@@ -102,6 +102,23 @@ enum Command {
         #[arg(default_value = "wow")]
         product: String,
     },
+    /// Resolve files through an install's root and encoding manifests.
+    Content {
+        /// A WoW install root.
+        path: PathBuf,
+        /// Product whose build key to take from `.build.info`.
+        #[arg(long, default_value = "wow")]
+        product: String,
+        /// Locale to filter the root manifest to (`any`, `enUS`, `deDE`, …).
+        #[arg(long, default_value = "any")]
+        locale: String,
+        /// Read this file id and report what came back.
+        #[arg(long)]
+        fdid: Option<u32>,
+        /// Read this game-relative path, e.g. `Interface/FrameXML/GlobalStrings.lua`.
+        #[arg(long, conflicts_with = "fdid")]
+        file: Option<String>,
+    },
     /// Open an install's CASC store and decode a sample of its files.
     Casc {
         /// A WoW install root, or a `Data`/`Data/data` directory.
@@ -510,6 +527,82 @@ async fn main() -> Result<()> {
                 .run(&runner, &layout, code.as_ref(), &mut NoDownloads)
                 .context("pre-flight cleanup")?;
             print_preflight(&report);
+        }
+        Command::Content { path, product, locale, fdid, file } => {
+            use lightforge_core::tact::config::BuildConfig;
+            use lightforge_core::tact::content::{Content, Locale};
+            use lightforge_core::tact::storage::Storage;
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let locale: Locale = locale.parse().context("parsing --locale")?;
+
+            // The build key is already recorded in .build.info, which is the
+            // file M3's writer maintains — this is where the two halves meet.
+            let info = BuildInfo::load(path.join(".build.info"))
+                .with_context(|| format!("reading {}", path.join(".build.info").display()))?;
+            let build_key = info.get(&code, lightforge_core::buildinfo::COL_BUILD_KEY)?;
+            println!("build key       {build_key}");
+
+            let build = BuildConfig::load(path.join("Data").join("config"), build_key)
+                .context("loading the build config")?;
+            println!("build name      {}", build.build_name.as_deref().unwrap_or("(unnamed)"));
+
+            let mut storage = Storage::open(&path).context("opening the CASC store")?;
+            let t = std::time::Instant::now();
+            let content = Content::open(&mut storage, build, locale)
+                .context("loading the encoding and root manifests")?;
+            println!("manifests       loaded in {:?}", t.elapsed());
+            println!("content keys    {}", content.encoded_count());
+            println!("file ids        {}", content.file_count());
+
+            // Root lists every file in the build; local storage holds only what
+            // was actually downloaded for this install's locale and options.
+            // The gap is expected, and measuring it is the basis of a future
+            // verify/repair pass.
+            let sample = 20_000usize;
+            let stride = (content.file_count() / sample).max(1);
+            let (mut present, mut checked) = (0usize, 0usize);
+            for id in content.file_ids().step_by(stride).take(sample) {
+                checked += 1;
+                if content.ekey_for_fdid(id).is_some_and(|k| storage.contains(&k)) {
+                    present += 1;
+                }
+            }
+            println!(
+                "installed       {present}/{checked} sampled ({:.0}% of the build)",
+                present as f64 / checked.max(1) as f64 * 100.0
+            );
+
+            let target = match (&fdid, &file) {
+                (Some(id), _) => Some(*id),
+                (None, Some(path)) => Some(
+                    content
+                        .fdid_for_path(path)
+                        .with_context(|| format!("no file named `{path}` in this build"))?,
+                ),
+                // Nothing asked for: prove the chain works on the first file
+                // that is actually present locally. The first file id overall
+                // is usually *not* installed, since root covers the whole
+                // build rather than this install's subset.
+                (None, None) => content
+                    .file_ids()
+                    .find(|id| content.ekey_for_fdid(*id).is_some_and(|k| storage.contains(&k))),
+            };
+
+            if let Some(id) = target {
+                let ckey = content.ckey_for_fdid(id).context("file id has no content key")?;
+                let ekey = content.ekey_for_fdid(id).context("content key has no encoding key")?;
+                let bytes = content.read_fdid(&mut storage, id).context("reading the file")?;
+                println!("\nfile id         {id}");
+                println!("content key     {}", lightforge_core::tact::config::to_hex(&ckey));
+                println!("encoding key    {}", lightforge_core::tact::config::to_hex(&ekey));
+                println!("expected size   {}", content.size_of(&ckey).unwrap_or(0));
+                println!("decoded size    {}", bytes.len());
+                let magic: String = bytes.iter().take(4).map(|b| {
+                    if b.is_ascii_graphic() { *b as char } else { '.' }
+                }).collect();
+                println!("magic           {magic:?}");
+            }
         }
         Command::Casc { path, sample } => {
             use lightforge_core::tact::storage::{Storage, StorageError};
