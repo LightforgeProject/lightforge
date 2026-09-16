@@ -184,6 +184,16 @@ impl AppDirs {
     pub fn proton_dir(&self) -> PathBuf {
         self.data.join("proton")
     }
+
+    /// DXVK state cache for one product, passed as `DXVK_STATE_CACHE_PATH`.
+    ///
+    /// Keyed per product deliberately. All products share a single prefix, so
+    /// letting DXVK pool its cache there would mean clearing Retail's stale
+    /// shaders after a Proton swap also discards Classic's — a stutter penalty
+    /// on a product the user never touched.
+    pub fn shader_cache_dir(&self, code: &ProductCode) -> PathBuf {
+        self.cache.join("dxvk").join(code.as_str())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -220,6 +230,19 @@ mod tests {
         let l = layout();
         assert_eq!(l.build_info(), PathBuf::from("/games/Blizzard/games/World of Warcraft/.build.info"));
         assert_ne!(l.product_dir(&ProductCode::Retail), l.product_dir(&ProductCode::Classic));
+    }
+
+    #[test]
+    fn shader_caches_are_isolated_per_product() {
+        let dirs = AppDirs::with_dirs("/c", "/cache", "/data");
+        assert_ne!(
+            dirs.shader_cache_dir(&ProductCode::Retail),
+            dirs.shader_cache_dir(&ProductCode::Classic)
+        );
+        assert_eq!(
+            dirs.shader_cache_dir(&ProductCode::Retail),
+            PathBuf::from("/cache/dxvk/wow")
+        );
     }
 
     #[test]

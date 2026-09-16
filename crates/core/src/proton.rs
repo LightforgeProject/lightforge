@@ -3,6 +3,11 @@
 //! Policy is **pinned + notify-only**: Lightforge never swaps a working Proton
 //! build out from under the user. Discovery, download, and launching land in
 //! Milestones 2 and 7; Milestone 1 fixes the model the whole feature hangs off.
+//!
+//! All products share one prefix, so a pin selects which Proton-GE binary runs
+//! at launch rather than isolating a prefix. The stale-shader safety step on a
+//! version swap therefore clears only that product's
+//! [`crate::paths::AppDirs::shader_cache_dir`].
 
 use std::path::PathBuf;
 
