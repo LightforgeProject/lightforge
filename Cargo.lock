@@ -2246,6 +2246,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "libc",
  "lightforge-core",
  "tokio",
 ]
@@ -2254,9 +2255,11 @@ dependencies = [
 name = "lightforge-core"
 version = "0.1.0"
 dependencies = [
+ "blte",
  "directories",
  "flate2",
  "futures-util",
+ "ngdp-crypto",
  "reqwest",
  "serde",
  "serde_json",

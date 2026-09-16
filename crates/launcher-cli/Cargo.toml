@@ -15,4 +15,5 @@ path = "src/main.rs"
 lightforge-core.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+libc.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -18,9 +18,12 @@ directories = "5"
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 iced = "0.13"
+libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 sha2 = "0.10"
 sysinfo = { version = "0.36", default-features = false, features = ["system"] }
+blte = "0.4"
+ngdp-crypto = "0.4"
 tact-parser = "0.4"
 tar = "0.4"
 tempfile = "3"

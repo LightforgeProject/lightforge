@@ -15,3 +15,4 @@
 //! synchronous.
 
 pub mod idx;
+pub mod storage;

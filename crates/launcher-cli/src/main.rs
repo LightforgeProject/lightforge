@@ -102,6 +102,14 @@ enum Command {
         #[arg(default_value = "wow")]
         product: String,
     },
+    /// Open an install's CASC store and decode a sample of its files.
+    Casc {
+        /// A WoW install root, or a `Data`/`Data/data` directory.
+        path: PathBuf,
+        /// How many files to decode, spread across the whole index.
+        #[arg(long, default_value_t = 2000)]
+        sample: usize,
+    },
     /// Inspect the CASC bucket indices of an install, verifying both hashes
     /// and re-serializing each file to prove we can write them byte-identically.
     Idx {
@@ -121,8 +129,27 @@ enum Command {
     },
 }
 
+/// Die quietly when output is piped into something that stops reading.
+///
+/// Rust sets `SIGPIPE` to `SIG_IGN` before `main`, so once the reader of a
+/// pipe goes away — `lightforge idx … | head` being the obvious case — every
+/// subsequent `println!` hits `EPIPE` and panics. Restoring the default
+/// disposition makes the process exit the way every other Unix tool does,
+/// with no backtrace and no partial-looking failure.
+///
+/// Safe to call here and nowhere else: it runs before any thread is spawned,
+/// and it only resets a signal to what the kernel would have done anyway.
+fn restore_sigpipe() {
+    // SAFETY: `signal` with `SIG_DFL` is async-signal-safe and this is the
+    // first thing main does, before any output or threads exist.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    restore_sigpipe();
     let cli = Cli::parse();
 
     let layout = match &cli.root {
@@ -483,6 +510,58 @@ async fn main() -> Result<()> {
                 .run(&runner, &layout, code.as_ref(), &mut NoDownloads)
                 .context("pre-flight cleanup")?;
             print_preflight(&report);
+        }
+        Command::Casc { path, sample } => {
+            use lightforge_core::tact::storage::{Storage, StorageError};
+
+            let t = std::time::Instant::now();
+            let mut storage = Storage::open(&path)
+                .with_context(|| format!("opening the CASC store at {}", path.display()))?;
+            let stats = storage.stats();
+            println!("store           {}", storage.data_dir().display());
+            println!("buckets         {}", stats.buckets);
+            println!("files           {}", stats.files);
+            println!("archive markers {}", stats.entries - stats.files);
+            println!("archived        {:.1} GB", stats.bytes as f64 / 1e9);
+            println!("opened in       {:?}\n", t.elapsed());
+
+            // Stride the sample so a single bad archive can't pass as healthy.
+            let entries: Vec<_> = storage.files().copied().collect();
+            let stride = (entries.len() / sample.max(1)).max(1);
+            let chosen: Vec<_> = entries.iter().step_by(stride).take(sample).collect();
+
+            let (mut ok, mut encrypted, mut failed) = (0usize, 0usize, 0usize);
+            let mut bytes = 0u64;
+            let t = std::time::Instant::now();
+            for entry in &chosen {
+                match storage.read_entry(entry) {
+                    Ok(d) => {
+                        ok += 1;
+                        bytes += d.len() as u64;
+                    }
+                    // Unreleased content ships encrypted; without the key this
+                    // is expected on a healthy install, not damage.
+                    Err(StorageError::Decode { source, .. })
+                        if source.to_string().to_lowercase().contains("key") =>
+                    {
+                        encrypted += 1
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        if failed <= 3 {
+                            println!("  {e}");
+                        }
+                    }
+                }
+            }
+            let secs = t.elapsed().as_secs_f64();
+            println!(
+                "decoded {ok}/{} ({encrypted} encrypted, {failed} failed) — {:.1} MB in {:.2}s ({:.0} MB/s)",
+                chosen.len(),
+                bytes as f64 / 1e6,
+                secs,
+                bytes as f64 / 1e6 / secs.max(0.001),
+            );
         }
         Command::Idx { path } => {
             use lightforge_core::tact::idx::{self, Index};
