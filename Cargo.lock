@@ -2248,6 +2248,7 @@ dependencies = [
  "clap",
  "libc",
  "lightforge-core",
+ "md5",
  "tokio",
 ]
 

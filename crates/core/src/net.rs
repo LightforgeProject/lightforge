@@ -132,6 +132,35 @@ impl Http {
             .map_err(|e| NetError::Request { url: url.to_owned(), source: e })
     }
 
+    /// Fetch a byte range. `range` is a `Range` header value such as
+    /// `bytes=0-1023`.
+    ///
+    /// The server is expected to answer 206; a 200 means it ignored the range
+    /// and sent the whole resource, which for a 256 MB archive is a very
+    /// expensive way to get one file and worth failing on rather than
+    /// silently accepting.
+    pub async fn get_range(&self, url: &str, range: &str) -> Result<Vec<u8>, NetError> {
+        let response = self
+            .client
+            .get(url)
+            .header(reqwest::header::RANGE, range)
+            .send()
+            .await
+            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
+
+        if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+            let status = response.status();
+            let response = check_status(url, response)?;
+            drop(response);
+            return Err(NetError::Status { url: url.to_owned(), status: status.as_u16() });
+        }
+        response
+            .bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })
+    }
+
     pub async fn download(
         &self,
         url: &str,

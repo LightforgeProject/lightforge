@@ -170,6 +170,12 @@ impl Content {
         self.encoding.len()
     }
 
+    /// Encoding key -> content key, for checking downloaded bytes against the
+    /// key that can actually verify them.
+    pub fn ckey_for_ekey(&self, ekey: &EKey) -> Option<CKey> {
+        self.encoding.ckey_for_ekey(ekey)
+    }
+
     /// Decoded size of a file, from the encoding manifest rather than the
     /// index — the index only knows the compressed size.
     pub fn size_of(&self, ckey: &CKey) -> Option<u64> {

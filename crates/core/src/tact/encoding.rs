@@ -137,6 +137,16 @@ impl Encoding {
     pub fn size_of(&self, ckey: &CKey) -> Option<u64> {
         self.get(ckey).map(|e| e.size)
     }
+
+    /// Encoding key -> content key.
+    ///
+    /// A linear scan: the manifest is sorted by content key, so the reverse
+    /// direction has no index. Callers that need many of these should build
+    /// their own map once rather than calling this in a loop over millions of
+    /// entries.
+    pub fn ckey_for_ekey(&self, ekey: &EKey) -> Option<CKey> {
+        self.entries.iter().find(|e| &e.ekey == ekey).map(|e| e.ckey)
+    }
 }
 
 /// Walk one ckey page, appending its entries.

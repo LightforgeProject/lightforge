@@ -16,4 +16,5 @@ lightforge-core.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 libc.workspace = true
+md5.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

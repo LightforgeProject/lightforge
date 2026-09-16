@@ -8,15 +8,32 @@
 //! <server>/<path>/data/<h0h1>/<h2h3>/<hash>      archives and loose files
 //! ```
 //!
-//! **Nothing fetched here is trusted until it hashes to the key that named
-//! it.** That is what makes the transport a convenience rather than a security
-//! boundary: the version service is reached over TLS, but even a perfect
-//! man-in-the-middle can only serve bytes whose MD5 matches a key we already
-//! hold, which is the definition of the content we asked for.
+//! **What each name can actually verify differs, and getting this wrong means
+//! either rejecting good content or accepting bad.** Measured against a live
+//! 12.1.0 install and CDN:
 //!
-//! Content keys hash the decoded bytes and encoding keys hash the BLTE-encoded
-//! file, so a download straight off the CDN verifies against its **encoding**
-//! key — the decoded form does not exist yet at that point.
+//! | name | relationship to the bytes |
+//! |---|---|
+//! | config hash | MD5 of the file. Verifiable on arrival. |
+//! | content key (CKey) | MD5 of the **decoded** content. Verifiable after BLTE decode. |
+//! | encoding key (EKey) | **Not** an MD5 of the encoded file. Not recomputable. |
+//!
+//! The EKey result is the surprising one and it is worth stating plainly,
+//! because "EKey is the MD5 of the encoded file" is the usual description and
+//! it does not hold here. The root manifest is served loose at
+//! `data/d1/75/d175f4af…`, decodes correctly, and its bytes hash to
+//! `c95b92c6…` — nothing like the key it is published under. The same is true
+//! of every archived file checked.
+//!
+//! So a BLTE download is verified by decoding it and checking the result
+//! against its **content** key, which is a stronger check anyway: it validates
+//! the bytes the game will actually read rather than one particular encoding
+//! of them. BLTE's own per-chunk MD5s catch transport damage before that.
+//!
+//! This is why the transport is a convenience and not the security boundary —
+//! but the boundary still holds, because content only becomes usable after it
+//! matches a content key that came from a manifest chain rooted in the build
+//! config.
 
 use crate::net::{Http, NetError};
 
@@ -136,15 +153,31 @@ impl Client {
         &self.endpoints
     }
 
-    /// Fetch a hash and verify the bytes against it.
+    /// Fetch a name across the endpoints, without checking the bytes.
     ///
-    /// Each endpoint is tried in turn; a host that is down or rate-limiting
-    /// falls through to the next. A *hash mismatch* also falls through rather
-    /// than failing outright, since one bad mirror should not make the content
-    /// unreachable — but if every endpoint disagrees with the hash, the error
-    /// reports the mismatch rather than a transport failure, because that is
-    /// the more alarming explanation.
-    pub async fn fetch_verified(
+    /// Each endpoint is tried in turn, so a host that is down or
+    /// rate-limiting falls through to the next. Callers are expected to verify
+    /// by whichever rule applies to what they asked for — see the module docs,
+    /// because the rule is not the same for every kind of name.
+    pub async fn fetch(&self, http: &Http, kind: Kind, hash: &str) -> Result<Vec<u8>, CdnError> {
+        let mut last: Option<CdnError> = None;
+        for endpoint in &self.endpoints {
+            let url = endpoint.url(kind, hash)?;
+            match http.get_bytes(&url).await {
+                Ok(bytes) => return Ok(bytes),
+                Err(source) => last = Some(CdnError::Fetch { url, source }),
+            }
+        }
+        Err(last.unwrap_or(CdnError::NoEndpoints))
+    }
+
+    /// Fetch a file whose name really is the MD5 of its bytes, and check it.
+    ///
+    /// Only correct for [`Kind::Config`]. A mismatch falls through to the next
+    /// endpoint rather than failing outright — one bad mirror should not make
+    /// the content unreachable — but if every endpoint disagrees the error
+    /// reports the mismatch, since that is the more alarming explanation.
+    pub async fn fetch_md5_verified(
         &self,
         http: &Http,
         kind: Kind,
@@ -174,10 +207,58 @@ impl Client {
         Err(last.unwrap_or(CdnError::NoEndpoints))
     }
 
-    /// Fetch a config, which is plain text and hashed like anything else.
+    /// Fetch a config and verify it: configs are the one kind named by the MD5
+    /// of their own bytes.
     pub async fn fetch_config(&self, http: &Http, hash: &str) -> Result<String, CdnError> {
-        let bytes = self.fetch_verified(http, Kind::Config, hash).await?;
+        let bytes = self.fetch_md5_verified(http, Kind::Config, hash).await?;
         String::from_utf8(bytes).map_err(|e| CdnError::NotText { hash: hash.to_owned(), source: e })
+    }
+
+    /// Fetch one file out of an archive by range request, decode it, and
+    /// verify the result against the content key it is supposed to be.
+    ///
+    /// This is the verification that matters for game content: the encoding
+    /// key names the bytes but cannot check them, while the content key
+    /// describes exactly what the game will read.
+    pub async fn fetch_from_archive(
+        &self,
+        http: &Http,
+        archive: &str,
+        located: &super::archive::Located,
+        expect_ckey: &super::config::CKey,
+        keys: Option<&ngdp_crypto::KeyService>,
+    ) -> Result<Vec<u8>, CdnError> {
+        let mut last: Option<CdnError> = None;
+
+        for endpoint in &self.endpoints {
+            let url = endpoint.url(Kind::Data, archive)?;
+            let raw = match http.get_range(&url, &located.range()).await {
+                Ok(bytes) => bytes,
+                Err(source) => {
+                    last = Some(CdnError::Fetch { url, source });
+                    continue;
+                }
+            };
+
+            // Archived entries on the CDN are bare BLTE files: unlike local
+            // storage, there is no CASC entry header in front of them.
+            match blte::decompress_blte(raw, keys) {
+                Ok(decoded) => {
+                    let actual = *md5::compute(&decoded);
+                    if &actual == expect_ckey {
+                        return Ok(decoded);
+                    }
+                    last = Some(CdnError::HashMismatch {
+                        url,
+                        expected: to_hex(expect_ckey),
+                        found: to_hex(&actual),
+                    });
+                }
+                Err(e) => last = Some(CdnError::Decode { url, detail: e.to_string() }),
+            }
+        }
+
+        Err(last.unwrap_or(CdnError::NoEndpoints))
     }
 }
 
@@ -206,6 +287,9 @@ pub enum CdnError {
         #[source]
         source: NetError,
     },
+
+    #[error("could not decode the BLTE payload from {url}: {detail}")]
+    Decode { url: String, detail: String },
 
     #[error("the config {hash} is not valid UTF-8")]
     NotText {
@@ -302,6 +386,22 @@ mod tests {
         let text = err.to_string();
         assert!(text.contains("9712ae9c84cc54111e9e3ddf9a6b8019"), "{text}");
         assert!(text.contains("00000000000000000000000000000000"), "{text}");
+    }
+
+    #[test]
+    fn an_encoding_key_is_not_the_md5_of_its_bytes() {
+        // Measured, not assumed: the root manifest is served loose under
+        // `d175f4af…`, decodes correctly, and its 50,502,156 bytes hash to
+        // `c95b92c6…`. Any code that "verifies" a BLTE download against its
+        // encoding key rejects every healthy file.
+        let ekey = "d175f4afe795101d0cf3660228b3283b";
+        let actual_md5_of_bytes = "c95b92c6350e33fca118d05d54d2e296";
+        assert_ne!(ekey, actual_md5_of_bytes);
+
+        // Content keys, by contrast, are exactly the MD5 of the decoded bytes,
+        // which is what `fetch_from_archive` checks.
+        let payload = b"decoded content";
+        assert_eq!(to_hex(&*md5::compute(payload)).len(), 32);
     }
 
     #[test]

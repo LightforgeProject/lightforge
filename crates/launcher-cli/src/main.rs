@@ -102,6 +102,22 @@ enum Command {
         #[arg(default_value = "wow")]
         product: String,
     },
+    /// Read an archive's index and pull real files out of it by range request.
+    CdnArchive {
+        /// Archive hash. Defaults to the first archive in the CDN config.
+        archive: Option<String>,
+        #[arg(long, default_value = "wow")]
+        product: String,
+        #[arg(long, default_value = "eu")]
+        region: String,
+        /// How many entries to fetch and verify.
+        #[arg(long, default_value_t = 5)]
+        fetch: usize,
+        /// Local install to resolve content keys from, so downloads can be
+        /// verified against the key that can actually check them.
+        #[arg(long)]
+        verify_with: Option<PathBuf>,
+    },
     /// Fetch content from Blizzard's CDN and verify it by hash.
     CdnFetch {
         /// Product code, e.g. `wow`.
@@ -555,6 +571,92 @@ async fn main() -> Result<()> {
                 .context("pre-flight cleanup")?;
             print_preflight(&report);
         }
+        Command::CdnArchive { archive, product, region, fetch, verify_with } => {
+            use lightforge_core::net::Http;
+            use lightforge_core::tact::archive::ArchiveIndex;
+            use lightforge_core::tact::cdn::{Client, Kind};
+            use lightforge_core::tact::config::{to_hex, BuildConfig, CdnConfig};
+            use lightforge_core::tact::version::{self, Region};
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let region: Region = region.parse().context("parsing --region")?;
+
+            let http = Http::new()?;
+            let versions = version::versions(&http, region, code.as_str()).await?;
+            let remote = version::for_region(&versions, region, |v| &v.region)
+                .context("the version table is empty")?;
+            let cdns = version::cdns(&http, region, code.as_str()).await?;
+            let cdn = version::for_region(&cdns, region, |c| &c.name)
+                .context("the CDN table is empty")?;
+            let client = Client::from_cdn(cdn)?;
+
+            let cdn_config = CdnConfig::parse(
+                &client.fetch_config(&http, &remote.cdn_config).await
+                    .context("fetching the CDN config")?,
+            )?;
+            println!("archives        {}", cdn_config.archives.len());
+
+            let archive = match archive {
+                Some(a) => a,
+                None => cdn_config.archives.first().cloned().context("no archives listed")?,
+            };
+
+            // The index lives beside the archive, at the same hash plus a
+            // suffix, and is not itself content-addressed by that name.
+            let endpoint = &client.endpoints()[0];
+            let url = format!("{}.index", endpoint.url(Kind::Data, &archive)?);
+            let raw = http.get_bytes(&url).await.context("fetching the archive index")?;
+            println!("index           {} bytes from {url}", raw.len());
+
+            let index = ArchiveIndex::parse(&raw, &archive).context("parsing the archive index")?;
+            println!("entries         {}", index.len());
+            println!("archived        {:.1} MB", index.bytes() as f64 / 1e6);
+
+            // Range-request real files and verify each against its CONTENT
+            // key — the encoding key names the bytes but cannot check them.
+            let Some(install) = verify_with else {
+                println!("\npass --verify-with <install> to fetch and verify entries");
+                return Ok(());
+            };
+
+            use lightforge_core::tact::content::{Content, Locale};
+            use lightforge_core::tact::storage::Storage;
+            let local_build = BuildConfig::load(
+                install.join("Data").join("config"),
+                &remote.build_config,
+            )
+            .context("loading the build config from the local install")?;
+            let mut storage = Storage::open(&install).context("opening the local store")?;
+            let content = Content::open(&mut storage, local_build, Locale::Any)
+                .context("loading the local manifests")?;
+
+            let (mut ok, mut bad, mut unknown) = (0usize, 0usize, 0usize);
+            for located in index.entries().iter().take(fetch) {
+                let Some(ckey) = content.ckey_for_ekey(&located.ekey) else {
+                    unknown += 1;
+                    continue;
+                };
+                match client
+                    .fetch_from_archive(&http, &archive, located, &ckey, None)
+                    .await
+                {
+                    Ok(decoded) => {
+                        ok += 1;
+                        println!(
+                            "  {} -> ckey {}  {:>9} bytes decoded  verified",
+                            to_hex(&located.ekey),
+                            to_hex(&ckey),
+                            decoded.len()
+                        );
+                    }
+                    Err(e) => {
+                        bad += 1;
+                        println!("  {} FAILED: {e}", to_hex(&located.ekey));
+                    }
+                }
+            }
+            println!("\nverified {ok}, failed {bad}, not in local encoding {unknown}");
+        }
         Command::CdnFetch { product, region, hash, kind, compare } => {
             use lightforge_core::net::Http;
             use lightforge_core::tact::cdn::{Client, Kind};
@@ -586,7 +688,7 @@ async fn main() -> Result<()> {
             println!("fetching        {hash} ({kind:?})");
 
             let t = std::time::Instant::now();
-            let bytes = client.fetch_verified(&http, kind, &hash).await
+            let bytes = client.fetch_md5_verified(&http, kind, &hash).await
                 .context("fetching from the CDN")?;
             let elapsed = t.elapsed();
             println!(
