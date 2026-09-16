@@ -19,3 +19,4 @@ pub mod content;
 pub mod encoding;
 pub mod idx;
 pub mod storage;
+pub mod version;

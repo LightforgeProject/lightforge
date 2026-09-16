@@ -102,6 +102,17 @@ enum Command {
         #[arg(default_value = "wow")]
         product: String,
     },
+    /// Compare a local install against what Blizzard currently ships.
+    UpdateCheck {
+        /// Install root. Defaults to the configured games directory.
+        path: Option<PathBuf>,
+        /// Product code, e.g. `wow`.
+        #[arg(long, default_value = "wow")]
+        product: String,
+        /// Blizzard region to ask.
+        #[arg(long, default_value = "eu")]
+        region: String,
+    },
     /// Resolve files through an install's root and encoding manifests.
     Content {
         /// A WoW install root.
@@ -527,6 +538,64 @@ async fn main() -> Result<()> {
                 .run(&runner, &layout, code.as_ref(), &mut NoDownloads)
                 .context("pre-flight cleanup")?;
             print_preflight(&report);
+        }
+        Command::UpdateCheck { path, product, region } => {
+            use lightforge_core::net::Http;
+            use lightforge_core::tact::version::{self, Region, Status};
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let region: Region = region.parse().context("parsing --region")?;
+            let install = path.unwrap_or_else(|| layout.wow_install());
+
+            // Local side: whatever .build.info records, if the product is
+            // installed at all. A missing file is "not installed", not a fault.
+            let local = BuildInfo::load(install.join(".build.info")).ok();
+            let local_build = local.as_ref().and_then(|i| {
+                i.get(&code, lightforge_core::buildinfo::COL_BUILD_KEY).ok()
+            });
+            let local_version = local.as_ref().and_then(|i| {
+                i.get(&code, lightforge_core::buildinfo::COL_VERSION).ok()
+            });
+
+            let http = Http::new()?;
+            let t = std::time::Instant::now();
+            let versions = version::versions(&http, region, code.as_str())
+                .await
+                .context("fetching the version table")?;
+            let remote = version::for_region(&versions, region, |v| &v.region)
+                .context("the version table is empty")?;
+            println!("service         {} ({:?})", region.host(), t.elapsed());
+            println!("regions         {}", versions.len());
+            println!("remote build    {} ({})", remote.build_config, remote.versions_name);
+            match local_build {
+                Some(b) => println!("local build     {b} ({})", local_version.unwrap_or("?")),
+                None => println!("local build     (not installed)"),
+            }
+
+            let status = Status::compare(local_build, local_version, remote);
+            println!("\nstatus          {:?}", status.action().label());
+            match &status {
+                Status::Current { version, .. } => println!("                up to date on {version}"),
+                Status::Behind { local_version, remote_version, .. } => println!(
+                    "                {} -> {remote_version}",
+                    local_version.as_deref().unwrap_or("unknown")
+                ),
+                Status::NotInstalled => println!("                nothing installed for `{code}`"),
+            }
+
+            let cdns = version::cdns(&http, region, code.as_str())
+                .await
+                .context("fetching the CDN table")?;
+            if let Some(cdn) = version::for_region(&cdns, region, |c| &c.name) {
+                println!("\ncdn path        {}", cdn.path);
+                println!("cdn config path {}", cdn.config_path);
+                for server in cdn.https_servers() {
+                    println!("cdn (tls)       {server}");
+                }
+                for server in cdn.servers.iter().filter(|s| s.starts_with("http://")) {
+                    println!("cdn (plain)     {server}");
+                }
+            }
         }
         Command::Content { path, product, locale, fdid, file } => {
             use lightforge_core::tact::config::BuildConfig;
