@@ -2259,6 +2259,7 @@ dependencies = [
  "directories",
  "flate2",
  "futures-util",
+ "md5",
  "ngdp-crypto",
  "reqwest",
  "serde",

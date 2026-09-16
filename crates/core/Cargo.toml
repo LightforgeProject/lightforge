@@ -17,6 +17,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sysinfo.workspace = true
+md5.workspace = true
 ngdp-crypto.workspace = true
 tact-parser.workspace = true
 tar.workspace = true

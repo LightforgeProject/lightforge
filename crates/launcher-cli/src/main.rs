@@ -102,6 +102,22 @@ enum Command {
         #[arg(default_value = "wow")]
         product: String,
     },
+    /// Fetch content from Blizzard's CDN and verify it by hash.
+    CdnFetch {
+        /// Product code, e.g. `wow`.
+        #[arg(long, default_value = "wow")]
+        product: String,
+        #[arg(long, default_value = "eu")]
+        region: String,
+        /// Hash to fetch. Defaults to the current build config.
+        hash: Option<String>,
+        /// Where the hash lives: `config`, `data` or `patch`.
+        #[arg(long, default_value = "config")]
+        kind: String,
+        /// Compare the result against this local file, byte for byte.
+        #[arg(long)]
+        compare: Option<PathBuf>,
+    },
     /// Compare a local install against what Blizzard currently ships.
     UpdateCheck {
         /// Install root. Defaults to the configured games directory.
@@ -538,6 +554,57 @@ async fn main() -> Result<()> {
                 .run(&runner, &layout, code.as_ref(), &mut NoDownloads)
                 .context("pre-flight cleanup")?;
             print_preflight(&report);
+        }
+        Command::CdnFetch { product, region, hash, kind, compare } => {
+            use lightforge_core::net::Http;
+            use lightforge_core::tact::cdn::{Client, Kind};
+            use lightforge_core::tact::version::{self, Region};
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let region: Region = region.parse().context("parsing --region")?;
+            let kind = match kind.as_str() {
+                "config" => Kind::Config,
+                "data" => Kind::Data,
+                "patch" => Kind::Patch,
+                other => anyhow::bail!("unknown --kind `{other}` (config, data or patch)"),
+            };
+
+            let http = Http::new()?;
+            let versions = version::versions(&http, region, code.as_str()).await?;
+            let remote = version::for_region(&versions, region, |v| &v.region)
+                .context("the version table is empty")?;
+            let cdns = version::cdns(&http, region, code.as_str()).await?;
+            let cdn = version::for_region(&cdns, region, |c| &c.name)
+                .context("the CDN table is empty")?;
+
+            let client = Client::from_cdn(cdn)?;
+            for endpoint in client.endpoints() {
+                println!("endpoint        {}/{}", endpoint.origin, endpoint.path);
+            }
+
+            let hash = hash.unwrap_or_else(|| remote.build_config.clone());
+            println!("fetching        {hash} ({kind:?})");
+
+            let t = std::time::Instant::now();
+            let bytes = client.fetch_verified(&http, kind, &hash).await
+                .context("fetching from the CDN")?;
+            let elapsed = t.elapsed();
+            println!(
+                "verified        {} bytes in {:.2}s ({:.1} MB/s)",
+                bytes.len(),
+                elapsed.as_secs_f64(),
+                bytes.len() as f64 / 1e6 / elapsed.as_secs_f64().max(0.001),
+            );
+
+            if let Some(local) = compare {
+                let want = std::fs::read(&local)
+                    .with_context(|| format!("reading {}", local.display()))?;
+                println!(
+                    "vs {}  {}",
+                    local.display(),
+                    if want == bytes { "identical" } else { "DIFFERS" }
+                );
+            }
         }
         Command::UpdateCheck { path, product, region } => {
             use lightforge_core::net::Http;

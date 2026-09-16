@@ -112,6 +112,26 @@ impl Http {
     /// The digest is computed during the transfer rather than by re-reading the
     /// file afterwards — for a 400 MB tarball that saves a full pass over disk.
     /// `on_progress` is called as bytes arrive; keep it cheap.
+    /// Fetch a whole response into memory.
+    ///
+    /// For manifests and configs, which are read whole and hashed whole.
+    /// Bulk content goes through [`Http::download`] instead, which streams to
+    /// disk rather than holding a multi-gigabyte archive in memory.
+    pub async fn get_bytes(&self, url: &str) -> Result<Vec<u8>, NetError> {
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
+        let response = check_status(url, response)?;
+        response
+            .bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })
+    }
+
     pub async fn download(
         &self,
         url: &str,

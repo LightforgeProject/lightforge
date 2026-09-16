@@ -14,6 +14,7 @@
 //! Networked entry points here are `async fn`; the rest of `core` stays
 //! synchronous.
 
+pub mod cdn;
 pub mod config;
 pub mod content;
 pub mod encoding;
