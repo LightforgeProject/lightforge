@@ -26,6 +26,7 @@ use serde_json::{json, Value};
 
 use crate::paths::Layout;
 use crate::prefix::{PrefixError, ProtonRunner};
+use crate::product::ProductCode;
 
 /// Blizzard's version-agnostic installer endpoint.
 pub const INSTALLER_URL: &str =
@@ -276,15 +277,25 @@ pub fn default_tweaks() -> Vec<Tweak> {
             json!("false"),
             "no background scanning of the filesystem for other Blizzard installs",
         ),
+    ]
+}
+
+/// Defaults for a per-account `<hash>.config`.
+///
+/// "Full quit, never tray-minimize" lives here rather than in
+/// `Battle.net.config`: the client stores window behavior per account, and
+/// keys of this name in the global config are silently ignored.
+pub fn account_tweaks() -> Vec<Tweak> {
+    vec![
         Tweak::new(
-            "Client.MinimizeToTray",
+            "User.Client.HideOnClose",
             json!("false"),
-            "close means quit — no tray icon and no lingering background client",
+            "closing the window quits — no tray icon, no lingering background client",
         ),
         Tweak::new(
-            "Client.CloseToTray",
+            "User.Client.DisplayExitPrompt",
             json!("false"),
-            "close means quit — no tray icon and no lingering background client",
+            "quit immediately instead of showing the close countdown",
         ),
     ]
 }
@@ -329,26 +340,72 @@ pub fn apply_tweaks(config: &mut Value, tweaks: &[Tweak]) {
 /// values before the client has ever run.
 pub fn configure(layout: &Layout, user: &str, tweaks: &[Tweak]) -> Result<PathBuf, BattleNetError> {
     let path = layout.battle_net_config(user);
+    merge_file(&path, tweaks, true)?;
+    Ok(path)
+}
 
-    let mut config = match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text).map_err(|e| BattleNetError::MalformedConfig {
-            path: path.clone(),
-            source: e,
-        })?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
-        Err(e) => return Err(BattleNetError::io(&path, e)),
+/// Apply `tweaks` to every per-account config next to `Battle.net.config`,
+/// returning the files changed.
+///
+/// These files are named after an account hash the client invents on first
+/// login, so there is nothing to write before the user has signed in once — an
+/// empty result is the normal outcome of a fresh setup, not a failure. M3's
+/// pre-flight pass is what applies them on later runs.
+pub fn configure_accounts(
+    layout: &Layout,
+    user: &str,
+    tweaks: &[Tweak],
+) -> Result<Vec<PathBuf>, BattleNetError> {
+    let Some(dir) = layout.battle_net_config(user).parent().map(Path::to_path_buf) else {
+        return Ok(Vec::new());
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(Vec::new());
+    };
+
+    let mut changed = Vec::new();
+    for path in account_configs(entries) {
+        merge_file(&path, tweaks, false)?;
+        changed.push(path);
+    }
+    changed.sort();
+    Ok(changed)
+}
+
+/// Every `<hash>.config` in the directory, excluding the global config.
+fn account_configs(entries: std::fs::ReadDir) -> Vec<PathBuf> {
+    entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && p.extension().is_some_and(|e| e == "config")
+                && p.file_name().is_some_and(|n| n != "Battle.net.config")
+        })
+        .collect()
+}
+
+/// Read, merge, and atomically rewrite one config file.
+///
+/// `seed` decides what a missing file means: the global config is created from
+/// nothing, while a per-account file is the client's to invent.
+fn merge_file(path: &Path, tweaks: &[Tweak], seed: bool) -> Result<bool, BattleNetError> {
+    let mut config = match std::fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text)
+            .map_err(|e| BattleNetError::MalformedConfig { path: path.to_path_buf(), source: e })?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && seed => json!({}),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(BattleNetError::io(path, e)),
     };
 
     apply_tweaks(&mut config, tweaks);
-    let mut text =
-        serde_json::to_string_pretty(&config).map_err(|e| BattleNetError::MalformedConfig {
-            path: path.clone(),
-            source: e,
-        })?;
+    let mut text = serde_json::to_string_pretty(&config)
+        .map_err(|e| BattleNetError::MalformedConfig { path: path.to_path_buf(), source: e })?;
     text.push('\n');
-    write_atomic(&path, text.as_bytes())?;
-    Ok(path)
+    write_atomic(path, text.as_bytes())?;
+    Ok(true)
 }
+
 
 /// Write via a temp file in the destination directory plus a rename, so a
 /// crash mid-write can never leave a truncated config behind.
@@ -429,12 +486,83 @@ pub fn apply_registry(runner: &ProtonRunner, values: &[RegValue]) -> Result<(), 
     Ok(())
 }
 
+/// How to open Battle.net.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Launch {
+    /// Just the client window — the app-level "other Blizzard titles" path.
+    Client,
+    /// Hand straight off into a product, so the user never clicks through the
+    /// Battle.net UI. Paired with `GameLaunchWindowBehavior: 2`, the client
+    /// exits by itself once the game is up.
+    Product { code: ProductCode, exec: Option<String> },
+}
+
+impl Launch {
+    /// Open a product with the default `launch <uid>` verb.
+    pub fn product(code: ProductCode) -> Self {
+        Self::Product { code, exec: None }
+    }
+
+    /// The executable and arguments this launch needs, relative to `install_dir`.
+    ///
+    /// Plain client opens go through `Battle.net Launcher.exe`, which is what
+    /// Blizzard's own shortcut runs and what keeps the client's self-update
+    /// path intact. A product hand-off goes straight to `Battle.net.exe`, the
+    /// binary that actually parses `--productcode`/`--exec`.
+    pub fn command(&self, install_dir: &Path) -> (PathBuf, Vec<String>) {
+        match self {
+            Self::Client => (install_dir.join("Battle.net Launcher.exe"), Vec::new()),
+            Self::Product { code, exec } => (
+                install_dir.join("Battle.net.exe"),
+                vec![
+                    format!("--productcode={code}"),
+                    format!("--exec=launch {}", exec.clone().unwrap_or_else(|| game_uid(code))),
+                ],
+            ),
+        }
+    }
+}
+
+/// Battle.net's own identifier for a game, as used by `--exec="launch <uid>"`.
+///
+/// It matches the TACT product code: the client keys its `Games` config block
+/// by the same string (`Games.wow`, `Games.wow_classic`). Custom products get
+/// their code verbatim, which is the best guess available for an entry
+/// Battle.net has never heard of.
+fn game_uid(code: &ProductCode) -> String {
+    code.as_str().to_owned()
+}
+
+/// Start Battle.net and hand the caller the running child.
+///
+/// Deliberately does not wait: the CLI blocks on the child itself, and the GUI
+/// wants the process to outlive the click that started it.
+pub fn launch(
+    runner: &ProtonRunner,
+    layout: &Layout,
+    launch: &Launch,
+) -> Result<std::process::Child, BattleNetError> {
+    let install_dir = layout.battle_net_dir();
+    if !is_installed(&install_dir) {
+        return Err(BattleNetError::NotInstalled(install_dir));
+    }
+
+    let (exe, args) = launch.command(&install_dir);
+    runner
+        .command("run", &exe, args)
+        .stdin(Stdio::null())
+        .spawn()
+        .map_err(|e| BattleNetError::Prefix(PrefixError::Spawn { program: exe, source: e }))
+}
+
 /// What a full [`provision`] run did, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetupReport {
     pub install: InstallOutcome,
     pub registry_values: usize,
     pub config_path: PathBuf,
+    /// Per-account configs found and updated — empty until the first login.
+    pub account_configs: Vec<PathBuf>,
 }
 
 /// Install Battle.net and configure it: the whole of M2 step 4 in one call.
@@ -459,11 +587,13 @@ pub fn provision(
     // Last, and only with nothing running: the client rewrites this file when
     // it exits, so an injection before the teardown above would be lost.
     let config_path = configure(layout, user, &default_tweaks())?;
+    let account_configs = configure_accounts(layout, user, &account_tweaks())?;
 
     Ok(SetupReport {
         install,
         registry_values: registry.len(),
         config_path,
+        account_configs,
     })
 }
 
@@ -474,6 +604,9 @@ pub enum BattleNetError {
 
     #[error("the prefix at {0} has not been created yet — run prefix setup first")]
     PrefixNotReady(PathBuf),
+
+    #[error("no Battle.net install at {0} — run setup first")]
+    NotInstalled(PathBuf),
 
     #[error("Battle.net did not finish installing into {dir} within {}s", after.as_secs())]
     InstallTimeout { after: Duration, dir: PathBuf },
@@ -599,6 +732,46 @@ mod tests {
     }
 
     #[test]
+    fn hide_on_close_is_written_to_every_account_config_but_not_the_global_one() {
+        let dir = scratch("accounts");
+        let layout = Layout::with_root(&dir);
+        let bnet = layout.battle_net_config("steamuser").parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&bnet).unwrap();
+        std::fs::write(bnet.join("1c858370.config"), r#"{"User":{"Client":{"HideOnClose":"true"}}}"#)
+            .unwrap();
+        std::fs::write(bnet.join("beef0001.config"), "{}").unwrap();
+
+        configure(&layout, "steamuser", &default_tweaks()).unwrap();
+        let changed = configure_accounts(&layout, "steamuser", &account_tweaks()).unwrap();
+        assert_eq!(changed.len(), 2);
+
+        for name in ["1c858370.config", "beef0001.config"] {
+            let v: Value =
+                serde_json::from_str(&std::fs::read_to_string(bnet.join(name)).unwrap()).unwrap();
+            assert_eq!(v["User"]["Client"]["HideOnClose"], json!("false"));
+            assert_eq!(v["User"]["Client"]["DisplayExitPrompt"], json!("false"));
+        }
+
+        // The global config is the client's own; account keys must not leak in.
+        let global: Value = serde_json::from_str(
+            &std::fs::read_to_string(layout.battle_net_config("steamuser")).unwrap(),
+        )
+        .unwrap();
+        assert!(global.get("User").is_none());
+        assert!(global["Client"].get("MinimizeToTray").is_none());
+    }
+
+    #[test]
+    fn a_prefix_with_no_account_yet_is_a_no_op() {
+        let dir = scratch("noaccount");
+        let layout = Layout::with_root(&dir);
+        configure(&layout, "steamuser", &default_tweaks()).unwrap();
+
+        // Only Battle.net.config exists before the first login.
+        assert!(configure_accounts(&layout, "steamuser", &account_tweaks()).unwrap().is_empty());
+    }
+
+    #[test]
     fn configure_seeds_a_config_that_does_not_exist_yet() {
         let dir = scratch("seed");
         let layout = Layout::with_root(&dir);
@@ -608,7 +781,7 @@ mod tests {
 
         let written: Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(written["Client"]["MinimizeToTray"], json!("false"));
+        assert_eq!(written["Client"]["GameLaunchWindowBehavior"], json!("2"));
     }
 
     #[test]
@@ -656,6 +829,51 @@ mod tests {
                 "/f",
             ]
         );
+    }
+
+    #[test]
+    fn a_plain_open_runs_the_launcher_with_no_arguments() {
+        let dir = Path::new("/prefix/Battle.net");
+        let (exe, args) = Launch::Client.command(dir);
+        assert_eq!(exe, dir.join("Battle.net Launcher.exe"));
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn a_product_hand_off_goes_to_battle_net_exe_with_productcode_and_exec() {
+        let dir = Path::new("/prefix/Battle.net");
+        let (exe, args) = Launch::product(ProductCode::Retail).command(dir);
+        assert_eq!(exe, dir.join("Battle.net.exe"));
+        assert_eq!(args, ["--productcode=wow", "--exec=launch wow"]);
+
+        let (_, classic) = Launch::product(ProductCode::Classic).command(dir);
+        assert_eq!(classic, ["--productcode=wow_classic", "--exec=launch wow_classic"]);
+    }
+
+    #[test]
+    fn an_explicit_exec_verb_overrides_the_derived_uid() {
+        let (_, args) = Launch::Product { code: ProductCode::Retail, exec: Some("WoW".into()) }
+            .command(Path::new("/prefix/Battle.net"));
+        assert_eq!(args, ["--productcode=wow", "--exec=launch WoW"]);
+    }
+
+    #[test]
+    fn launching_without_an_install_is_an_error_not_a_spawn_attempt() {
+        let dir = scratch("nolaunch");
+        let layout = Layout::with_root(&dir);
+        let release = crate::proton::ProtonRelease {
+            version: "GE-Proton11-7".into(),
+            flavor: crate::proton::ProtonFlavor::GloriousEggroll,
+            source: crate::proton::ProtonSource::Managed,
+            path: dir.join("GE-Proton11-7"),
+            built_at: None,
+        };
+        let runner = ProtonRunner::new(&release, &layout, dir.join("Steam"));
+
+        assert!(matches!(
+            launch(&runner, &layout, &Launch::Client),
+            Err(BattleNetError::NotInstalled(_))
+        ));
     }
 
     #[test]

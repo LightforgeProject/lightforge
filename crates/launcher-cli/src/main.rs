@@ -69,6 +69,18 @@ enum Command {
     },
     /// Re-apply the `Battle.net.config` defaults without running the installer.
     BattlenetConfig,
+    /// Open Battle.net in the prefix, optionally handing straight off to a game.
+    BattlenetRun {
+        /// Proton build to launch under.
+        #[arg(long)]
+        proton: Option<String>,
+        /// Product code to launch, e.g. `wow`. Omit to just open the client.
+        #[arg(long)]
+        product: Option<String>,
+        /// Override the `--exec="launch <uid>"` verb Battle.net is given.
+        #[arg(long, requires = "product")]
+        exec: Option<String>,
+    },
     /// Show the `.build.info` row for a product.
     BuildInfo {
         /// Product code, e.g. `wow` or `wow_classic`.
@@ -332,24 +344,60 @@ async fn main() -> Result<()> {
             }
             println!("registry        {} values applied", report.registry_values);
             println!("config          {}", report.config_path.display());
+            match report.account_configs.len() {
+                0 => println!("accounts        none yet — log in once, then re-run `battlenet-config`"),
+                n => println!("accounts        {n} updated"),
+            }
         }
         Command::BattlenetConfig => {
             use lightforge_core::battlenet;
             use lightforge_core::config::Config;
 
-            let tweaks = battlenet::default_tweaks();
             let user = Config::default().prefix_user;
+
+            let tweaks = battlenet::default_tweaks();
             let path = battlenet::configure(&layout, &user, &tweaks)
                 .context("writing Battle.net.config")?;
-
             println!("{}", path.display());
-            for tweak in &tweaks {
-                println!(
-                    "  {:<40} {}\n    {}",
-                    tweak.key(),
-                    tweak.value,
-                    tweak.reason
-                );
+            print_tweaks(&tweaks);
+
+            let account_tweaks = battlenet::account_tweaks();
+            let accounts = battlenet::configure_accounts(&layout, &user, &account_tweaks)
+                .context("writing the per-account config")?;
+            if accounts.is_empty() {
+                println!("\nno per-account config yet — it appears after the first login");
+            }
+            for account in &accounts {
+                println!("\n{}", account.display());
+                print_tweaks(&account_tweaks);
+            }
+        }
+        Command::BattlenetRun { proton, product, exec } => {
+            use lightforge_core::battlenet::{self, Launch};
+
+            let launch = match &product {
+                Some(code) => Launch::Product {
+                    code: code.parse().expect("product codes are infallible"),
+                    exec: exec.clone(),
+                },
+                None => Launch::Client,
+            };
+
+            let (runner, build) = proton_runner(&layout, proton.as_deref())?;
+            let (exe, args) = launch.command(&layout.battle_net_dir());
+            println!("using {} ({})", build.version, build.path.display());
+            println!("running {}{}", exe.display(), if args.is_empty() { String::new() } else { format!(" {}", args.join(" ")) });
+
+            let mut child = battlenet::launch(&runner, &layout, &launch)
+                .context("launching Battle.net")?;
+            let status = child.wait().context("waiting for Battle.net")?;
+
+            // Battle.net exits non-zero on perfectly ordinary paths (a window
+            // closed mid-update, a hand-off to the game), so a code is worth
+            // printing but not worth failing the command over.
+            match status.code() {
+                Some(0) | None => println!("exited"),
+                Some(code) => println!("exited with code {code}"),
             }
         }
         Command::BuildInfo { product } => {
@@ -368,6 +416,13 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Render a config tweak list: key, value, and why it is set.
+fn print_tweaks(tweaks: &[lightforge_core::battlenet::Tweak]) {
+    for tweak in tweaks {
+        println!("  {:<40} {}\n    {}", tweak.key(), tweak.value, tweak.reason);
+    }
 }
 
 /// Resolve the Proton build to run against the shared prefix, and a runner for
