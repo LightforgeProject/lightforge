@@ -1,0 +1,14 @@
+[package]
+name = "lightforge-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "UI-agnostic core: product models, path layout, .build.info engine, TACT/CASC, addons"
+
+[dependencies]
+directories.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+toml.workspace = true

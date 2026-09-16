@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/launcher-cli", "crates/launcher-gui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "GPL-3.0-or-later"
+repository = "https://git.tuxcore.pro/kenny/lightforge.git"
+
+[workspace.dependencies]
+lightforge-core = { path = "crates/core" }
+
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+directories = "5"
+iced = "0.13"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "0.8"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

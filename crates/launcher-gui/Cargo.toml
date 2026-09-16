@@ -1,0 +1,17 @@
+[package]
+name = "lightforge-gui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "iced-based Lightforge GUI"
+
+[[bin]]
+name = "lightforge-gui"
+path = "src/main.rs"
+
+[dependencies]
+lightforge-core.workspace = true
+anyhow.workspace = true
+iced.workspace = true

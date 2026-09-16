@@ -1,0 +1,17 @@
+[package]
+name = "lightforge-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Headless CLI consumer of lightforge-core, for scripting and debugging"
+
+[[bin]]
+name = "lightforge"
+path = "src/main.rs"
+
+[dependencies]
+lightforge-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
