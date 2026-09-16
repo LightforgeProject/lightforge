@@ -1,0 +1,801 @@
+//! Pre-flight: everything that has to be true before Battle.net is spawned.
+//!
+//! The problem this solves is the "Initializing Data…" deadlock. A previous
+//! session leaves `Agent.exe` — or the whole client — alive inside the prefix;
+//! the next launch finds Agent's directory cache describing a world that no
+//! longer exists, and Agent responds by scanning 126 GB of CASC storage.
+//!
+//! The pass, in order:
+//!
+//! 1. [`scan`] the process table for anything belonging to *this* prefix,
+//! 2. `wineserver -k` for a graceful, prefix-scoped shutdown,
+//! 3. re-scan and signal the stragglers, `SIGTERM` then `SIGKILL`,
+//! 4. with nothing alive: delete Agent's directory cache and the installer's
+//!    staging directory,
+//! 5. re-apply the Battle.net config defaults,
+//! 6. pause any download writing to CASC storage.
+//!
+//! **Ownership is proven, never guessed.** A process is only ever signalled
+//! when its own environment names Lightforge's prefix — `WINEPREFIX` or
+//! `STEAM_COMPAT_DATA_PATH`. A user running Battle.net out of Lutris or Steam
+//! at the same time has processes with identical names and a different prefix,
+//! and killing those would be a data-loss bug, not a cleanup. A process whose
+//! environment cannot be read is left alone for the same reason.
+//!
+//! Steps 4 and 5 are gated on step 3 having actually succeeded. The client
+//! rewrites its configs on exit and Agent memory-maps its cache, so writing
+//! into a live prefix loses the write at best and corrupts it at worst.
+
+use std::collections::HashSet;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System, UpdateKind};
+
+use crate::battlenet::{self, BattleNetError};
+use crate::paths::Layout;
+use crate::prefix::{PrefixError, ProtonRunner};
+use crate::product::ProductCode;
+
+/// How long a process gets to exit on `SIGTERM` before `SIGKILL` follows.
+pub const DEFAULT_GRACE: Duration = Duration::from_secs(5);
+
+/// Polling interval while waiting for signalled processes to disappear.
+const POLL: Duration = Duration::from_millis(100);
+
+/// Environment variables that identify which prefix a process belongs to.
+const PREFIX_VARS: [&str; 2] = ["WINEPREFIX", "STEAM_COMPAT_DATA_PATH"];
+
+/// What a process found inside the prefix is.
+///
+/// The distinction is not cosmetic: [`ProcKind::Agent`] is the one that causes
+/// the repair scan, and [`ProcKind::WineServer`] is the one that must die last,
+/// because everything else dies with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ProcKind {
+    /// `Battle.net.exe` or `Battle.net Launcher.exe`.
+    BattleNet,
+    /// `Agent.exe` — the update/repair service.
+    Agent,
+    /// A CEF or crash-handler child of the client.
+    Helper,
+    /// The prefix's own `wineserver`.
+    WineServer,
+}
+
+impl ProcKind {
+    /// Classify a process from its command line.
+    ///
+    /// `argv[0]` is the only dependable source here. Linux reports a process's
+    /// name from `comm`, which is the *thread* name, and the client is CEF —
+    /// so a live `Battle.net.exe` shows up as `CrBrowserMain`, `CrGpuMain` or
+    /// `CrRendererMain` and a name-based match misses the one process this
+    /// whole module exists to clean up. `argv[0]` is the Windows path Wine was
+    /// handed, e.g. `C:\Program Files (x86)\Battle.net\Battle.net.exe`.
+    ///
+    /// Returns `None` for anything Lightforge has no business touching.
+    fn classify(argv: &[std::ffi::OsString], name: &str) -> Option<Self> {
+        // Matching is case-insensitive: Wine's spelling of an executable is
+        // not dependable across builds.
+        let exe = executable_name(argv, name).to_ascii_lowercase();
+        let kind = match exe.trim_end_matches(".exe") {
+            "battle.net" | "battle.net launcher" => Self::BattleNet,
+            "agent" => Self::Agent,
+            "blizzarderror" | "bnetcrashhandler" => Self::Helper,
+            "wineserver" => Self::WineServer,
+            _ => return None,
+        };
+
+        // CEF's own children re-exec the same binary with `--type=`. They are
+        // helpers, not the client, and go first so the browser process isn't
+        // left rendering into dead children while it shuts down.
+        if kind == Self::BattleNet && argv.iter().skip(1).any(is_cef_child_arg) {
+            return Some(Self::Helper);
+        }
+        Some(kind)
+    }
+
+    /// Termination order: children before the server that owns them.
+    fn kill_order(self) -> u8 {
+        match self {
+            Self::Helper => 0,
+            Self::Agent => 1,
+            Self::BattleNet => 2,
+            Self::WineServer => 3,
+        }
+    }
+}
+
+/// The executable's file name, from `argv[0]` where there is one.
+///
+/// Splits on both separators: `argv[0]` is a Windows path for anything running
+/// under Wine and a POSIX one for `wineserver` itself.
+fn executable_name(argv: &[std::ffi::OsString], fallback: &str) -> String {
+    let Some(argv0) = argv.first().map(|a| a.to_string_lossy()) else {
+        return fallback.to_owned();
+    };
+    if argv0.is_empty() {
+        return fallback.to_owned();
+    }
+    argv0
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(&argv0)
+        .to_owned()
+}
+
+fn is_cef_child_arg(arg: &std::ffi::OsString) -> bool {
+    arg.to_string_lossy().starts_with("--type=")
+}
+
+/// A process proven to belong to Lightforge's prefix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrefixProcess {
+    pub pid: u32,
+    pub name: String,
+    pub kind: ProcKind,
+    pub exe: Option<PathBuf>,
+}
+
+/// How a process was made to exit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Disposition {
+    /// Gone after `wineserver -k`, before any signal was sent.
+    Wineserver,
+    /// Exited on `SIGTERM`.
+    Terminated,
+    /// Needed `SIGKILL`.
+    Killed,
+    /// Still alive after both. The launch must not proceed.
+    Survived,
+}
+
+/// One process and what became of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Outcome {
+    pub process: PrefixProcess,
+    pub disposition: Disposition,
+}
+
+/// Find every process belonging to the prefix described by `layout`.
+///
+/// Returns them in termination order. An empty result is the normal state of a
+/// healthy system, not a failure to detect anything.
+pub fn scan(layout: &Layout) -> Vec<PrefixProcess> {
+    let mut system = System::new();
+    refresh(&mut system);
+    collect(&system, layout)
+}
+
+/// Refresh only what ownership and classification need. The default refresh
+/// walks disks, networks and CPU state as well, which on a machine with a
+/// 126 GB install is a measurable stall for data nobody here reads.
+fn refresh(system: &mut System) {
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing()
+            .with_cmd(UpdateKind::Always)
+            .with_exe(UpdateKind::Always)
+            .with_environ(UpdateKind::Always),
+    );
+}
+
+fn collect(system: &System, layout: &Layout) -> Vec<PrefixProcess> {
+    let prefixes = owned_prefixes(layout);
+
+    let mut found: Vec<PrefixProcess> = system
+        .processes()
+        .iter()
+        .filter_map(|(pid, proc)| {
+            // Threads share their process's environment and command line, so
+            // they match every test below — and signalling one is not how a
+            // process is stopped. Only thread-group leaders are candidates.
+            if proc.thread_kind().is_some() {
+                return None;
+            }
+            let fallback = proc.name().to_string_lossy();
+            let kind = ProcKind::classify(proc.cmd(), &fallback)?;
+            if !belongs_to(proc.environ(), &prefixes) {
+                return None;
+            }
+            Some(PrefixProcess {
+                pid: pid.as_u32(),
+                name: executable_name(proc.cmd(), &fallback),
+                kind,
+                exe: proc.exe().map(Path::to_path_buf),
+            })
+        })
+        .collect();
+
+    found.sort_by_key(|p| (p.kind.kill_order(), p.pid));
+    found
+}
+
+/// Every spelling of "our prefix" a process's environment might carry.
+///
+/// Both the compat-data directory and the `pfx` inside it count, because
+/// Proton exports the first and Wine exports the second. Canonical forms are
+/// included so a prefix reached through a symlinked home still matches.
+fn owned_prefixes(layout: &Layout) -> HashSet<PathBuf> {
+    let mut set = HashSet::new();
+    for path in [layout.compat_data(), layout.prefix()] {
+        if let Ok(real) = path.canonicalize() {
+            set.insert(real);
+        }
+        set.insert(path);
+    }
+    set
+}
+
+/// Whether a process's environment names one of `prefixes`.
+///
+/// Unreadable or absent — the case for a process owned by another user, or one
+/// that exited mid-scan — means "not ours". Refusing to signal a process we
+/// cannot attribute is the whole safety property of this module.
+fn belongs_to(environ: &[std::ffi::OsString], prefixes: &HashSet<PathBuf>) -> bool {
+    environ.iter().any(|entry| {
+        let Some(value) = PREFIX_VARS.iter().find_map(|var| strip_var(entry, var)) else {
+            return false;
+        };
+        let path = PathBuf::from(value);
+        prefixes.contains(&path)
+            || matches!(path.canonicalize(), Ok(real) if prefixes.contains(&real))
+    })
+}
+
+/// `KEY=value` -> `value`, for one key.
+fn strip_var<'a>(entry: &'a OsStr, var: &str) -> Option<&'a OsStr> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let bytes = entry.as_bytes();
+    let prefix = var.as_bytes();
+    let rest = bytes.strip_prefix(prefix)?;
+    let rest = rest.strip_prefix(b"=")?;
+    Some(OsStr::from_bytes(rest))
+}
+
+/// Shut the prefix down: `wineserver -k` first, then signals for whatever
+/// ignored it.
+///
+/// `wineserver -k` is preferred because it is the shutdown Wine itself defines
+/// — the client gets to flush `Battle.net.config` instead of being killed
+/// mid-write — and because it is scoped to one `WINEPREFIX` by construction.
+/// Signals are the fallback for a genuinely orphaned process whose wineserver
+/// is already gone, which is precisely the case that produces the deadlock.
+pub fn shutdown(
+    runner: &ProtonRunner,
+    layout: &Layout,
+    grace: Duration,
+) -> Result<Vec<Outcome>, PreflightError> {
+    let found = scan(layout);
+    if found.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Idempotent and near-instant on a prefix with no server running.
+    runner.wineserver_kill()?;
+
+    let mut system = System::new();
+    refresh(&mut system);
+    let remaining = collect(&system, layout);
+
+    let mut outcomes: Vec<Outcome> = found
+        .iter()
+        .filter(|p| !remaining.iter().any(|r| r.pid == p.pid))
+        .map(|p| Outcome { process: p.clone(), disposition: Disposition::Wineserver })
+        .collect();
+
+    if remaining.is_empty() {
+        outcomes.sort_by_key(|o| o.process.pid);
+        return Ok(outcomes);
+    }
+
+    let stubborn = signal_all(&mut system, layout, &remaining, Signal::Term, grace);
+    let (ignored_term, exited): (Vec<_>, Vec<_>) =
+        remaining.into_iter().partition(|p| stubborn.contains(&p.pid));
+    outcomes.extend(exited.into_iter().map(|process| Outcome {
+        process,
+        disposition: Disposition::Terminated,
+    }));
+
+    if !ignored_term.is_empty() {
+        let survivors = signal_all(&mut system, layout, &ignored_term, Signal::Kill, grace);
+        outcomes.extend(ignored_term.into_iter().map(|process| {
+            let disposition = if survivors.contains(&process.pid) {
+                Disposition::Survived
+            } else {
+                Disposition::Killed
+            };
+            Outcome { process, disposition }
+        }));
+    }
+
+    outcomes.sort_by_key(|o| o.process.pid);
+    Ok(outcomes)
+}
+
+/// Send `signal` to each process, then wait up to `grace` for them all to go
+/// away. Returns the pids still alive at the end.
+///
+/// Every pid is re-attributed against the prefix immediately before it is
+/// signalled. Between the scan and the signal a pid can be recycled onto an
+/// unrelated process, and signalling that one would be indefensible.
+fn signal_all(
+    system: &mut System,
+    layout: &Layout,
+    targets: &[PrefixProcess],
+    signal: Signal,
+    grace: Duration,
+) -> HashSet<u32> {
+    let prefixes = owned_prefixes(layout);
+    let mut pending: HashSet<u32> = HashSet::new();
+
+    for target in targets {
+        let pid = Pid::from_u32(target.pid);
+        let Some(proc) = system.process(pid) else {
+            continue;
+        };
+        if !belongs_to(proc.environ(), &prefixes) {
+            continue;
+        }
+        if proc.kill_with(signal).is_some() {
+            pending.insert(target.pid);
+        }
+    }
+
+    let deadline = Instant::now() + grace;
+    while !pending.is_empty() && Instant::now() < deadline {
+        std::thread::sleep(POLL);
+        let pids: Vec<Pid> = pending.iter().map(|p| Pid::from_u32(*p)).collect();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&pids),
+            true,
+            ProcessRefreshKind::nothing(),
+        );
+        pending.retain(|pid| system.process(Pid::from_u32(*pid)).is_some());
+    }
+    pending
+}
+
+/// Delete a directory, reporting the bytes reclaimed. A missing directory is
+/// success with nothing reclaimed.
+fn remove_dir(dir: &Path) -> Result<Option<u64>, PreflightError> {
+    if !dir.is_dir() {
+        return Ok(None);
+    }
+    let bytes = dir_size(dir);
+    std::fs::remove_dir_all(dir)
+        .map_err(|source| PreflightError::Io { path: dir.to_path_buf(), source })?;
+    Ok(Some(bytes))
+}
+
+/// Recursive size, best-effort. Used only to report what cleanup reclaimed, so
+/// an unreadable entry is skipped rather than escalated.
+fn dir_size(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| match entry.file_type() {
+            Ok(t) if t.is_dir() => dir_size(&entry.path()),
+            Ok(t) if t.is_file() => entry.metadata().map(|m| m.len()).unwrap_or(0),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// A downloader that pre-flight can pause before Battle.net starts.
+///
+/// The native downloader lands in Milestone 4; this is the seam it plugs into,
+/// defined now so the launch ordering never has to be revisited. Both the
+/// downloader and an `Agent.exe` verification pass write the same
+/// `data.NNN`/`.idx` files, and letting them overlap corrupts CASC storage.
+///
+/// Implementations are expected to be cheap no-ops when nothing is in flight.
+pub trait DownloadGuard {
+    /// Pause any transfer writing to `code`'s CASC storage. `Ok(true)` means
+    /// something was actually paused and [`DownloadGuard::resume`] is owed.
+    /// An `Err` blocks the launch rather than risking the overlap.
+    fn pause(&mut self, code: &ProductCode) -> Result<bool, PreflightError>;
+
+    /// Resume what [`DownloadGuard::pause`] stopped, once Battle.net has exited.
+    fn resume(&mut self, code: &ProductCode) -> Result<bool, PreflightError>;
+}
+
+/// The Milestone 3 implementation: there is no downloader yet, so there is
+/// never anything to pause.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoDownloads;
+
+impl DownloadGuard for NoDownloads {
+    fn pause(&mut self, _code: &ProductCode) -> Result<bool, PreflightError> {
+        Ok(false)
+    }
+
+    fn resume(&mut self, _code: &ProductCode) -> Result<bool, PreflightError> {
+        Ok(false)
+    }
+}
+
+/// What a pre-flight pass is allowed to do.
+#[derive(Debug, Clone)]
+pub struct Preflight {
+    /// Windows user inside the prefix, for locating the config files.
+    user: String,
+    grace: Duration,
+    clear_agent_cache: bool,
+    clear_staging: bool,
+    reapply_config: bool,
+}
+
+impl Preflight {
+    pub fn new(user: impl Into<String>) -> Self {
+        Self {
+            user: user.into(),
+            grace: DEFAULT_GRACE,
+            clear_agent_cache: true,
+            clear_staging: true,
+            reapply_config: true,
+        }
+    }
+
+    /// How long a process gets between `SIGTERM` and `SIGKILL`.
+    pub fn with_grace(mut self, grace: Duration) -> Self {
+        self.grace = grace;
+        self
+    }
+
+    /// Keep Agent's directory cache. Only useful for debugging Agent itself.
+    pub fn keep_agent_cache(mut self) -> Self {
+        self.clear_agent_cache = false;
+        self
+    }
+
+    /// Keep the installer's `.extract` staging directory.
+    pub fn keep_staging(mut self) -> Self {
+        self.clear_staging = false;
+        self
+    }
+
+    /// Leave `Battle.net.config` and the per-account configs alone.
+    pub fn keep_config(mut self) -> Self {
+        self.reapply_config = false;
+        self
+    }
+
+    /// Run the full pass. Fails rather than half-cleaning if anything in the
+    /// prefix refused to die.
+    pub fn run(
+        &self,
+        runner: &ProtonRunner,
+        layout: &Layout,
+        code: Option<&ProductCode>,
+        downloads: &mut dyn DownloadGuard,
+    ) -> Result<Report, PreflightError> {
+        let processes = shutdown(runner, layout, self.grace)?;
+
+        let survivors: Vec<PrefixProcess> = processes
+            .iter()
+            .filter(|o| o.disposition == Disposition::Survived)
+            .map(|o| o.process.clone())
+            .collect();
+        if !survivors.is_empty() {
+            return Err(PreflightError::StillRunning(survivors));
+        }
+
+        // Everything below this line depends on the prefix being quiet.
+        let agent_cache = if self.clear_agent_cache {
+            remove_dir(&layout.agent_cache_dir())?
+        } else {
+            None
+        };
+        let staging = if self.clear_staging {
+            remove_dir(&layout.battle_net_staging())?
+        } else {
+            None
+        };
+
+        // The per-account file is the client's, not ours: it is recreated on
+        // login and after a prefix update, each time without `HideOnClose`. A
+        // one-shot write at setup does not survive, so it is re-applied here
+        // on every launch.
+        let mut configs = Vec::new();
+        if self.reapply_config {
+            configs.push(battlenet::configure(layout, &self.user, &battlenet::default_tweaks())?);
+            configs.extend(battlenet::configure_accounts(
+                layout,
+                &self.user,
+                &battlenet::account_tweaks(),
+            )?);
+        }
+
+        let download_paused = match code {
+            Some(code) => downloads.pause(code)?,
+            None => false,
+        };
+
+        Ok(Report {
+            processes,
+            agent_cache_removed: agent_cache,
+            staging_removed: staging,
+            configs,
+            download_paused,
+        })
+    }
+}
+
+/// Everything a pre-flight pass did, for the CLI and the UI's status line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Report {
+    /// Processes found and how each was made to exit. Empty on a clean system.
+    pub processes: Vec<Outcome>,
+    /// Bytes reclaimed from Agent's directory cache, if it existed.
+    pub agent_cache_removed: Option<u64>,
+    /// Bytes reclaimed from the installer's staging directory, if it existed.
+    pub staging_removed: Option<u64>,
+    /// Config files re-applied, global first.
+    pub configs: Vec<PathBuf>,
+    /// Whether a download was paused and is owed a resume.
+    pub download_paused: bool,
+}
+
+impl Report {
+    /// Whether anything at all needed doing. A quiet report is the good case.
+    pub fn is_clean(&self) -> bool {
+        self.processes.is_empty()
+            && self.agent_cache_removed.is_none()
+            && self.staging_removed.is_none()
+    }
+
+    pub fn bytes_reclaimed(&self) -> u64 {
+        self.agent_cache_removed.unwrap_or(0) + self.staging_removed.unwrap_or(0)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PreflightError {
+    #[error(
+        "{} in the prefix survived SIGKILL: {}",
+        if .0.len() == 1 { "a process" } else { "processes" },
+        .0.iter().map(|p| format!("{} (pid {})", p.name, p.pid)).collect::<Vec<_>>().join(", ")
+    )]
+    StillRunning(Vec<PrefixProcess>),
+
+    #[error("a download for `{0}` is writing to CASC storage and could not be paused")]
+    DownloadBusy(ProductCode),
+
+    #[error(transparent)]
+    Prefix(#[from] PrefixError),
+
+    #[error(transparent)]
+    BattleNet(#[from] BattleNetError),
+
+    #[error("i/o error at {path}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("lightforge-preflight-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn environ(vars: &[&str]) -> Vec<OsString> {
+        vars.iter().map(OsString::from).collect()
+    }
+
+    /// `argv` as Wine presents it, plus the `comm` Linux reports.
+    fn argv(parts: &[&str]) -> Vec<OsString> {
+        parts.iter().map(OsString::from).collect()
+    }
+
+    const BNET: &str = r"C:\Program Files (x86)\Battle.net\Battle.net.exe";
+    const AGENT: &str = r"C:\ProgramData\Battle.net\Agent\Agent.9775\Agent.exe";
+
+    #[test]
+    fn only_the_processes_that_cause_the_deadlock_are_classified() {
+        assert_eq!(
+            ProcKind::classify(&argv(&[AGENT, "--session=4409"]), "Agent.exe"),
+            Some(ProcKind::Agent)
+        );
+        assert_eq!(
+            ProcKind::classify(&argv(&[BNET, "--from-launcher"]), "CrBrowserMain"),
+            Some(ProcKind::BattleNet)
+        );
+        assert_eq!(
+            ProcKind::classify(
+                &argv(&[r"C:\Program Files (x86)\Battle.net\Battle.net Launcher.exe"]),
+                "Battle.net Laun"
+            ),
+            Some(ProcKind::BattleNet)
+        );
+        assert_eq!(
+            ProcKind::classify(
+                &argv(&["/home/u/proton/files/bin/wineserver", "-p"]),
+                "wineserver"
+            ),
+            Some(ProcKind::WineServer)
+        );
+
+        // The game itself is never touched — that is the legal guardrail, and
+        // it is enforced here rather than by remembering not to.
+        assert_eq!(
+            ProcKind::classify(&argv(&[r"C:\...\_retail_\Wow.exe"]), "Wow.exe"),
+            None
+        );
+        assert_eq!(
+            ProcKind::classify(&argv(&["/usr/bin/firefox"]), "firefox"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_client_is_recognised_despite_cef_renaming_its_threads() {
+        // Live finding: Linux reports `comm`, and the Battle.net client is
+        // CEF — every one of its processes is named after a Chromium thread,
+        // never after the executable. Classifying on the name alone silently
+        // misses the client entirely, which is the one process pre-flight
+        // exists to clear.
+        for comm in ["CrBrowserMain", "CrGpuMain", "CrRendererMain", "CrUtilityMain", "Agent"] {
+            assert!(
+                ProcKind::classify(&argv(&[BNET, "--from-launcher"]), comm).is_some(),
+                "{comm} was not recognised as the client"
+            );
+        }
+    }
+
+    #[test]
+    fn cef_children_are_helpers_and_die_before_the_browser_process() {
+        let child = ProcKind::classify(
+            &argv(&[BNET, "--type=renderer", "--log-severity=error"]),
+            "CrRendererMain",
+        );
+        assert_eq!(child, Some(ProcKind::Helper));
+        assert!(ProcKind::Helper.kill_order() < ProcKind::BattleNet.kill_order());
+    }
+
+    #[test]
+    fn a_windows_argv0_splits_on_backslashes() {
+        assert_eq!(executable_name(&argv(&[BNET]), "x"), "Battle.net.exe");
+        assert_eq!(executable_name(&argv(&["/usr/bin/wineserver"]), "x"), "wineserver");
+        // A process with no readable command line still has its name.
+        assert_eq!(executable_name(&[], "wineserver"), "wineserver");
+        assert_eq!(executable_name(&argv(&[""]), "wineserver"), "wineserver");
+    }
+
+    #[test]
+    fn wineserver_dies_after_everything_it_owns() {
+        let mut kinds = [
+            ProcKind::WineServer,
+            ProcKind::BattleNet,
+            ProcKind::Helper,
+            ProcKind::Agent,
+        ];
+        kinds.sort_by_key(|k| k.kill_order());
+        assert_eq!(
+            kinds,
+            [
+                ProcKind::Helper,
+                ProcKind::Agent,
+                ProcKind::BattleNet,
+                ProcKind::WineServer
+            ]
+        );
+    }
+
+    #[test]
+    fn a_process_in_another_prefix_is_never_ours() {
+        let layout = Layout::with_root("/games/Blizzard");
+        let prefixes = owned_prefixes(&layout);
+
+        // Gabriel's Lutris Battle.net: same executable name, different prefix.
+        assert!(!belongs_to(
+            &environ(&["WINEPREFIX=/home/u/Games/battlenet"]),
+            &prefixes
+        ));
+        assert!(belongs_to(
+            &environ(&["WINEPREFIX=/games/Blizzard/prefix/pfx"]),
+            &prefixes
+        ));
+        // Proton exports the compat-data dir rather than the prefix itself.
+        assert!(belongs_to(
+            &environ(&["STEAM_COMPAT_DATA_PATH=/games/Blizzard/prefix"]),
+            &prefixes
+        ));
+    }
+
+    #[test]
+    fn an_unreadable_environment_means_hands_off() {
+        let prefixes = owned_prefixes(&Layout::with_root("/games/Blizzard"));
+        assert!(!belongs_to(&[], &prefixes));
+        assert!(!belongs_to(&environ(&["PATH=/usr/bin"]), &prefixes));
+    }
+
+    #[test]
+    fn a_variable_that_merely_starts_with_the_name_does_not_match() {
+        let prefixes = owned_prefixes(&Layout::with_root("/games/Blizzard"));
+        // `WINEPREFIXES` is not `WINEPREFIX`, and a value-only match would be
+        // a way to get an unrelated process signalled.
+        assert!(!belongs_to(
+            &environ(&["WINEPREFIXES=/games/Blizzard/prefix/pfx"]),
+            &prefixes
+        ));
+    }
+
+    #[test]
+    fn scanning_a_prefix_nothing_runs_in_finds_nothing() {
+        // Lightforge's own test process is alive and has neither variable set,
+        // so this also asserts the scan doesn't match on name alone.
+        assert!(scan(&Layout::with_root("/nonexistent/Blizzard")).is_empty());
+    }
+
+    #[test]
+    fn cleanup_reports_what_it_reclaimed_and_is_idempotent() {
+        let root = scratch("cleanup");
+        let layout = Layout::with_root(&root);
+
+        let cache = layout.agent_cache_dir();
+        std::fs::create_dir_all(cache.join("data")).unwrap();
+        std::fs::write(cache.join("data").join("blob"), vec![0u8; 2048]).unwrap();
+
+        assert_eq!(remove_dir(&cache).unwrap(), Some(2048));
+        assert!(!cache.exists());
+        // A second pass is the normal case on a healthy system.
+        assert_eq!(remove_dir(&cache).unwrap(), None);
+    }
+
+    #[test]
+    fn the_installer_staging_directory_is_the_one_inside_the_install() {
+        let layout = Layout::with_root("/games/Blizzard");
+        assert!(layout
+            .battle_net_staging()
+            .starts_with(layout.battle_net_dir()));
+        assert!(layout.battle_net_staging().ends_with(".battle.net/.extract"));
+    }
+
+    #[test]
+    fn a_clean_report_says_so() {
+        let report = Report {
+            processes: Vec::new(),
+            agent_cache_removed: None,
+            staging_removed: None,
+            configs: vec![PathBuf::from("/x/Battle.net.config")],
+            download_paused: false,
+        };
+        assert!(report.is_clean());
+        assert_eq!(report.bytes_reclaimed(), 0);
+    }
+
+    #[test]
+    fn a_surviving_process_names_itself_in_the_error() {
+        let err = PreflightError::StillRunning(vec![PrefixProcess {
+            pid: 4242,
+            name: "Agent.exe".into(),
+            kind: ProcKind::Agent,
+            exe: None,
+        }]);
+        let text = err.to_string();
+        assert!(text.contains("Agent.exe"), "{text}");
+        assert!(text.contains("4242"), "{text}");
+    }
+
+    #[test]
+    fn the_milestone_3_guard_never_claims_a_pause() {
+        let mut guard = NoDownloads;
+        assert!(!guard.pause(&ProductCode::Retail).unwrap());
+        assert!(!guard.resume(&ProductCode::Retail).unwrap());
+    }
+}

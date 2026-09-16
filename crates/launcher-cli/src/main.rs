@@ -81,11 +81,37 @@ enum Command {
         #[arg(long, requires = "product")]
         exec: Option<String>,
     },
+    /// Clean the prefix up the way a launch would, without launching anything.
+    Preflight {
+        /// Proton build whose `wineserver` shuts the prefix down.
+        #[arg(long)]
+        proton: Option<String>,
+        /// Product the launch is for, so a download can be paused.
+        #[arg(long)]
+        product: Option<String>,
+        /// Report what would be done without touching anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Seconds a process gets between SIGTERM and SIGKILL.
+        #[arg(long, default_value_t = 5)]
+        grace: u64,
+    },
     /// Show the `.build.info` row for a product.
     BuildInfo {
         /// Product code, e.g. `wow` or `wow_classic`.
         #[arg(default_value = "wow")]
         product: String,
+    },
+    /// Atomically rewrite one product's build keys in `.build.info`.
+    BuildInfoSet {
+        /// Product code, e.g. `wow`.
+        product: String,
+        #[arg(long)]
+        build_key: String,
+        #[arg(long)]
+        cdn_key: String,
+        #[arg(long)]
+        version: String,
     },
 }
 
@@ -374,6 +400,8 @@ async fn main() -> Result<()> {
         }
         Command::BattlenetRun { proton, product, exec } => {
             use lightforge_core::battlenet::{self, Launch};
+            use lightforge_core::config::Config;
+            use lightforge_core::preflight::{DownloadGuard, NoDownloads, Preflight};
 
             let launch = match &product {
                 Some(code) => Launch::Product {
@@ -386,11 +414,29 @@ async fn main() -> Result<()> {
             let (runner, build) = proton_runner(&layout, proton.as_deref())?;
             let (exe, args) = launch.command(&layout.battle_net_dir());
             println!("using {} ({})", build.version, build.path.display());
-            println!("running {}{}", exe.display(), if args.is_empty() { String::new() } else { format!(" {}", args.join(" ")) });
 
+            // Never spawn the client into a prefix that still has one running.
+            let code = match &launch {
+                Launch::Product { code, .. } => Some(code.clone()),
+                Launch::Client => None,
+            };
+            let mut downloads = NoDownloads;
+            let report = Preflight::new(Config::default().prefix_user)
+                .run(&runner, &layout, code.as_ref(), &mut downloads)
+                .context("pre-flight cleanup")?;
+            print_preflight(&report);
+
+            println!("running {}{}", exe.display(), if args.is_empty() { String::new() } else { format!(" {}", args.join(" ")) });
             let mut child = battlenet::launch(&runner, &layout, &launch)
                 .context("launching Battle.net")?;
             let status = child.wait().context("waiting for Battle.net")?;
+
+            if report.download_paused {
+                if let Some(code) = &code {
+                    downloads.resume(code).context("resuming the download")?;
+                    println!("download        resumed");
+                }
+            }
 
             // Battle.net exits non-zero on perfectly ordinary paths (a window
             // closed mid-update, a hand-off to the game), so a code is worth
@@ -399,6 +445,55 @@ async fn main() -> Result<()> {
                 Some(0) | None => println!("exited"),
                 Some(code) => println!("exited with code {code}"),
             }
+        }
+        Command::Preflight { proton, product, dry_run, grace } => {
+            use lightforge_core::config::Config;
+            use lightforge_core::preflight::{self, NoDownloads, Preflight};
+
+            let code: Option<ProductCode> =
+                product.map(|p| p.parse().expect("product codes are infallible"));
+
+            if dry_run {
+                let found = preflight::scan(&layout);
+                if found.is_empty() {
+                    println!("processes       none in {}", layout.prefix().display());
+                }
+                for proc in &found {
+                    println!("would signal    {:<24} pid {}  {:?}", proc.name, proc.pid, proc.kind);
+                }
+                for dir in [layout.agent_cache_dir(), layout.battle_net_staging()] {
+                    if dir.is_dir() {
+                        println!("would delete    {}", dir.display());
+                    }
+                }
+                return Ok(());
+            }
+
+            let (runner, build) = proton_runner(&layout, proton.as_deref())?;
+            println!("using {} ({})", build.version, build.path.display());
+
+            let report = Preflight::new(Config::default().prefix_user)
+                .with_grace(std::time::Duration::from_secs(grace))
+                .run(&runner, &layout, code.as_ref(), &mut NoDownloads)
+                .context("pre-flight cleanup")?;
+            print_preflight(&report);
+        }
+        Command::BuildInfoSet { product, build_key, cdn_key, version } => {
+            use lightforge_core::buildinfo::BuildInfoError;
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let path = layout.build_info();
+
+            // Read-modify-write, atomically. The caller is responsible for
+            // having run pre-flight first — this is the file Agent watches.
+            let info = BuildInfo::update(&path, |info| {
+                info.set_build(&code, &build_key, &cdn_key, &version)
+            })
+            .map_err(|e: BuildInfoError| e)
+            .with_context(|| format!("rewriting {}", path.display()))?;
+
+            println!("{}", path.display());
+            println!("{}", info.row(&code).expect("the row just written").cells().join(" | "));
         }
         Command::BuildInfo { product } => {
             let code: ProductCode = product.parse().expect("product codes are infallible");
@@ -416,6 +511,44 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Render what a pre-flight pass did, one aligned line per fact.
+fn print_preflight(report: &lightforge_core::preflight::Report) {
+    use lightforge_core::preflight::Disposition;
+
+    if report.processes.is_empty() {
+        println!("processes       none running");
+    }
+    for outcome in &report.processes {
+        let how = match outcome.disposition {
+            Disposition::Wineserver => "wineserver -k",
+            Disposition::Terminated => "SIGTERM",
+            Disposition::Killed => "SIGKILL",
+            Disposition::Survived => "SURVIVED",
+        };
+        println!(
+            "processes       {:<24} pid {:<8} {how}",
+            outcome.process.name, outcome.process.pid
+        );
+    }
+
+    for (label, bytes) in [
+        ("agent cache", report.agent_cache_removed),
+        ("staging", report.staging_removed),
+    ] {
+        match bytes {
+            Some(n) => println!("{label:<15} removed, {:.0} MB reclaimed", n as f64 / 1_048_576.0),
+            None => println!("{label:<15} absent"),
+        }
+    }
+
+    for config in &report.configs {
+        println!("config          re-applied {}", config.display());
+    }
+    if report.download_paused {
+        println!("download        paused for the session");
+    }
 }
 
 /// Render a config tweak list: key, value, and why it is set.

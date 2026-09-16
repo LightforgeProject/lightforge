@@ -100,6 +100,17 @@ impl Layout {
             .join("Battle.net.config")
     }
 
+    /// The bootstrapper's staging directory inside the Battle.net install.
+    ///
+    /// `Battle.net-Setup.exe` unpacks the client here and then promotes it to
+    /// `Battle.net.<build>/` alongside. A setup that was torn down at the
+    /// moment of promotion leaves a full duplicate behind — roughly 750 MB —
+    /// which the client only clears on its next successful launch. Pre-flight
+    /// removes it once nothing in the prefix is alive.
+    pub fn battle_net_staging(&self) -> PathBuf {
+        self.battle_net_dir().join(".battle.net").join(".extract")
+    }
+
     /// Agent's directory cache, deleted by pre-flight cleanup.
     pub fn agent_cache_dir(&self) -> PathBuf {
         self.drive_c()

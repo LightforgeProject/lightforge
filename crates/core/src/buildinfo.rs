@@ -14,10 +14,17 @@
 //! 2. **Only the target product's row is ever mutated.** Retail, Classic and
 //!    PTR share one file, so a whole-file rewrite would clobber siblings.
 //!
-//! Milestone 1 provides the parser and the in-memory model. The atomic
-//! temp-file-and-rename writer lands in Milestone 3.
+//! Milestone 1 provided the parser and the in-memory model; Milestone 3 adds
+//! the atomic temp-file-and-rename writer. Writing is never in-place: Agent
+//! memory-maps this file and a torn write is exactly the corruption that
+//! triggers the full repair scan Lightforge exists to avoid.
+//!
+//! Nothing here checks whether Agent is running. That gate belongs to
+//! [`crate::preflight`], which every caller must pass through first.
 
 use std::collections::HashMap;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use crate::product::ProductCode;
 
@@ -119,6 +126,101 @@ impl BuildInfo {
         Ok(())
     }
 
+    /// Read and parse a `.build.info` from disk.
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, BuildInfoError> {
+        let path = path.as_ref();
+        let contents = std::fs::read_to_string(path)
+            .map_err(|source| BuildInfoError::Io { path: path.to_path_buf(), source })?;
+        Self::parse(&contents)
+    }
+
+    /// Atomically replace `path` with this document.
+    ///
+    /// Temp file in the destination directory, `fsync`, then `rename` — the
+    /// rename is the only step an observer can see, so the file is either the
+    /// old bytes or the new ones and never a prefix of either. The directory
+    /// is synced afterwards so the rename itself survives a power loss, which
+    /// is the half that a plain tempfile-and-persist leaves undone.
+    ///
+    /// The original file's permissions are carried over. `tempfile` creates
+    /// `0600`, and silently tightening a file Wine shares would be a change
+    /// nobody asked for.
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<(), BuildInfoError> {
+        let path = path.as_ref();
+        let dir = path.parent().unwrap_or(Path::new("."));
+        std::fs::create_dir_all(dir)
+            .map_err(|source| BuildInfoError::Io { path: dir.to_path_buf(), source })?;
+
+        let io = |p: &Path| {
+            let p = p.to_path_buf();
+            move |source| BuildInfoError::Io { path: p.clone(), source }
+        };
+
+        let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(io(dir))?;
+        tmp.write_all(self.to_file_contents().as_bytes())
+            .map_err(io(tmp.path()))?;
+        tmp.as_file().sync_all().map_err(io(tmp.path()))?;
+
+        if let Ok(meta) = std::fs::metadata(path) {
+            // Only meaningful when the file already existed; a fresh install
+            // gets tempfile's default and Wine is happy with it.
+            let _ = tmp.as_file().set_permissions(meta.permissions());
+        }
+        tmp.persist(path).map_err(|e| BuildInfoError::Io { path: path.to_path_buf(), source: e.error })?;
+
+        // Durability of the rename, not of the contents.
+        if let Ok(handle) = std::fs::File::open(dir) {
+            let _ = handle.sync_all();
+        }
+        Ok(())
+    }
+
+    /// Load, mutate, and atomically write back in one call.
+    ///
+    /// The read-modify-write is deliberately not held open across the
+    /// mutation: `.build.info` has no lock protocol, and pre-flight — not a
+    /// file handle — is what guarantees nobody else is writing.
+    pub fn update<E>(
+        path: impl AsRef<Path>,
+        edit: impl FnOnce(&mut Self) -> Result<(), E>,
+    ) -> Result<Self, E>
+    where
+        E: From<BuildInfoError>,
+    {
+        let path = path.as_ref();
+        let mut info = Self::load(path)?;
+        edit(&mut info)?;
+        info.save(path)?;
+        Ok(info)
+    }
+
+    /// Point a product's row at a new build, the three cells Agent compares
+    /// against the CDN.
+    ///
+    /// Grouped into one call because writing two of the three is worse than
+    /// writing none: a `Version` that disagrees with its `Build Key` is what
+    /// makes Agent decide the install is damaged.
+    pub fn set_build(
+        &mut self,
+        code: &ProductCode,
+        build_key: &str,
+        cdn_key: &str,
+        version: &str,
+    ) -> Result<(), BuildInfoError> {
+        // Resolve every column before mutating, so a schema missing one of
+        // them leaves the row exactly as it was.
+        let cols = [
+            (self.column(COL_BUILD_KEY)?, build_key),
+            (self.column(COL_CDN_KEY)?, cdn_key),
+            (self.column(COL_VERSION)?, version),
+        ];
+        let row = self.row_mut(code)?;
+        for (col, value) in cols {
+            row.cells[col] = value.to_owned();
+        }
+        Ok(())
+    }
+
     /// Serialize back to the on-disk format, preserving column order.
     pub fn to_file_contents(&self) -> String {
         let mut out = String::new();
@@ -151,6 +253,13 @@ pub enum BuildInfoError {
 
     #[error("`{0}` has no row in .build.info")]
     UnknownProduct(String),
+
+    #[error("i/o error at {path}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 #[cfg(test)]
@@ -236,6 +345,87 @@ us|1|cccc|dddd|1.15.5.57638|wow_classic\n";
     fn round_trips_unchanged() {
         let bi = BuildInfo::parse(SAMPLE).unwrap();
         assert_eq!(bi.to_file_contents(), SAMPLE);
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("lightforge-buildinfo-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_saved_file_reloads_identically_and_leaves_no_temp_files() {
+        let dir = scratch("roundtrip");
+        let path = dir.join(".build.info");
+        std::fs::write(&path, REAL_RETAIL).unwrap();
+
+        let mut info = BuildInfo::load(&path).unwrap();
+        info.set(&ProductCode::Retail, COL_VERSION, "12.1.5.70000").unwrap();
+        info.save(&path).unwrap();
+
+        assert_eq!(BuildInfo::load(&path).unwrap(), info);
+        // A stray `.tmpXXXX` next to `.build.info` is something Agent notices.
+        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left.len(), 1, "{left:?}");
+    }
+
+    #[test]
+    fn saving_preserves_the_original_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = scratch("perms");
+        let path = dir.join(".build.info");
+        std::fs::write(&path, REAL_RETAIL).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        BuildInfo::load(&path).unwrap().save(&path).unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644, "tempfile's 0600 must not be inherited");
+    }
+
+    #[test]
+    fn a_failed_edit_leaves_the_file_exactly_as_it_was() {
+        let dir = scratch("failed-edit");
+        let path = dir.join(".build.info");
+        std::fs::write(&path, REAL_RETAIL).unwrap();
+
+        let result = BuildInfo::update(&path, |info| {
+            info.set(&ProductCode::Retail, COL_VERSION, "12.1.5.70000")?;
+            // A later step fails: nothing may reach disk.
+            info.set(&ProductCode::Classic, COL_BUILD_KEY, "dead")
+        });
+
+        assert!(matches!(result, Err(BuildInfoError::UnknownProduct(_))));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), REAL_RETAIL);
+    }
+
+    #[test]
+    fn set_build_writes_all_three_cells_or_none() {
+        let mut bi = BuildInfo::parse(SAMPLE).unwrap();
+        bi.set_build(&ProductCode::Retail, "1111", "2222", "11.9.9.99999").unwrap();
+        assert_eq!(bi.get(&ProductCode::Retail, COL_BUILD_KEY).unwrap(), "1111");
+        assert_eq!(bi.get(&ProductCode::Retail, COL_CDN_KEY).unwrap(), "2222");
+        assert_eq!(bi.get(&ProductCode::Retail, COL_VERSION).unwrap(), "11.9.9.99999");
+        assert_eq!(bi.get(&ProductCode::Classic, COL_BUILD_KEY).unwrap(), "cccc");
+
+        // A schema without a CDN Key column must not leave a half-updated row:
+        // a Version that disagrees with its Build Key is what makes Agent
+        // decide the install is damaged.
+        let partial = "Product!STRING:0|Version!STRING:0|Build Key!HEX:16\nwow|1.2.3|ffff\n";
+        let mut bi = BuildInfo::parse(partial).unwrap();
+        assert!(matches!(
+            bi.set_build(&ProductCode::Retail, "1111", "2222", "9.9.9"),
+            Err(BuildInfoError::MissingColumn(_))
+        ));
+        assert_eq!(bi.to_file_contents(), partial);
+    }
+
+    #[test]
+    fn a_missing_file_names_itself() {
+        let err = BuildInfo::load("/nonexistent/games/.build.info").unwrap_err();
+        assert!(err.to_string().contains("/nonexistent/games/.build.info"));
     }
 
     #[test]

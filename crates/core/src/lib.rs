@@ -15,6 +15,7 @@ pub mod error;
 pub mod net;
 pub mod paths;
 pub mod prefix;
+pub mod preflight;
 pub mod product;
 pub mod proton;
 pub mod state;

@@ -34,6 +34,9 @@ pub enum CoreError {
     #[error(transparent)]
     BattleNet(#[from] crate::battlenet::BattleNetError),
 
+    #[error(transparent)]
+    Preflight(#[from] crate::preflight::PreflightError),
+
     #[error("i/o error at {path}")]
     Io {
         path: PathBuf,
