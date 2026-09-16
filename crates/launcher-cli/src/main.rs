@@ -102,6 +102,12 @@ enum Command {
         #[arg(default_value = "wow")]
         product: String,
     },
+    /// Inspect the CASC bucket indices of an install, verifying both hashes
+    /// and re-serializing each file to prove we can write them byte-identically.
+    Idx {
+        /// A WoW install root, or a `Data/data` directory directly.
+        path: PathBuf,
+    },
     /// Atomically rewrite one product's build keys in `.build.info`.
     BuildInfoSet {
         /// Product code, e.g. `wow`.
@@ -477,6 +483,58 @@ async fn main() -> Result<()> {
                 .run(&runner, &layout, code.as_ref(), &mut NoDownloads)
                 .context("pre-flight cleanup")?;
             print_preflight(&report);
+        }
+        Command::Idx { path } => {
+            use lightforge_core::tact::idx::{self, Index};
+
+            // Accept either spelling so this is usable against an install root
+            // or a bare data directory.
+            let dir = if path.join("Data").join("data").is_dir() {
+                path.join("Data").join("data")
+            } else {
+                path.clone()
+            };
+
+            let files = idx::discover(&dir).with_context(|| format!("scanning {}", dir.display()))?;
+            if files.is_empty() {
+                println!("no .idx files under {}", dir.display());
+                return Ok(());
+            }
+
+            let (mut exact, mut differing) = (0usize, 0usize);
+            let mut entries_total = 0usize;
+            for file in &files {
+                let raw = std::fs::read(file)?;
+                let name = file.file_name().unwrap_or_default().to_string_lossy();
+
+                match Index::parse(&raw) {
+                    Ok(index) => {
+                        // Both hashes already verified by parse; this proves we
+                        // can reproduce the file Blizzard wrote, byte for byte.
+                        let round = index.to_bytes()?;
+                        let identical = round == raw;
+                        if identical { exact += 1 } else { differing += 1 }
+                        entries_total += index.entries().len();
+                        println!(
+                            "{name}  bucket {:02x}  v{}  {:>7} files  {:>4} markers  {:>5} free  {}",
+                            index.bucket(),
+                            index.version(),
+                            index.files().count(),
+                            index.entries().len() - index.files().count(),
+                            index.remaining_capacity(),
+                            if identical { "round-trips exactly" } else { "DIFFERS" },
+                        );
+                    }
+                    Err(e) => {
+                        differing += 1;
+                        println!("{name}  FAILED: {e}");
+                    }
+                }
+            }
+            println!(
+                "\n{} files, {entries_total} entries; {exact} round-trip byte-for-byte, {differing} do not",
+                files.len()
+            );
         }
         Command::BuildInfoSet { product, build_key, cdn_key, version } => {
             use lightforge_core::buildinfo::BuildInfoError;

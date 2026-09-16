@@ -5,7 +5,7 @@ members = ["crates/core", "crates/launcher-cli", "crates/launcher-gui"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.86"
 license = "GPL-3.0-or-later"
 repository = "https://git.tuxcore.pro/kenny/lightforge.git"
 
@@ -21,6 +21,7 @@ iced = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 sha2 = "0.10"
 sysinfo = { version = "0.36", default-features = false, features = ["system"] }
+tact-parser = "0.4"
 tar = "0.4"
 tempfile = "3"
 tokio = { version = "1", default-features = false }
