@@ -1,8 +1,8 @@
 //! Lightforge core.
 //!
 //! UI-agnostic domain logic: product models, the on-disk path layout, the
-//! `.build.info` engine, Proton-GE version management, TACT/CASC downloading,
-//! addon management, and the themed asset pipeline.
+//! `.build.info` engine, prefix provisioning, Proton-GE version management,
+//! TACT/CASC downloading, addon management, and the themed asset pipeline.
 //!
 //! Networking lives behind `async fn` in the modules that need it; everything
 //! else stays synchronous and directly testable. `core` never depends on iced
@@ -13,6 +13,7 @@ pub mod config;
 pub mod error;
 pub mod net;
 pub mod paths;
+pub mod prefix;
 pub mod product;
 pub mod proton;
 pub mod state;

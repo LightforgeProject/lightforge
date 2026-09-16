@@ -157,6 +157,55 @@ pub enum BuildInfoError {
 mod tests {
     use super::*;
 
+    /// A real single-product `.build.info` from a live 12.1.0 retail install.
+    ///
+    /// Account and geoip tags are neutralized; everything else — column set,
+    /// `!TYPE:N` suffixes, empty `HEX:16`/`DEC:4` cells, the `?`/`:` tag
+    /// grammar, trailing newline — is verbatim, because that is exactly the
+    /// shape hand-written fixtures get wrong.
+    const REAL_RETAIL: &str = concat!(
+        "Branch!STRING:0|Active!DEC:1|Build Key!HEX:16|CDN Key!HEX:16|Install Key!HEX:16|",
+        "IM Size!DEC:4|CDN Path!STRING:0|CDN Hosts!STRING:0|CDN Servers!STRING:0|Tags!STRING:0|",
+        "Armadillo!STRING:0|Last Activated!STRING:0|Version!STRING:0|KeyRing!HEX:16|Product!STRING:0\n",
+        "eu|1|9712ae9c84cc54111e9e3ddf9a6b8019|904e68a1fd418798b47ec3f9dba8da38|||tpr/wow|",
+        "level3.blizzard.com|http://level3.blizzard.com/?maxhosts=8 ",
+        "https://level3.ssl.blizzard.com/?maxhosts=8&fallback=1|",
+        "Windows x86_64 EU? acct-XXX? geoip-XX? enUS speech?:",
+        "Windows x86_64 EU? acct-XXX? geoip-XX? enUS text?|||12.1.0.69814|",
+        "3ca57fe7319a297346440e4d2a03a0cd|wow\n",
+    );
+
+    #[test]
+    fn parses_a_real_retail_build_info() {
+        let info = BuildInfo::parse(REAL_RETAIL).unwrap();
+        assert_eq!(info.get(&ProductCode::Retail, "Version").unwrap(), "12.1.0.69814");
+        assert_eq!(
+            info.get(&ProductCode::Retail, "Build Key").unwrap(),
+            "9712ae9c84cc54111e9e3ddf9a6b8019"
+        );
+        assert_eq!(info.get(&ProductCode::Retail, "CDN Path").unwrap(), "tpr/wow");
+        // Empty typed cells are legal and must survive as empty strings.
+        assert_eq!(info.get(&ProductCode::Retail, "Install Key").unwrap(), "");
+        assert_eq!(info.get(&ProductCode::Retail, "IM Size").unwrap(), "");
+    }
+
+    #[test]
+    fn a_real_file_round_trips_byte_for_byte() {
+        // Agent re-scans anything it doesn't recognize, so rewriting a file
+        // Lightforge only read must change nothing at all.
+        let info = BuildInfo::parse(REAL_RETAIL).unwrap();
+        assert_eq!(info.to_file_contents(), REAL_RETAIL);
+    }
+
+    #[test]
+    fn mutating_one_cell_leaves_every_other_byte_alone() {
+        let mut info = BuildInfo::parse(REAL_RETAIL).unwrap();
+        info.set(&ProductCode::Retail, "Version", "12.1.5.70000").unwrap();
+        let written = info.to_file_contents();
+
+        assert_eq!(written.replace("12.1.5.70000", "12.1.0.69814"), REAL_RETAIL);
+    }
+
     const SAMPLE: &str = "Branch!STRING:0|Active!DEC:1|Build Key!HEX:16|CDN Key!HEX:16|Version!STRING:0|Product!STRING:0\n\
 us|1|aaaa|bbbb|11.0.5.57171|wow\n\
 us|1|cccc|dddd|1.15.5.57638|wow_classic\n";

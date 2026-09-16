@@ -5,11 +5,12 @@
 //!
 //! ```text
 //! ~/Games/Blizzard/
-//! ├── prefix/                       Wine/Proton prefix (disposable)
-//! │   └── drive_c/
-//! │       └── Program Files (x86)/
-//! │           ├── Battle.net/
-//! │           └── World of Warcraft/  -> symlink into games/
+//! ├── prefix/                       Proton compat-data dir (disposable)
+//! │   └── pfx/                      the Wine prefix itself
+//! │       └── drive_c/
+//! │           └── Program Files (x86)/
+//! │               ├── Battle.net/
+//! │               └── World of Warcraft/  -> symlink into games/
 //! └── games/                        real assets (survive a prefix wipe)
 //!     └── World of Warcraft/
 //! ```
@@ -50,10 +51,21 @@ impl Layout {
         &self.root
     }
 
-    /// The Wine/Proton prefix. Treated as disposable — never store game or
-    /// user data here that isn't reproducible.
-    pub fn prefix(&self) -> PathBuf {
+    /// The Proton compat-data directory — the value of
+    /// `STEAM_COMPAT_DATA_PATH`. Proton creates the Wine prefix one level
+    /// inside it, at `pfx/`.
+    pub fn compat_data(&self) -> PathBuf {
         self.root.join("prefix")
+    }
+
+    /// The Wine prefix itself, `prefix/pfx`. Treated as disposable — never
+    /// store game or user data here that isn't reproducible.
+    ///
+    /// The `pfx` component is Proton's, not Lightforge's: Proton always builds
+    /// the prefix at `$STEAM_COMPAT_DATA_PATH/pfx`, so a layout that skipped it
+    /// would describe a directory Proton never writes to.
+    pub fn prefix(&self) -> PathBuf {
+        self.compat_data().join("pfx")
     }
 
     /// `prefix/drive_c`
@@ -221,7 +233,9 @@ mod tests {
     fn symlink_uses_a_windows_program_files_path() {
         assert_eq!(
             layout().wow_symlink(),
-            PathBuf::from("/games/Blizzard/prefix/drive_c/Program Files (x86)/World of Warcraft")
+            PathBuf::from(
+                "/games/Blizzard/prefix/pfx/drive_c/Program Files (x86)/World of Warcraft"
+            )
         );
     }
 

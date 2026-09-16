@@ -28,6 +28,9 @@ pub enum CoreError {
     #[error(transparent)]
     Proton(#[from] crate::proton::ProtonError),
 
+    #[error(transparent)]
+    Prefix(#[from] crate::prefix::PrefixError),
+
     #[error("i/o error at {path}")]
     Io {
         path: PathBuf,

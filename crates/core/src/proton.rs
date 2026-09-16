@@ -171,6 +171,23 @@ pub fn discover_all(
     found
 }
 
+/// Choose the build to launch with.
+///
+/// A pin is honored exactly — silently falling back to another build is how a
+/// user ends up debugging a regression against a Proton version they never
+/// selected. Without a pin, the newest supported build wins, dated by the
+/// `version` file rather than by tag, since tags don't sort numerically
+/// (`GE-Proton11-10` < `GE-Proton11-7` lexically).
+pub fn select<'a>(builds: &'a [ProtonRelease], pin: Option<&str>) -> Option<&'a ProtonRelease> {
+    match pin {
+        Some(version) => builds.iter().find(|b| b.version == version),
+        None => builds
+            .iter()
+            .filter(|b| b.flavor.is_supported())
+            .max_by_key(|b| (b.built_at, b.version.clone())),
+    }
+}
+
 /// Every Proton build installed across the user's Steam libraries.
 ///
 /// Unsupported flavors are included; filter with [`ProtonFlavor::is_supported`]
@@ -276,6 +293,33 @@ mod tests {
         assert!(!ProtonFlavor::Umu.is_supported());
         assert!(!ProtonFlavor::Valve.is_supported());
         assert!(!ProtonFlavor::Other.is_supported());
+    }
+
+    fn build(version: &str, built_at: Option<u64>, flavor: ProtonFlavor) -> ProtonRelease {
+        ProtonRelease {
+            version: version.to_owned(),
+            flavor,
+            source: ProtonSource::Managed,
+            path: PathBuf::from("/tmp").join(version),
+            built_at,
+        }
+    }
+
+    #[test]
+    fn selection_prefers_the_newest_supported_build() {
+        let builds = vec![
+            build("GE-Proton11-7", Some(1_787_951_532), ProtonFlavor::GloriousEggroll),
+            build("GE-Proton11-10", Some(1_780_000_000), ProtonFlavor::GloriousEggroll),
+            build("proton-11.0-2-x86_64", Some(1_799_999_999), ProtonFlavor::Valve),
+        ];
+        assert_eq!(select(&builds, None).unwrap().version, "GE-Proton11-7");
+    }
+
+    #[test]
+    fn a_pin_is_never_silently_substituted() {
+        let builds = vec![build("GE-Proton11-7", None, ProtonFlavor::GloriousEggroll)];
+        assert_eq!(select(&builds, Some("GE-Proton11-7")).unwrap().version, "GE-Proton11-7");
+        assert!(select(&builds, Some("GE-Proton9-20")).is_none());
     }
 
     #[test]

@@ -10,6 +10,7 @@ use clap::{Parser, Subcommand};
 use lightforge_core::buildinfo::BuildInfo;
 use lightforge_core::config::Config;
 use lightforge_core::paths::{AppDirs, Layout};
+use lightforge_core::prefix::{LinkState, PrefixStatus};
 use lightforge_core::ProductCode;
 
 #[derive(Parser)]
@@ -38,6 +39,17 @@ enum Command {
         /// Release tag, e.g. `GE-Proton11-7`. Defaults to the latest stable.
         version: Option<String>,
     },
+    /// Report on the shared prefix and the game symlink.
+    Prefix,
+    /// Create or update the prefix, then put the game symlink in place.
+    PrefixInit {
+        /// Proton build to use, e.g. `GE-Proton11-7`. Defaults to the newest
+        /// supported build installed.
+        #[arg(long)]
+        proton: Option<String>,
+    },
+    /// Create or repair only the game symlink, without running Proton.
+    PrefixLink,
     /// Show the `.build.info` row for a product.
     BuildInfo {
         /// Product code, e.g. `wow` or `wow_classic`.
@@ -59,6 +71,7 @@ async fn main() -> Result<()> {
         Command::Paths => {
             let dirs = AppDirs::discover().context("resolving XDG directories")?;
             println!("blizzard root   {}", layout.root().display());
+            println!("compat data     {}", layout.compat_data().display());
             println!("prefix          {}", layout.prefix().display());
             println!("battle.net      {}", layout.battle_net_dir().display());
             println!("games root      {}", layout.games_root().display());
@@ -191,6 +204,47 @@ async fn main() -> Result<()> {
             println!("\nverified and extracted");
             println!("  {} at {}", installed.version, installed.path.display());
         }
+        Command::Prefix => {
+            let status = PrefixStatus::inspect(&layout);
+            println!("compat data     {}", status.compat_data.display());
+            println!("prefix          {}", status.prefix.display());
+            println!("initialized     {}", if status.initialized { "yes" } else { "no" });
+            println!("symlink         {}", describe_link(&status.link));
+            println!("ready           {}", if status.is_ready() { "yes" } else { "no" });
+        }
+        Command::PrefixInit { proton } => {
+            use lightforge_core::prefix::ProtonRunner;
+            use lightforge_core::proton;
+
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let steam = lightforge_core::steam::SteamRoot::discover();
+            let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());
+            let build = proton::select(&builds, proton.as_deref()).with_context(|| match &proton {
+                Some(tag) => format!("no installed Proton build tagged `{tag}`"),
+                None => "no supported Proton-GE build installed — run `lightforge proton-install`"
+                    .to_owned(),
+            })?;
+
+            let runner = ProtonRunner::new(
+                build,
+                &layout,
+                ProtonRunner::steam_client_path(steam.as_ref(), &dirs),
+            );
+            println!("using {} ({})", build.version, build.path.display());
+            println!("prefix {}", runner.prefix().display());
+
+            let status = lightforge_core::prefix::provision(&runner, &layout)
+                .context("provisioning the prefix")?;
+            println!("symlink         {}", describe_link(&status.link));
+            println!("ready           {}", if status.is_ready() { "yes" } else { "no" });
+        }
+        Command::PrefixLink => {
+            let (link, target) = (layout.wow_symlink(), layout.wow_install());
+            let before = lightforge_core::prefix::ensure_link(&link, &target)
+                .with_context(|| format!("linking {} -> {}", link.display(), target.display()))?;
+            println!("was             {}", describe_link(&before));
+            println!("now             {} -> {}", link.display(), target.display());
+        }
         Command::BuildInfo { product } => {
             let code: ProductCode = product.parse().expect("product codes are infallible");
             let path = layout.build_info();
@@ -206,4 +260,16 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// One-line rendering of the symlink's state for the CLI.
+fn describe_link(state: &LinkState) -> String {
+    match state {
+        LinkState::Correct => "ok".to_owned(),
+        LinkState::Missing => "missing".to_owned(),
+        LinkState::Dangling(t) => format!("dangling -> {}", t.display()),
+        LinkState::Mislinked(t) => format!("points at {}", t.display()),
+        LinkState::OccupiedEmpty => "empty directory in the way".to_owned(),
+        LinkState::Occupied => "a real directory with files in it".to_owned(),
+    }
 }
