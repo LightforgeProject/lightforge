@@ -15,6 +15,7 @@ pub mod paths;
 pub mod product;
 pub mod proton;
 pub mod state;
+pub mod steam;
 
 // Milestone placeholders — see the module docs for what lands where.
 pub mod addons;

@@ -29,6 +29,8 @@ enum Command {
     Paths,
     /// Print the effective configuration as TOML.
     Config,
+    /// List Proton builds installed on this system.
+    Proton,
     /// Show the `.build.info` row for a product.
     BuildInfo {
         /// Product code, e.g. `wow` or `wow_classic`.
@@ -62,6 +64,31 @@ fn main() -> Result<()> {
         Command::Config => {
             // Milestone 1 has no loader yet; show what a fresh install writes.
             print!("{}", Config::with_default_products().to_toml()?);
+        }
+        Command::Proton => {
+            let steam = lightforge_core::steam::SteamRoot::discover()
+                .context("no Steam installation found")?;
+            println!("steam root   {}", steam.path().display());
+            for lib in steam.library_paths() {
+                println!("library      {}", lib.display());
+            }
+            println!();
+
+            let installed = lightforge_core::proton::discover_installed(&steam);
+            if installed.is_empty() {
+                println!("no Proton builds found");
+            }
+            for release in &installed {
+                let mark = if release.flavor.is_supported() { "*" } else { " " };
+                println!(
+                    "{mark} {:<24} {:?} {:?}\n    {}",
+                    release.version,
+                    release.flavor,
+                    release.source,
+                    release.path.display(),
+                );
+            }
+            println!("\n* = supported launch target");
         }
         Command::BuildInfo { product } => {
             let code: ProductCode = product.parse().expect("product codes are infallible");
