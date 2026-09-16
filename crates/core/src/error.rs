@@ -31,6 +31,9 @@ pub enum CoreError {
     #[error(transparent)]
     Prefix(#[from] crate::prefix::PrefixError),
 
+    #[error(transparent)]
+    BattleNet(#[from] crate::battlenet::BattleNetError),
+
     #[error("i/o error at {path}")]
     Io {
         path: PathBuf,
@@ -45,6 +48,9 @@ impl CoreError {
     /// Bare io errors say *what* failed but never *which file*, which is the
     /// half that actually helps a user debugging a broken prefix.
     pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
-        Self::Io { path: path.into(), source }
+        Self::Io {
+            path: path.into(),
+            source,
+        }
     }
 }

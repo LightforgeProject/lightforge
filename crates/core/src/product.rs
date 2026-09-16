@@ -121,7 +121,11 @@ pub struct Product {
 
 impl Product {
     pub fn new(code: ProductCode, display_name: impl Into<String>) -> Self {
-        Self { code, display_name: display_name.into(), profile: ProductProfile::default() }
+        Self {
+            code,
+            display_name: display_name.into(),
+            profile: ProductProfile::default(),
+        }
     }
 }
 
@@ -172,7 +176,14 @@ mod tests {
 
     #[test]
     fn official_codes_round_trip() {
-        for code in ["wow", "wow_classic", "wow_classic_era", "wowt", "wow_classic_ptr", "wow_beta"] {
+        for code in [
+            "wow",
+            "wow_classic",
+            "wow_classic_era",
+            "wowt",
+            "wow_classic_ptr",
+            "wow_beta",
+        ] {
             let parsed: ProductCode = code.parse().unwrap();
             assert!(parsed.is_official());
             assert_eq!(parsed.as_str(), code);

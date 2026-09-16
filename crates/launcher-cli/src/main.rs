@@ -50,6 +50,25 @@ enum Command {
     },
     /// Create or repair only the game symlink, without running Proton.
     PrefixLink,
+    /// Download Battle.net-Setup.exe into the cache.
+    BattlenetFetch,
+    /// Install Battle.net headlessly, then apply registry and config defaults.
+    BattlenetSetup {
+        /// Proton build to run the installer under.
+        #[arg(long)]
+        proton: Option<String>,
+        /// Battle.net UI language.
+        #[arg(long, default_value = "enUS")]
+        locale: String,
+        /// Use an already-downloaded installer instead of the cached one.
+        #[arg(long)]
+        installer: Option<PathBuf>,
+        /// Seconds to wait for the install to appear.
+        #[arg(long, default_value_t = 600)]
+        timeout: u64,
+    },
+    /// Re-apply the `Battle.net.config` defaults without running the installer.
+    BattlenetConfig,
     /// Show the `.build.info` row for a product.
     BuildInfo {
         /// Product code, e.g. `wow` or `wow_classic`.
@@ -107,7 +126,11 @@ async fn main() -> Result<()> {
                 println!("no Proton builds found");
             }
             for release in &installed {
-                let mark = if release.flavor.is_supported() { "*" } else { " " };
+                let mark = if release.flavor.is_supported() {
+                    "*"
+                } else {
+                    " "
+                };
                 println!(
                     "{mark} {:<24} {:?} {:?}\n    {}",
                     release.version,
@@ -131,11 +154,26 @@ async fn main() -> Result<()> {
                 .await
                 .context("fetching Proton-GE releases")?;
 
-            println!("{} releases ({})", releases.len(), if cached { "revalidated" } else { "fresh" });
+            println!(
+                "{} releases ({})",
+                releases.len(),
+                if cached { "revalidated" } else { "fresh" }
+            );
             if let Some(latest) = proton::latest_stable(&releases) {
                 let size = latest.tarball().map(|a| a.size).unwrap_or(0);
-                println!("latest stable  {}  ({:.0} MB)", latest.tag_name, size as f64 / 1_048_576.0);
-                println!("checksum       {}", latest.tarball().and_then(|t| latest.checksum_for(t)).map(|a| a.name.as_str()).unwrap_or("MISSING"));
+                println!(
+                    "latest stable  {}  ({:.0} MB)",
+                    latest.tag_name,
+                    size as f64 / 1_048_576.0
+                );
+                println!(
+                    "checksum       {}",
+                    latest
+                        .tarball()
+                        .and_then(|t| latest.checksum_for(t))
+                        .map(|a| a.name.as_str())
+                        .unwrap_or("MISSING")
+                );
             }
 
             let steam = lightforge_core::steam::SteamRoot::discover();
@@ -174,12 +212,8 @@ async fn main() -> Result<()> {
 
             let start = std::time::Instant::now();
             let mut last = 0u64;
-            let installed = proton::install_release(
-                &http,
-                release,
-                &dest,
-                dirs.cache_dir(),
-                |done, total| {
+            let installed =
+                proton::install_release(&http, release, &dest, dirs.cache_dir(), |done, total| {
                     // Redraw at most once per MB to keep the callback cheap.
                     if done - last < 1_048_576 && Some(done) != total {
                         return;
@@ -197,9 +231,8 @@ async fn main() -> Result<()> {
                         None => print!("\r  {mb:.0} MB  {rate:.1} MB/s  "),
                     }
                     let _ = std::io::stdout().flush();
-                },
-            )
-            .await?;
+                })
+                .await?;
 
             println!("\nverified and extracted");
             println!("  {} at {}", installed.version, installed.path.display());
@@ -208,35 +241,28 @@ async fn main() -> Result<()> {
             let status = PrefixStatus::inspect(&layout);
             println!("compat data     {}", status.compat_data.display());
             println!("prefix          {}", status.prefix.display());
-            println!("initialized     {}", if status.initialized { "yes" } else { "no" });
+            println!(
+                "initialized     {}",
+                if status.initialized { "yes" } else { "no" }
+            );
             println!("symlink         {}", describe_link(&status.link));
-            println!("ready           {}", if status.is_ready() { "yes" } else { "no" });
+            println!(
+                "ready           {}",
+                if status.is_ready() { "yes" } else { "no" }
+            );
         }
         Command::PrefixInit { proton } => {
-            use lightforge_core::prefix::ProtonRunner;
-            use lightforge_core::proton;
-
-            let dirs = AppDirs::discover().context("resolving XDG directories")?;
-            let steam = lightforge_core::steam::SteamRoot::discover();
-            let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());
-            let build = proton::select(&builds, proton.as_deref()).with_context(|| match &proton {
-                Some(tag) => format!("no installed Proton build tagged `{tag}`"),
-                None => "no supported Proton-GE build installed — run `lightforge proton-install`"
-                    .to_owned(),
-            })?;
-
-            let runner = ProtonRunner::new(
-                build,
-                &layout,
-                ProtonRunner::steam_client_path(steam.as_ref(), &dirs),
-            );
+            let (runner, build) = proton_runner(&layout, proton.as_deref())?;
             println!("using {} ({})", build.version, build.path.display());
             println!("prefix {}", runner.prefix().display());
 
             let status = lightforge_core::prefix::provision(&runner, &layout)
                 .context("provisioning the prefix")?;
             println!("symlink         {}", describe_link(&status.link));
-            println!("ready           {}", if status.is_ready() { "yes" } else { "no" });
+            println!(
+                "ready           {}",
+                if status.is_ready() { "yes" } else { "no" }
+            );
         }
         Command::PrefixLink => {
             let (link, target) = (layout.wow_symlink(), layout.wow_install());
@@ -245,12 +271,94 @@ async fn main() -> Result<()> {
             println!("was             {}", describe_link(&before));
             println!("now             {} -> {}", link.display(), target.display());
         }
+        Command::BattlenetFetch => {
+            use lightforge_core::battlenet;
+            use lightforge_core::net::Http;
+            use std::io::Write;
+
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let http = Http::new()?;
+            let start = std::time::Instant::now();
+            let path = battlenet::fetch_installer(&http, dirs.cache_dir(), |done, total| {
+                let mb = done as f64 / 1_048_576.0;
+                match total {
+                    Some(t) => print!("\r  {:.1}/{:.1} MB  ", mb, t as f64 / 1_048_576.0),
+                    None => print!("\r  {mb:.1} MB  "),
+                }
+                let _ = std::io::stdout().flush();
+            })
+            .await
+            .context("downloading Battle.net-Setup.exe")?;
+            println!(
+                "\n{} ({:.1}s)",
+                path.display(),
+                start.elapsed().as_secs_f64()
+            );
+        }
+        Command::BattlenetSetup {
+            proton,
+            locale,
+            installer,
+            timeout,
+        } => {
+            use lightforge_core::battlenet::{self, Installer};
+            use lightforge_core::config::Config;
+
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let installer_path =
+                installer.unwrap_or_else(|| dirs.cache_dir().join(battlenet::INSTALLER_FILE));
+            let user = Config::default().prefix_user;
+
+            let (runner, build) = proton_runner(&layout, proton.as_deref())?;
+            println!("using {} ({})", build.version, build.path.display());
+            println!("installer {}", installer_path.display());
+
+            let setup = Installer::new(&layout, &installer_path)
+                .with_locale(locale)
+                .with_timeout(std::time::Duration::from_secs(timeout));
+            if !setup.is_installed() {
+                println!("running setup — this takes a few minutes");
+            }
+
+            let report = battlenet::provision(&runner, &layout, &user, &installer_path)
+                .context("setting Battle.net up")?;
+            if report.install.skipped {
+                println!("battle.net      already installed");
+            } else {
+                println!(
+                    "battle.net      installed in {:.0}s",
+                    report.install.waited.as_secs_f64()
+                );
+            }
+            println!("registry        {} values applied", report.registry_values);
+            println!("config          {}", report.config_path.display());
+        }
+        Command::BattlenetConfig => {
+            use lightforge_core::battlenet;
+            use lightforge_core::config::Config;
+
+            let tweaks = battlenet::default_tweaks();
+            let user = Config::default().prefix_user;
+            let path = battlenet::configure(&layout, &user, &tweaks)
+                .context("writing Battle.net.config")?;
+
+            println!("{}", path.display());
+            for tweak in &tweaks {
+                println!(
+                    "  {:<40} {}\n    {}",
+                    tweak.key(),
+                    tweak.value,
+                    tweak.reason
+                );
+            }
+        }
         Command::BuildInfo { product } => {
             let code: ProductCode = product.parse().expect("product codes are infallible");
             let path = layout.build_info();
             let contents = std::fs::read_to_string(&path)
                 .with_context(|| format!("reading {}", path.display()))?;
-            let info = BuildInfo::parse(&contents).with_context(|| format!("parsing {}", path.display()))?;
+            let info = BuildInfo::parse(&contents)
+                .with_context(|| format!("parsing {}", path.display()))?;
 
             let row = info
                 .row(&code)
@@ -260,6 +368,36 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Resolve the Proton build to run against the shared prefix, and a runner for
+/// it. `None` selects the newest supported build installed.
+fn proton_runner(
+    layout: &Layout,
+    version: Option<&str>,
+) -> Result<(
+    lightforge_core::prefix::ProtonRunner,
+    lightforge_core::proton::ProtonRelease,
+)> {
+    use lightforge_core::prefix::ProtonRunner;
+    use lightforge_core::proton;
+
+    let dirs = AppDirs::discover().context("resolving XDG directories")?;
+    let steam = lightforge_core::steam::SteamRoot::discover();
+    let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());
+    let build = proton::select(&builds, version).with_context(|| match version {
+        Some(tag) => format!("no installed Proton build tagged `{tag}`"),
+        None => {
+            "no supported Proton-GE build installed — run `lightforge proton-install`".to_owned()
+        }
+    })?;
+
+    let runner = ProtonRunner::new(
+        build,
+        layout,
+        ProtonRunner::steam_client_path(steam.as_ref(), &dirs),
+    );
+    Ok((runner, build.clone()))
 }
 
 /// One-line rendering of the symlink's state for the CLI.

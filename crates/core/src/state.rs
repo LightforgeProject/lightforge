@@ -16,7 +16,10 @@ pub enum ActionState {
     /// Game is missing — `[ INSTALL ]`, light blue.
     Install,
     /// Ribbit reports newer CDN hashes than local `.build.info` — `[ UPDATE ]`, orange.
-    Update { local_build: String, remote_build: String },
+    Update {
+        local_build: String,
+        remote_build: String,
+    },
     /// A download or patch is running. Carries live progress for the speed/ETA UI.
     Downloading(Progress),
     /// Download is paused, either by the user or by pre-flight before launching
@@ -82,7 +85,9 @@ impl Progress {
         if self.bytes_per_second == 0 || self.total_bytes == 0 {
             return None;
         }
-        Some(std::time::Duration::from_secs(self.remaining_bytes() / self.bytes_per_second))
+        Some(std::time::Duration::from_secs(
+            self.remaining_bytes() / self.bytes_per_second,
+        ))
     }
 }
 
@@ -105,14 +110,22 @@ mod tests {
 
     #[test]
     fn progress_handles_unknown_total() {
-        let p = Progress { downloaded_bytes: 10, total_bytes: 0, bytes_per_second: 5 };
+        let p = Progress {
+            downloaded_bytes: 10,
+            total_bytes: 0,
+            bytes_per_second: 5,
+        };
         assert_eq!(p.fraction(), 0.0);
         assert!(p.eta().is_none());
     }
 
     #[test]
     fn eta_uses_remaining_bytes() {
-        let p = Progress { downloaded_bytes: 50, total_bytes: 150, bytes_per_second: 10 };
+        let p = Progress {
+            downloaded_bytes: 50,
+            total_bytes: 150,
+            bytes_per_second: 10,
+        };
         assert_eq!(p.eta().unwrap().as_secs(), 10);
         assert!((p.fraction() - 1.0 / 3.0).abs() < f32::EPSILON);
     }

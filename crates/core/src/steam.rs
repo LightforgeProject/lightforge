@@ -68,7 +68,9 @@ impl SteamRoot {
             self.path.join("config").join("libraryfolders.vdf"),
             self.path.join("steamapps").join("libraryfolders.vdf"),
         ] {
-            let Ok(contents) = std::fs::read_to_string(&vdf) else { continue };
+            let Ok(contents) = std::fs::read_to_string(&vdf) else {
+                continue;
+            };
             for path in parse_library_paths(&contents) {
                 if !out.contains(&path) {
                     out.push(path);

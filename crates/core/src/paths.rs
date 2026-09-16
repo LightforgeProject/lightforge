@@ -43,7 +43,9 @@ impl Layout {
     /// The default layout at `~/Games/Blizzard`.
     pub fn default_for_user() -> Result<Self, PathError> {
         let home = directories::UserDirs::new().ok_or(PathError::NoHomeDirectory)?;
-        Ok(Self::with_root(home.home_dir().join("Games").join("Blizzard")))
+        Ok(Self::with_root(
+            home.home_dir().join("Games").join("Blizzard"),
+        ))
     }
 
     /// `~/Games/Blizzard`
@@ -100,7 +102,10 @@ impl Layout {
 
     /// Agent's directory cache, deleted by pre-flight cleanup.
     pub fn agent_cache_dir(&self) -> PathBuf {
-        self.drive_c().join("ProgramData").join("Battle.net").join("Agent")
+        self.drive_c()
+            .join("ProgramData")
+            .join("Battle.net")
+            .join("Agent")
     }
 
     /// Real game assets root: `~/Games/Blizzard/games`.
@@ -166,8 +171,16 @@ impl AppDirs {
         })
     }
 
-    pub fn with_dirs(config: impl Into<PathBuf>, cache: impl Into<PathBuf>, data: impl Into<PathBuf>) -> Self {
-        Self { config: config.into(), cache: cache.into(), data: data.into() }
+    pub fn with_dirs(
+        config: impl Into<PathBuf>,
+        cache: impl Into<PathBuf>,
+        data: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            config: config.into(),
+            cache: cache.into(),
+            data: data.into(),
+        }
     }
 
     pub fn config_dir(&self) -> &Path {
@@ -242,8 +255,14 @@ mod tests {
     #[test]
     fn products_share_one_build_info_but_separate_dirs() {
         let l = layout();
-        assert_eq!(l.build_info(), PathBuf::from("/games/Blizzard/games/World of Warcraft/.build.info"));
-        assert_ne!(l.product_dir(&ProductCode::Retail), l.product_dir(&ProductCode::Classic));
+        assert_eq!(
+            l.build_info(),
+            PathBuf::from("/games/Blizzard/games/World of Warcraft/.build.info")
+        );
+        assert_ne!(
+            l.product_dir(&ProductCode::Retail),
+            l.product_dir(&ProductCode::Classic)
+        );
     }
 
     #[test]

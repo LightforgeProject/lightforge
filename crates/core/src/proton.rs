@@ -141,7 +141,9 @@ fn parse_version_file(contents: &str) -> Option<(Option<u64>, String)> {
 
 /// Builds Lightforge downloaded and manages itself.
 pub fn discover_managed(proton_dir: &Path) -> Vec<ProtonRelease> {
-    let Ok(entries) = std::fs::read_dir(proton_dir) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(proton_dir) else {
+        return Vec::new();
+    };
     entries
         .flatten()
         .filter_map(|e| ProtonRelease::read_from_dir(&e.path(), ProtonSource::Managed))
@@ -165,7 +167,9 @@ pub fn discover_all(
         a.version
             .cmp(&b.version)
             // Managed sorts before SystemCompatTools/SteamApp, so dedup keeps it.
-            .then_with(|| (a.source != ProtonSource::Managed).cmp(&(b.source != ProtonSource::Managed)))
+            .then_with(|| {
+                (a.source != ProtonSource::Managed).cmp(&(b.source != ProtonSource::Managed))
+            })
     });
     found.dedup_by(|a, b| a.version == b.version);
     found
@@ -197,12 +201,20 @@ pub fn discover_installed(steam: &crate::steam::SteamRoot) -> Vec<ProtonRelease>
 
     for library in steam.library_paths() {
         let sources = [
-            (library.join("compatibilitytools.d"), ProtonSource::SystemCompatTools),
-            (library.join("steamapps").join("common"), ProtonSource::SteamApp),
+            (
+                library.join("compatibilitytools.d"),
+                ProtonSource::SystemCompatTools,
+            ),
+            (
+                library.join("steamapps").join("common"),
+                ProtonSource::SteamApp,
+            ),
         ];
 
         for (dir, source) in sources {
-            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
             for entry in entries.flatten() {
                 if let Some(release) = ProtonRelease::read_from_dir(&entry.path(), source) {
                     found.push(release);
@@ -277,10 +289,22 @@ mod tests {
     #[test]
     fn classifies_real_world_tags() {
         // Tags observed on a live system.
-        assert_eq!(ProtonFlavor::classify("GE-Proton11-6"), ProtonFlavor::GloriousEggroll);
-        assert_eq!(ProtonFlavor::classify("GE-Proton10-34"), ProtonFlavor::GloriousEggroll);
-        assert_eq!(ProtonFlavor::classify("UMU-Proton-10.0-4"), ProtonFlavor::Umu);
-        assert_eq!(ProtonFlavor::classify("proton-11.0-2-x86_64"), ProtonFlavor::Valve);
+        assert_eq!(
+            ProtonFlavor::classify("GE-Proton11-6"),
+            ProtonFlavor::GloriousEggroll
+        );
+        assert_eq!(
+            ProtonFlavor::classify("GE-Proton10-34"),
+            ProtonFlavor::GloriousEggroll
+        );
+        assert_eq!(
+            ProtonFlavor::classify("UMU-Proton-10.0-4"),
+            ProtonFlavor::Umu
+        );
+        assert_eq!(
+            ProtonFlavor::classify("proton-11.0-2-x86_64"),
+            ProtonFlavor::Valve
+        );
         assert_eq!(
             ProtonFlavor::classify("experimental-11.0-20260910b-x86_64"),
             ProtonFlavor::Valve
@@ -308,9 +332,21 @@ mod tests {
     #[test]
     fn selection_prefers_the_newest_supported_build() {
         let builds = vec![
-            build("GE-Proton11-7", Some(1_787_951_532), ProtonFlavor::GloriousEggroll),
-            build("GE-Proton11-10", Some(1_780_000_000), ProtonFlavor::GloriousEggroll),
-            build("proton-11.0-2-x86_64", Some(1_799_999_999), ProtonFlavor::Valve),
+            build(
+                "GE-Proton11-7",
+                Some(1_787_951_532),
+                ProtonFlavor::GloriousEggroll,
+            ),
+            build(
+                "GE-Proton11-10",
+                Some(1_780_000_000),
+                ProtonFlavor::GloriousEggroll,
+            ),
+            build(
+                "proton-11.0-2-x86_64",
+                Some(1_799_999_999),
+                ProtonFlavor::Valve,
+            ),
         ];
         assert_eq!(select(&builds, None).unwrap().version, "GE-Proton11-7");
     }
@@ -318,7 +354,10 @@ mod tests {
     #[test]
     fn a_pin_is_never_silently_substituted() {
         let builds = vec![build("GE-Proton11-7", None, ProtonFlavor::GloriousEggroll)];
-        assert_eq!(select(&builds, Some("GE-Proton11-7")).unwrap().version, "GE-Proton11-7");
+        assert_eq!(
+            select(&builds, Some("GE-Proton11-7")).unwrap().version,
+            "GE-Proton11-7"
+        );
         assert!(select(&builds, Some("GE-Proton9-20")).is_none());
     }
 
@@ -332,7 +371,10 @@ mod tests {
 
     #[test]
     fn version_file_tolerates_a_bare_tag() {
-        assert_eq!(parse_version_file("GE-Proton9-20"), Some((None, "GE-Proton9-20".to_owned())));
+        assert_eq!(
+            parse_version_file("GE-Proton9-20"),
+            Some((None, "GE-Proton9-20".to_owned()))
+        );
         assert_eq!(parse_version_file(""), None);
     }
 
@@ -359,7 +401,10 @@ mod tests {
     #[test]
     fn latest_stable_skips_prereleases() {
         // GitHub returns newest-first.
-        let releases = vec![release("GE-Proton12-1", true), release("GE-Proton11-6", false)];
+        let releases = vec![
+            release("GE-Proton12-1", true),
+            release("GE-Proton11-6", false),
+        ];
         assert_eq!(latest_stable(&releases).unwrap().tag_name, "GE-Proton11-6");
     }
 
@@ -409,8 +454,14 @@ mod tests {
         );
         let tarball = r.tarball_for("x86_64").unwrap();
         assert_eq!(tarball.name, "GE-Proton11-7-x86_64.tar.gz");
-        assert_eq!(r.checksum_for(tarball).unwrap().name, "GE-Proton11-7-x86_64.sha512sum");
-        assert_eq!(r.tarball_for("aarch64").unwrap().name, "GE-Proton11-7-aarch64.tar.gz");
+        assert_eq!(
+            r.checksum_for(tarball).unwrap().name,
+            "GE-Proton11-7-x86_64.sha512sum"
+        );
+        assert_eq!(
+            r.tarball_for("aarch64").unwrap().name,
+            "GE-Proton11-7-aarch64.tar.gz"
+        );
     }
 
     #[test]
@@ -427,15 +478,24 @@ mod tests {
         );
         let tarball = r.tarball_for("x86_64").unwrap();
         assert_eq!(tarball.name, "GE-Proton11-3.tar.gz");
-        assert_eq!(r.checksum_for(tarball).unwrap().name, "GE-Proton11-3.sha512sum");
+        assert_eq!(
+            r.checksum_for(tarball).unwrap().name,
+            "GE-Proton11-3.sha512sum"
+        );
     }
 
     #[test]
     fn legacy_single_asset_release_resolves() {
-        let r = with_assets("GE-Proton10-34", &["GE-Proton10-34.sha512sum", "GE-Proton10-34.tar.gz"]);
+        let r = with_assets(
+            "GE-Proton10-34",
+            &["GE-Proton10-34.sha512sum", "GE-Proton10-34.tar.gz"],
+        );
         let tarball = r.tarball_for("x86_64").unwrap();
         assert_eq!(tarball.name, "GE-Proton10-34.tar.gz");
-        assert_eq!(r.checksum_for(tarball).unwrap().name, "GE-Proton10-34.sha512sum");
+        assert_eq!(
+            r.checksum_for(tarball).unwrap().name,
+            "GE-Proton10-34.sha512sum"
+        );
         // No ARM build in this era.
         assert!(r.tarball_for("aarch64").is_none());
     }
@@ -448,7 +508,10 @@ mod tests {
             Some(digest.clone())
         );
         // Uppercase digests normalize.
-        assert_eq!(parse_sha512sum(&format!("{}  f", "A".repeat(128))), Some("a".repeat(128)));
+        assert_eq!(
+            parse_sha512sum(&format!("{}  f", "A".repeat(128))),
+            Some("a".repeat(128))
+        );
     }
 
     #[test]
@@ -462,7 +525,10 @@ mod tests {
     fn pin_round_trips_through_an_optional_string() {
         assert_eq!(ProtonPin::from(None), ProtonPin::Default);
         assert_eq!(ProtonPin::Default.version(), None);
-        assert_eq!(ProtonPin::from(Some("GE-Proton11-6".to_owned())).version(), Some("GE-Proton11-6"));
+        assert_eq!(
+            ProtonPin::from(Some("GE-Proton11-6".to_owned())).version(),
+            Some("GE-Proton11-6")
+        );
     }
 }
 
@@ -594,7 +660,9 @@ pub async fn install_release(
         .ok_or_else(|| ProtonError::NoTarball(release.tag_name.clone()))?;
 
     let archive = scratch.join(&tarball.name);
-    let digest = http.download(&tarball.browser_download_url, &archive, on_progress).await?;
+    let digest = http
+        .download(&tarball.browser_download_url, &archive, on_progress)
+        .await?;
 
     // GE publishes a checksum file for every release; treat its absence as a
     // reason to stop rather than a reason to trust the download.
@@ -628,37 +696,51 @@ pub async fn install_release(
 
 /// Extract a `.tar.gz`, returning the single top-level directory it created.
 fn unpack(archive: &Path, dest_root: &Path) -> Result<PathBuf, ProtonError> {
-    let file = std::fs::File::open(archive)
-        .map_err(|e| ProtonError::Io { path: archive.to_path_buf(), source: e })?;
-    std::fs::create_dir_all(dest_root)
-        .map_err(|e| ProtonError::Io { path: dest_root.to_path_buf(), source: e })?;
+    let file = std::fs::File::open(archive).map_err(|e| ProtonError::Io {
+        path: archive.to_path_buf(),
+        source: e,
+    })?;
+    std::fs::create_dir_all(dest_root).map_err(|e| ProtonError::Io {
+        path: dest_root.to_path_buf(),
+        source: e,
+    })?;
 
     let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
     let mut top: Option<PathBuf> = None;
 
-    for entry in tar
-        .entries()
-        .map_err(|e| ProtonError::Io { path: archive.to_path_buf(), source: e })?
-    {
-        let mut entry =
-            entry.map_err(|e| ProtonError::Io { path: archive.to_path_buf(), source: e })?;
+    for entry in tar.entries().map_err(|e| ProtonError::Io {
+        path: archive.to_path_buf(),
+        source: e,
+    })? {
+        let mut entry = entry.map_err(|e| ProtonError::Io {
+            path: archive.to_path_buf(),
+            source: e,
+        })?;
         let path = entry
             .path()
-            .map_err(|e| ProtonError::Io { path: archive.to_path_buf(), source: e })?
+            .map_err(|e| ProtonError::Io {
+                path: archive.to_path_buf(),
+                source: e,
+            })?
             .into_owned();
 
         // Reject absolute paths and `..` traversal rather than trusting the
         // archive to stay inside its own directory.
-        if path.is_absolute() || path.components().any(|c| c == std::path::Component::ParentDir) {
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|c| c == std::path::Component::ParentDir)
+        {
             return Err(ProtonError::UnsafeArchivePath(path));
         }
         if top.is_none() {
             top = path.components().next().map(|c| dest_root.join(c));
         }
 
-        entry
-            .unpack_in(dest_root)
-            .map_err(|e| ProtonError::Io { path: dest_root.to_path_buf(), source: e })?;
+        entry.unpack_in(dest_root).map_err(|e| ProtonError::Io {
+            path: dest_root.to_path_buf(),
+            source: e,
+        })?;
     }
 
     top.ok_or_else(|| ProtonError::EmptyArchive(archive.to_path_buf()))
@@ -686,7 +768,11 @@ pub enum ProtonError {
     MalformedChecksum(String),
 
     #[error("checksum mismatch for {version}: expected {expected}, got {actual}")]
-    ChecksumMismatch { version: String, expected: String, actual: String },
+    ChecksumMismatch {
+        version: String,
+        expected: String,
+        actual: String,
+    },
 
     #[error("archive contains an unsafe path: {0}")]
     UnsafeArchivePath(PathBuf),

@@ -77,10 +77,12 @@ impl Http {
 
         cache.store(&body, etag.as_deref())?;
 
-        serde_json::from_slice(&body).map(Some).map_err(|e| NetError::Decode {
-            url: url.to_owned(),
-            source: e,
-        })
+        serde_json::from_slice(&body)
+            .map(Some)
+            .map_err(|e| NetError::Decode {
+                url: url.to_owned(),
+                source: e,
+            })
     }
 
     /// Fetch a small document as text, without caching.
@@ -90,12 +92,18 @@ impl Http {
             .get(url)
             .send()
             .await
-            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
+            .map_err(|e| NetError::Request {
+                url: url.to_owned(),
+                source: e,
+            })?;
 
         check_status(url, response)?
             .text()
             .await
-            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })
+            .map_err(|e| NetError::Request {
+                url: url.to_owned(),
+                source: e,
+            })
     }
 
     /// Stream a download to `dest`, reporting progress and returning its
@@ -115,37 +123,51 @@ impl Http {
             .get(url)
             .send()
             .await
-            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
+            .map_err(|e| NetError::Request {
+                url: url.to_owned(),
+                source: e,
+            })?;
         let response = check_status(url, response)?;
         let total = response.content_length();
 
         if let Some(parent) = dest.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
-                .map_err(|e| NetError::Io { path: parent.to_path_buf(), source: e })?;
+                .map_err(|e| NetError::Io {
+                    path: parent.to_path_buf(),
+                    source: e,
+                })?;
         }
 
         let mut file = tokio::fs::File::create(dest)
             .await
-            .map_err(|e| NetError::Io { path: dest.to_path_buf(), source: e })?;
+            .map_err(|e| NetError::Io {
+                path: dest.to_path_buf(),
+                source: e,
+            })?;
 
         let mut hasher = Sha512::new();
         let mut written = 0u64;
         let mut stream = response.bytes_stream();
 
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
+            let chunk = chunk.map_err(|e| NetError::Request {
+                url: url.to_owned(),
+                source: e,
+            })?;
             hasher.update(&chunk);
-            file.write_all(&chunk)
-                .await
-                .map_err(|e| NetError::Io { path: dest.to_path_buf(), source: e })?;
+            file.write_all(&chunk).await.map_err(|e| NetError::Io {
+                path: dest.to_path_buf(),
+                source: e,
+            })?;
             written += chunk.len() as u64;
             on_progress(written, total);
         }
 
-        file.flush()
-            .await
-            .map_err(|e| NetError::Io { path: dest.to_path_buf(), source: e })?;
+        file.flush().await.map_err(|e| NetError::Io {
+            path: dest.to_path_buf(),
+            source: e,
+        })?;
 
         Ok(hex(&hasher.finalize()))
     }
@@ -158,14 +180,20 @@ fn check_status(url: &str, response: reqwest::Response) -> Result<reqwest::Respo
     }
     // GitHub answers 403 with a rate-limit body; call it out by name, since
     // "forbidden" sends people hunting for a credentials problem they don't have.
-    if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+    if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+    {
         if let Some(reset) = response.headers().get("x-ratelimit-remaining") {
             if reset.to_str().ok() == Some("0") {
-                return Err(NetError::RateLimited { url: url.to_owned() });
+                return Err(NetError::RateLimited {
+                    url: url.to_owned(),
+                });
             }
         }
     }
-    Err(NetError::Status { url: url.to_owned(), status: status.as_u16() })
+    Err(NetError::Status {
+        url: url.to_owned(),
+        status: status.as_u16(),
+    })
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -183,7 +211,9 @@ pub struct ETagCache {
 
 impl ETagCache {
     pub fn new(body_path: impl Into<PathBuf>) -> Self {
-        Self { body_path: body_path.into() }
+        Self {
+            body_path: body_path.into(),
+        }
     }
 
     fn etag_path(&self) -> PathBuf {
@@ -200,13 +230,17 @@ impl ETagCache {
         if !self.body_path.is_file() {
             return None;
         }
-        std::fs::read_to_string(self.etag_path()).ok().map(|s| s.trim().to_owned())
+        std::fs::read_to_string(self.etag_path())
+            .ok()
+            .map(|s| s.trim().to_owned())
     }
 
     /// The cached body, used when the server reports `304`.
     pub fn read(&self) -> Result<Vec<u8>, NetError> {
-        std::fs::read(&self.body_path)
-            .map_err(|e| NetError::Io { path: self.body_path.clone(), source: e })
+        std::fs::read(&self.body_path).map_err(|e| NetError::Io {
+            path: self.body_path.clone(),
+            source: e,
+        })
     }
 
     /// Read and deserialize the cached body.
@@ -220,15 +254,21 @@ impl ETagCache {
 
     fn store(&self, body: &[u8], etag: Option<&str>) -> Result<(), NetError> {
         if let Some(parent) = self.body_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| NetError::Io { path: parent.to_path_buf(), source: e })?;
+            std::fs::create_dir_all(parent).map_err(|e| NetError::Io {
+                path: parent.to_path_buf(),
+                source: e,
+            })?;
         }
-        std::fs::write(&self.body_path, body)
-            .map_err(|e| NetError::Io { path: self.body_path.clone(), source: e })?;
+        std::fs::write(&self.body_path, body).map_err(|e| NetError::Io {
+            path: self.body_path.clone(),
+            source: e,
+        })?;
 
         match etag {
-            Some(etag) => std::fs::write(self.etag_path(), etag)
-                .map_err(|e| NetError::Io { path: self.etag_path(), source: e })?,
+            Some(etag) => std::fs::write(self.etag_path(), etag).map_err(|e| NetError::Io {
+                path: self.etag_path(),
+                source: e,
+            })?,
             // No ETag offered: drop any stale one so the next request is
             // unconditional rather than validated against the wrong version.
             None => {

@@ -8,6 +8,7 @@
 //! else stays synchronous and directly testable. `core` never depends on iced
 //! or clap.
 
+pub mod battlenet;
 pub mod buildinfo;
 pub mod config;
 pub mod error;
