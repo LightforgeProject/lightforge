@@ -9,6 +9,13 @@ description = "UI-agnostic core: product models, path layout, .build.info engine
 
 [dependencies]
 directories.workspace = true
+flate2.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "rt"] }
 toml.workspace = true

@@ -22,6 +22,12 @@ pub enum CoreError {
     #[error(transparent)]
     Product(#[from] crate::product::ProductError),
 
+    #[error(transparent)]
+    Net(#[from] crate::net::NetError),
+
+    #[error(transparent)]
+    Proton(#[from] crate::proton::ProtonError),
+
     #[error("i/o error at {path}")]
     Io {
         path: PathBuf,

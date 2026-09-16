@@ -260,10 +260,374 @@ mod tests {
         assert_eq!(parse_version_file(""), None);
     }
 
+    fn release(tag: &str, prerelease: bool) -> UpstreamRelease {
+        UpstreamRelease {
+            tag_name: tag.to_owned(),
+            prerelease,
+            html_url: format!("https://example.invalid/{tag}"),
+            assets: vec![
+                ReleaseAsset {
+                    name: format!("{tag}.tar.gz"),
+                    browser_download_url: format!("https://example.invalid/{tag}.tar.gz"),
+                    size: 400_000_000,
+                },
+                ReleaseAsset {
+                    name: format!("{tag}.sha512sum"),
+                    browser_download_url: format!("https://example.invalid/{tag}.sha512sum"),
+                    size: 150,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn latest_stable_skips_prereleases() {
+        // GitHub returns newest-first.
+        let releases = vec![release("GE-Proton12-1", true), release("GE-Proton11-6", false)];
+        assert_eq!(latest_stable(&releases).unwrap().tag_name, "GE-Proton11-6");
+    }
+
+    #[test]
+    fn update_notice_only_when_behind() {
+        let releases = vec![release("GE-Proton11-6", false)];
+        assert!(check_for_update("GE-Proton11-6", &releases).is_none());
+
+        let notice = check_for_update("GE-Proton10-34", &releases).unwrap();
+        assert_eq!(notice.current, "GE-Proton10-34");
+        assert_eq!(notice.available, "GE-Proton11-6");
+    }
+
+    #[test]
+    fn no_notice_when_upstream_has_only_prereleases() {
+        let releases = vec![release("GE-Proton12-1", true)];
+        assert!(check_for_update("GE-Proton11-6", &releases).is_none());
+    }
+
+    fn with_assets(tag: &str, names: &[&str]) -> UpstreamRelease {
+        UpstreamRelease {
+            tag_name: tag.to_owned(),
+            prerelease: false,
+            html_url: String::new(),
+            assets: names
+                .iter()
+                .map(|n| ReleaseAsset {
+                    name: (*n).to_owned(),
+                    browser_download_url: format!("https://example.invalid/{n}"),
+                    size: 0,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn dual_arch_release_does_not_hand_x86_the_arm_build() {
+        // Real asset list for GE-Proton11-7; aarch64 sorts first.
+        let r = with_assets(
+            "GE-Proton11-7",
+            &[
+                "GE-Proton11-7-aarch64.sha512sum",
+                "GE-Proton11-7-aarch64.tar.gz",
+                "GE-Proton11-7-x86_64.sha512sum",
+                "GE-Proton11-7-x86_64.tar.gz",
+            ],
+        );
+        let tarball = r.tarball_for("x86_64").unwrap();
+        assert_eq!(tarball.name, "GE-Proton11-7-x86_64.tar.gz");
+        assert_eq!(r.checksum_for(tarball).unwrap().name, "GE-Proton11-7-x86_64.sha512sum");
+        assert_eq!(r.tarball_for("aarch64").unwrap().name, "GE-Proton11-7-aarch64.tar.gz");
+    }
+
+    #[test]
+    fn mixed_era_treats_the_unsuffixed_asset_as_x86() {
+        // GE-Proton11-3 shipped aarch64 alongside an unsuffixed x86_64 build.
+        let r = with_assets(
+            "GE-Proton11-3",
+            &[
+                "GE-Proton11-3-aarch64.sha512sum",
+                "GE-Proton11-3-aarch64.tar.gz",
+                "GE-Proton11-3.sha512sum",
+                "GE-Proton11-3.tar.gz",
+            ],
+        );
+        let tarball = r.tarball_for("x86_64").unwrap();
+        assert_eq!(tarball.name, "GE-Proton11-3.tar.gz");
+        assert_eq!(r.checksum_for(tarball).unwrap().name, "GE-Proton11-3.sha512sum");
+    }
+
+    #[test]
+    fn legacy_single_asset_release_resolves() {
+        let r = with_assets("GE-Proton10-34", &["GE-Proton10-34.sha512sum", "GE-Proton10-34.tar.gz"]);
+        let tarball = r.tarball_for("x86_64").unwrap();
+        assert_eq!(tarball.name, "GE-Proton10-34.tar.gz");
+        assert_eq!(r.checksum_for(tarball).unwrap().name, "GE-Proton10-34.sha512sum");
+        // No ARM build in this era.
+        assert!(r.tarball_for("aarch64").is_none());
+    }
+
+    #[test]
+    fn sha512sum_line_yields_the_digest() {
+        let digest = "a".repeat(128);
+        assert_eq!(
+            parse_sha512sum(&format!("{digest}  GE-Proton11-6.tar.gz\n")),
+            Some(digest.clone())
+        );
+        // Uppercase digests normalize.
+        assert_eq!(parse_sha512sum(&format!("{}  f", "A".repeat(128))), Some("a".repeat(128)));
+    }
+
+    #[test]
+    fn malformed_checksums_are_rejected() {
+        assert_eq!(parse_sha512sum(""), None);
+        assert_eq!(parse_sha512sum("deadbeef  short.tar.gz"), None);
+        assert_eq!(parse_sha512sum(&format!("{}  f", "z".repeat(128))), None);
+    }
+
     #[test]
     fn pin_round_trips_through_an_optional_string() {
         assert_eq!(ProtonPin::from(None), ProtonPin::Default);
         assert_eq!(ProtonPin::Default.version(), None);
         assert_eq!(ProtonPin::from(Some("GE-Proton11-6".to_owned())).version(), Some("GE-Proton11-6"));
     }
+}
+
+// ---------------------------------------------------------------------------
+// Upstream releases (async edge)
+// ---------------------------------------------------------------------------
+
+/// GitHub Releases endpoint for Proton-GE.
+const GE_RELEASES_URL: &str =
+    "https://api.github.com/repos/GloriousEggroll/proton-ge-custom/releases";
+
+/// One release as published upstream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpstreamRelease {
+    /// Release tag, e.g. `GE-Proton11-6`. Matches the `version` file of an
+    /// installed build, which is what makes the two comparable.
+    pub tag_name: String,
+    #[serde(default)]
+    pub prerelease: bool,
+    #[serde(default)]
+    pub html_url: String,
+    #[serde(default)]
+    pub assets: Vec<ReleaseAsset>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReleaseAsset {
+    pub name: String,
+    pub browser_download_url: String,
+    #[serde(default)]
+    pub size: u64,
+}
+
+/// Architecture suffix used by GE's release assets.
+const AARCH64: &str = "-aarch64";
+
+impl UpstreamRelease {
+    /// The `.tar.gz` build artifact for `arch`.
+    ///
+    /// GE's asset naming has three eras, all still present in the release list:
+    ///
+    /// | era | assets |
+    /// |---|---|
+    /// | ≤ `GE-Proton11-2` | `GE-ProtonX-Y.tar.gz` — unsuffixed, x86_64 |
+    /// | `GE-Proton11-1`, `11-3` | unsuffixed x86_64 **plus** `-aarch64` |
+    /// | ≥ `GE-Proton11-4` | explicit `-x86_64` **and** `-aarch64` |
+    ///
+    /// So an x86_64 host takes an explicit `-x86_64` when offered and otherwise
+    /// any tarball that isn't `-aarch64`; picking the first `.tar.gz` would
+    /// select the ARM build, since `aarch64` sorts first.
+    pub fn tarball_for(&self, arch: &str) -> Option<&ReleaseAsset> {
+        let suffix = format!("-{arch}.tar.gz");
+        if let Some(exact) = self.assets.iter().find(|a| a.name.ends_with(&suffix)) {
+            return Some(exact);
+        }
+        // Only x86_64 has an unsuffixed spelling; ARM is always explicit.
+        if arch != "x86_64" {
+            return None;
+        }
+        self.assets
+            .iter()
+            .find(|a| a.name.ends_with(".tar.gz") && !a.name.contains(AARCH64))
+    }
+
+    /// The build artifact for the architecture Lightforge is running on.
+    pub fn tarball(&self) -> Option<&ReleaseAsset> {
+        self.tarball_for(std::env::consts::ARCH)
+    }
+
+    /// The checksum published alongside a specific tarball.
+    ///
+    /// Derived from the tarball's own name rather than searched for, so a
+    /// dual-arch release can never pair an x86_64 download with the ARM digest.
+    pub fn checksum_for(&self, tarball: &ReleaseAsset) -> Option<&ReleaseAsset> {
+        let expected = tarball.name.replace(".tar.gz", ".sha512sum");
+        self.assets.iter().find(|a| a.name == expected)
+    }
+}
+
+/// Fetch the Proton-GE release list, revalidating with `cache`.
+///
+/// Unauthenticated GitHub API calls are capped at 60/hour per IP, so the cached
+/// copy is returned on `304` and the budget only moves when something actually
+/// changed upstream.
+pub async fn fetch_releases(
+    http: &crate::net::Http,
+    cache: &crate::net::ETagCache,
+) -> Result<Vec<UpstreamRelease>, ProtonError> {
+    match http.get_json_cached(GE_RELEASES_URL, cache).await? {
+        Some(releases) => Ok(releases),
+        None => Ok(cache.read_json()?),
+    }
+}
+
+/// The newest stable release, or `None` if upstream published only prereleases.
+pub fn latest_stable(releases: &[UpstreamRelease]) -> Option<&UpstreamRelease> {
+    // GitHub returns newest-first, so the first stable entry is the latest.
+    releases.iter().find(|r| !r.prerelease)
+}
+
+/// Compare an installed version against upstream, producing a passive notice.
+///
+/// Returns `None` when already current. Nothing here applies an update — the
+/// policy is pinned + notify-only.
+pub fn check_for_update(installed: &str, releases: &[UpstreamRelease]) -> Option<UpdateNotice> {
+    let latest = latest_stable(releases)?;
+    (latest.tag_name != installed).then(|| UpdateNotice {
+        current: installed.to_owned(),
+        available: latest.tag_name.clone(),
+        release_url: latest.html_url.clone(),
+    })
+}
+
+/// Download, verify, and unpack a release into `dest_root`.
+///
+/// The tarball unpacks to a single top-level directory named for the release,
+/// so the installed build lands at `dest_root/<dir>`. The download is verified
+/// against the published SHA-512 before anything is extracted — a truncated
+/// Proton fails much later and far more confusingly than a checksum mismatch.
+pub async fn install_release(
+    http: &crate::net::Http,
+    release: &UpstreamRelease,
+    dest_root: &Path,
+    scratch: &Path,
+    on_progress: impl FnMut(u64, Option<u64>),
+) -> Result<ProtonRelease, ProtonError> {
+    let tarball = release
+        .tarball()
+        .ok_or_else(|| ProtonError::NoTarball(release.tag_name.clone()))?;
+
+    let archive = scratch.join(&tarball.name);
+    let digest = http.download(&tarball.browser_download_url, &archive, on_progress).await?;
+
+    // GE publishes a checksum file for every release; treat its absence as a
+    // reason to stop rather than a reason to trust the download.
+    let expected = match release.checksum_for(tarball) {
+        Some(asset) => parse_sha512sum(&http.get_text(&asset.browser_download_url).await?)
+            .ok_or_else(|| ProtonError::MalformedChecksum(asset.name.clone()))?,
+        None => return Err(ProtonError::NoChecksum(release.tag_name.clone())),
+    };
+
+    if !digest.eq_ignore_ascii_case(&expected) {
+        let _ = std::fs::remove_file(&archive);
+        return Err(ProtonError::ChecksumMismatch {
+            version: release.tag_name.clone(),
+            expected,
+            actual: digest,
+        });
+    }
+
+    let dest_root = dest_root.to_path_buf();
+    let archive_for_task = archive.clone();
+    // Decompression is CPU-bound and blocking; keep it off the async runtime.
+    let unpacked = tokio::task::spawn_blocking(move || unpack(&archive_for_task, &dest_root))
+        .await
+        .map_err(|e| ProtonError::Join(e.to_string()))??;
+
+    let _ = std::fs::remove_file(&archive);
+
+    ProtonRelease::read_from_dir(&unpacked, ProtonSource::Managed)
+        .ok_or(ProtonError::NotAProtonBuild(unpacked))
+}
+
+/// Extract a `.tar.gz`, returning the single top-level directory it created.
+fn unpack(archive: &Path, dest_root: &Path) -> Result<PathBuf, ProtonError> {
+    let file = std::fs::File::open(archive)
+        .map_err(|e| ProtonError::Io { path: archive.to_path_buf(), source: e })?;
+    std::fs::create_dir_all(dest_root)
+        .map_err(|e| ProtonError::Io { path: dest_root.to_path_buf(), source: e })?;
+
+    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    let mut top: Option<PathBuf> = None;
+
+    for entry in tar
+        .entries()
+        .map_err(|e| ProtonError::Io { path: archive.to_path_buf(), source: e })?
+    {
+        let mut entry =
+            entry.map_err(|e| ProtonError::Io { path: archive.to_path_buf(), source: e })?;
+        let path = entry
+            .path()
+            .map_err(|e| ProtonError::Io { path: archive.to_path_buf(), source: e })?
+            .into_owned();
+
+        // Reject absolute paths and `..` traversal rather than trusting the
+        // archive to stay inside its own directory.
+        if path.is_absolute() || path.components().any(|c| c == std::path::Component::ParentDir) {
+            return Err(ProtonError::UnsafeArchivePath(path));
+        }
+        if top.is_none() {
+            top = path.components().next().map(|c| dest_root.join(c));
+        }
+
+        entry
+            .unpack_in(dest_root)
+            .map_err(|e| ProtonError::Io { path: dest_root.to_path_buf(), source: e })?;
+    }
+
+    top.ok_or_else(|| ProtonError::EmptyArchive(archive.to_path_buf()))
+}
+
+/// Pull the digest out of a `sha512sum` line: `<hex>  <filename>`.
+fn parse_sha512sum(contents: &str) -> Option<String> {
+    let digest = contents.split_whitespace().next()?;
+    (digest.len() == 128 && digest.chars().all(|c| c.is_ascii_hexdigit()))
+        .then(|| digest.to_ascii_lowercase())
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ProtonError {
+    #[error(transparent)]
+    Net(#[from] crate::net::NetError),
+
+    #[error("release {0} publishes no .tar.gz asset for {arch}", arch = std::env::consts::ARCH)]
+    NoTarball(String),
+
+    #[error("release {0} publishes no checksum; refusing to install unverified")]
+    NoChecksum(String),
+
+    #[error("checksum file {0} is malformed")]
+    MalformedChecksum(String),
+
+    #[error("checksum mismatch for {version}: expected {expected}, got {actual}")]
+    ChecksumMismatch { version: String, expected: String, actual: String },
+
+    #[error("archive contains an unsafe path: {0}")]
+    UnsafeArchivePath(PathBuf),
+
+    #[error("archive {0} is empty")]
+    EmptyArchive(PathBuf),
+
+    #[error("{0} is not a Proton build")]
+    NotAProtonBuild(PathBuf),
+
+    #[error("extraction task failed: {0}")]
+    Join(String),
+
+    #[error("i/o error at {path}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }

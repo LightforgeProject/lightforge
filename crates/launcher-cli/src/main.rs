@@ -31,6 +31,8 @@ enum Command {
     Config,
     /// List Proton builds installed on this system.
     Proton,
+    /// Check upstream Proton-GE releases and report whether a newer one exists.
+    ProtonCheck,
     /// Show the `.build.info` row for a product.
     BuildInfo {
         /// Product code, e.g. `wow` or `wow_classic`.
@@ -39,7 +41,8 @@ enum Command {
     },
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let layout = match &cli.root {
@@ -89,6 +92,42 @@ fn main() -> Result<()> {
                 );
             }
             println!("\n* = supported launch target");
+        }
+        Command::ProtonCheck => {
+            use lightforge_core::net::{ETagCache, Http};
+            use lightforge_core::proton;
+
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let cache = ETagCache::new(dirs.cache_dir().join("proton-releases.json"));
+            let cached = cache.etag().is_some();
+
+            let http = Http::new()?;
+            let releases = proton::fetch_releases(&http, &cache)
+                .await
+                .context("fetching Proton-GE releases")?;
+
+            println!("{} releases ({})", releases.len(), if cached { "revalidated" } else { "fresh" });
+            if let Some(latest) = proton::latest_stable(&releases) {
+                let size = latest.tarball().map(|a| a.size).unwrap_or(0);
+                println!("latest stable  {}  ({:.0} MB)", latest.tag_name, size as f64 / 1_048_576.0);
+                println!("checksum       {}", latest.tarball().and_then(|t| latest.checksum_for(t)).map(|a| a.name.as_str()).unwrap_or("MISSING"));
+            }
+
+            let steam = lightforge_core::steam::SteamRoot::discover();
+            let installed: Vec<_> = steam
+                .as_ref()
+                .map(proton::discover_installed)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|r| r.flavor.is_supported())
+                .collect();
+
+            for build in &installed {
+                match proton::check_for_update(&build.version, &releases) {
+                    Some(n) => println!("  {} -> {} available", n.current, n.available),
+                    None => println!("  {} is current", build.version),
+                }
+            }
         }
         Command::BuildInfo { product } => {
             let code: ProductCode = product.parse().expect("product codes are infallible");
