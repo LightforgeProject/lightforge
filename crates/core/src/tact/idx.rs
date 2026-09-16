@@ -383,8 +383,20 @@ impl Index {
     /// Returns the path written.
     pub fn save_new_generation(&self, dir: impl AsRef<Path>) -> Result<PathBuf, IdxError> {
         let dir = dir.as_ref();
-        let bytes = self.to_bytes()?;
         let sequence = latest_sequence(dir, self.bucket)?.map_or(0, |s| s + 1);
+        self.save_generation(dir, sequence)
+    }
+
+    /// Write this index as a specific generation.
+    ///
+    /// Callers rebuilding an existing store should carry the source's
+    /// generation numbers over rather than restarting from zero. A real
+    /// install's are in the 0x32-0x38 range and there is exactly one per
+    /// bucket; an index written at generation 0 is not a shape the client ever
+    /// produces, and it is not safe to assume that goes unnoticed.
+    pub fn save_generation(&self, dir: impl AsRef<Path>, sequence: u32) -> Result<PathBuf, IdxError> {
+        let dir = dir.as_ref();
+        let bytes = self.to_bytes()?;
         let path = dir.join(file_name(self.bucket, sequence));
 
         // A new generation is a new file, so a plain create is already atomic

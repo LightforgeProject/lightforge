@@ -1,0 +1,6 @@
+9/17 01:06:35.442  vendor: AuthenticAMD
+9/17 01:06:35.442  branding: AMD Ryzen 7 9800X3D 8-Core Processor           
+9/17 01:06:35.442  features: lahf64 cmpxchg16b sse sse2 sse3 ssse3 sse41 sse42 avx avx2 avx512f aesni clmul sha rdrand 
+9/17 01:06:35.442  sockets: 1
+9/17 01:06:35.442  cores: 8
+9/17 01:06:35.442  threads: 16

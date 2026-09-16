@@ -47,6 +47,9 @@ pub struct StoreWriter {
     max_archive: u64,
     files: usize,
     bytes: u64,
+    /// Generation to write each bucket's index at, when rebuilding a store
+    /// whose numbering should be preserved.
+    generations: HashMap<u8, u32>,
 }
 
 impl StoreWriter {
@@ -72,7 +75,15 @@ impl StoreWriter {
             max_archive: MAX_ARCHIVE_SIZE,
             files: 0,
             bytes: 0,
+            generations: HashMap::new(),
         })
+    }
+
+    /// Write `bucket`'s index at a specific generation instead of the next
+    /// free one. See [`Index::save_generation`] for why that matters.
+    pub fn with_index_generation(mut self, bucket: u8, sequence: u32) -> Self {
+        self.generations.insert(bucket, sequence);
+        self
     }
 
     /// Cap archives lower than the format allows. Only useful for tests, which
@@ -164,7 +175,10 @@ impl StoreWriter {
         let mut indices: Vec<_> = self.indices.into_values().collect();
         indices.sort_by_key(Index::bucket);
         for index in &indices {
-            written.push(index.save_new_generation(&self.data_dir)?);
+            written.push(match self.generations.get(&index.bucket()) {
+                Some(seq) => index.save_generation(&self.data_dir, *seq)?,
+                None => index.save_new_generation(&self.data_dir)?,
+            });
         }
 
         Ok(Summary {
@@ -421,6 +435,32 @@ mod tests {
         let mut writer = StoreWriter::create(dir.join("data")).unwrap().with_max_archive_size(1024);
         let err = writer.write(&ekey(1), &vec![0u8; 4096]).unwrap_err();
         assert!(matches!(err, WriteError::FileTooLarge { .. }));
+    }
+
+    #[test]
+    fn index_generations_can_be_pinned_to_match_a_source_store() {
+        let dir = scratch("generations");
+        let data = dir.join("Data").join("data");
+
+        let mut writer = StoreWriter::create(&data)
+            .unwrap()
+            .with_index_generation(0, 0x35)
+            .with_index_generation(1, 0x38);
+        writer.write(&ekey(1), &blte(b"x")).unwrap();
+        let summary = writer.finish().unwrap();
+
+        let names: Vec<String> = summary
+            .indices
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"0000000035.idx".to_owned()), "{names:?}");
+        assert!(names.contains(&"0100000038.idx".to_owned()), "{names:?}");
+        // Buckets with no pin still get the next free generation.
+        assert!(names.contains(&"0200000000.idx".to_owned()), "{names:?}");
+
+        // And the store still opens with those names.
+        assert_eq!(Storage::open(&dir).unwrap().stats().buckets, usize::from(BUCKETS));
     }
 
     #[test]

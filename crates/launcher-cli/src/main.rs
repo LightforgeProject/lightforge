@@ -81,6 +81,21 @@ enum Command {
         #[arg(long, requires = "product")]
         exec: Option<String>,
     },
+    /// Launch the game directly under Proton — the `[ PLAY ]` path.
+    ///
+    /// Runs pre-flight first, then starts `Wow.exe` through the prefix's
+    /// Windows-visible path. Battle.net is not involved.
+    Play {
+        /// Product to launch, e.g. `wow` or `wow_classic`.
+        #[arg(long, default_value = "wow")]
+        product: String,
+        /// Proton build to launch under.
+        #[arg(long)]
+        proton: Option<String>,
+        /// Print what would run and exit.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Clean the prefix up the way a launch would, without launching anything.
     Preflight {
         /// Proton build whose `wineserver` shuts the prefix down.
@@ -562,6 +577,58 @@ async fn main() -> Result<()> {
                 Some(code) => println!("exited with code {code}"),
             }
         }
+        Command::Play { product, proton, dry_run } => {
+            use lightforge_core::config::Config;
+            use lightforge_core::preflight::{NoDownloads, Preflight};
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+
+            // The game is launched through the symlink, so Wine sees the
+            // conventional Windows path — the same thing that keeps CEF happy
+            // for the in-game store.
+            let exe = layout.wow_symlink().join(code.install_dir()).join("Wow.exe");
+            if !exe.is_file() {
+                anyhow::bail!(
+                    "no game at {} — is the symlink pointing at an install?",
+                    exe.display()
+                );
+            }
+
+            // Whatever the symlink resolves to has to be visible inside the
+            // prefix, and it is not necessarily under the games root.
+            let target = std::fs::read_link(layout.wow_symlink())
+                .unwrap_or_else(|_| layout.wow_install());
+
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let (runner, build) = proton_runner(&layout, proton.as_deref())?;
+            let runner = runner
+                .with_compat_mount(&target)
+                // Per-product shader cache: the prefix is shared, so pooling
+                // it would mean a Proton swap for one product discarding
+                // another's accumulated shaders.
+                .with_shader_cache(dirs.shader_cache_dir(&code));
+
+            println!("using {} ({})", build.version, build.path.display());
+            println!("install {}", target.display());
+            println!("running {}", exe.display());
+            if dry_run {
+                return Ok(());
+            }
+
+            let report = Preflight::new(Config::default().prefix_user)
+                .run(&runner, &layout, Some(&code), &mut NoDownloads)
+                .context("pre-flight cleanup")?;
+            print_preflight(&report);
+
+            let status = runner
+                .command("run", &exe, Vec::<String>::new())
+                .status()
+                .context("launching the game")?;
+            match status.code() {
+                Some(0) | None => println!("exited"),
+                Some(code) => println!("exited with code {code}"),
+            }
+        }
         Command::Preflight { proton, product, dry_run, grace } => {
             use lightforge_core::config::Config;
             use lightforge_core::preflight::{self, NoDownloads, Preflight};
@@ -687,8 +754,19 @@ async fn main() -> Result<()> {
             }
             println!("rebuilding {} entries", entries.len());
 
-            let t = std::time::Instant::now();
+            // Carry the source's index generation numbers over. A real
+            // install has exactly one generation per bucket in the 0x32-0x38
+            // range; starting from zero produces a store the client does not
+            // treat the same way.
             let mut writer = StoreWriter::create(&dst_data)?;
+            let src_data = source.data_dir().to_path_buf();
+            for bucket in 0..lightforge_core::tact::idx::BUCKETS {
+                if let Some(seq) = lightforge_core::tact::idx::latest_sequence(&src_data, bucket)? {
+                    writer = writer.with_index_generation(bucket, seq);
+                }
+            }
+
+            let t = std::time::Instant::now();
             let (mut done, mut failed) = (0usize, 0usize);
             let mut last_report = std::time::Instant::now();
 
