@@ -102,6 +102,29 @@ enum Command {
         #[arg(default_value = "wow")]
         product: String,
     },
+    /// Rebuild an install's CASC store into a scratch copy, then verify it.
+    ///
+    /// The source is only ever read. Used to prove that a store Lightforge
+    /// wrote is byte-for-byte usable in place of one Agent wrote.
+    CascRebuild {
+        /// Existing install to read from.
+        src: PathBuf,
+        /// Directory to build the rebuilt install in. Must not be inside src.
+        dst: PathBuf,
+        /// Rebuild only this fraction of entries, for a quick smoke test.
+        #[arg(long, default_value_t = 100)]
+        percent: u8,
+    },
+    /// Compare a rebuilt CASC store against the install it was built from.
+    CascVerify {
+        /// The original install.
+        src: PathBuf,
+        /// The rebuilt copy.
+        dst: PathBuf,
+        /// How many entries to compare, spread across the whole store.
+        #[arg(long, default_value_t = 20000)]
+        sample: usize,
+    },
     /// Read an archive's index and pull real files out of it by range request.
     CdnArchive {
         /// Archive hash. Defaults to the first archive in the CDN config.
@@ -570,6 +593,149 @@ async fn main() -> Result<()> {
                 .run(&runner, &layout, code.as_ref(), &mut NoDownloads)
                 .context("pre-flight cleanup")?;
             print_preflight(&report);
+        }
+        Command::CascVerify { src, dst, sample } => {
+            use lightforge_core::tact::entry::Header;
+            use lightforge_core::tact::storage::Storage;
+
+            let mut source = Storage::open(&src).context("opening the source store")?;
+            let mut rebuilt = Storage::open(&dst).context("opening the rebuilt store")?;
+            let (a, b) = (source.stats(), rebuilt.stats());
+            println!("source   {:>9} files, {:>9} entries, {:.1} GB", a.files, a.entries, a.bytes as f64 / 1e9);
+            println!("rebuilt  {:>9} files, {:>9} entries, {:.1} GB", b.files, b.entries, b.bytes as f64 / 1e9);
+            if a.files != b.files {
+                println!("NOTE: file counts differ by {}", a.files.abs_diff(b.files));
+            }
+
+            let entries: Vec<_> = rebuilt.files().copied().collect();
+            let stride = (entries.len() / sample.max(1)).max(1);
+            let chosen: Vec<_> = entries.iter().step_by(stride).take(sample).copied().collect();
+            println!("\ncomparing {} entries…", chosen.len());
+
+            let t = std::time::Instant::now();
+            let (mut same, mut differ, mut both_enc, mut hdr_ok, mut hdr_bad) =
+                (0usize, 0usize, 0usize, 0usize, 0usize);
+            for e in &chosen {
+                // The header must verify at the position we chose for it.
+                match rebuilt.read_raw(e) {
+                    Ok(raw) if Header::verify(&raw, e.archive_id, e.offset) => hdr_ok += 1,
+                    _ => hdr_bad += 1,
+                }
+
+                let mut ekey = [0u8; 16];
+                ekey[..9].copy_from_slice(&e.key);
+                match (source.read(&ekey), rebuilt.read(&ekey)) {
+                    (Ok(x), Ok(y)) if x == y => same += 1,
+                    // Encrypted content fails to decode in both, which is
+                    // agreement, not damage.
+                    (Err(_), Err(_)) => both_enc += 1,
+                    _ => {
+                        differ += 1;
+                        if differ <= 3 {
+                            println!("  MISMATCH at archive {} offset {}", e.archive_id, e.offset);
+                        }
+                    }
+                }
+            }
+
+            println!(
+                "\ndecoded identically: {same}\nundecodable in both:  {both_enc}\nmismatched:           {differ}"
+            );
+            println!("headers verifying:    {hdr_ok} ok, {hdr_bad} bad");
+            println!("compared in {:.0}s", t.elapsed().as_secs_f64());
+            if differ == 0 && hdr_bad == 0 {
+                println!("\nthe rebuilt store is byte-equivalent to the source for every entry checked");
+            } else {
+                anyhow::bail!("the rebuilt store does not match the source");
+            }
+        }
+        Command::CascRebuild { src, dst, percent } => {
+            use lightforge_core::tact::storage::Storage;
+            use lightforge_core::tact::writer::StoreWriter;
+
+            if dst.starts_with(&src) {
+                anyhow::bail!("dst must not be inside src — the source is read-only");
+            }
+            let dst_data = dst.join("Data").join("data");
+            if dst_data.exists() {
+                anyhow::bail!("{} already exists; remove it first", dst_data.display());
+            }
+
+            // Everything outside the CASC store is small and copied verbatim:
+            // binaries, WTF, Data/config, and .build.info.
+            println!("copying non-CASC files…");
+            let t = std::time::Instant::now();
+            let status = std::process::Command::new("rsync")
+                .arg("-a")
+                .arg("--exclude=Data/data/")
+                .arg(format!("{}/", src.display()))
+                .arg(format!("{}/", dst.display()))
+                .status()
+                .context("running rsync — is it installed?")?;
+            anyhow::ensure!(status.success(), "rsync failed");
+            std::fs::create_dir_all(&dst_data)?;
+            println!("  done in {:?}", t.elapsed());
+
+            let mut source = Storage::open(&src).context("opening the source store")?;
+            let mut entries: Vec<_> = source.files().copied().collect();
+            // Read in physical order: the index is sorted by key, which would
+            // make this a random-access pass over 123 GB.
+            entries.sort_by_key(|e| (e.archive_id, e.offset));
+            if percent < 100 {
+                let keep = entries.len() * usize::from(percent.max(1)) / 100;
+                entries.truncate(keep);
+            }
+            println!("rebuilding {} entries", entries.len());
+
+            let t = std::time::Instant::now();
+            let mut writer = StoreWriter::create(&dst_data)?;
+            let (mut done, mut failed) = (0usize, 0usize);
+            let mut last_report = std::time::Instant::now();
+
+            for entry in &entries {
+                let raw = match source.read_raw(entry) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        failed += 1;
+                        if failed <= 3 { println!("  read failed: {e}"); }
+                        continue;
+                    }
+                };
+                // Pad the 9-byte index key back to a full key: the writer uses
+                // only the first nine bytes, which is what headers store.
+                let mut ekey = [0u8; 16];
+                ekey[..9].copy_from_slice(&entry.key);
+                writer.write(&ekey, &raw[lightforge_core::tact::idx::CASC_ENTRY_HEADER..])?;
+                done += 1;
+
+                if last_report.elapsed().as_secs() >= 5 {
+                    let secs = t.elapsed().as_secs_f64();
+                    println!(
+                        "  {done}/{} ({:.0}%)  {:.1} GB  {:.0} MB/s",
+                        entries.len(),
+                        done as f64 / entries.len() as f64 * 100.0,
+                        writer.bytes_written() as f64 / 1e9,
+                        writer.bytes_written() as f64 / 1e6 / secs.max(0.001),
+                    );
+                    last_report = std::time::Instant::now();
+                }
+            }
+
+            let summary = writer.finish()?;
+            let secs = t.elapsed().as_secs_f64();
+            println!(
+                "\nrebuilt {} files / {:.1} GB into {} archives + {} indices in {:.0}s ({:.0} MB/s)",
+                summary.files,
+                summary.bytes as f64 / 1e9,
+                summary.archives,
+                summary.indices.len(),
+                secs,
+                summary.bytes as f64 / 1e6 / secs.max(0.001),
+            );
+            if failed > 0 {
+                println!("{failed} source entries could not be read");
+            }
+            println!("\nverify with:  lightforge content {} --locale enUS", dst.display());
         }
         Command::CdnArchive { archive, product, region, fetch, verify_with } => {
             use lightforge_core::net::Http;
