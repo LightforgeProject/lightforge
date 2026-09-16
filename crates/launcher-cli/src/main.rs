@@ -33,6 +33,11 @@ enum Command {
     Proton,
     /// Check upstream Proton-GE releases and report whether a newer one exists.
     ProtonCheck,
+    /// Download, verify, and install a Proton-GE release.
+    ProtonInstall {
+        /// Release tag, e.g. `GE-Proton11-7`. Defaults to the latest stable.
+        version: Option<String>,
+    },
     /// Show the `.build.info` row for a product.
     BuildInfo {
         /// Product code, e.g. `wow` or `wow_classic`.
@@ -69,15 +74,22 @@ async fn main() -> Result<()> {
             print!("{}", Config::with_default_products().to_toml()?);
         }
         Command::Proton => {
-            let steam = lightforge_core::steam::SteamRoot::discover()
-                .context("no Steam installation found")?;
-            println!("steam root   {}", steam.path().display());
-            for lib in steam.library_paths() {
-                println!("library      {}", lib.display());
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let steam = lightforge_core::steam::SteamRoot::discover();
+            match &steam {
+                Some(s) => {
+                    println!("steam root   {}", s.path().display());
+                    for lib in s.library_paths() {
+                        println!("library      {}", lib.display());
+                    }
+                }
+                None => println!("steam root   (not found)"),
             }
+            println!("managed      {}", dirs.proton_dir().display());
             println!();
 
-            let installed = lightforge_core::proton::discover_installed(&steam);
+            let installed =
+                lightforge_core::proton::discover_all(steam.as_ref(), &dirs.proton_dir());
             if installed.is_empty() {
                 println!("no Proton builds found");
             }
@@ -114,10 +126,7 @@ async fn main() -> Result<()> {
             }
 
             let steam = lightforge_core::steam::SteamRoot::discover();
-            let installed: Vec<_> = steam
-                .as_ref()
-                .map(proton::discover_installed)
-                .unwrap_or_default()
+            let installed: Vec<_> = proton::discover_all(steam.as_ref(), &dirs.proton_dir())
                 .into_iter()
                 .filter(|r| r.flavor.is_supported())
                 .collect();
@@ -128,6 +137,59 @@ async fn main() -> Result<()> {
                     None => println!("  {} is current", build.version),
                 }
             }
+        }
+        Command::ProtonInstall { version } => {
+            use lightforge_core::net::{ETagCache, Http};
+            use lightforge_core::proton;
+            use std::io::Write;
+
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let cache = ETagCache::new(dirs.cache_dir().join("proton-releases.json"));
+            let http = Http::new()?;
+            let releases = proton::fetch_releases(&http, &cache).await?;
+
+            let release = match &version {
+                Some(tag) => releases
+                    .iter()
+                    .find(|r| &r.tag_name == tag)
+                    .with_context(|| format!("no release tagged `{tag}`"))?,
+                None => proton::latest_stable(&releases).context("no stable release found")?,
+            };
+
+            let dest = dirs.proton_dir();
+            println!("installing {} -> {}", release.tag_name, dest.display());
+
+            let start = std::time::Instant::now();
+            let mut last = 0u64;
+            let installed = proton::install_release(
+                &http,
+                release,
+                &dest,
+                dirs.cache_dir(),
+                |done, total| {
+                    // Redraw at most once per MB to keep the callback cheap.
+                    if done - last < 1_048_576 && Some(done) != total {
+                        return;
+                    }
+                    last = done;
+                    let mb = done as f64 / 1_048_576.0;
+                    let rate = mb / start.elapsed().as_secs_f64().max(0.001);
+                    match total {
+                        Some(t) => print!(
+                            "\r  {:.0}/{:.0} MB  {:.1} MB/s  ",
+                            mb,
+                            t as f64 / 1_048_576.0,
+                            rate
+                        ),
+                        None => print!("\r  {mb:.0} MB  {rate:.1} MB/s  "),
+                    }
+                    let _ = std::io::stdout().flush();
+                },
+            )
+            .await?;
+
+            println!("\nverified and extracted");
+            println!("  {} at {}", installed.version, installed.path.display());
         }
         Command::BuildInfo { product } => {
             let code: ProductCode = product.parse().expect("product codes are infallible");

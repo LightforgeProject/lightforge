@@ -139,7 +139,39 @@ fn parse_version_file(contents: &str) -> Option<(Option<u64>, String)> {
     }
 }
 
-/// Every Proton build installed on the system, across all Steam libraries.
+/// Builds Lightforge downloaded and manages itself.
+pub fn discover_managed(proton_dir: &Path) -> Vec<ProtonRelease> {
+    let Ok(entries) = std::fs::read_dir(proton_dir) else { return Vec::new() };
+    entries
+        .flatten()
+        .filter_map(|e| ProtonRelease::read_from_dir(&e.path(), ProtonSource::Managed))
+        .collect()
+}
+
+/// Every Proton build available to Lightforge: its own managed installs plus
+/// everything found across the user's Steam libraries.
+///
+/// Managed builds are listed first so they win the dedup against an identical
+/// version installed under Steam — Lightforge controls its own copy's integrity.
+pub fn discover_all(
+    steam: Option<&crate::steam::SteamRoot>,
+    proton_dir: &Path,
+) -> Vec<ProtonRelease> {
+    let mut found = discover_managed(proton_dir);
+    if let Some(steam) = steam {
+        found.extend(discover_installed(steam));
+    }
+    found.sort_by(|a, b| {
+        a.version
+            .cmp(&b.version)
+            // Managed sorts before SystemCompatTools/SteamApp, so dedup keeps it.
+            .then_with(|| (a.source != ProtonSource::Managed).cmp(&(b.source != ProtonSource::Managed)))
+    });
+    found.dedup_by(|a, b| a.version == b.version);
+    found
+}
+
+/// Every Proton build installed across the user's Steam libraries.
 ///
 /// Unsupported flavors are included; filter with [`ProtonFlavor::is_supported`]
 /// at the point of use.
