@@ -19,6 +19,8 @@ pub mod cdn;
 pub mod config;
 pub mod content;
 pub mod encoding;
+pub mod entry;
 pub mod idx;
 pub mod storage;
 pub mod version;
+pub mod writer;
