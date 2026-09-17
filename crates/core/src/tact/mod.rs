@@ -21,6 +21,7 @@ pub mod content;
 pub mod encoding;
 pub mod entry;
 pub mod idx;
+pub mod manifest;
 pub mod storage;
 pub mod version;
 pub mod writer;
