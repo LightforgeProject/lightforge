@@ -87,11 +87,39 @@ impl BuildConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CdnConfig {
     pub archives: Vec<String>,
+    /// The `archives-index-size` list, **which is not positionally aligned
+    /// with `archives` and so cannot be used to check an index**.
+    ///
+    /// Kept because it is in the config, not because it is usable. Measured
+    /// against three real CDN configs (1406, 1362 and 1363 archives): every
+    /// `archives` list is sorted lexicographically, every size list is a
+    /// permutation of the true sizes, and pairing them by position matches
+    /// only 2-4% — about what coincidence gives, since sizes repeat. The CDN
+    /// serves exactly the bytes the local files hold, so the sizes are right
+    /// and only their order is lost.
+    ///
+    /// An index is therefore checked by its own geometry at parse time, where
+    /// blocks, TOC and footer must account for every byte.
+    pub archives_index_size: Vec<u64>,
+    /// Present in the config but **not fetchable** — the CDN answers 403.
+    /// Agent builds it locally from the per-archive indices, which is why a
+    /// real install has one in `Data/indices` beside the others.
     pub archive_group: Option<String>,
     pub file_index: Option<String>,
+    pub file_index_size: Option<u64>,
 }
 
 impl CdnConfig {
+    /// Each archive index to fetch, with no size to check it against.
+    ///
+    /// The size is always `None`: see [`CdnConfig::archives_index_size`] for
+    /// why the published list cannot be paired with the archive list. The
+    /// shape keeps a size in the signature so the day Blizzard publishes an
+    /// aligned list — or a per-index hash — nothing above here changes.
+    pub fn archive_indices(&self) -> Vec<(&str, Option<u64>)> {
+        self.archives.iter().map(|a| (a.as_str(), None)).collect()
+    }
+
     pub fn parse(text: &str) -> Result<Self, ConfigError> {
         let config = tact_parser::config::ConfigFile::parse(text)
             .map_err(|e| ConfigError::Malformed(e.to_string()))?;
@@ -102,10 +130,24 @@ impl CdnConfig {
                 .map(|v| v.split_whitespace().map(str::to_owned).collect())
                 .unwrap_or_default()
         };
+        let sizes = |key: &str| -> Vec<u64> {
+            config
+                .values
+                .get(key)
+                .map(|v| v.split_whitespace().filter_map(|n| n.parse().ok()).collect())
+                .unwrap_or_default()
+        };
+
         Ok(Self {
             archives: list("archives"),
+            archives_index_size: sizes("archives-index-size"),
             archive_group: config.values.get("archive-group").cloned(),
             file_index: config.values.get("file-index").cloned(),
+            file_index_size: config
+                .values
+                .get("file-index-size")
+                .and_then(|v| v.split_whitespace().next())
+                .and_then(|n| n.parse().ok()),
         })
     }
 

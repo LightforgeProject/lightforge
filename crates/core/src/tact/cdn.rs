@@ -119,6 +119,17 @@ impl Endpoint {
     }
 }
 
+impl Endpoint {
+    /// The URL an index lives at: the archive's own URL with `.index` on it.
+    ///
+    /// Indices sit beside their archives rather than under a path of their
+    /// own, and the file index is fetched the same way despite indexing
+    /// nothing but loose files.
+    pub fn index_url(&self, hash: &str) -> Result<String, CdnError> {
+        Ok(format!("{}.index", self.url(Kind::Data, hash)?))
+    }
+}
+
 /// Scheme and host of a server URL, dropping path and query.
 fn origin_of(server: &str) -> String {
     let without_scheme = server.split_once("://").map(|(_, rest)| rest).unwrap_or(server);
@@ -214,6 +225,80 @@ impl Client {
         String::from_utf8(bytes).map_err(|e| CdnError::NotText { hash: hash.to_owned(), source: e })
     }
 
+    /// Fetch an index, checking it against the size its CDN config declares.
+    ///
+    /// That size is the only external check an index gets — an index is not
+    /// named by the hash of its own bytes the way a config is. A response of
+    /// the wrong length falls through to the next endpoint, since a truncated
+    /// mirror is the likeliest cause and the next one may be fine.
+    pub async fn fetch_index(
+        &self,
+        http: &Http,
+        hash: &str,
+        expect_size: Option<u64>,
+    ) -> Result<Vec<u8>, CdnError> {
+        let mut last: Option<CdnError> = None;
+
+        for endpoint in &self.endpoints {
+            let url = endpoint.index_url(hash)?;
+            match http.get_bytes(&url).await {
+                Ok(bytes) => match expect_size {
+                    Some(want) if bytes.len() as u64 != want => {
+                        last = Some(CdnError::WrongSize { url, expected: want, found: bytes.len() as u64 });
+                    }
+                    _ => return Ok(bytes),
+                },
+                Err(source) => last = Some(CdnError::Fetch { url, source }),
+            }
+        }
+
+        Err(last.unwrap_or(CdnError::NoEndpoints))
+    }
+
+    /// Fetch a loose file, decode it, and verify it against its content key.
+    ///
+    /// Loose files are the ones the file index lists — too large to archive,
+    /// so served whole at their own URL. Everything else answers 403 here and
+    /// must come out of an archive by range request.
+    pub async fn fetch_loose(
+        &self,
+        http: &Http,
+        ekey: &super::storage::EKey,
+        expect_ckey: &super::config::CKey,
+        keys: Option<&ngdp_crypto::KeyService>,
+    ) -> Result<Vec<u8>, CdnError> {
+        let hash = to_hex(ekey);
+        let mut last: Option<CdnError> = None;
+
+        for endpoint in &self.endpoints {
+            let url = endpoint.url(Kind::Data, &hash)?;
+            let raw = match http.get_bytes(&url).await {
+                Ok(bytes) => bytes,
+                Err(source) => {
+                    last = Some(CdnError::Fetch { url, source });
+                    continue;
+                }
+            };
+
+            match blte::decompress_blte(raw, keys) {
+                Ok(decoded) => {
+                    let actual = *md5::compute(&decoded);
+                    if &actual == expect_ckey {
+                        return Ok(decoded);
+                    }
+                    last = Some(CdnError::HashMismatch {
+                        url,
+                        expected: to_hex(expect_ckey),
+                        found: to_hex(&actual),
+                    });
+                }
+                Err(e) => last = Some(CdnError::Decode { url, detail: e.to_string() }),
+            }
+        }
+
+        Err(last.unwrap_or(CdnError::NoEndpoints))
+    }
+
     /// Fetch one file out of an archive by range request, decode it, and
     /// verify the result against the content key it is supposed to be.
     ///
@@ -290,6 +375,9 @@ pub enum CdnError {
 
     #[error("could not decode the BLTE payload from {url}: {detail}")]
     Decode { url: String, detail: String },
+
+    #[error("{url} returned {found} bytes, but its config declares {expected}")]
+    WrongSize { url: String, expected: u64, found: u64 },
 
     #[error("the config {hash} is not valid UTF-8")]
     NotText {
