@@ -68,17 +68,43 @@ impl Cancel {
 pub struct Options {
     /// Requests in flight at once.
     pub concurrency: usize,
-    /// Bytes stored between checkpoints.
+    /// Upper bound on the bytes stored between checkpoints.
     ///
-    /// The upper bound on what an interrupted download refetches. Four
-    /// gigabytes over a 123 GiB install is about thirty checkpoints, so the
-    /// generation counter stays near where a real install's sits.
+    /// An *upper* bound, not the interval: a plan smaller than this would
+    /// otherwise never checkpoint at all, and a download with no intermediate
+    /// index write is one an interrupt costs entirely. Classic Era is 4.5 GiB
+    /// against this 4 GiB default — 3.2 GB of it was orphaned by a restart
+    /// before the first checkpoint was ever due. The effective interval is
+    /// [`Options::interval_for`].
     pub checkpoint_bytes: u64,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Self { concurrency: 8, checkpoint_bytes: 4 << 30 }
+    }
+}
+
+/// Checkpoints a download aims for, however big it is.
+///
+/// Eight keeps an interrupt's cost near an eighth of the work while leaving
+/// the generation counter in the range a real install's sits in.
+const TARGET_CHECKPOINTS: u64 = 8;
+
+/// Floor on the interval, so a tiny plan does not rewrite sixteen indices
+/// every few megabytes for no gain.
+const MIN_CHECKPOINT_BYTES: u64 = 64 << 20;
+
+impl Options {
+    /// The interval actually used for a plan of `total` bytes.
+    ///
+    /// Scales down for small products so every download checkpoints several
+    /// times, rather than depending on whether it happens to exceed a constant
+    /// tuned on a 123 GiB install.
+    pub fn interval_for(&self, total: u64) -> u64 {
+        self.checkpoint_bytes
+            .min((total / TARGET_CHECKPOINTS).max(MIN_CHECKPOINT_BYTES))
+            .max(1)
     }
 }
 
@@ -146,6 +172,21 @@ pub struct Source<'a> {
     pub keys: Option<&'a KeyService>,
 }
 
+/// A key service loaded the way [`super::storage::Storage`] loads one.
+///
+/// Every caller wants this, and the one that did not — the first Classic Era
+/// download, which passed `None` — logged its encrypted files as corruption.
+/// Exposed here so a front-end never has to name a cascette type to build one.
+///
+/// A machine with no key files is the normal case and not an error: the
+/// built-in keys still decrypt some content, and what they cannot is stored
+/// unverified.
+pub fn default_key_service() -> KeyService {
+    let mut keys = KeyService::new();
+    let _ = keys.load_from_standard_dirs();
+    keys
+}
+
 /// Drives a plan into a store.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Downloader {
@@ -183,6 +224,7 @@ impl Downloader {
             },
             since_checkpoint: 0,
         };
+        let checkpoint_every = self.options.interval_for(plan.bytes());
 
         // Runs first: they are the bulk, and the loose files are large enough
         // that leaving them last keeps the tail of the download responsive.
@@ -250,7 +292,7 @@ impl Downloader {
                 }
             }
 
-            if sink.since_checkpoint >= self.options.checkpoint_bytes {
+            if sink.since_checkpoint >= checkpoint_every {
                 sink.writer.checkpoint()?;
                 sink.since_checkpoint = 0;
             }
@@ -535,11 +577,84 @@ fn verify(encoded: &[u8], ckey: Option<&CKey>, keys: Option<&KeyService>) -> Ver
                 ))
             }
         }
-        // Unreleased content is shipped encrypted and the key is withheld
-        // until it goes live. Refusing it would refuse ~2% of every build.
-        Err(blte::Error::KeyNotFound(_) | blte::Error::Encryption(_)) => Verified::Unverifiable,
-        Err(e) => Verified::Wrong(e.to_string()),
+        // Classify a failure by what the bytes ARE, not by what the decoder
+        // says about them. `blte` 0.4 cannot decode an encrypted block at all
+        // (see [`has_encrypted_chunk`]), so its error text does not reliably
+        // distinguish "withheld key" from "corrupt".
+        Err(e) => {
+            if has_encrypted_chunk(encoded) {
+                Verified::Unverifiable
+            } else {
+                Verified::Wrong(e.to_string())
+            }
+        }
     }
+}
+
+/// Whether any chunk of a BLTE payload is encrypted.
+///
+/// Read directly out of the chunk table rather than inferred from a decode
+/// error, because neither of `blte` 0.4's failure modes is trustworthy here:
+///
+/// - With no key service it returns an untyped
+///   `DecompressionFailed("Key service required for encrypted blocks")`.
+/// - With one, it cannot parse the block at all. Its encrypted-block reader
+///   takes the key-name size as a little-endian **u64** where the format
+///   stores a single byte, so it consumes the size plus seven bytes of the key
+///   name and reports nonsense: "Invalid key name size: 9560733477763426568".
+///   That value is `0829466e718cae84` little-endian — low byte `0x08`, the
+///   real size. Verified against two different real files.
+///
+/// Unreleased content ships encrypted with the key withheld until it goes
+/// live, and Agent stores it regardless, so these files are stored unverified.
+/// Refusing them cost a real Classic Era download 7 files.
+///
+/// ```text
+/// "BLTE"            4 bytes
+/// header_size       u32 BE   0 means one chunk, data immediately after
+/// flags             u8
+/// chunk_count       u24 BE
+/// chunk_count x     compressed u32 BE, decompressed u32 BE, md5 16 bytes
+/// <data>            each chunk starts with its mode byte
+/// ```
+fn has_encrypted_chunk(blte: &[u8]) -> bool {
+    /// Mode byte of an encrypted chunk.
+    const ENCRYPTED: u8 = b'E';
+
+    if blte.len() < 8 || &blte[..4] != b"BLTE" {
+        return false;
+    }
+    let header_size = u32::from_be_bytes(blte[4..8].try_into().expect("4 bytes")) as usize;
+
+    // A zero header means a single chunk whose data starts right here.
+    if header_size == 0 {
+        return blte.get(8) == Some(&ENCRYPTED);
+    }
+    if header_size > blte.len() || blte.len() < 12 {
+        return false;
+    }
+
+    let chunk_count = u32::from_be_bytes([0, blte[9], blte[10], blte[11]]) as usize;
+    let mut table = 12;
+    let mut at = header_size;
+
+    for _ in 0..chunk_count {
+        let Some(entry) = blte.get(table..table + 24) else {
+            return false;
+        };
+        let compressed = u32::from_be_bytes(entry[..4].try_into().expect("4 bytes")) as usize;
+
+        if blte.get(at) == Some(&ENCRYPTED) {
+            return true;
+        }
+        table += 24;
+        match at.checked_add(compressed) {
+            Some(next) if next <= blte.len() => at = next,
+            _ => return false,
+        }
+    }
+
+    false
 }
 
 enum Work<'a> {
@@ -603,6 +718,88 @@ mod tests {
     fn a_file_encoding_does_not_list_is_stored_unverified() {
         // The 2-in-1.5-million case: no content key to check it against.
         assert!(matches!(verify(&blte(b"x"), None, None), Verified::Unverifiable));
+    }
+
+    /// A BLTE container with an explicit chunk table.
+    fn blte_chunks(modes: &[u8]) -> Vec<u8> {
+        let header_size = 12 + 24 * modes.len();
+        let mut out = Vec::new();
+        out.extend_from_slice(b"BLTE");
+        out.extend_from_slice(&(header_size as u32).to_be_bytes());
+        out.push(0x0F);
+        out.extend_from_slice(&(modes.len() as u32).to_be_bytes()[1..]);
+
+        // Each chunk here is one mode byte plus three of payload.
+        for _ in modes {
+            out.extend_from_slice(&4u32.to_be_bytes());
+            out.extend_from_slice(&3u32.to_be_bytes());
+            out.extend_from_slice(&[0u8; 16]);
+        }
+        for mode in modes {
+            out.push(*mode);
+            out.extend_from_slice(b"abc");
+        }
+        out
+    }
+
+    #[test]
+    fn an_encrypted_chunk_is_recognised_wherever_it_sits() {
+        assert!(has_encrypted_chunk(&blte_chunks(b"E")));
+        // Blizzard mixes modes within one file, so a later chunk counts too.
+        assert!(has_encrypted_chunk(&blte_chunks(b"ZZE")));
+        assert!(has_encrypted_chunk(&blte_chunks(b"ZEZ")));
+
+        assert!(!has_encrypted_chunk(&blte_chunks(b"Z")));
+        assert!(!has_encrypted_chunk(&blte_chunks(b"ZNZ")));
+    }
+
+    #[test]
+    fn a_single_chunk_container_declares_no_header() {
+        // header_size 0: one chunk, its mode byte immediately after.
+        let mut encrypted = Vec::from(*b"BLTE");
+        encrypted.extend_from_slice(&0u32.to_be_bytes());
+        encrypted.extend_from_slice(b"Epayload");
+        assert!(has_encrypted_chunk(&encrypted));
+
+        let mut plain = Vec::from(*b"BLTE");
+        plain.extend_from_slice(&0u32.to_be_bytes());
+        plain.extend_from_slice(b"Zpayload");
+        assert!(!has_encrypted_chunk(&plain));
+    }
+
+    #[test]
+    fn malformed_containers_are_not_encrypted_and_do_not_panic() {
+        assert!(!has_encrypted_chunk(b""));
+        assert!(!has_encrypted_chunk(b"BLTE"));
+        assert!(!has_encrypted_chunk(b"not blte at all"));
+
+        // A header claiming more than the file holds must not index past it.
+        let mut lying = Vec::from(*b"BLTE");
+        lying.extend_from_slice(&9999u32.to_be_bytes());
+        lying.extend_from_slice(&[0u8; 8]);
+        assert!(!has_encrypted_chunk(&lying));
+
+        // A chunk count larger than the table.
+        let mut truncated = blte_chunks(b"ZZE");
+        truncated.truncate(20);
+        assert!(!has_encrypted_chunk(&truncated));
+    }
+
+    #[test]
+    fn an_encrypted_file_is_stored_unverified_rather_than_refused() {
+        // The end-to-end shape of the Classic Era bug: a real encrypted file
+        // fails to decode, and must still reach the store.
+        let encrypted = blte_chunks(b"E");
+        assert!(matches!(
+            verify(&encrypted, Some(&ckey_of(b"whatever")), None),
+            Verified::Unverifiable
+        ));
+
+        // Corruption that is not encrypted is still refused.
+        assert!(matches!(
+            verify(&blte_chunks(b"Z"), Some(&ckey_of(b"whatever")), None),
+            Verified::Wrong(_)
+        ));
     }
 
     #[test]
@@ -698,6 +895,28 @@ mod tests {
 
         assert!(!downloads.pause(&code).unwrap());
         assert!(!downloads.resume(&code).unwrap());
+    }
+
+    #[test]
+    fn a_small_download_still_checkpoints_several_times() {
+        let options = Options::default();
+
+        // The bug this guards: Classic Era is 4.5 GiB against a 4 GiB default,
+        // so it would have checkpointed once at the very end, if at all. A
+        // restart orphaned 3.2 GB because no index had ever been written.
+        let classic_era = 4_900_000_000u64;
+        let interval = options.interval_for(classic_era);
+        assert!(interval < options.checkpoint_bytes);
+        assert!(classic_era / interval >= 6, "only {} checkpoints", classic_era / interval);
+
+        // A big install still honours the cap rather than checkpointing on an
+        // eighth of 123 GiB.
+        let retail = 132_000_000_000u64;
+        assert_eq!(options.interval_for(retail), options.checkpoint_bytes);
+
+        // A tiny plan does not rewrite sixteen indices every few megabytes.
+        assert_eq!(options.interval_for(1_000_000), MIN_CHECKPOINT_BYTES);
+        assert!(options.interval_for(0) > 0);
     }
 
     #[test]

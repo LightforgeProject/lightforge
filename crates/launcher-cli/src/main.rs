@@ -1056,7 +1056,12 @@ async fn main() -> Result<()> {
             let data_dir = dest.join("Data").join("data");
             let mut writer = StoreWriter::create(&data_dir)?;
             let cancel = Cancel::new();
-            let source = Source { http: &http, client: &client, keys: None };
+            // The reader always carries a key service; the downloader must too,
+            // or blte cannot even name a missing key properly. Built-in keys
+            // decrypt some content outright, and anything still missing a key
+            // is stored unverified rather than refused.
+            let key_service = lightforge_core::tact::download::default_key_service();
+            let source = Source { http: &http, client: &client, keys: Some(&key_service) };
             let downloader = Downloader::new(DlOptions {
                 concurrency,
                 checkpoint_bytes: checkpoint_mib * 1024 * 1024,

@@ -67,13 +67,29 @@ impl StoreWriter {
     /// Existing archives are not appended to. A fresh set is started after the
     /// highest `data.NNN` already present, so an interrupted run leaves the
     /// previous archives untouched rather than half-rewritten.
+    ///
+    /// **Any index already in `data_dir` is loaded first.** A store's index is
+    /// the union of everything ever written to its archives, and this writer
+    /// replaces a bucket's index wholesale when it writes one — so starting
+    /// from empty would publish an index that knows only about this run and
+    /// strand every file written before it. A resumed Classic Era download did
+    /// exactly that, cutting a 146,662-file store down to 131,129 with the
+    /// remainder still on disk but unreachable.
+    ///
+    /// Loading them also makes [`StoreWriter::contains`] answer for the whole
+    /// store, so a resumed run does not rewrite bytes it already has.
     pub fn create(data_dir: impl Into<PathBuf>) -> Result<Self, WriteError> {
         let data_dir = data_dir.into();
         std::fs::create_dir_all(&data_dir)
             .map_err(|source| WriteError::Io { path: data_dir.clone(), source })?;
 
         let archive_id = next_archive_id(&data_dir)?;
-        let indices = (0..BUCKETS).map(|b| (b, Index::new(b))).collect();
+
+        let mut indices: HashMap<u8, Index> = (0..BUCKETS).map(|b| (b, Index::new(b))).collect();
+        for path in idx::discover(&data_dir).map_err(WriteError::Idx)? {
+            let existing = Index::load(&path)?;
+            indices.insert(existing.bucket(), existing);
+        }
 
         Ok(Self {
             data_dir,
@@ -516,6 +532,46 @@ mod tests {
         let mut writer = StoreWriter::create(dir.join("data")).unwrap().with_max_archive_size(1024);
         let err = writer.write(&ekey(1), &vec![0u8; 4096]).unwrap_err();
         assert!(matches!(err, WriteError::FileTooLarge { .. }));
+    }
+
+    #[test]
+    fn a_second_writer_keeps_what_the_first_one_stored() {
+        let dir = scratch("resume");
+        let data = dir.join("Data").join("data");
+
+        let mut first = StoreWriter::create(&data).unwrap();
+        first.write(&ekey(1), &blte(b"from the first run")).unwrap();
+        first.write(&ekey(2), &blte(b"also the first run")).unwrap();
+        first.finish().unwrap();
+
+        // A resumed download opens a new writer over the same store. Writing
+        // its index must not strand the first run's files: this cut a real
+        // 146,662-file store down to 131,129.
+        let mut second = StoreWriter::create(&data).unwrap();
+        second.write(&ekey(3), &blte(b"from the second run")).unwrap();
+        second.finish().unwrap();
+
+        let mut store = Storage::open(&dir).unwrap();
+        assert_eq!(store.read(&ekey(1)).unwrap(), b"from the first run");
+        assert_eq!(store.read(&ekey(2)).unwrap(), b"also the first run");
+        assert_eq!(store.read(&ekey(3)).unwrap(), b"from the second run");
+        assert_eq!(store.stats().files, 3);
+    }
+
+    #[test]
+    fn a_resumed_writer_knows_what_the_store_already_holds() {
+        let dir = scratch("resume-dedupe");
+        let data = dir.join("Data").join("data");
+
+        let mut first = StoreWriter::create(&data).unwrap();
+        first.write(&ekey(1), &blte(b"already stored")).unwrap();
+        first.finish().unwrap();
+
+        // Without the loaded index this reports false and the resumed run
+        // refetches and rewrites every byte it already has.
+        let second = StoreWriter::create(&data).unwrap();
+        assert!(second.contains(&ekey(1)));
+        assert!(!second.contains(&ekey(2)));
     }
 
     #[test]
