@@ -18,6 +18,7 @@ pub mod archive;
 pub mod cdn;
 pub mod config;
 pub mod content;
+pub mod download;
 pub mod encoding;
 pub mod entry;
 pub mod idx;

@@ -255,6 +255,32 @@ impl Client {
         Err(last.unwrap_or(CdnError::NoEndpoints))
     }
 
+    /// Fetch a byte range of an archive, exactly as served.
+    ///
+    /// Deliberately unverified and undecoded: a downloader storing into CASC
+    /// needs the encoded bytes the CDN sent, since that is what an archive
+    /// holds, and a run covers several files at once so there is no single
+    /// key to check it against. Verification happens per file, after the run
+    /// is split up.
+    pub async fn fetch_range(
+        &self,
+        http: &Http,
+        archive: &str,
+        range: &str,
+    ) -> Result<Vec<u8>, CdnError> {
+        let mut last: Option<CdnError> = None;
+
+        for endpoint in &self.endpoints {
+            let url = endpoint.url(Kind::Data, archive)?;
+            match http.get_range(&url, range).await {
+                Ok(bytes) => return Ok(bytes),
+                Err(source) => last = Some(CdnError::Fetch { url, source }),
+            }
+        }
+
+        Err(last.unwrap_or(CdnError::NoEndpoints))
+    }
+
     /// Fetch a loose file, decode it, and verify it against its content key.
     ///
     /// Loose files are the ones the file index lists — too large to archive,

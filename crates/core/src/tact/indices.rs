@@ -15,10 +15,14 @@
 //! so an install Lightforge downloads looks like one Agent downloaded, and a
 //! later Agent run reuses the work rather than refetching it.
 //!
-//! An index is not named by the hash of its own bytes, so the checks are the
-//! size its CDN config declares and the index's own internal geometry — which
-//! is a strong check in practice, since block count, TOC and footer have to
-//! account for every byte.
+//! An index is not named by the hash of its own bytes, and the CDN config's
+//! `archives-index-size` list turns out not to be positionally aligned with
+//! its `archives` list, so there is no declared size to check an archive index
+//! against either — see [`super::config::CdnConfig::archives_index_size`].
+//! What remains is the index's own geometry, checked at parse time, and it is
+//! a strong check: block count, TOC and footer must account for every byte.
+//! The file index is the exception, since `file-index-size` is a single value
+//! with no ordering to lose.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -185,7 +189,12 @@ impl IndexCache {
             .and_then(|()| temp.as_file().sync_all())
             .map_err(|source| IndexError::Io { path: path.clone(), source })?;
         temp.persist(&path)
-            .map_err(|e| IndexError::Io { path, source: e.error })?;
+            .map_err(|e| IndexError::Io { path: path.clone(), source: e.error })?;
+
+        // 0644, as Agent's own cached indices are — tempfile's 0600 would
+        // leave a file the client cannot read.
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o644))
+            .map_err(|source| IndexError::Io { path, source })?;
         Ok(())
     }
 }

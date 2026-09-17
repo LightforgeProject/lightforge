@@ -35,6 +35,15 @@ pub const COL_BUILD_KEY: &str = "Build Key";
 pub const COL_CDN_KEY: &str = "CDN Key";
 pub const COL_VERSION: &str = "Version";
 
+/// The header line of a real retail `.build.info`, used for fresh installs.
+///
+/// Verbatim from `/mnt/games/battle-net/World of Warcraft`, 12.1.0.69814.
+pub const DEFAULT_SCHEMA: &str = concat!(
+    "Branch!STRING:0|Active!DEC:1|Build Key!HEX:16|CDN Key!HEX:16|Install Key!HEX:16|",
+    "IM Size!DEC:4|CDN Path!STRING:0|CDN Hosts!STRING:0|CDN Servers!STRING:0|Tags!STRING:0|",
+    "Armadillo!STRING:0|Last Activated!STRING:0|Version!STRING:0|KeyRing!HEX:16|Product!STRING:0\n"
+);
+
 /// A parsed `.build.info`, preserving column order and every untouched row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildInfo {
@@ -161,10 +170,18 @@ impl BuildInfo {
             .map_err(io(tmp.path()))?;
         tmp.as_file().sync_all().map_err(io(tmp.path()))?;
 
-        if let Ok(meta) = std::fs::metadata(path) {
-            // Only meaningful when the file already existed; a fresh install
-            // gets tempfile's default and Wine is happy with it.
-            let _ = tmp.as_file().set_permissions(meta.permissions());
+        match std::fs::metadata(path) {
+            // Carry the existing file's mode over rather than imposing one.
+            Ok(meta) => {
+                let _ = tmp.as_file().set_permissions(meta.permissions());
+            }
+            // A fresh install would otherwise keep tempfile's 0600, where a
+            // real `.build.info` is 0644 — the same tightening the indices had.
+            Err(_) => {
+                let _ = tmp
+                    .as_file()
+                    .set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o644));
+            }
         }
         tmp.persist(path).map_err(|e| BuildInfoError::Io { path: path.to_path_buf(), source: e.error })?;
 
@@ -217,6 +234,52 @@ impl BuildInfo {
         let row = self.row_mut(code)?;
         for (col, value) in cols {
             row.cells[col] = value.to_owned();
+        }
+        Ok(())
+    }
+
+    /// An empty `.build.info` with the column schema Agent writes.
+    ///
+    /// For a fresh install, where there is no file to update. The schema is
+    /// copied from a real retail install rather than invented: Agent reads
+    /// these by name, but a file whose columns it does not recognise is not
+    /// worth finding out about the hard way.
+    pub fn with_default_schema() -> Self {
+        Self::parse(DEFAULT_SCHEMA).expect("the pinned schema parses")
+    }
+
+    /// Add or replace a product's row, taking cells by column name.
+    ///
+    /// Columns not named are left empty, which is what Agent itself writes for
+    /// the ones it does not use on a fresh install — `Install Key`, `IM Size`,
+    /// `Armadillo`, `Last Activated`. Naming a column the schema does not have
+    /// is an error rather than a silently dropped value.
+    pub fn set_product(
+        &mut self,
+        code: &ProductCode,
+        values: &[(&str, &str)],
+    ) -> Result<(), BuildInfoError> {
+        // Resolve every column first, for the same reason `set_build` does:
+        // a half-written row is worse than an unwritten one.
+        let mut resolved = Vec::with_capacity(values.len() + 1);
+        for (column, value) in values {
+            resolved.push((self.column(column)?, (*value).to_owned()));
+        }
+        resolved.push((self.column(COL_PRODUCT)?, code.as_str().to_owned()));
+
+        let mut cells = vec![String::new(); self.headers.len()];
+        for (column, value) in resolved {
+            cells[column] = value;
+        }
+
+        match self.rows.iter_mut().find(|r| {
+            self.index
+                .get(COL_PRODUCT)
+                .and_then(|i| r.cells.get(*i))
+                .is_some_and(|p| p == code.as_str())
+        }) {
+            Some(row) => *row = Row { cells },
+            None => self.rows.push(Row { cells }),
         }
         Ok(())
     }
@@ -313,6 +376,71 @@ mod tests {
         let written = info.to_file_contents();
 
         assert_eq!(written.replace("12.1.5.70000", "12.1.0.69814"), REAL_RETAIL);
+    }
+
+    #[test]
+    fn a_fresh_build_info_gets_the_schema_agent_writes() {
+        let info = BuildInfo::with_default_schema();
+        assert!(info.rows().is_empty());
+
+        // Every column the update engine touches has to resolve by name.
+        for column in [COL_BUILD_KEY, COL_CDN_KEY, COL_VERSION, "Tags", "Branch", "Product"] {
+            assert!(info.column(column).is_ok(), "{column} is missing");
+        }
+    }
+
+    #[test]
+    fn a_product_row_can_be_created_then_replaced_in_place() {
+        let code: ProductCode = "wow".parse().unwrap();
+        let mut info = BuildInfo::with_default_schema();
+
+        info.set_product(
+            &code,
+            &[
+                ("Branch", "eu"),
+                ("Active", "1"),
+                (COL_BUILD_KEY, "9712ae9c84cc54111e9e3ddf9a6b8019"),
+                (COL_CDN_KEY, "ae86d19f4ff37f2239363425d9289417"),
+                ("CDN Path", "tpr/wow"),
+                (COL_VERSION, "12.1.0.69814"),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(info.rows().len(), 1);
+        assert_eq!(info.get(&code, COL_VERSION).unwrap(), "12.1.0.69814");
+        // Columns Agent leaves blank on a fresh install stay blank.
+        assert_eq!(info.get(&code, "Install Key").unwrap(), "");
+        assert_eq!(info.get(&code, "Product").unwrap(), "wow");
+
+        // A second call replaces the row rather than appending a duplicate.
+        info.set_product(&code, &[(COL_VERSION, "12.1.5.70000")]).unwrap();
+        assert_eq!(info.rows().len(), 1);
+        assert_eq!(info.get(&code, COL_VERSION).unwrap(), "12.1.5.70000");
+    }
+
+    #[test]
+    fn a_row_naming_a_column_the_schema_lacks_is_refused_whole() {
+        let code: ProductCode = "wow".parse().unwrap();
+        let mut info = BuildInfo::with_default_schema();
+
+        assert!(info
+            .set_product(&code, &[(COL_VERSION, "12.1.0"), ("Nonexistent", "x")])
+            .is_err());
+        // Nothing was written: a partial row is worse than no row.
+        assert!(info.rows().is_empty());
+    }
+
+    #[test]
+    fn a_fresh_row_round_trips_through_the_file_format() {
+        let code: ProductCode = "wow".parse().unwrap();
+        let mut info = BuildInfo::with_default_schema();
+        info.set_product(&code, &[("Branch", "eu"), (COL_VERSION, "12.1.0.69814")]).unwrap();
+
+        let text = info.to_file_contents();
+        let reparsed = BuildInfo::parse(&text).unwrap();
+        assert_eq!(reparsed, info);
+        assert_eq!(text.lines().count(), 2);
     }
 
     const SAMPLE: &str = "Branch!STRING:0|Active!DEC:1|Build Key!HEX:16|CDN Key!HEX:16|Version!STRING:0|Product!STRING:0\n\

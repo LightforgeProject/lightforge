@@ -172,6 +172,47 @@ enum Command {
         #[arg(long)]
         compare: Option<PathBuf>,
     },
+    /// Download a product from Blizzard's CDN into a CASC store.
+    Download {
+        /// Install root to build. Created if absent.
+        dest: PathBuf,
+        #[arg(long, default_value = "wow")]
+        product: String,
+        #[arg(long, default_value = "eu")]
+        region: String,
+        /// Locale to install, e.g. `enUS`.
+        #[arg(long, default_value = "enUS")]
+        locale: String,
+        /// Flavor directory the install files go in.
+        #[arg(long, default_value = "_retail_")]
+        flavor: String,
+        /// Plan and report, then stop without fetching any content.
+        #[arg(long)]
+        dry_run: bool,
+        /// Only cache this many archive indices. Bounds a test run; a real
+        /// install needs all of them, and the plan is incomplete without.
+        #[arg(long)]
+        limit_archives: Option<usize>,
+        /// Only fetch this many runs. Bounds a test run.
+        #[arg(long)]
+        limit_runs: Option<usize>,
+        /// Skip the loose files, which are the large ones.
+        #[arg(long)]
+        skip_loose: bool,
+        /// Also extract the install manifest's files (Wow.exe and friends).
+        #[arg(long)]
+        install_files: bool,
+        /// Requests in flight.
+        #[arg(long, default_value_t = 8)]
+        concurrency: usize,
+        /// Merge files separated by fewer than this many KiB into one request.
+        #[arg(long, default_value_t = 64)]
+        gap_kib: u32,
+        /// Rewrite the indices every this many MiB. Bounds what an interrupted
+        /// download has to fetch again.
+        #[arg(long, default_value_t = 4096)]
+        checkpoint_mib: u64,
+    },
     /// Compare a local install against what Blizzard currently ships.
     UpdateCheck {
         /// Install root. Defaults to the configured games directory.
@@ -814,6 +855,308 @@ async fn main() -> Result<()> {
                 println!("{failed} source entries could not be read");
             }
             println!("\nverify with:  lightforge content {} --locale enUS", dst.display());
+        }
+        Command::Download {
+            dest,
+            product,
+            region,
+            locale,
+            flavor,
+            dry_run,
+            limit_archives,
+            limit_runs,
+            skip_loose,
+            install_files,
+            concurrency,
+            gap_kib,
+            checkpoint_mib,
+        } => {
+            use lightforge_core::net::Http;
+            use lightforge_core::tact::archive::FileIndex;
+            use lightforge_core::tact::cdn::Client;
+            use lightforge_core::tact::config::{BuildConfig, CdnConfig};
+            use lightforge_core::tact::download::{
+                extract_install, Cancel, Catalog, Downloader, Options as DlOptions, Source,
+            };
+            use lightforge_core::tact::encoding::Encoding;
+            use lightforge_core::tact::indices::{Fetched, IndexCache, Locations};
+            use lightforge_core::tact::manifest::{DownloadManifest, InstallManifest, TagSet};
+            use lightforge_core::tact::plan::{reverse_encoding, Options as PlanOptions, Plan};
+            use lightforge_core::tact::storage::{EKey, Storage};
+            use lightforge_core::tact::version::{self, Region};
+            use lightforge_core::tact::writer::StoreWriter;
+            use std::collections::HashSet;
+            use std::time::Instant;
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let region: Region = region.parse().context("parsing --region")?;
+            let gib = |b: u64| b as f64 / 1024f64.powi(3);
+
+            // The tag expression a `.build.info` would carry for this machine.
+            let tag_column = format!(
+                "Windows x86_64 {r} {locale} speech:Windows x86_64 {r} {locale} text",
+                r = region.as_str().to_uppercase()
+            );
+            let tags = TagSet::parse(&tag_column);
+
+            let http = Http::new()?;
+            let versions = version::versions(&http, region, code.as_str()).await?;
+            let remote = version::for_region(&versions, region, |v| &v.region)
+                .context("the version table is empty")?;
+            let cdns = version::cdns(&http, region, code.as_str()).await?;
+            let cdn = version::for_region(&cdns, region, |c| &c.name)
+                .context("the CDN table is empty")?;
+            let client = Client::from_cdn(cdn)?;
+            println!("build           {} ({})", remote.versions_name, remote.build_config);
+
+            let build = BuildConfig::parse(
+                &client.fetch_config(&http, &remote.build_config).await
+                    .context("fetching the build config")?,
+            )?;
+            let cdn_config = CdnConfig::parse(
+                &client.fetch_config(&http, &remote.cdn_config).await
+                    .context("fetching the CDN config")?,
+            )?;
+            println!("archives        {}", cdn_config.archives.len());
+
+            // Manifests are the loose kind: one plain GET, decoded and checked
+            // against the content key the build config names them by.
+            let fetch_manifest = |pair: Option<lightforge_core::tact::config::KeyPair>, what: &'static str| {
+                let client = &client;
+                let http = &http;
+                async move {
+                    let pair = pair.with_context(|| format!("the build config has no {what}"))?;
+                    let ekey = pair.ekey.with_context(|| format!("{what} has no encoding key"))?;
+                    let decoded = client
+                        .fetch_loose(http, &ekey, &pair.ckey, None)
+                        .await
+                        .with_context(|| format!("fetching the {what}"))?;
+                    anyhow::Ok(decoded)
+                }
+            };
+
+            let t = Instant::now();
+            let encoding = Encoding::parse(&fetch_manifest(Some(build.encoding), "encoding manifest").await?)?;
+            println!("encoding        {} entries in {:.1?}", encoding.len(), t.elapsed());
+
+            let download = DownloadManifest::parse(&fetch_manifest(build.download, "download manifest").await?)?;
+            let install = InstallManifest::parse(&fetch_manifest(build.install, "install manifest").await?)?;
+            println!("download        {} entries, {} tags", download.len(), download.tags().len());
+            println!("install         {} entries", install.len());
+            println!("tags            {:?}", tags.unknown_names(download.tags()));
+
+            let wanted = download.select(&tags);
+            println!(
+                "wanted          {} files, {:.1} GiB",
+                wanted.len(),
+                gib(wanted.iter().map(|e| e.size).sum())
+            );
+
+            // Cache the archive indices. Without these nothing can be located.
+            let cache = IndexCache::new(dest.join("Data").join("indices"));
+            let mut archives = cdn_config.archive_indices();
+            if let Some(limit) = limit_archives {
+                archives.truncate(limit);
+                println!("\n(limited to {limit} archive indices — the plan will be incomplete)");
+            }
+
+            let t = Instant::now();
+            let mut last = 0usize;
+            let report = cache
+                .ensure(&http, &client, &archives, concurrency, |step| {
+                    if step.done - last >= 100 || step.done == step.total {
+                        last = step.done;
+                        println!("  indices {}/{}", step.done, step.total);
+                    }
+                    if let Fetched::Failed { detail } = &step.outcome {
+                        eprintln!("  index {} failed: {detail}", step.hash);
+                    }
+                })
+                .await?;
+            println!(
+                "indices         {} cached, {} downloaded ({:.1} MiB) in {:.1?}",
+                report.cached,
+                report.downloaded,
+                report.bytes as f64 / 1048576.0,
+                t.elapsed()
+            );
+
+            let file_index_hash = cdn_config.file_index.clone().context("no file index in the CDN config")?;
+            if !cache.is_cached(&file_index_hash, cdn_config.file_index_size) {
+                let bytes = client
+                    .fetch_index(&http, &file_index_hash, cdn_config.file_index_size)
+                    .await
+                    .context("fetching the file index")?;
+                std::fs::write(cache.path_of(&file_index_hash), &bytes)?;
+            }
+            let loose = FileIndex::parse(&std::fs::read(cache.path_of(&file_index_hash))?)?;
+            println!("loose files     {}", loose.len());
+
+            // Locate every wanted key.
+            let wanted_keys: HashSet<EKey> = wanted.iter().map(|e| e.ekey).collect();
+            let ckeys = reverse_encoding(&encoding, &wanted_keys);
+            let t = Instant::now();
+            let mut locations = Locations::default();
+            for (archive, _) in &archives {
+                if cache.is_cached(archive, None) {
+                    locations.absorb(&cache.load_archive(archive)?, &wanted_keys);
+                }
+            }
+            println!("located         {} of {} in {:.1?}", locations.len(), wanted.len(), t.elapsed());
+
+            // Skip whatever the store already holds, which is what makes an
+            // interrupted download resume instead of starting over.
+            let present: HashSet<EKey> = match Storage::open(&dest) {
+                Ok(store) => store.files().map(|e| {
+                    let mut k = [0u8; 16];
+                    k[..9].copy_from_slice(&e.key);
+                    k
+                }).collect(),
+                Err(_) => HashSet::new(),
+            };
+            let have = |ekey: &EKey| {
+                let mut probe = [0u8; 16];
+                probe[..9].copy_from_slice(&ekey[..9]);
+                present.contains(&probe)
+            };
+
+            let mut plan = Plan::build(
+                &wanted,
+                &locations,
+                &loose,
+                &ckeys,
+                have,
+                PlanOptions { max_gap: gap_kib * 1024, ..PlanOptions::default() },
+            );
+            if skip_loose {
+                plan.loose.clear();
+            }
+            if let Some(limit) = limit_runs {
+                plan.runs.truncate(limit);
+            }
+
+            println!(
+                "\nplan            {} requests, {} files, {:.2} GiB ({:.2} GiB padding)",
+                plan.requests(),
+                plan.files(),
+                gib(plan.bytes()),
+                gib(plan.padding())
+            );
+            println!("already present {}", plan.already_present);
+            if !plan.missing.is_empty() {
+                println!("UNLOCATABLE     {} keys", plan.missing.len());
+            }
+
+            if dry_run {
+                println!("\n--dry-run: nothing fetched");
+                return Ok(());
+            }
+
+            // Fetch.
+            let data_dir = dest.join("Data").join("data");
+            let mut writer = StoreWriter::create(&data_dir)?;
+            let cancel = Cancel::new();
+            let source = Source { http: &http, client: &client, keys: None };
+            let downloader = Downloader::new(DlOptions {
+                concurrency,
+                checkpoint_bytes: checkpoint_mib * 1024 * 1024,
+            });
+
+            let t = Instant::now();
+            let mut last_report = Instant::now();
+            let outcome = downloader
+                .run(source, &plan, &mut writer, &cancel, |p| {
+                    if last_report.elapsed().as_secs() >= 2 || p.requests_done == p.requests_total {
+                        last_report = Instant::now();
+                        let mb = p.bytes_stored as f64 / 1e6;
+                        println!(
+                            "  {:>5.1}%  {}/{} requests  {} files  {:.0} MB  {:.1} MB/s",
+                            p.fraction() * 100.0,
+                            p.requests_done,
+                            p.requests_total,
+                            p.files_stored,
+                            mb,
+                            mb / t.elapsed().as_secs_f64().max(0.001)
+                        );
+                    }
+                })
+                .await?;
+
+            println!(
+                "\nstored          {} files, {:.2} GiB in {:.1?}",
+                outcome.files_stored,
+                gib(outcome.bytes_stored),
+                t.elapsed()
+            );
+            println!("unverified      {} (encrypted or not in encoding)", outcome.unverified);
+            for failure in outcome.failed.iter().take(10) {
+                eprintln!(
+                    "  FAILED {} — {}",
+                    lightforge_core::tact::config::to_hex(&failure.ekey),
+                    failure.reason
+                );
+            }
+            if outcome.failed.len() > 10 {
+                eprintln!("  ... and {} more", outcome.failed.len() - 10);
+            }
+
+            if install_files {
+                let selected = install.select(&tags);
+                println!("\ninstall files   {} selected", selected.len());
+                let catalog = Catalog { encoding: &encoding, locations: &locations, loose: &loose };
+                let report = extract_install(
+                    source,
+                    &selected,
+                    catalog,
+                    &dest.join(&flavor),
+                    &cancel,
+                    |e| println!("  {} ({:.1} MiB)", e.path.display(), e.bytes as f64 / 1048576.0),
+                )
+                .await?;
+                println!(
+                    "extracted       {} files, {:.1} MiB",
+                    report.written.len(),
+                    report.bytes() as f64 / 1048576.0
+                );
+                for (path, reason) in &report.failed {
+                    eprintln!("  FAILED {path} — {reason}");
+                }
+            }
+
+            // `.build.info` last: it is what Agent reads to decide the install
+            // is present and current, so it must not claim a build whose
+            // content is still arriving.
+            let info_path = dest.join(".build.info");
+            let mut info = match BuildInfo::load(&info_path) {
+                Ok(existing) => existing,
+                Err(_) => BuildInfo::with_default_schema(),
+            };
+            info.set_product(
+                &code,
+                &[
+                    ("Branch", region.as_str()),
+                    ("Active", "1"),
+                    ("Build Key", &remote.build_config),
+                    ("CDN Key", &remote.cdn_config),
+                    ("CDN Path", &cdn.path),
+                    ("CDN Hosts", &cdn.hosts.join(" ")),
+                    ("CDN Servers", &cdn.servers.join(" ")),
+                    ("Tags", &tag_column),
+                    ("Version", &remote.versions_name),
+                ],
+            )?;
+            info.save(&info_path)?;
+            println!("\n.build.info     {} ({})", info_path.display(), remote.versions_name);
+
+            let summary = writer.finish()?;
+            println!(
+                "\nstore           {} archives, {} files, {:.2} GiB",
+                summary.archives,
+                summary.files,
+                gib(summary.bytes)
+            );
+            println!("indices         {} written", summary.indices.len());
+            println!("\nverify with:  lightforge casc {}", dest.display());
         }
         Command::CdnArchive { archive, product, region, fetch, verify_with } => {
             use lightforge_core::net::Http;

@@ -32,6 +32,15 @@ use super::storage::{archive_name, EKey};
 /// Largest an archive may get: index entries carry a 30-bit offset.
 pub const MAX_ARCHIVE_SIZE: u64 = 1 << 30;
 
+/// Generation a bucket's first index is written at when the store has none.
+///
+/// **Never zero.** A real install's generations sit around 0x32-0x38 — the
+/// counter has advanced once per update since the install was created — and
+/// generation 0 is not a shape the client ever produces. Starting there was a
+/// real bug, caught only by a live run, so the floor lives here rather than in
+/// whichever caller happens to remember.
+pub const FIRST_GENERATION: u32 = 0x32;
+
 /// Writes files into a CASC store.
 ///
 /// Nothing is durable until [`StoreWriter::finish`] runs — it is what writes
@@ -159,6 +168,31 @@ impl StoreWriter {
         Ok(entry)
     }
 
+    /// Make everything written so far durable, without ending the store.
+    ///
+    /// Archive bytes that no index references are unreachable, so an
+    /// interrupted download would refetch everything since the last index
+    /// write. Checkpointing bounds that loss: after it returns, the store on
+    /// disk is complete and readable, and a resumed download re-plans against
+    /// it and fetches only what is missing.
+    ///
+    /// Each checkpoint writes the next generation and removes the previous
+    /// one, which is exactly what a real install looks like — sixteen `.idx`
+    /// files, one per bucket, nothing older kept.
+    pub fn checkpoint(&mut self) -> Result<Vec<PathBuf>, WriteError> {
+        // Flush and sync the open archive without closing it: the indices
+        // about to be written will point into these bytes, so they have to be
+        // on the disk before the index that references them, not after.
+        if let Some(archive) = self.archive.as_mut() {
+            let path = self.data_dir.join(archive_name(self.archive_id));
+            archive
+                .flush()
+                .and_then(|()| archive.get_ref().sync_all())
+                .map_err(|source| WriteError::Io { path, source })?;
+        }
+        self.write_indices()
+    }
+
     /// Finish the store: flush the open archive and write every index.
     pub fn finish(mut self) -> Result<Summary, WriteError> {
         if let Some(mut archive) = self.archive.take() {
@@ -169,17 +203,7 @@ impl StoreWriter {
                 .map_err(|source| WriteError::Io { path, source })?;
         }
 
-        // Buckets that received nothing still get an index: a store missing
-        // one of its sixteen is not a shape Blizzard ever produces.
-        let mut written = Vec::new();
-        let mut indices: Vec<_> = self.indices.into_values().collect();
-        indices.sort_by_key(Index::bucket);
-        for index in &indices {
-            written.push(match self.generations.get(&index.bucket()) {
-                Some(seq) => index.save_generation(&self.data_dir, *seq)?,
-                None => index.save_new_generation(&self.data_dir)?,
-            });
-        }
+        let written = self.write_indices()?;
 
         Ok(Summary {
             data_dir: self.data_dir,
@@ -188,6 +212,36 @@ impl StoreWriter {
             bytes: self.bytes,
             indices: written,
         })
+    }
+
+    /// Write every bucket's index at its next generation, pruning the old one.
+    ///
+    /// Buckets that received nothing still get an index: a store missing one
+    /// of its sixteen is not a shape Blizzard ever produces.
+    fn write_indices(&mut self) -> Result<Vec<PathBuf>, WriteError> {
+        let mut written = Vec::new();
+        let mut buckets: Vec<u8> = self.indices.keys().copied().collect();
+        buckets.sort_unstable();
+
+        for bucket in buckets {
+            let sequence = match self.generations.get(&bucket) {
+                Some(pinned) => *pinned,
+                None => idx::latest_sequence(&self.data_dir, bucket)
+                    .map_err(WriteError::Idx)?
+                    .map_or(FIRST_GENERATION, |latest| latest.saturating_add(1)),
+            };
+
+            let index = &self.indices[&bucket];
+            let path = index.save_generation(&self.data_dir, sequence)?;
+
+            // A later checkpoint must not rewrite the generation this one just
+            // wrote, or a reader could see the same name with two contents.
+            self.generations.insert(bucket, sequence.saturating_add(1));
+            prune_old_generations(&self.data_dir, bucket, sequence)?;
+            written.push(path);
+        }
+
+        Ok(written)
     }
 
     /// Open the next archive and seed its reserved head.
@@ -241,6 +295,33 @@ pub struct Summary {
     pub bytes: u64,
     /// Index files written, one per bucket.
     pub indices: Vec<PathBuf>,
+}
+
+/// Delete every generation of `bucket` except the one just written.
+///
+/// Agent keeps exactly one index per bucket — a real install has sixteen
+/// `.idx` files and no history — so a store that accumulated a generation per
+/// checkpoint would be visibly not one of its own.
+fn prune_old_generations(data_dir: &Path, bucket: u8, keep: u32) -> Result<(), WriteError> {
+    let entries = match std::fs::read_dir(data_dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => return Err(WriteError::Io { path: data_dir.to_path_buf(), source }),
+    };
+
+    for entry in entries.flatten() {
+        let Some((b, sequence)) = idx::parse_file_name(&entry.file_name().to_string_lossy()) else {
+            continue;
+        };
+        if b == bucket && sequence != keep {
+            // A failure here is not fatal: the new index is already in place
+            // and a stale sibling is ignored by every reader, which picks the
+            // highest generation. Leaving it beats failing the download.
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+
+    Ok(())
 }
 
 /// The archive number a fresh writer should start at.
@@ -438,6 +519,56 @@ mod tests {
     }
 
     #[test]
+    fn a_checkpoint_leaves_a_store_that_opens_and_reads() {
+        let dir = scratch("checkpoint");
+        let data = dir.join("Data").join("data");
+
+        let mut writer = StoreWriter::create(&data).unwrap();
+        writer.write(&ekey(1), &blte(b"before the checkpoint")).unwrap();
+        writer.checkpoint().unwrap();
+
+        // Everything written so far is reachable without finishing.
+        let mut store = Storage::open(&dir).unwrap();
+        assert_eq!(store.stats().buckets, usize::from(BUCKETS));
+        assert_eq!(store.read(&ekey(1)).unwrap(), b"before the checkpoint");
+
+        // And the writer carries on into the same archive afterwards.
+        writer.write(&ekey(2), &blte(b"after")).unwrap();
+        writer.finish().unwrap();
+
+        let mut store = Storage::open(&dir).unwrap();
+        assert_eq!(store.read(&ekey(1)).unwrap(), b"before the checkpoint");
+        assert_eq!(store.read(&ekey(2)).unwrap(), b"after");
+    }
+
+    #[test]
+    fn repeated_checkpoints_advance_the_generation_and_keep_only_the_newest() {
+        let dir = scratch("prune");
+        let data = dir.join("Data").join("data");
+
+        let mut writer = StoreWriter::create(&data).unwrap();
+        for n in 1..=3u8 {
+            writer.write(&ekey(n), &blte(&[n; 64])).unwrap();
+            writer.checkpoint().unwrap();
+        }
+        writer.finish().unwrap();
+
+        // A real install has exactly sixteen .idx files and no history.
+        let mut names: Vec<String> = std::fs::read_dir(&data)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".idx"))
+            .collect();
+        names.sort();
+        assert_eq!(names.len(), usize::from(BUCKETS), "{names:?}");
+
+        // Three checkpoints plus the finish: the floor advanced four times.
+        assert_eq!(names[0], "0000000035.idx", "{names:?}");
+        assert_eq!(Storage::open(&dir).unwrap().stats().buckets, usize::from(BUCKETS));
+    }
+
+    #[test]
     fn index_generations_can_be_pinned_to_match_a_source_store() {
         let dir = scratch("generations");
         let data = dir.join("Data").join("data");
@@ -456,8 +587,10 @@ mod tests {
             .collect();
         assert!(names.contains(&"0000000035.idx".to_owned()), "{names:?}");
         assert!(names.contains(&"0100000038.idx".to_owned()), "{names:?}");
-        // Buckets with no pin still get the next free generation.
-        assert!(names.contains(&"0200000000.idx".to_owned()), "{names:?}");
+        // A bucket with no pin starts at the floor, never at generation 0 —
+        // pinning some buckets used to leave the rest writing 0000000000.idx.
+        assert!(names.contains(&"0200000032.idx".to_owned()), "{names:?}");
+        assert!(!names.iter().any(|n| n.ends_with("00000000.idx")), "{names:?}");
 
         // And the store still opens with those names.
         assert_eq!(Storage::open(&dir).unwrap().stats().buckets, usize::from(BUCKETS));

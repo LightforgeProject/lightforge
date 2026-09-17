@@ -502,6 +502,12 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), IdxError> {
     tmp.write_all(bytes).map_err(io(tmp.path()))?;
     tmp.as_file().sync_all().map_err(io(tmp.path()))?;
     tmp.persist(path).map_err(|e| IdxError::Io { path: path.to_path_buf(), source: e.error })?;
+
+    // A real install's indices are 0644. tempfile creates at 0600, which would
+    // hand Agent and the client an index only this user can read — the same
+    // silent tightening `buildinfo::save` guards against.
+    std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o644))
+        .map_err(io(path))?;
     Ok(())
 }
 
