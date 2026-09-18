@@ -1,10 +1,30 @@
 //! The primary action button's state machine.
 //!
-//! The UI renders exactly one of these per product. Transitions are computed
-//! from local `.build.info` against Ribbit's reported CDN build (Milestone 5);
-//! Milestone 1 defines the shape and the invariants.
+//! The UI renders exactly one of these per product. Milestone 1 defined the
+//! shape; Milestone 5 adds the resolver that decides which one a product is in.
+//!
+//! Three rules are deliberate and none are obvious:
+//!
+//! 1. **`.build.info` is the completion marker.** The downloader writes it last
+//!    and only on a complete run, so a half-finished install has none and reads
+//!    as `Install` rather than offering `Play` on a broken game. During an
+//!    update it still names the *previous* build, which is the one the store is
+//!    complete for and therefore the one that is safe to launch.
+//! 2. **An unreachable version service does not block launching.** If the
+//!    install is complete and Blizzard cannot be asked whether it is current,
+//!    the answer is `Play`, not `Error`. A launcher that refuses to start a
+//!    working game because a metadata endpoint is down is broken.
+//! 3. **A live transfer outranks everything.** What the app is doing now
+//!    describes the button better than what the disk looked like when it was
+//!    last inspected.
+
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+
+use crate::paths::Layout;
+use crate::product::ProductCode;
+use crate::tact::version::Version;
 
 /// What the primary button currently offers.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -91,9 +111,192 @@ impl Progress {
     }
 }
 
+/// What one product looks like on this machine, read without any network.
+///
+/// Cheap enough to call on every refresh: the store is opened only to count
+/// its files, which is an index read rather than a scan of 4.5 GiB.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Local {
+    /// `Build Key` from `.build.info`, absent if the file or row is missing.
+    pub build_key: Option<String>,
+    /// `Version`, e.g. `1.15.9.69722`.
+    pub version: Option<String>,
+    /// The game binary, if one is actually there.
+    pub executable: Option<PathBuf>,
+    /// Files the CASC store holds. Zero means no readable store.
+    pub store_files: usize,
+}
+
+impl Local {
+    /// Inspect `code`'s install under `layout`.
+    pub fn inspect(layout: &Layout, code: &ProductCode) -> Self {
+        let info = crate::buildinfo::BuildInfo::load(layout.build_info()).ok();
+        let cell = |column: &str| {
+            info.as_ref()
+                .and_then(|i| i.get(code, column).ok())
+                .map(str::to_owned)
+                .filter(|v| !v.is_empty())
+        };
+
+        let exe = layout.wow_exe(code);
+        let store_files = crate::tact::storage::Storage::open(layout.wow_install())
+            .map(|store| store.stats().files)
+            .unwrap_or(0);
+
+        Self {
+            build_key: cell(crate::buildinfo::COL_BUILD_KEY),
+            version: cell(crate::buildinfo::COL_VERSION),
+            executable: exe.is_file().then_some(exe),
+            store_files,
+        }
+    }
+
+    /// Whether this is a finished install rather than a partial one.
+    ///
+    /// All three have to hold. A `.build.info` naming a build proves a download
+    /// once completed, the binary proves the flavor directory was extracted,
+    /// and a non-empty store proves the content is there — any one alone is a
+    /// shape an interrupted run leaves behind.
+    pub fn is_installed(&self) -> bool {
+        self.build_key.is_some() && self.executable.is_some() && self.store_files > 0
+    }
+}
+
+/// A transfer this process is running for the product.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transfer {
+    Running(Progress),
+    Paused(Progress),
+}
+
+/// Decide which button a product shows.
+///
+/// Pure, so every combination is testable without a disk or a network:
+/// [`Local::inspect`] supplies the disk half and the caller supplies `remote`,
+/// which is `None` when the version service could not be reached.
+pub fn decide(local: &Local, remote: Option<&Version>, transfer: Option<Transfer>) -> ActionState {
+    // What is happening now beats what the disk said a moment ago.
+    match transfer {
+        Some(Transfer::Running(progress)) => return ActionState::Downloading(progress),
+        Some(Transfer::Paused(progress)) => return ActionState::Paused(progress),
+        None => {}
+    }
+
+    if !local.is_installed() {
+        return ActionState::Install;
+    }
+
+    let Some(remote) = remote else {
+        // Offline, or the service is down. The install is complete, so it runs.
+        return ActionState::Play;
+    };
+
+    match crate::tact::version::Status::compare(
+        local.build_key.as_deref(),
+        local.version.as_deref(),
+        remote,
+    ) {
+        crate::tact::version::Status::Behind { local_build, remote_build, .. } => {
+            ActionState::Update { local_build, remote_build }
+        }
+        // `NotInstalled` cannot happen here — `is_installed` already required a
+        // build key — and `Current` is the ordinary ready case.
+        _ => ActionState::Play,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn remote(build: &str) -> Version {
+        Version {
+            region: "eu".into(),
+            build_config: build.into(),
+            cdn_config: "cdn".into(),
+            key_ring: None,
+            build_id: 69722,
+            versions_name: "1.15.9.69722".into(),
+            product_config: String::new(),
+        }
+    }
+
+    fn complete() -> Local {
+        Local {
+            build_key: Some("3645f0fe9dc5215ea90eaf7cdb7379ce".into()),
+            version: Some("1.15.9.69722".into()),
+            executable: Some("/games/_classic_era_/WowClassic.exe".into()),
+            store_files: 146_669,
+        }
+    }
+
+    #[test]
+    fn a_complete_install_on_the_current_build_plays() {
+        let state = decide(&complete(), Some(&remote("3645f0fe9dc5215ea90eaf7cdb7379ce")), None);
+        assert_eq!(state, ActionState::Play);
+    }
+
+    #[test]
+    fn a_different_remote_build_offers_an_update_either_direction() {
+        let state = decide(&complete(), Some(&remote("ffffffffffffffffffffffffffffffff")), None);
+        match state {
+            ActionState::Update { local_build, remote_build } => {
+                assert_eq!(local_build, "3645f0fe9dc5215ea90eaf7cdb7379ce");
+                assert_eq!(remote_build, "ffffffffffffffffffffffffffffffff");
+            }
+            other => panic!("expected Update, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_unreachable_version_service_still_lets_a_finished_install_play() {
+        // Refusing to launch a working game because a metadata endpoint is
+        // down would be a broken launcher.
+        assert_eq!(decide(&complete(), None, None), ActionState::Play);
+    }
+
+    #[test]
+    fn every_partial_shape_reads_as_install_not_play() {
+        // Each of these is a shape an interrupted run leaves behind, and every
+        // one of them would launch a broken game if it offered Play.
+        let no_marker = Local { build_key: None, ..complete() };
+        let no_binary = Local { executable: None, ..complete() };
+        let no_content = Local { store_files: 0, ..complete() };
+
+        for local in [no_marker, no_binary, no_content, Local::default()] {
+            assert!(!local.is_installed(), "{local:?}");
+            assert_eq!(decide(&local, Some(&remote("abc")), None), ActionState::Install);
+            // Offline does not turn a partial install into a playable one.
+            assert_eq!(decide(&local, None, None), ActionState::Install);
+        }
+    }
+
+    #[test]
+    fn a_live_transfer_outranks_whatever_the_disk_says() {
+        let progress = Progress { downloaded_bytes: 50, total_bytes: 100, bytes_per_second: 10 };
+
+        // Even a complete, current install shows the transfer that is running.
+        let current = Some(remote("3645f0fe9dc5215ea90eaf7cdb7379ce"));
+        assert_eq!(
+            decide(&complete(), current.as_ref(), Some(Transfer::Running(progress))),
+            ActionState::Downloading(progress)
+        );
+        assert_eq!(
+            decide(&Local::default(), None, Some(Transfer::Paused(progress))),
+            ActionState::Paused(progress)
+        );
+    }
+
+    #[test]
+    fn a_paused_transfer_does_not_block_battle_net_but_a_running_one_does() {
+        let progress = Progress::default();
+        let running = decide(&complete(), None, Some(Transfer::Running(progress)));
+        let paused = decide(&complete(), None, Some(Transfer::Paused(progress)));
+
+        assert!(running.is_writing_casc());
+        assert!(!paused.is_writing_casc());
+        assert!(!running.is_playable() && !paused.is_playable());
+    }
 
     #[test]
     fn only_play_is_playable() {

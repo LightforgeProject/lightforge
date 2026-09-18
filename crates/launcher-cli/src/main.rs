@@ -213,6 +213,17 @@ enum Command {
         #[arg(long, default_value_t = 4096)]
         checkpoint_mib: u64,
     },
+    /// Resolve the primary action button's state for a product.
+    Status {
+        /// Product code, e.g. `wow` or `wow_classic_era`.
+        #[arg(long, default_value = "wow")]
+        product: String,
+        #[arg(long, default_value = "eu")]
+        region: String,
+        /// Skip the version service and report what the disk alone implies.
+        #[arg(long)]
+        offline: bool,
+    },
     /// Compare a local install against what Blizzard currently ships.
     UpdateCheck {
         /// Install root. Defaults to the configured games directory.
@@ -1106,6 +1117,7 @@ async fn main() -> Result<()> {
                 eprintln!("  ... and {} more", outcome.failed.len() - 10);
             }
 
+            let mut install_report_complete = true;
             if install_files {
                 let selected = install.select(&tags);
                 println!("\ninstall files   {} selected", selected.len());
@@ -1135,11 +1147,54 @@ async fn main() -> Result<()> {
                 for (path, reason) in &report.failed {
                     eprintln!("  FAILED {path} — {reason}");
                 }
+                install_report_complete = report.is_complete();
             }
 
-            // `.build.info` last: it is what Agent reads to decide the install
-            // is present and current, so it must not claim a build whose
-            // content is still arriving.
+            // `.build.info` is the completion marker: `state::Local` treats its
+            // presence as proof a download once finished, so writing it after a
+            // partial run would offer PLAY on a broken install. Every way this
+            // run could be short of a whole build has to be accounted for —
+            // failures, cancellation, unlocatable keys, and the limit flags,
+            // which truncate the plan deliberately.
+            let limited = limit_archives.is_some() || limit_runs.is_some() || skip_loose;
+            let install_incomplete = install_files && !install_report_complete;
+            let complete = outcome.is_complete()
+                && plan.missing.is_empty()
+                && !limited
+                && !install_incomplete;
+
+            if !complete {
+                println!(
+                    "\n.build.info     NOT written — this run is not a complete install"
+                );
+                if limited {
+                    println!("                (limit flags truncated the plan)");
+                }
+                if !outcome.failed.is_empty() {
+                    println!("                ({} files failed)", outcome.failed.len());
+                }
+                if !plan.missing.is_empty() {
+                    println!("                ({} keys unlocatable)", plan.missing.len());
+                }
+                if outcome.cancelled {
+                    println!("                (cancelled)");
+                }
+                if install_incomplete {
+                    println!("                (install files incomplete)");
+                }
+
+                let summary = writer.finish()?;
+                println!(
+                    "\nstore           {} archives, {} files, {:.2} GiB",
+                    summary.archives,
+                    summary.files,
+                    gib(summary.bytes)
+                );
+                println!("indices         {} written", summary.indices.len());
+                println!("\nre-run to continue; what is stored is kept");
+                return Ok(());
+            }
+
             let info_path = dest.join(".build.info");
             let mut info = match BuildInfo::load(&info_path) {
                 Ok(existing) => existing,
@@ -1308,6 +1363,51 @@ async fn main() -> Result<()> {
                     if want == bytes { "identical" } else { "DIFFERS" }
                 );
             }
+        }
+        Command::Status { product, region, offline } => {
+            use lightforge_core::net::Http;
+            use lightforge_core::state::{decide, Local};
+            use lightforge_core::tact::version::{self, Region};
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let region: Region = region.parse().context("parsing --region")?;
+
+            let local = Local::inspect(&layout, &code);
+            println!("product         {}", code.as_str());
+            println!("install dir     {}", layout.product_dir(&code).display());
+            println!("build key       {}", local.build_key.as_deref().unwrap_or("-"));
+            println!("version         {}", local.version.as_deref().unwrap_or("-"));
+            println!(
+                "executable      {}",
+                local.executable.as_ref().map_or("-".into(), |p| p.display().to_string())
+            );
+            println!("store files     {}", local.store_files);
+            println!("installed       {}", local.is_installed());
+
+            // `None` here is the offline case the resolver is required to
+            // survive: a complete install stays playable when the service
+            // cannot be reached.
+            let remote = if offline {
+                None
+            } else {
+                match version::versions(&Http::new()?, region, code.as_str()).await {
+                    Ok(rows) => version::for_region(&rows, region, |v| &v.region).cloned(),
+                    Err(e) => {
+                        println!("version service unreachable: {e}");
+                        None
+                    }
+                }
+            };
+            if let Some(remote) = &remote {
+                println!("remote build    {}", remote.build_config);
+                println!("remote version  {}", remote.versions_name);
+            }
+
+            // No transfer: the CLI is one-shot, so nothing of ours is running.
+            let state = decide(&local, remote.as_ref(), None);
+            println!("\nbutton          [ {} ]", state.label());
+            println!("state           {state:?}");
+            println!("playable        {}", state.is_playable());
         }
         Command::UpdateCheck { path, product, region } => {
             use lightforge_core::net::Http;
