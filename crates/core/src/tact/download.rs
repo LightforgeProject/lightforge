@@ -488,7 +488,7 @@ pub async fn extract_install(
             continue;
         }
 
-        let path = dest.join(entry.relative_path());
+        let path = resolve_windows_path(dest, &entry.relative_path());
         match write_file(&path, &decoded) {
             Ok(()) => {
                 let written = Extracted { path, bytes: decoded.len() as u64 };
@@ -500,6 +500,76 @@ pub async fn extract_install(
     }
 
     Ok(report)
+}
+
+/// The `.flavor.info` line a client reads to know which product it is.
+const FLAVOR_HEADER: &str = "Product Flavor!STRING:0";
+
+/// Write `<flavor dir>/.flavor.info`, which nothing else creates.
+///
+/// Agent writes this, the install manifest does not list it, and the client
+/// uses it to work out which `.build.info` row belongs to it. A flavor
+/// directory without one is not an install any Blizzard tool produces.
+///
+/// Verbatim shape, from a real install's `_classic_beta_`:
+///
+/// ```text
+/// Product Flavor!STRING:0
+/// wow_classic_beta
+/// ```
+pub fn write_flavor_info(
+    flavor_dir: &std::path::Path,
+    product: &crate::ProductCode,
+) -> std::io::Result<std::path::PathBuf> {
+    let path = flavor_dir.join(".flavor.info");
+    write_file(&path, format!("{FLAVOR_HEADER}\n{}\n", product.as_str()).as_bytes())?;
+    Ok(path)
+}
+
+/// Join `relative` onto `root`, reusing directories that differ only by case.
+///
+/// The install manifest is internally inconsistent about case — `Utils\cef.pak`
+/// sits beside `UTILS\LOCALES\EN-US.PAK` in the same file — and Agent lands
+/// both in one `Utils` directory because Windows filesystems are
+/// case-insensitive. On Linux they are not, so joining the paths verbatim
+/// creates `Utils/` **and** `UTILS/`, splitting the directory in two.
+///
+/// That is not cosmetic: a real install has `Utils/LIBCEF.DLL`, while the
+/// split put `LIBCEF.DLL` in `UTILS/` and left `Utils/` without it. Wine
+/// resolves one of the two and the client can fail to find CEF at all.
+///
+/// So each component reuses an existing entry that matches ignoring ASCII
+/// case, and otherwise keeps the spelling the manifest used — which is what
+/// Windows gives Agent for free, first writer deciding the case. File name
+/// case is preserved either way: the real install really does hold
+/// `LIBCEF.DLL` next to `cef.pak`.
+fn resolve_windows_path(root: &std::path::Path, relative: &std::path::Path) -> std::path::PathBuf {
+    let mut at = root.to_path_buf();
+
+    for component in relative.components() {
+        let name = component.as_os_str();
+        let candidate = at.join(name);
+
+        // An exact match wins without a directory scan, which is the common
+        // case and keeps this off the hot path for deep trees.
+        if candidate.exists() {
+            at = candidate;
+            continue;
+        }
+
+        let existing = std::fs::read_dir(&at).ok().and_then(|entries| {
+            entries.flatten().map(|e| e.file_name()).find(|existing| {
+                existing.as_encoded_bytes().eq_ignore_ascii_case(name.as_encoded_bytes())
+            })
+        });
+
+        at = match existing {
+            Some(existing) => at.join(existing),
+            None => candidate,
+        };
+    }
+
+    at
 }
 
 /// Write a file and its parent directories, via a temporary file alongside.
@@ -832,6 +902,70 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"MZ newer");
         let siblings: Vec<_> = std::fs::read_dir(path.parent().unwrap()).unwrap().flatten().collect();
         assert_eq!(siblings.len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_paths_collapse_onto_a_directory_that_differs_only_by_case() {
+        let dir = std::env::temp_dir().join(format!("lightforge-case-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // The manifest spells it `Utils\cef.pak` here and `UTILS\...` there.
+        // Whichever lands first decides the case, and the rest join it.
+        let first = resolve_windows_path(&dir, std::path::Path::new("Utils/cef.pak"));
+        write_file(&first, b"cef").unwrap();
+
+        let second = resolve_windows_path(&dir, std::path::Path::new("UTILS/LIBCEF.DLL"));
+        write_file(&second, b"libcef").unwrap();
+
+        // One directory, not two — the split left a real install's Utils/
+        // without LIBCEF.DLL and Wine could not find CEF.
+        let dirs: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(dirs.len(), 1, "{dirs:?}");
+        assert_eq!(dirs[0], "Utils");
+
+        // File name case is preserved: a real install holds LIBCEF.DLL next
+        // to cef.pak inside that one directory.
+        let mut names: Vec<String> = std::fs::read_dir(dir.join("Utils"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["LIBCEF.DLL", "cef.pak"]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_path_with_nothing_to_match_keeps_the_spelling_it_was_given() {
+        let dir = std::env::temp_dir().join(format!("lightforge-case2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let path = resolve_windows_path(&dir, std::path::Path::new("Utils/swiftshader/libEGL.dll"));
+        assert_eq!(path, dir.join("Utils/swiftshader/libEGL.dll"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_flavor_file_matches_the_shape_a_real_install_has() {
+        let dir = std::env::temp_dir().join(format!("lightforge-flavor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let code: crate::ProductCode = "wow_classic_era".parse().unwrap();
+        let path = write_flavor_info(&dir, &code).unwrap();
+
+        // Byte-for-byte the shape of a real `_classic_beta_/.flavor.info`.
+        assert_eq!(path.file_name().unwrap(), ".flavor.info");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "Product Flavor!STRING:0\nwow_classic_era\n"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

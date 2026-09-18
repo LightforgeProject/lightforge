@@ -48,6 +48,22 @@ impl ProductCode {
         }
     }
 
+    /// The game binary this product is expected to ship, by name only.
+    ///
+    /// A hint, not an authority — see [`crate::paths::Layout::wow_exe`], which
+    /// prefers what is actually on disk. One real install carries three
+    /// different names: `_retail_/Wow.exe`, `_classic_era_/WowClassic.exe` and
+    /// `_classic_beta_/WowB.exe`, so a table alone would be guessing for any
+    /// flavor nobody has looked inside yet.
+    pub fn executable(&self) -> &str {
+        match self {
+            Self::Retail | Self::Ptr => "Wow.exe",
+            Self::Classic | Self::ClassicEra | Self::ClassicPtr => "WowClassic.exe",
+            Self::Beta => "WowB.exe",
+            Self::Custom(_) => "Wow.exe",
+        }
+    }
+
     /// The install subdirectory this product uses beneath the WoW root, e.g.
     /// `_retail_`. Custom products get their code as the directory name.
     pub fn install_dir(&self) -> &str {

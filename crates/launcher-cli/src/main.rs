@@ -627,7 +627,8 @@ async fn main() -> Result<()> {
             // The game is launched through the symlink, so Wine sees the
             // conventional Windows path — the same thing that keeps CEF happy
             // for the in-game store.
-            let exe = layout.wow_symlink().join(code.install_dir()).join("Wow.exe");
+            let flavor_dir = layout.wow_symlink().join(code.install_dir());
+            let exe = lightforge_core::paths::game_executable(&flavor_dir, &code);
             if !exe.is_file() {
                 anyhow::bail!(
                     "no game at {} — is the symlink pointing at an install?",
@@ -1123,6 +1124,14 @@ async fn main() -> Result<()> {
                     report.written.len(),
                     report.bytes() as f64 / 1048576.0
                 );
+
+                // Agent writes this and the install manifest does not list it;
+                // without it the client cannot tell which product it is.
+                let flavor_file = lightforge_core::tact::download::write_flavor_info(
+                    &dest.join(&flavor),
+                    &code,
+                )?;
+                println!("flavor          {}", flavor_file.display());
                 for (path, reason) in &report.failed {
                     eprintln!("  FAILED {path} — {reason}");
                 }

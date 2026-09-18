@@ -157,9 +157,56 @@ impl Layout {
     }
 
     /// The product's game binary, launched directly under Proton for `[ PLAY ]`.
+    ///
+    /// Resolved against the directory rather than assumed, because the name
+    /// varies per flavor and not in a pattern worth guessing: one real install
+    /// holds `_retail_/Wow.exe`, `_classic_era_/WowClassic.exe` and
+    /// `_classic_beta_/WowB.exe`. The expected name wins when it is there; a
+    /// probe covers the rest, including flavors that do not exist yet.
+    ///
+    /// Falls back to the expected name when nothing is installed, so the error
+    /// a caller reports names a plausible file instead of nothing.
     pub fn wow_exe(&self, code: &ProductCode) -> PathBuf {
-        self.product_dir(code).join("Wow.exe")
+        game_executable(&self.product_dir(code), code)
     }
+}
+
+/// The game binary inside a flavor directory, resolved by probing it.
+///
+/// The name varies per flavor and not in a pattern worth guessing: one real
+/// install holds `_retail_/Wow.exe`, `_classic_era_/WowClassic.exe` and
+/// `_classic_beta_/WowB.exe`. The expected name wins when it is there, a probe
+/// covers the rest, and the expected name is the fallback so a caller that
+/// finds nothing can still name a plausible file in its error.
+///
+/// Takes the directory rather than a [`Layout`] because the launch path goes
+/// through the prefix symlink — Wine has to see the conventional Windows path
+/// — while everything else addresses the install directly.
+pub fn game_executable(flavor_dir: &Path, code: &ProductCode) -> PathBuf {
+    let expected = flavor_dir.join(code.executable());
+    if expected.is_file() {
+        return expected;
+    }
+
+    std::fs::read_dir(flavor_dir)
+        .ok()
+        .and_then(|entries| {
+            let mut found: Vec<PathBuf> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    // `BlizzardError.exe` ships beside the game in every
+                    // flavor and is a crash reporter, not the client.
+                    p.is_file()
+                        && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe"))
+                        && p.file_name()
+                            .is_some_and(|n| !n.eq_ignore_ascii_case("BlizzardError.exe"))
+                })
+                .collect();
+            found.sort();
+            found.into_iter().next()
+        })
+        .unwrap_or(expected)
 }
 
 /// XDG locations for Lightforge's own data, kept separate from the game root
@@ -295,5 +342,51 @@ mod tests {
             layout().addons_dir(&ProductCode::Retail),
             PathBuf::from("/games/Blizzard/games/World of Warcraft/_retail_/Interface/AddOns")
         );
+    }
+}
+
+#[cfg(test)]
+mod exe_tests {
+    use super::*;
+
+    fn layout_with(flavor: &str, files: &[&str]) -> (tempfile::TempDir, Layout, ProductCode) {
+        let temp = tempfile::TempDir::new().unwrap();
+        let layout = Layout::with_root(temp.path());
+        let code: ProductCode = flavor.parse().unwrap();
+        let dir = layout.product_dir(&code);
+        std::fs::create_dir_all(&dir).unwrap();
+        for file in files {
+            std::fs::write(dir.join(file), b"MZ").unwrap();
+        }
+        (temp, layout, code)
+    }
+
+    #[test]
+    fn the_expected_binary_wins_when_it_is_installed() {
+        let (_t, layout, code) =
+            layout_with("wow_classic_era", &["WowClassic.exe", "BlizzardError.exe"]);
+        assert_eq!(layout.wow_exe(&code).file_name().unwrap(), "WowClassic.exe");
+    }
+
+    #[test]
+    fn an_unexpected_name_is_found_by_probing() {
+        // A real install's `_classic_beta_` ships WowB.exe, which no table
+        // predicted; the directory is the authority.
+        let (_t, layout, code) = layout_with("wow_classic_beta", &["WowB.exe", "BlizzardError.exe"]);
+        assert_eq!(layout.wow_exe(&code).file_name().unwrap(), "WowB.exe");
+    }
+
+    #[test]
+    fn the_crash_reporter_is_never_mistaken_for_the_game() {
+        let (_t, layout, code) = layout_with("wow", &["BlizzardError.exe"]);
+        // Nothing launchable is present, so the expected name comes back for
+        // the error message rather than the crash reporter.
+        assert_eq!(layout.wow_exe(&code).file_name().unwrap(), "Wow.exe");
+    }
+
+    #[test]
+    fn an_empty_install_still_names_a_plausible_binary() {
+        let (_t, layout, code) = layout_with("wow_classic_era", &[]);
+        assert_eq!(layout.wow_exe(&code).file_name().unwrap(), "WowClassic.exe");
     }
 }
