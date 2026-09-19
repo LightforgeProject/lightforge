@@ -65,6 +65,10 @@ pub struct Resolved {
     pub file_name: Option<String>,
     #[serde(default)]
     pub file_length: Option<u64>,
+    /// Package MD5, when the provider publishes one. Only WoWInterface does
+    /// today, and it is the one provider whose downloads can be verified.
+    #[serde(default)]
+    pub md5: Option<String>,
     /// Absent for anything but [`Status::Ok`].
     #[serde(default)]
     pub download_url: Option<String>,
@@ -74,6 +78,10 @@ pub struct Resolved {
     /// Where to send the user when the download is unavailable.
     #[serde(default)]
     pub website_url: Option<String>,
+    /// Anything worth telling the user about how this was resolved — a guessed
+    /// flavor, or why a provider could not answer.
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 impl Resolved {
@@ -218,9 +226,11 @@ impl Catalog {
                             file_id: None,
                             file_name: None,
                             file_length: None,
+                            md5: None,
                             download_url: None,
                             folders: Vec::new(),
                             website_url: None,
+                            note: None,
                         })
                 })
                 .collect());
@@ -324,9 +334,11 @@ mod tests {
             file_id: Some("8866508".into()),
             file_name: Some("BigWigs-v424.8.zip".into()),
             file_length: Some(1_234_567),
+            md5: None,
             download_url: url.map(str::to_owned),
             folders: vec!["BigWigs".into()],
             website_url: Some("https://www.curseforge.com/wow/addons/big-wigs".into()),
+            note: None,
         }
     }
 

@@ -22,6 +22,7 @@
 pub mod catalog;
 pub mod install;
 pub mod manage;
+pub mod providers;
 
 pub use catalog::{Catalog, Origin, Resolved, Status};
 pub use install::{Ledger, Record};
@@ -45,6 +46,7 @@ pub enum Provider {
     Wago,
     GitHub,
     WowInterface,
+    TukUI,
     Other(String),
 }
 
@@ -56,6 +58,7 @@ impl Provider {
             "wago" | "wago.io" => Self::Wago,
             "github" => Self::GitHub,
             "wowinterface" | "wowi" => Self::WowInterface,
+            "tukui" | "tukui.org" => Self::TukUI,
             other => Self::Other(other.to_owned()),
         }
     }
@@ -66,13 +69,28 @@ impl Provider {
             Self::Wago => "wago",
             Self::GitHub => "github",
             Self::WowInterface => "wowinterface",
+            Self::TukUI => "tukui",
             Self::Other(name) => name,
         }
     }
 
     /// Whether Lightforge can resolve this provider at all today.
+    ///
+    /// Wago is the exception: its API needs a key nobody has arranged, so a
+    /// Wago entry is listed and skipped rather than silently attempted.
     pub fn is_supported(&self) -> bool {
-        matches!(self, Self::Curse | Self::Wago | Self::GitHub)
+        matches!(
+            self,
+            Self::Curse | Self::GitHub | Self::WowInterface | Self::TukUI
+        )
+    }
+
+    /// Whether this provider is resolved without any server of ours.
+    ///
+    /// The keyless ones keep working when the catalog proxy is down, which is
+    /// why the split exists.
+    pub fn is_keyless(&self) -> bool {
+        matches!(self, Self::GitHub | Self::WowInterface | Self::TukUI)
     }
 }
 
@@ -538,6 +556,14 @@ mod tests {
         assert_eq!(Provider::parse("Curse"), Provider::Curse);
         assert_eq!(Provider::parse("curseforge"), Provider::Curse);
         assert_eq!(Provider::parse("GitHub"), Provider::GitHub);
+        assert_eq!(Provider::parse("TukUI"), Provider::TukUI);
+        assert_eq!(Provider::parse("WowInterface"), Provider::WowInterface);
+        // Keyless providers need no server of ours; Curse does.
+        assert!(Provider::TukUI.is_keyless());
+        assert!(!Provider::Curse.is_keyless());
+        assert!(Provider::Curse.is_supported());
+        // Wago is known but unresolvable: listed, never attempted.
+        assert!(!Provider::Wago.is_supported());
         // An unknown provider is kept, so it can be reported rather than lost.
         assert_eq!(Provider::parse("Fancy"), Provider::Other("fancy".into()));
         assert!(!Provider::Other("fancy".into()).is_supported());

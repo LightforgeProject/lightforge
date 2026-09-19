@@ -1351,7 +1351,8 @@ async fn main() -> Result<()> {
                 println!("skipping        {} ({})", entry.name, entry.provider);
             }
 
-            let catalog = Catalog::new(addon_origin(catalog.as_deref(), &dirs)?);
+            // Optional now: the keyless providers work without it.
+            let catalog = addon_origin(catalog.as_deref(), &dirs).map(Catalog::new);
             let options = manage::Options {
                 flavor: addons::flavor_of(&code).to_owned(),
                 addons_dir: layout.addons_dir(&code),
@@ -1363,23 +1364,34 @@ async fn main() -> Result<()> {
 
             let http = Http::new()?;
             if dry_run {
-                let resolved = catalog.resolve(&http, &options.flavor, &requests).await?;
+                let resolved = manage::resolve_everywhere(
+                    &http,
+                    catalog.as_ref(),
+                    &requests,
+                    &options.flavor,
+                )
+                .await?;
                 for entry in &resolved {
-                    println!(
-                        "{:<44} {}",
-                        truncate(entry.name.as_deref().unwrap_or(&entry.id), 44),
-                        entry.unavailable_reason().unwrap_or_else(|| format!(
-                            "{} ({} bytes)",
+                    let detail = entry.unavailable_reason().unwrap_or_else(|| {
+                        format!(
+                            "{} {}",
                             entry.file_name.as_deref().unwrap_or("-"),
-                            entry.file_length.unwrap_or(0)
-                        ))
+                            entry.file_id.as_deref().unwrap_or("")
+                        )
+                    });
+                    println!(
+                        "{:<26} {:<46} {}{}",
+                        entry.id,
+                        truncate(&detail, 46),
+                        entry.note.as_deref().unwrap_or(""),
+                        if entry.md5.is_some() { "  [md5]" } else { "" }
                     );
                 }
                 println!("\n--dry-run: nothing written");
                 return Ok(());
             }
 
-            let report = manage::install_all(&http, &catalog, &requests, &options, |event| {
+            let report = manage::install_all(&http, catalog.as_ref(), &requests, &options, |event| {
                 print_addon_event(&event)
             })
             .await?;
@@ -1391,7 +1403,7 @@ async fn main() -> Result<()> {
 
             let code: ProductCode = product.parse().expect("product codes are infallible");
             let dirs = AppDirs::discover().context("resolving XDG directories")?;
-            let catalog = Catalog::new(addon_origin(catalog.as_deref(), &dirs)?);
+            let catalog = addon_origin(catalog.as_deref(), &dirs).map(Catalog::new);
             let options = manage::Options {
                 flavor: addons::flavor_of(&code).to_owned(),
                 addons_dir: layout.addons_dir(&code),
@@ -1400,7 +1412,7 @@ async fn main() -> Result<()> {
             };
 
             let http = Http::new()?;
-            let report = manage::update_all(&http, &catalog, &options, |event| {
+            let report = manage::update_all(&http, catalog.as_ref(), &options, |event| {
                 print_addon_event(&event)
             })
             .await?;
@@ -2010,19 +2022,16 @@ fn read_token(token: &str) -> Result<String> {
 fn addon_origin(
     flag: Option<&str>,
     dirs: &AppDirs,
-) -> Result<lightforge_core::addons::catalog::Origin> {
+) -> Option<lightforge_core::addons::catalog::Origin> {
     use lightforge_core::addons::catalog::Origin;
     use lightforge_core::config::Config;
 
     let configured = Config::load_or_default(&dirs.config_file())
         .ok()
         .and_then(|c| c.addon_catalog);
-    let source = flag
-        .map(str::to_owned)
-        .or(configured)
-        .context("no addon catalog configured — pass --catalog or set addon_catalog")?;
+    let source = flag.map(str::to_owned).or(configured)?;
 
-    Ok(match source.contains("://") {
+    Some(match source.contains("://") {
         true => Origin::Http(source),
         false => Origin::Dir(PathBuf::from(source)),
     })

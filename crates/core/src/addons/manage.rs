@@ -13,6 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use super::catalog::{Catalog, CatalogError, Request, Resolved};
+use super::providers;
 use super::install::{self, InstallError, Ledger, Record};
 use crate::net::Http;
 
@@ -63,7 +64,7 @@ impl Report {
 /// `requests` is what to fetch; the ledger decides what can be skipped.
 pub async fn install_all(
     http: &Http,
-    catalog: &Catalog,
+    catalog: Option<&Catalog>,
     requests: &[Request],
     options: &Options,
     mut on_event: impl FnMut(Event),
@@ -82,7 +83,7 @@ pub async fn install_all(
         .collect();
 
     on_event(Event::Resolving { count: requests.len() });
-    let resolved = catalog.resolve(http, &options.flavor, &requests).await?;
+    let resolved = resolve_everywhere(http, catalog, &requests, &options.flavor).await?;
     let unavailable = resolved.iter().filter(|r| r.downloadable().is_none()).count();
     on_event(Event::Resolved {
         ok: resolved.len() - unavailable,
@@ -133,7 +134,7 @@ pub async fn install_all(
 /// Update everything the ledger tracks.
 pub async fn update_all(
     http: &Http,
-    catalog: &Catalog,
+    catalog: Option<&Catalog>,
     options: &Options,
     on_event: impl FnMut(Event),
 ) -> Result<Report, ManageError> {
@@ -153,6 +154,43 @@ pub async fn update_all(
     install_all(http, catalog, &requests, &options, on_event).await
 }
 
+/// Resolve a mixed batch, sending each provider's entries where they belong.
+///
+/// CurseForge goes through the catalog proxy because it needs a key; the rest
+/// are resolved client-side. That split is the point: with no catalog
+/// configured, or with the proxy down, every keyless provider still works.
+pub async fn resolve_everywhere(
+    http: &Http,
+    catalog: Option<&Catalog>,
+    requests: &[Request],
+    flavor: &str,
+) -> Result<Vec<Resolved>, ManageError> {
+    use std::collections::BTreeMap;
+
+    let mut grouped: BTreeMap<super::Provider, Vec<Request>> = BTreeMap::new();
+    for request in requests {
+        grouped
+            .entry(super::Provider::parse(&request.provider))
+            .or_default()
+            .push(request.clone());
+    }
+
+    let mut resolved = Vec::with_capacity(requests.len());
+    for (provider, batch) in grouped {
+        match (&provider, catalog) {
+            (super::Provider::Curse, Some(catalog)) => {
+                resolved.extend(catalog.resolve(http, flavor, &batch).await?)
+            }
+            (super::Provider::Curse, None) => resolved.extend(providers::unsupported(
+                &batch,
+                "no addon catalog is configured, so CurseForge addons cannot be resolved",
+            )),
+            _ => resolved.extend(providers::resolve(http, &provider, &batch, flavor).await),
+        }
+    }
+    Ok(resolved)
+}
+
 /// Fetch one package and write it, updating the ledger entry.
 async fn fetch_and_install(
     http: &Http,
@@ -165,6 +203,8 @@ async fn fetch_and_install(
     let url = entry.downloadable().ok_or(ManageError::NoDownload)?;
     let package = http.get_bytes(url).await?;
 
+    verify_md5(&package, entry.md5.as_deref(), name)?;
+
     // Trust what the package contains over what the catalog said it contains:
     // the folders are what removal will delete, so they have to be real.
     let extracted = install::extract(&package, &options.addons_dir)?;
@@ -176,6 +216,26 @@ async fn fetch_and_install(
         folders: extracted.folders.clone(),
     });
     Ok(extracted.folders)
+}
+
+/// Check a package against a published MD5, when there is one.
+///
+/// Only WoWInterface publishes one today. A mismatch means a truncated or
+/// tampered package, and extracting it would overwrite a working addon folder
+/// with a broken one — so it fails before anything is written.
+fn verify_md5(package: &[u8], expected: Option<&str>, name: &str) -> Result<(), ManageError> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    let actual = format!("{:x}", md5::compute(package));
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(ManageError::Checksum {
+            name: name.to_owned(),
+            expected: expected.to_owned(),
+            actual,
+        });
+    }
+    Ok(())
 }
 
 /// Remove an addon Lightforge installed.
@@ -224,6 +284,9 @@ pub enum ManageError {
     #[error("the catalog reported this addon as available but gave no download URL")]
     NoDownload,
 
+    #[error("{name} downloaded as {actual}, expected {expected} — the package is damaged")]
+    Checksum { name: String, expected: String, actual: String },
+
     #[error("i/o error at {path}")]
     Io {
         path: PathBuf,
@@ -266,6 +329,21 @@ mod tests {
         let skipped = unsupported(&collection);
         assert_eq!(skipped.len(), 1);
         assert_eq!(skipped[0].name, "Odd");
+    }
+
+    #[test]
+    fn a_published_md5_is_enforced_in_both_directions() {
+        let package = b"addon bytes";
+        let digest = format!("{:x}", md5::compute(package));
+
+        assert!(verify_md5(package, Some(&digest), "BigWigs").is_ok());
+        // Case differences are not corruption.
+        assert!(verify_md5(package, Some(&digest.to_uppercase()), "BigWigs").is_ok());
+        // A provider that publishes no digest is not an error.
+        assert!(verify_md5(package, None, "ElvUI").is_ok());
+
+        let err = verify_md5(b"tampered", Some(&digest), "BigWigs").unwrap_err();
+        assert!(matches!(err, ManageError::Checksum { .. }), "{err}");
     }
 
     #[test]
