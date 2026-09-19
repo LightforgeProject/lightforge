@@ -26,7 +26,7 @@ pub mod providers;
 
 pub use catalog::{Catalog, Origin, Resolved, Status};
 pub use install::{Ledger, Record};
-pub use manage::{Options as ManageOptions, Report};
+pub use manage::{Options as ManageOptions, Report, Unavailable};
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

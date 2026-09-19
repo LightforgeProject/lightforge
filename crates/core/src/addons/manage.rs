@@ -43,13 +43,22 @@ pub enum Event {
     Unavailable { name: String, reason: String },
 }
 
+/// An addon that could not be installed, and what to do about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unavailable {
+    pub name: String,
+    pub reason: String,
+    /// The project page. For an opt-out this is the *only* way to get the
+    /// addon, so a UI should offer to open it rather than just explaining.
+    pub website_url: Option<String>,
+}
+
 /// What a run achieved.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Report {
     pub installed: Vec<String>,
     pub up_to_date: Vec<String>,
-    /// Name and reason, for anything that could not be installed.
-    pub unavailable: Vec<(String, String)>,
+    pub unavailable: Vec<Unavailable>,
 }
 
 impl Report {
@@ -105,7 +114,11 @@ pub async fn install_all(
 
         if let Some(reason) = entry.unavailable_reason() {
             on_event(Event::Unavailable { name: name.clone(), reason: reason.clone() });
-            report.unavailable.push((name, reason));
+            report.unavailable.push(Unavailable {
+                name,
+                reason,
+                website_url: entry.website_url.clone(),
+            });
             continue;
         }
         if !ledger.needs_update(entry, &provider) {
@@ -122,7 +135,11 @@ pub async fn install_all(
             Err(e) => {
                 let reason = e.to_string();
                 on_event(Event::Unavailable { name: name.clone(), reason: reason.clone() });
-                report.unavailable.push((name, reason));
+                report.unavailable.push(Unavailable {
+                    name,
+                    reason,
+                    website_url: entry.website_url.clone(),
+                });
             }
         }
     }
@@ -354,7 +371,11 @@ mod tests {
         };
         assert!(report.is_complete());
 
-        report.unavailable.push(("EXCore".into(), "opted out".into()));
+        report.unavailable.push(Unavailable {
+            name: "EXCore".into(),
+            reason: "opted out".into(),
+            website_url: Some("https://curseforge.com/x".into()),
+        });
         assert!(!report.is_complete());
     }
 }

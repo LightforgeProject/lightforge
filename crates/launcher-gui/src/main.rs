@@ -17,6 +17,7 @@
 //!   pre-flight does before launching Battle.net, which is why the same guard
 //!   serves both.
 
+mod addonwork;
 mod provision;
 mod tasks;
 mod theme;
@@ -83,6 +84,15 @@ enum Message {
     SaveSettings,
     CheckProton,
     ProtonChecked(Result<Option<String>, String>),
+
+    AddonsListed(Box<addonwork::Listing>),
+    TokenChanged(String),
+    ImportToken,
+    UpdateAddons,
+    AddonsFinished(Result<Box<lightforge_core::addons::Report>, String>),
+    RemoveAddon(String, String),
+    AddonRemoved(Result<Vec<String>, String>),
+    OpenUrl(String),
 }
 
 /// Which screen is showing.
@@ -91,6 +101,7 @@ enum Screen {
     Dashboard,
     Setup,
     Settings,
+    Addons,
 }
 
 /// A Proton build in a picker, or the "follow the default" entry.
@@ -167,6 +178,13 @@ struct Lightforge {
     /// Editable copy of `assets_source`, committed on save.
     assets_input: String,
     proton_notice: Option<String>,
+
+    addons: addonwork::Listing,
+    token_input: String,
+    addon_rx: Option<tokio::sync::watch::Receiver<addonwork::Progress>>,
+    addon_sample: addonwork::Progress,
+    addons_busy: bool,
+    addon_report: Option<lightforge_core::addons::Report>,
 }
 
 impl Lightforge {
@@ -227,6 +245,12 @@ impl Lightforge {
             setup_running: false,
             assets_input,
             proton_notice: None,
+            addons: addonwork::Listing::default(),
+            token_input: String::new(),
+            addon_rx: None,
+            addon_sample: addonwork::Progress::default(),
+            addons_busy: false,
+            addon_report: None,
         };
 
         // What is provisioned decides which screen opens: a machine that has
@@ -251,7 +275,11 @@ impl Lightforge {
                 },
             ),
             Task::perform(tasks::theme(self.pipeline.clone(), code.clone()), {
+                let code = code.clone();
                 move |b| Message::Themed(code.clone(), b)
+            }),
+            Task::perform(addonwork::list(self.layout.clone(), code), |listing| {
+                Message::AddonsListed(Box::new(listing))
             }),
         ])
     }
@@ -373,6 +401,9 @@ impl Lightforge {
             Message::Tick => {
                 if let Some(rx) = &self.setup_rx {
                     self.setup_sample = rx.borrow().clone();
+                }
+                if let Some(rx) = &self.addon_rx {
+                    self.addon_sample = rx.borrow().clone();
                 }
                 let Some(transfer) = &self.transfer else {
                     return Task::none();
@@ -596,6 +627,98 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::AddonsListed(listing) => {
+                self.addons = *listing;
+                Task::none()
+            }
+
+            Message::TokenChanged(value) => {
+                self.token_input = value;
+                Task::none()
+            }
+
+            Message::ImportToken => {
+                let token = self.token_input.trim().to_owned();
+                if token.is_empty() {
+                    return Task::none();
+                }
+                let (tx, rx) = tokio::sync::watch::channel(addonwork::Progress::default());
+                self.addon_rx = Some(rx);
+                self.addons_busy = true;
+                self.addon_report = None;
+                self.error = None;
+
+                Task::perform(
+                    addonwork::import(
+                        self.layout.clone(),
+                        self.selected.code.clone(),
+                        token,
+                        tx,
+                    ),
+                    |result| Message::AddonsFinished(result.map(Box::new)),
+                )
+            }
+
+            Message::UpdateAddons => {
+                let (tx, rx) = tokio::sync::watch::channel(addonwork::Progress::default());
+                self.addon_rx = Some(rx);
+                self.addons_busy = true;
+                self.addon_report = None;
+                self.error = None;
+
+                Task::perform(
+                    addonwork::update(self.layout.clone(), self.selected.code.clone(), tx),
+                    |result| Message::AddonsFinished(result.map(Box::new)),
+                )
+            }
+
+            Message::AddonsFinished(result) => {
+                self.addons_busy = false;
+                self.addon_rx = None;
+                match result {
+                    Ok(report) => {
+                        self.addon_report = Some(*report);
+                        // The list on screen is now stale in both directions.
+                        Task::perform(
+                            addonwork::list(self.layout.clone(), self.selected.code.clone()),
+                            |listing| Message::AddonsListed(Box::new(listing)),
+                        )
+                    }
+                    Err(e) => {
+                        self.error = Some(e);
+                        Task::none()
+                    }
+                }
+            }
+
+            Message::RemoveAddon(provider, id) => Task::perform(
+                addonwork::remove(
+                    self.layout.clone(),
+                    self.selected.code.clone(),
+                    provider,
+                    id,
+                ),
+                Message::AddonRemoved,
+            ),
+
+            Message::AddonRemoved(result) => {
+                match result {
+                    Ok(folders) => self.status = format!("removed {}", folders.join(", ")),
+                    Err(e) => self.error = Some(e),
+                }
+                Task::perform(
+                    addonwork::list(self.layout.clone(), self.selected.code.clone()),
+                    |listing| Message::AddonsListed(Box::new(listing)),
+                )
+            }
+
+            Message::OpenUrl(url) => {
+                if let Err(e) = tasks::open_url(&url) {
+                    self.error = Some(e);
+                }
+                Task::none()
+            }
+
             Message::CopyDebug => {
                 let action = self.action();
                 let info = DebugInfo::gather(
@@ -625,7 +748,7 @@ impl Lightforge {
         // Only while something is moving: an idle dashboard should wake up for
         // nothing.
         let closing = iced::window::close_requests().map(Message::CloseRequested);
-        match self.transfer.is_some() || self.setup_running {
+        match self.transfer.is_some() || self.setup_running || self.addons_busy {
             true => Subscription::batch([
                 closing,
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),
@@ -639,6 +762,7 @@ impl Lightforge {
             Screen::Dashboard => self.dashboard(),
             Screen::Setup => self.setup_screen(),
             Screen::Settings => self.settings(),
+            Screen::Addons => self.addons_screen(),
         }
     }
 
@@ -666,6 +790,7 @@ impl Lightforge {
             );
         }
         // Setup stays reachable once done — a prefix can always be rebuilt.
+        bar = bar.push(nav("Addons", Screen::Addons));
         bar = bar.push(nav("Setup", Screen::Setup));
         bar = bar.push(nav("Settings", Screen::Settings));
         if self.screen != Screen::Dashboard {
@@ -707,6 +832,182 @@ impl Lightforge {
             .into(),
             None => content.into(),
         }
+    }
+
+    /// Addon management for the selected product.
+    ///
+    /// Two populations share this list and must not be confused: addons
+    /// Lightforge installed, which it may update and delete, and everything
+    /// else, which it may only report. The badge says which is which, and only
+    /// managed rows get a Remove button.
+    fn addons_screen(&self) -> Element<'_, Message> {
+        let mut body = column![
+            row![
+                text("Addons").size(26),
+                Space::with_width(Length::Fill),
+                text(format!(
+                    "{} installed · {} managed by Lightforge",
+                    self.addons.rows.len(),
+                    self.addons.managed
+                ))
+                .size(12)
+                .color(theme::SUBTEXT),
+            ]
+            .align_y(Alignment::Center)
+        ]
+        .spacing(12);
+
+        // Import.
+        body = body.push(
+            row![
+                text_input("Paste a WoWUp import token…", &self.token_input)
+                    .on_input(Message::TokenChanged)
+                    .on_submit(Message::ImportToken)
+                    .padding(8),
+                {
+                    let import = button(text("Import").size(14))
+                        .style(theme::filled(theme::BATTLE_NET))
+                        .padding([8, 18]);
+                    match self.addons_busy || self.token_input.trim().is_empty() {
+                        true => import,
+                        false => import.on_press(Message::ImportToken),
+                    }
+                },
+                {
+                    let update = button(text("Update all").size(14))
+                        .style(theme::quiet)
+                        .padding([8, 18]);
+                    match self.addons_busy || self.addons.managed == 0 {
+                        true => update,
+                        false => update.on_press(Message::UpdateAddons),
+                    }
+                },
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        );
+
+        if self.addons_busy {
+            let progress = &self.addon_sample;
+            body = body.push(
+                text(format!(
+                    "{}  ({}/{})",
+                    progress.line, progress.done, progress.total
+                ))
+                .size(12)
+                .color(theme::SUBTEXT),
+            );
+        }
+
+        if let Some(e) = &self.error {
+            body = body.push(text(format!("⚠ {e}")).size(13).color(theme::ERROR));
+        }
+
+        // Whatever the last run could not install, with a way to act on it —
+        // an opt-out addon is only obtainable from its own page.
+        if let Some(report) = &self.addon_report {
+            if !report.unavailable.is_empty() {
+                body = body.push(horizontal_rule(1));
+                body = body.push(
+                    text(format!("{} could not be installed", report.unavailable.len()))
+                        .size(14)
+                        .color(theme::UPDATE),
+                );
+                for item in &report.unavailable {
+                    let mut line = row![column![
+                        text(item.name.clone()).size(13),
+                        text(item.reason.clone()).size(11).color(theme::SUBTEXT),
+                    ]
+                    .spacing(2)]
+                    .spacing(8)
+                    .align_y(Alignment::Center);
+
+                    if let Some(url) = &item.website_url {
+                        line = line.push(Space::with_width(Length::Fill));
+                        line = line.push(
+                            button(text("Open page").size(12))
+                                .on_press(Message::OpenUrl(url.clone()))
+                                .style(theme::quiet)
+                                .padding([4, 10]),
+                        );
+                    }
+                    body = body.push(line);
+                }
+            }
+        }
+
+        body = body.push(horizontal_rule(1));
+
+        if self.addons.rows.is_empty() {
+            body = body.push(
+                text("No addons installed for this product yet. Paste an import token above.")
+                    .size(13)
+                    .color(theme::SUBTEXT),
+            );
+        }
+
+        for addon in &self.addons.rows {
+            // A package's extra folders belong to the addon above them; showing
+            // BigWigs' eleven folders as eleven addons would be a lie.
+            if addon.child_of.is_some() {
+                continue;
+            }
+
+            let extra = self
+                .addons
+                .rows
+                .iter()
+                .filter(|r| r.child_of.as_deref() == Some(addon.folder.as_str()))
+                .count();
+
+            let mut line = row![column![
+                row![
+                    text(addon.title.clone()).size(14),
+                    text(addon.version.clone()).size(12).color(theme::SUBTEXT),
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center),
+                text(match (&addon.managed, extra) {
+                    (Some(m), 0) => format!("{} · managed", m.provider),
+                    (Some(m), n) => format!("{} · managed · +{n} folders", m.provider),
+                    (None, _) => "installed by hand".to_owned(),
+                })
+                .size(11)
+                .color(theme::SUBTEXT),
+            ]
+            .spacing(2)]
+            .spacing(8)
+            .align_y(Alignment::Center);
+
+            line = line.push(Space::with_width(Length::Fill));
+            if let Some(managed) = &addon.managed {
+                line = line.push(
+                    button(text("Remove").size(12))
+                        .on_press(Message::RemoveAddon(
+                            managed.provider.clone(),
+                            managed.id.clone(),
+                        ))
+                        .style(theme::quiet)
+                        .padding([4, 10]),
+                );
+            }
+            body = body.push(line);
+        }
+
+        body = body.push(
+            text(format!("{}", self.addons.dir.display()))
+                .size(11)
+                .color(theme::SUBTEXT),
+        );
+
+        column![
+            self.header(),
+            Space::with_height(Length::Fixed(8.0)),
+            scrollable(body).height(Length::Fill),
+        ]
+        .spacing(12)
+        .padding(24)
+        .into()
     }
 
     /// First-run provisioning: what is missing, and one button to fix it.
