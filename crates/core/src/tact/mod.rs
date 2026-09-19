@@ -23,6 +23,7 @@ pub mod encoding;
 pub mod entry;
 pub mod idx;
 pub mod indices;
+pub mod install;
 pub mod manifest;
 pub mod plan;
 pub mod storage;

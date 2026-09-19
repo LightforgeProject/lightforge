@@ -11,6 +11,7 @@
 pub mod battlenet;
 pub mod buildinfo;
 pub mod config;
+pub mod debug;
 pub mod error;
 pub mod net;
 pub mod paths;

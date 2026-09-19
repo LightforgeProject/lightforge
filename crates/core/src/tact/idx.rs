@@ -58,11 +58,23 @@ const OFFSET_MASK: u32 = (1 << SEGMENT_BITS) - 1;
 /// header Blizzard ships (`data_size` 16 → body ends at 0x18 → pad to 0x20).
 const DATA_SECTION_ALIGN: usize = 16;
 
-/// Byte size every real index file is padded out to. Treated as the bucket's
-/// capacity: Agent allocates the file once and writes entries into it, so a
-/// bucket that would overflow this is a condition to report, not to silently
-/// grow past into a layout no Blizzard tool has ever produced.
+/// Byte size a fresh index file is padded out to — 28 × 64 KiB, the shape a
+/// real install ships.
+///
+/// It is a *floor*, not a cap. Sizes in the wild vary with the store: retail's
+/// sixteen files are 2,031,616 bytes each, while the WoW client itself rewrites
+/// a small store's indices at 196,608 or 262,144. What every one of them has in
+/// common is being a whole number of 64 KiB units big enough to hold the
+/// bucket, so that is the rule [`Index::to_bytes`] follows.
 pub const DEFAULT_FILE_SIZE: usize = 1_835_008;
+
+/// Index files are allocated in whole 64 KiB units. Every real file observed —
+/// Agent's and the client's — is a multiple of this.
+pub const SIZE_GRANULARITY: usize = 65_536;
+
+/// A sanity bound, far above anything observed (retail's buckets are ~2 MB).
+/// Exceeding it means something is wrong with the caller, not with the format.
+pub const MAX_FILE_SIZE: usize = 64 * 1024 * 1024;
 
 /// Bytes of CASC entry header in front of every archived file's BLTE payload.
 pub const CASC_ENTRY_HEADER: usize = 30;
@@ -344,16 +356,21 @@ impl Index {
             entry.write(&mut entries);
         }
 
+        // Grow to fit rather than refusing. A store this writer resumes was
+        // very likely last written by someone else — the client rewrites
+        // indices at its own size — so the size a file happened to have when
+        // it was loaded is not a budget the next generation has to live within.
         let total = data_offset(self.blocks.len()) + 8 + entries.len();
-        if total > self.file_size {
+        let file_size = self.file_size.max(total.div_ceil(SIZE_GRANULARITY) * SIZE_GRANULARITY);
+        if file_size > MAX_FILE_SIZE {
             return Err(IdxError::BucketFull {
                 bucket: self.bucket,
                 entries: self.entries.len(),
-                capacity: (self.file_size - data_offset(self.blocks.len()) - 8) / ENTRY_SIZE,
+                capacity: (MAX_FILE_SIZE - data_offset(self.blocks.len()) - 8) / ENTRY_SIZE,
             });
         }
 
-        let mut out = Vec::with_capacity(self.file_size);
+        let mut out = Vec::with_capacity(file_size);
         out.extend_from_slice(&(body.len() as u32).to_le_bytes());
         out.extend_from_slice(&hashlittle(&body, 0).to_le_bytes());
         out.extend_from_slice(&body);
@@ -362,7 +379,7 @@ impl Index {
         out.extend_from_slice(&(entries.len() as u32).to_le_bytes());
         out.extend_from_slice(&entries_hash(&entries).to_le_bytes());
         out.extend_from_slice(&entries);
-        out.resize(self.file_size, 0);
+        out.resize(file_size, 0);
         Ok(out)
     }
 
@@ -648,7 +665,11 @@ mod tests {
     }
 
     #[test]
-    fn an_overfull_bucket_is_refused_not_silently_grown() {
+    fn a_bucket_that_outgrows_its_file_is_grown_in_64_kib_units() {
+        // The failure this guards against is concrete: a store the WoW client
+        // last wrote has small indices (196,608 bytes on a real one), and a
+        // resumed download that adds entries must grow the file rather than
+        // refuse to checkpoint — refusing loses everything the run fetched.
         let mut idx = Index::new(0);
         let capacity = idx.remaining_capacity();
         for i in 0..=capacity {
@@ -656,7 +677,31 @@ mod tests {
             key[..8].copy_from_slice(&(i as u64).to_be_bytes());
             idx.insert(entry(key, 0, 0, 1));
         }
-        assert!(matches!(idx.to_bytes(), Err(IdxError::BucketFull { .. })));
+
+        let bytes = idx.to_bytes().expect("grown, not refused");
+        assert!(bytes.len() > DEFAULT_FILE_SIZE);
+        assert_eq!(bytes.len() % SIZE_GRANULARITY, 0);
+        // And it still reads back as itself.
+        assert_eq!(Index::parse(&bytes).unwrap().entries().len(), capacity + 1);
+    }
+
+    #[test]
+    fn a_small_file_from_the_client_is_grown_rather_than_treated_as_a_budget() {
+        // Round-trip a deliberately small index, then add enough to overflow it.
+        let mut idx = Index::new(3);
+        idx.insert(entry([1; 9], 0, 0, 10));
+        let small = idx.to_bytes().unwrap();
+        let mut reloaded = Index::parse(&small).unwrap();
+
+        let capacity = reloaded.remaining_capacity();
+        for i in 0..=capacity {
+            let mut key = [0u8; 9];
+            key[..8].copy_from_slice(&(i as u64).to_be_bytes());
+            reloaded.insert(entry(key, 0, 0, 1));
+        }
+        let grown = reloaded.to_bytes().expect("grown, not refused");
+        assert!(grown.len() > small.len());
+        assert_eq!(grown.len() % SIZE_GRANULARITY, 0);
     }
 
     #[test]

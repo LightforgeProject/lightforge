@@ -15,3 +15,5 @@ path = "src/main.rs"
 lightforge-core.workspace = true
 anyhow.workspace = true
 iced.workspace = true
+open.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
