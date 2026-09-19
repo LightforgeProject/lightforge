@@ -109,6 +109,25 @@ impl ProductInstall {
         })
     }
 
+    /// Rewrite the tags the way Agent writes them.
+    ///
+    /// Agent's own records read
+    /// `Windows x86_64 EU? acct-AUT? geoip-AT? enUS speech?:… text?` — the `?`
+    /// marks a tag as advisory, and the account/GeoIP tags are present even
+    /// though no manifest defines them. Our downloader writes the plain form,
+    /// which selects identical files (`TagSet` strips `?` and ignores names the
+    /// manifest does not define), but it is not byte-identical to what Agent
+    /// expects to read back.
+    pub fn with_agent_tags(mut self) -> Self {
+        self.tags = agent_tags(
+            &self.region,
+            &self.locale,
+            &self.account_country,
+            &self.geo_country,
+        );
+        self
+    }
+
     /// Set the countries Agent would otherwise fill in from the account.
     pub fn with_countries(
         mut self,
@@ -215,6 +234,21 @@ pub fn write(install_root: &Path, installs: &[ProductInstall]) -> Result<PathBuf
         source,
     })?;
     Ok(path)
+}
+
+/// Agent's tag expression for a region, locale and account.
+///
+/// Both halves are identical but for the trailing `speech?` / `text?`.
+pub fn agent_tags(region: &str, locale: &str, account: &str, geo: &str) -> String {
+    let mut common = format!("Windows x86_64 {}?", region.to_uppercase());
+    if !account.is_empty() {
+        common.push_str(&format!(" acct-{account}?"));
+    }
+    if !geo.is_empty() {
+        common.push_str(&format!(" geoip-{geo}?"));
+    }
+    common.push_str(&format!(" {locale}"));
+    format!("{common} speech?:{common} text?")
 }
 
 /// The locale named in a tag expression, e.g. `enUS` from
@@ -437,6 +471,35 @@ mod tests {
         };
         let bytes = encode(&[sample(), second]);
         assert_eq!(fields(&bytes).len(), 2);
+    }
+
+    #[test]
+    fn agent_style_tags_match_what_a_real_record_carries() {
+        // Verbatim shape from Gabriel's install, wow row.
+        assert_eq!(
+            agent_tags("eu", "enUS", "AUT", "AT"),
+            "Windows x86_64 EU? acct-AUT? geoip-AT? enUS speech?:\
+             Windows x86_64 EU? acct-AUT? geoip-AT? enUS text?"
+                .replace("\\\n             ", "")
+        );
+        // Without an account, the acct/geoip tags are left out rather than
+        // written empty.
+        assert_eq!(
+            agent_tags("us", "deDE", "", ""),
+            "Windows x86_64 US? deDE speech?:Windows x86_64 US? deDE text?"
+        );
+    }
+
+    #[test]
+    fn agent_tags_parse_back_to_the_same_names_we_select_on() {
+        use crate::tact::manifest::TagSet;
+
+        // The `?` suffixes must not change selection, or rewriting the tags
+        // would silently change what an update fetches. `TagSet` strips them,
+        // so both forms carry the same required names.
+        let plain = TagSet::parse("Windows x86_64 EU enUS speech:Windows x86_64 EU enUS text");
+        let agent = TagSet::parse(&agent_tags("eu", "enUS", "", ""));
+        assert_eq!(format!("{plain:?}"), format!("{agent:?}"));
     }
 
     #[test]

@@ -304,6 +304,10 @@ enum Command {
         /// GeoIP country, e.g. `AT`.
         #[arg(long, default_value = "")]
         geo_country: String,
+        /// Write tags the way Agent writes them (`EU? acct-AUT? … speech?`),
+        /// and update `.build.info` to match.
+        #[arg(long)]
+        agent_tags: bool,
         /// Print what would be written without writing it.
         #[arg(long)]
         dry_run: bool,
@@ -1575,7 +1579,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Command::ProductDb { path, products, account_country, geo_country, dry_run } => {
+        Command::ProductDb { path, products, account_country, geo_country, agent_tags, dry_run } => {
             use lightforge_core::paths::WINDOWS_WOW_PATH;
             use lightforge_core::tact::productdb::{self, ProductInstall};
 
@@ -1595,19 +1599,32 @@ async fn main() -> Result<()> {
             };
 
             let mut records = Vec::new();
+            let mut info = info;
             for code in &codes {
-                let record = ProductInstall::from_build_info(&info, code, WINDOWS_WOW_PATH)?
+                let mut record = ProductInstall::from_build_info(&info, code, WINDOWS_WOW_PATH)?
                     .with_countries(&account_country, &geo_country);
+                if agent_tags {
+                    record = record.with_agent_tags();
+                    // Keep `.build.info` saying the same thing; the two
+                    // disagreeing is exactly the kind of inconsistency Agent
+                    // refuses an install for.
+                    info.set(code, "Tags", record.tags.clone())?;
+                }
                 println!(
                     "{:<18} {:<16} {:<22} {}",
                     record.product, record.version, record.flavor_dir, record.build_key
                 );
+                println!("  tags          {}", record.tags);
                 records.push(record);
             }
 
             match dry_run {
                 true => println!("\n--dry-run: nothing written"),
                 false => {
+                    if agent_tags {
+                        info.save(install.join(".build.info"))?;
+                        println!("updated         .build.info tags");
+                    }
                     let written = productdb::write(&install, &records)?;
                     println!("\nwrote           {} ({} bytes)", written.display(), std::fs::metadata(&written)?.len());
                     println!("install path    {WINDOWS_WOW_PATH}");
