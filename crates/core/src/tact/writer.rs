@@ -654,7 +654,9 @@ mod tests {
 
     #[test]
     fn a_fresh_writer_does_not_reuse_an_existing_archive_number() {
-        let dir = scratch("resume");
+        // Distinct from the other resume test's scratch dir: `scratch` wipes
+        // the directory, so a shared name races under the parallel runner.
+        let dir = scratch("resume-archive-id");
         let data = dir.join("data");
         std::fs::create_dir_all(&data).unwrap();
         std::fs::write(data.join("data.000"), b"existing").unwrap();

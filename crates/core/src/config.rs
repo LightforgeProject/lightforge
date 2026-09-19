@@ -26,6 +26,10 @@ pub struct Config {
     pub battle_net_proton: ProtonPin,
     /// Fallback Proton build for products that don't pin their own.
     pub default_proton: ProtonPin,
+    /// Where themed branding is read from: a base URL, or a local fixture
+    /// directory while the Tuxcore endpoint is not live yet. `None` means the
+    /// UI uses its built-in art and never touches the network for theming.
+    pub assets_source: Option<String>,
     /// Every product Lightforge manages, official and custom alike.
     pub products: Vec<Product>,
 }
@@ -37,6 +41,7 @@ impl Default for Config {
             prefix_user: DEFAULT_PREFIX_USER.to_owned(),
             battle_net_proton: ProtonPin::default(),
             default_proton: ProtonPin::default(),
+            assets_source: None,
             products: Vec::new(),
         }
     }
@@ -52,6 +57,23 @@ impl Config {
                 Product::new(ProductCode::Ptr, "WoW PTR"),
             ],
             ..Self::default()
+        }
+    }
+
+    /// Read `config.toml`, or fall back to the seeded defaults when it does
+    /// not exist yet. A file that exists but does not parse is an error, not a
+    /// silent reset — overwriting someone's hand-edited pins is worse than
+    /// refusing to start.
+    pub fn load_or_default(path: &std::path::Path) -> Result<Self, ConfigError> {
+        match std::fs::read_to_string(path) {
+            Ok(text) => Self::from_toml(&text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Ok(Self::with_default_products())
+            }
+            Err(source) => Err(ConfigError::Io {
+                path: path.to_path_buf(),
+                source,
+            }),
         }
     }
 
@@ -80,6 +102,22 @@ impl Config {
         Ok(())
     }
 
+    /// Where the asset pipeline should read from, if configured.
+    ///
+    /// Anything carrying a scheme is a base URL; anything else is a path to a
+    /// fixture directory, so switching to the live endpoint is a one-line
+    /// config edit and no code change.
+    pub fn asset_origin(&self) -> Option<crate::assets::Origin> {
+        let source = self.assets_source.as_deref()?.trim();
+        if source.is_empty() {
+            return None;
+        }
+        Some(match source.contains("://") {
+            true => crate::assets::Origin::Http(source.to_owned()),
+            false => crate::assets::Origin::Dir(PathBuf::from(source)),
+        })
+    }
+
     /// The Proton build a product should launch under: its own pin, else the
     /// app-wide default, else `None` (meaning "auto-provision on first run").
     pub fn effective_proton(&self, code: &ProductCode) -> Option<&str> {
@@ -96,6 +134,13 @@ pub enum ConfigError {
 
     #[error("could not serialize config")]
     Serialize(#[source] toml::ser::Error),
+
+    #[error("i/o error at {path}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 #[cfg(test)]
@@ -127,6 +172,31 @@ mod tests {
             Some("set realmlist test.example".into());
 
         assert!(config.product(&ProductCode::Retail).unwrap().profile.realmlist_override.is_none());
+    }
+
+    #[test]
+    fn a_missing_config_file_reads_as_the_seeded_defaults() {
+        let missing = std::env::temp_dir().join("lightforge-no-such-config.toml");
+        let _ = std::fs::remove_file(&missing);
+        assert_eq!(Config::load_or_default(&missing).unwrap(), Config::with_default_products());
+    }
+
+    #[test]
+    fn an_asset_source_is_a_url_or_a_fixture_directory() {
+        use crate::assets::Origin;
+
+        let mut config = Config::default();
+        assert!(config.asset_origin().is_none());
+
+        config.assets_source = Some("https://assets.tuxcore.pro/wow/".into());
+        assert!(matches!(config.asset_origin(), Some(Origin::Http(_))));
+
+        config.assets_source = Some("/home/gabriel/lightforge-assets".into());
+        assert!(matches!(config.asset_origin(), Some(Origin::Dir(_))));
+
+        // An empty string is a blank field, not a fixture at the current dir.
+        config.assets_source = Some("  ".into());
+        assert!(config.asset_origin().is_none());
     }
 
     #[test]

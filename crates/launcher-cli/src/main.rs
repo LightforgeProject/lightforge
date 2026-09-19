@@ -213,6 +213,16 @@ enum Command {
         #[arg(long, default_value_t = 4096)]
         checkpoint_mib: u64,
     },
+    /// Resolve a product's themed branding through the asset pipeline.
+    Assets {
+        /// Product code to theme, e.g. `wow`.
+        #[arg(long, default_value = "wow")]
+        product: String,
+        /// Base URL or fixture directory. Defaults to `assets_source` in
+        /// config.toml.
+        #[arg(long)]
+        source: Option<String>,
+    },
     /// Resolve the primary action button's state for a product.
     Status {
         /// Product code, e.g. `wow` or `wow_classic_era`.
@@ -1361,6 +1371,49 @@ async fn main() -> Result<()> {
                     "vs {}  {}",
                     local.display(),
                     if want == bytes { "identical" } else { "DIFFERS" }
+                );
+            }
+        }
+        Command::Assets { product, source } => {
+            use lightforge_core::assets::{Origin, Pipeline, Store};
+            use lightforge_core::net::Http;
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let config = Config::load_or_default(&dirs.config_file())
+                .with_context(|| format!("reading {}", dirs.config_file().display()))?;
+            let origin = match source.as_deref().map(str::trim) {
+                Some(s) if s.contains("://") => Origin::Http(s.to_owned()),
+                Some(s) => Origin::Dir(PathBuf::from(s)),
+                None => config.asset_origin().context(
+                    "no asset source: pass --source, or set assets_source in config.toml",
+                )?,
+            };
+
+            let store = Store::new(dirs.asset_cache_dir());
+            println!("origin          {origin:?}");
+            println!("cache           {}", store.dir().display());
+
+            let pipeline = Pipeline::new(origin, store);
+            let http = Http::new()?;
+            let manifest = pipeline.manifest(&http).await.context("fetching the manifest")?;
+            println!("schema          {}", manifest.schema);
+            println!("themes          {}", manifest.products.len());
+            println!("default         {}", manifest.default.as_deref().unwrap_or("-"));
+
+            let branding = pipeline
+                .resolve_with(&http, &manifest, &code)
+                .await
+                .with_context(|| format!("resolving branding for {}", code.as_str()))?;
+
+            println!("\nproduct         {}", code.as_str());
+            println!("label           {}", branding.label);
+            for (slot, asset) in [("logo", &branding.logo), ("background", &branding.background)] {
+                let size = std::fs::metadata(&asset.path).map(|m| m.len()).unwrap_or(0);
+                println!(
+                    "{slot:<15} {} ({size} bytes, {})",
+                    asset.path.display(),
+                    if asset.fetched { "fetched" } else { "cached" }
                 );
             }
         }

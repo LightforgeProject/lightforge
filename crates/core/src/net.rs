@@ -85,6 +85,46 @@ impl Http {
             })
     }
 
+    /// Fetch a body, revalidating against `cache` when possible.
+    ///
+    /// Returns `None` on `304 Not Modified`; the caller reads the cached copy
+    /// with [`ETagCache::read`]. Used for the themed art, which is binary and
+    /// wants its own ETag independent of the manifest that names it.
+    pub async fn get_bytes_cached(
+        &self,
+        url: &str,
+        cache: &ETagCache,
+    ) -> Result<Option<Vec<u8>>, NetError> {
+        let mut request = self.client.get(url);
+        if let Some(etag) = cache.etag() {
+            request = request.header(reqwest::header::IF_NONE_MATCH, etag);
+        }
+
+        let response = request.send().await.map_err(|e| NetError::Request {
+            url: url.to_owned(),
+            source: e,
+        })?;
+
+        if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+            return Ok(None);
+        }
+        let response = check_status(url, response)?;
+
+        let etag = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+
+        let body = response.bytes().await.map_err(|e| NetError::Request {
+            url: url.to_owned(),
+            source: e,
+        })?;
+
+        cache.store(&body, etag.as_deref())?;
+        Ok(Some(body.to_vec()))
+    }
+
     /// Fetch a small document as text, without caching.
     pub async fn get_text(&self, url: &str) -> Result<String, NetError> {
         let response = self
