@@ -212,6 +212,10 @@ enum Command {
         /// download has to fetch again.
         #[arg(long, default_value_t = 4096)]
         checkpoint_mib: u64,
+        /// With `--dry-run`, list the install-manifest files this build would
+        /// extract, and where each would land.
+        #[arg(long)]
+        show_install: bool,
         /// Trip the cancel token after this many seconds — the same path the
         /// GUI's pause button takes. For measuring how long a pause takes to
         /// come to rest.
@@ -287,6 +291,17 @@ enum Command {
     AddonToken {
         /// The token, or `@path` to read it from a file.
         token: String,
+    },
+    /// Remove an installed product. Prints the plan unless `--yes` is given.
+    Uninstall {
+        #[arg(long, default_value = "wow")]
+        product: String,
+        /// Install root. Defaults to the managed WoW install.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Actually delete. Without this, nothing is touched.
+        #[arg(long)]
+        yes: bool,
     },
     /// Write `.product.db` so Battle.net will adopt an existing install.
     ///
@@ -1025,6 +1040,7 @@ async fn main() -> Result<()> {
             gap_kib,
             checkpoint_mib,
             cancel_after,
+            show_install,
         } => {
             use lightforge_core::net::Http;
             use lightforge_core::tact::download::Cancel;
@@ -1144,7 +1160,14 @@ async fn main() -> Result<()> {
             }
 
             if dry_run {
-                install::prepare(&http, &dest, &code, &options, &mut on_event).await?;
+                let prepared = install::prepare(&http, &dest, &code, &options, &mut on_event).await?;
+                if show_install {
+                    let selected = prepared.install.select(&prepared.tags);
+                    println!("\ninstall files   {} selected of {}", selected.len(), prepared.install.len());
+                    for entry in &selected {
+                        println!("  {}", entry.path);
+                    }
+                }
                 println!("\n--dry-run: nothing fetched");
                 return Ok(());
             }
@@ -1578,6 +1601,52 @@ async fn main() -> Result<()> {
                     );
                 }
             }
+        }
+        Command::Uninstall { product, path, yes } => {
+            use lightforge_core::tact::uninstall;
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let install = path.unwrap_or_else(|| layout.wow_install());
+            let plan = uninstall::plan(&install, &code)?;
+
+            let gib = |b: u64| b as f64 / 1024f64.powi(3);
+            println!("install         {}", install.display());
+            println!("product         {}", code.as_str());
+
+            if plan.is_empty() {
+                println!("\nnothing to remove — that product is not installed here");
+                return Ok(());
+            }
+
+            println!("\nwould delete:");
+            for dir in plan.flavor_dir.iter().chain(plan.store.iter()) {
+                println!("  {}", dir.display());
+            }
+            if plan.has_row {
+                println!(
+                    "  .build.info {}",
+                    match plan.remove_build_info {
+                        true => "(the whole file — no products left)",
+                        false => "(this product's row only)",
+                    }
+                );
+            }
+            println!("\nfrees           {:.2} GiB", gib(plan.bytes));
+            match plan.remaining.is_empty() {
+                true => println!("remaining       nothing — this removes the whole install"),
+                false => println!(
+                    "remaining       {} (the shared CASC store is kept for them)",
+                    plan.remaining.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", ")
+                ),
+            }
+
+            if !yes {
+                println!("\nnothing deleted. Re-run with --yes to go ahead.");
+                return Ok(());
+            }
+
+            let removed = uninstall::execute(&install, &code, &plan)?;
+            println!("\ndeleted         {} paths, {:.2} GiB", removed.paths.len(), gib(removed.bytes));
         }
         Command::ProductDb { path, products, account_country, geo_country, agent_tags, dry_run } => {
             use lightforge_core::paths::WINDOWS_WOW_PATH;

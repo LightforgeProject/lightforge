@@ -133,6 +133,25 @@ impl BuildInfo {
             .ok_or_else(|| BuildInfoError::UnknownProduct(code.as_str().to_owned()))
     }
 
+    /// Drop a product's row entirely. Returns whether one was there.
+    ///
+    /// The file keeps its header and every other row: products share one
+    /// `.build.info`, so removing Classic Era must leave Retail untouched.
+    pub fn remove_product(&mut self, code: &ProductCode) -> bool {
+        let Ok(product_col) = self.column(COL_PRODUCT) else {
+            return false;
+        };
+        let before = self.rows.len();
+        self.rows
+            .retain(|row| row.cells.get(product_col).map(String::as_str) != Some(code.as_str()));
+        self.rows.len() != before
+    }
+
+    /// Whether any product rows remain.
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+
     /// Read one cell of a product's row by column name.
     pub fn get(&self, code: &ProductCode, column: &str) -> Result<&str, BuildInfoError> {
         let col = self.column(column)?;

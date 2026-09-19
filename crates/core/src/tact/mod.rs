@@ -28,5 +28,6 @@ pub mod manifest;
 pub mod plan;
 pub mod productdb;
 pub mod storage;
+pub mod uninstall;
 pub mod version;
 pub mod writer;
