@@ -52,8 +52,19 @@ pub struct Record {
 
 impl Ledger {
     /// Where a product's ledger lives.
-    pub fn path_for(data_dir: &Path, code: &ProductCode) -> PathBuf {
-        data_dir.join("addons").join(format!("{}.json", code.as_str()))
+    ///
+    /// Keyed by the AddOns directory as well as the product, because a product
+    /// code alone is not an install: a second install of the same product (a
+    /// test root, a second copy of the game) would otherwise share one ledger
+    /// and each would be told it manages the other's addons.
+    pub fn path_for(data_dir: &Path, addons_dir: &Path, code: &ProductCode) -> PathBuf {
+        use sha2::{Digest, Sha256};
+
+        let digest = Sha256::digest(addons_dir.as_os_str().as_encoded_bytes());
+        let tag: String = digest.iter().take(4).map(|b| format!("{b:02x}")).collect();
+        data_dir
+            .join("addons")
+            .join(format!("{}-{tag}.json", code.as_str()))
     }
 
     /// Load a ledger, treating a missing file as an empty one.
@@ -480,9 +491,23 @@ mod tests {
     }
 
     #[test]
+    fn two_installs_of_one_product_do_not_share_a_ledger() {
+        // The symptom this prevents, seen for real: a test install's ledger
+        // reported "3 managed" against a different, empty install.
+        let data = PathBuf::from("/data");
+        let a = Ledger::path_for(&data, Path::new("/games/a/Interface/AddOns"), &ProductCode::Retail);
+        let b = Ledger::path_for(&data, Path::new("/games/b/Interface/AddOns"), &ProductCode::Retail);
+
+        assert_ne!(a, b);
+        // Still readable at a glance, and stable for the same input.
+        assert!(a.file_name().unwrap().to_string_lossy().starts_with("wow-"));
+        assert_eq!(a, Ledger::path_for(&data, Path::new("/games/a/Interface/AddOns"), &ProductCode::Retail));
+    }
+
+    #[test]
     fn a_ledger_round_trips_and_a_missing_one_is_empty() {
         let dir = tmpdir("ledger");
-        let path = Ledger::path_for(&dir, &ProductCode::Retail);
+        let path = Ledger::path_for(&dir, Path::new("/games/x/AddOns"), &ProductCode::Retail);
         assert_eq!(Ledger::load(&path).unwrap(), Ledger::default());
 
         let mut ledger = Ledger::default();
@@ -496,6 +521,5 @@ mod tests {
         ledger.save(&path).unwrap();
 
         assert_eq!(Ledger::load(&path).unwrap(), ledger);
-        assert!(path.display().to_string().ends_with("addons/wow.json"));
     }
 }

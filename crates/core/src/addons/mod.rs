@@ -19,6 +19,7 @@
 //! is `Curse` rather than `curseforge`, its ids are strings, and every entry
 //! pins an exact `version_id` — a *file* id, not just a project.
 
+pub mod browse;
 pub mod catalog;
 pub mod install;
 pub mod manage;

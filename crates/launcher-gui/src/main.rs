@@ -93,6 +93,23 @@ enum Message {
     RemoveAddon(String, String),
     AddonRemoved(Result<Vec<String>, String>),
     OpenUrl(String),
+
+    AddonTab(AddonTab),
+    SearchChanged(String),
+    RunSearch,
+    SearchDone(Box<addonwork::SearchOutcome>),
+    InstallAddon(String, String),
+    CheckAddonUpdates,
+    AddonUpdatesChecked(Result<Vec<lightforge_core::addons::manage::UpdateStatus>, String>),
+}
+
+/// Which half of the addon screen is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AddonTab {
+    /// What is installed, and what has updates.
+    Mine,
+    /// Search every provider and install.
+    Browse,
 }
 
 /// Which screen is showing.
@@ -185,6 +202,11 @@ struct Lightforge {
     addon_sample: addonwork::Progress,
     addons_busy: bool,
     addon_report: Option<lightforge_core::addons::Report>,
+    addon_tab: AddonTab,
+    search_input: String,
+    search: addonwork::SearchOutcome,
+    searching: bool,
+    updates: Vec<lightforge_core::addons::manage::UpdateStatus>,
 }
 
 impl Lightforge {
@@ -251,6 +273,11 @@ impl Lightforge {
             addon_sample: addonwork::Progress::default(),
             addons_busy: false,
             addon_report: None,
+            addon_tab: AddonTab::Mine,
+            search_input: String::new(),
+            search: addonwork::SearchOutcome::default(),
+            searching: false,
+            updates: Vec::new(),
         };
 
         // What is provisioned decides which screen opens: a machine that has
@@ -719,6 +746,70 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::AddonTab(tab) => {
+                self.addon_tab = tab;
+                self.error = None;
+                Task::none()
+            }
+
+            Message::SearchChanged(value) => {
+                self.search_input = value;
+                Task::none()
+            }
+
+            Message::RunSearch => {
+                let query = self.search_input.trim().to_owned();
+                if query.is_empty() {
+                    return Task::none();
+                }
+                self.searching = true;
+                Task::perform(
+                    addonwork::search(self.layout.clone(), self.selected.code.clone(), query),
+                    |outcome| Message::SearchDone(Box::new(outcome)),
+                )
+            }
+
+            Message::SearchDone(outcome) => {
+                self.searching = false;
+                // Ignore a reply for a query the user has already moved past.
+                if outcome.query == self.search_input.trim() {
+                    self.search = *outcome;
+                }
+                Task::none()
+            }
+
+            Message::InstallAddon(provider, id) => {
+                let (tx, rx) = tokio::sync::watch::channel(addonwork::Progress::default());
+                self.addon_rx = Some(rx);
+                self.addons_busy = true;
+                self.addon_report = None;
+                self.error = None;
+
+                Task::perform(
+                    addonwork::install_one(
+                        self.layout.clone(),
+                        self.selected.code.clone(),
+                        provider,
+                        id,
+                        tx,
+                    ),
+                    |result| Message::AddonsFinished(result.map(Box::new)),
+                )
+            }
+
+            Message::CheckAddonUpdates => Task::perform(
+                addonwork::check_updates(self.layout.clone(), self.selected.code.clone()),
+                Message::AddonUpdatesChecked,
+            ),
+
+            Message::AddonUpdatesChecked(result) => {
+                match result {
+                    Ok(statuses) => self.updates = statuses,
+                    Err(e) => self.error = Some(e),
+                }
+                Task::none()
+            }
+
             Message::CopyDebug => {
                 let action = self.action();
                 let info = DebugInfo::gather(
@@ -836,28 +927,68 @@ impl Lightforge {
 
     /// Addon management for the selected product.
     ///
-    /// Two populations share this list and must not be confused: addons
-    /// Lightforge installed, which it may update and delete, and everything
-    /// else, which it may only report. The badge says which is which, and only
-    /// managed rows get a Remove button.
+    /// Two tabs, because they answer different questions: *My Addons* is what
+    /// is installed and what has updates; *Browse* is what exists and could be.
     fn addons_screen(&self) -> Element<'_, Message> {
+        let tab = |label: &'static str, which: AddonTab| {
+            let button = button(text(label).size(13)).padding([6, 14]);
+            match self.addon_tab == which {
+                true => button.style(theme::filled(theme::BATTLE_NET)),
+                false => button.style(theme::quiet).on_press(Message::AddonTab(which)),
+            }
+        };
+
         let mut body = column![
             row![
                 text("Addons").size(26),
+                Space::with_width(Length::Fixed(16.0)),
+                tab("My Addons", AddonTab::Mine),
+                tab("Browse", AddonTab::Browse),
                 Space::with_width(Length::Fill),
                 text(format!(
-                    "{} installed · {} managed by Lightforge",
+                    "{} installed · {} managed",
                     self.addons.rows.len(),
                     self.addons.managed
                 ))
                 .size(12)
                 .color(theme::SUBTEXT),
             ]
+            .spacing(8)
             .align_y(Alignment::Center)
         ]
         .spacing(12);
 
-        // Import.
+        if self.addons_busy {
+            let progress = &self.addon_sample;
+            body = body.push(
+                text(format!("{}  ({}/{})", progress.line, progress.done, progress.total))
+                    .size(12)
+                    .color(theme::SUBTEXT),
+            );
+        }
+        if let Some(e) = &self.error {
+            body = body.push(text(format!("⚠ {e}")).size(13).color(theme::ERROR));
+        }
+
+        body = body.push(match self.addon_tab {
+            AddonTab::Mine => self.addons_mine(),
+            AddonTab::Browse => self.addons_browse(),
+        });
+
+        column![
+            self.header(),
+            Space::with_height(Length::Fixed(8.0)),
+            scrollable(body).height(Length::Fill),
+        ]
+        .spacing(12)
+        .padding(24)
+        .into()
+    }
+
+    /// Installed addons, update badges, import and removal.
+    fn addons_mine(&self) -> Element<'_, Message> {
+        let mut body = column![].spacing(10);
+
         body = body.push(
             row![
                 text_input("Paste a WoWUp import token…", &self.token_input)
@@ -873,66 +1004,67 @@ impl Lightforge {
                         false => import.on_press(Message::ImportToken),
                     }
                 },
-                {
-                    let update = button(text("Update all").size(14))
-                        .style(theme::quiet)
-                        .padding([8, 18]);
-                    match self.addons_busy || self.addons.managed == 0 {
-                        true => update,
-                        false => update.on_press(Message::UpdateAddons),
-                    }
-                },
             ]
             .spacing(8)
             .align_y(Alignment::Center),
         );
 
-        if self.addons_busy {
-            let progress = &self.addon_sample;
-            body = body.push(
-                text(format!(
-                    "{}  ({}/{})",
-                    progress.line, progress.done, progress.total
-                ))
+        let outdated = self.updates.iter().filter(|u| u.has_update()).count();
+        body = body.push(
+            row![
+                {
+                    let check = button(text("Check for updates").size(13))
+                        .style(theme::quiet)
+                        .padding([6, 12]);
+                    match self.addons_busy || self.addons.managed == 0 {
+                        true => check,
+                        false => check.on_press(Message::CheckAddonUpdates),
+                    }
+                },
+                {
+                    let update = button(text("Update all").size(13))
+                        .style(theme::filled(match outdated {
+                            0 => theme::PAUSE,
+                            _ => theme::UPDATE,
+                        }))
+                        .padding([6, 12]);
+                    match self.addons_busy || self.addons.managed == 0 {
+                        true => update,
+                        false => update.on_press(Message::UpdateAddons),
+                    }
+                },
+                text(match (self.updates.is_empty(), outdated) {
+                    (true, _) => String::new(),
+                    (false, 0) => "everything is up to date".to_owned(),
+                    (false, n) => format!("{n} have updates"),
+                })
                 .size(12)
                 .color(theme::SUBTEXT),
-            );
-        }
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        );
 
-        if let Some(e) = &self.error {
-            body = body.push(text(format!("⚠ {e}")).size(13).color(theme::ERROR));
-        }
-
-        // Whatever the last run could not install, with a way to act on it —
-        // an opt-out addon is only obtainable from its own page.
         if let Some(report) = &self.addon_report {
-            if !report.unavailable.is_empty() {
-                body = body.push(horizontal_rule(1));
-                body = body.push(
-                    text(format!("{} could not be installed", report.unavailable.len()))
-                        .size(14)
-                        .color(theme::UPDATE),
-                );
-                for item in &report.unavailable {
-                    let mut line = row![column![
-                        text(item.name.clone()).size(13),
-                        text(item.reason.clone()).size(11).color(theme::SUBTEXT),
-                    ]
-                    .spacing(2)]
-                    .spacing(8)
-                    .align_y(Alignment::Center);
+            for item in &report.unavailable {
+                let mut line = row![column![
+                    text(item.name.clone()).size(13),
+                    text(item.reason.clone()).size(11).color(theme::SUBTEXT),
+                ]
+                .spacing(2)]
+                .spacing(8)
+                .align_y(Alignment::Center);
 
-                    if let Some(url) = &item.website_url {
-                        line = line.push(Space::with_width(Length::Fill));
-                        line = line.push(
-                            button(text("Open page").size(12))
-                                .on_press(Message::OpenUrl(url.clone()))
-                                .style(theme::quiet)
-                                .padding([4, 10]),
-                        );
-                    }
-                    body = body.push(line);
+                if let Some(url) = &item.website_url {
+                    line = line.push(Space::with_width(Length::Fill));
+                    line = line.push(
+                        button(text("Open page").size(12))
+                            .on_press(Message::OpenUrl(url.clone()))
+                            .style(theme::quiet)
+                            .padding([4, 10]),
+                    );
                 }
+                body = body.push(line);
             }
         }
 
@@ -940,33 +1072,49 @@ impl Lightforge {
 
         if self.addons.rows.is_empty() {
             body = body.push(
-                text("No addons installed for this product yet. Paste an import token above.")
+                text("Nothing installed for this product yet — search under Browse, or paste an import token.")
                     .size(13)
                     .color(theme::SUBTEXT),
             );
         }
 
         for addon in &self.addons.rows {
-            // A package's extra folders belong to the addon above them; showing
+            // A package's other folders belong to the addon above them; showing
             // BigWigs' eleven folders as eleven addons would be a lie.
             if addon.child_of.is_some() {
                 continue;
             }
-
             let extra = self
                 .addons
                 .rows
                 .iter()
                 .filter(|r| r.child_of.as_deref() == Some(addon.folder.as_str()))
                 .count();
+            let status = addon.managed.as_ref().and_then(|m| {
+                self.updates
+                    .iter()
+                    .find(|u| u.id == m.id && u.provider == m.provider)
+            });
+
+            let mut heading = row![
+                text(addon.title.clone()).size(14),
+                text(addon.version.clone()).size(12).color(theme::SUBTEXT),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center);
+            if status.is_some_and(|s| s.has_update()) {
+                heading = heading.push(
+                    text(format!(
+                        "update → {}",
+                        status.and_then(|s| s.available.clone()).unwrap_or_default()
+                    ))
+                    .size(11)
+                    .color(theme::UPDATE),
+                );
+            }
 
             let mut line = row![column![
-                row![
-                    text(addon.title.clone()).size(14),
-                    text(addon.version.clone()).size(12).color(theme::SUBTEXT),
-                ]
-                .spacing(10)
-                .align_y(Alignment::Center),
+                heading,
                 text(match (&addon.managed, extra) {
                     (Some(m), 0) => format!("{} · managed", m.provider),
                     (Some(m), n) => format!("{} · managed · +{n} folders", m.provider),
@@ -995,19 +1143,119 @@ impl Lightforge {
         }
 
         body = body.push(
-            text(format!("{}", self.addons.dir.display()))
+            text(self.addons.dir.display().to_string())
+                .size(11)
+                .color(theme::SUBTEXT),
+        );
+        body.into()
+    }
+
+    /// Search across providers, and install from the results.
+    fn addons_browse(&self) -> Element<'_, Message> {
+        let mut body = column![].spacing(10);
+
+        body = body.push(
+            row![
+                text_input("Search addons…", &self.search_input)
+                    .on_input(Message::SearchChanged)
+                    .on_submit(Message::RunSearch)
+                    .padding(8),
+                {
+                    let search = button(text("Search").size(14))
+                        .style(theme::filled(theme::BATTLE_NET))
+                        .padding([8, 18]);
+                    match self.searching || self.search_input.trim().is_empty() {
+                        true => search,
+                        false => search.on_press(Message::RunSearch),
+                    }
+                },
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        );
+        body = body.push(
+            text("WoWInterface, Tukui and GitHub (type owner/repo). CurseForge needs a catalog in Settings.")
                 .size(11)
                 .color(theme::SUBTEXT),
         );
 
-        column![
-            self.header(),
-            Space::with_height(Length::Fixed(8.0)),
-            scrollable(body).height(Length::Fill),
-        ]
-        .spacing(12)
-        .padding(24)
-        .into()
+        // A provider that could not answer is said out loud: an empty list
+        // otherwise reads as "nothing matched".
+        for problem in &self.search.problems {
+            body = body.push(text(format!("⚠ {problem}")).size(11).color(theme::UPDATE));
+        }
+
+        body = body.push(horizontal_rule(1));
+
+        if self.searching {
+            body = body.push(text("searching…").size(13).color(theme::SUBTEXT));
+        } else if self.search.listings.is_empty() && !self.search.query.is_empty() {
+            body = body.push(
+                text(format!("Nothing found for “{}”.", self.search.query))
+                    .size(13)
+                    .color(theme::SUBTEXT),
+            );
+        }
+
+        let installed_ids: Vec<(&str, &str)> = self
+            .addons
+            .rows
+            .iter()
+            .filter_map(|r| r.managed.as_ref())
+            .map(|m| (m.provider.as_str(), m.id.as_str()))
+            .collect();
+
+        for listing in &self.search.listings {
+            let provider = listing.provider.as_str().to_owned();
+            let already = installed_ids
+                .iter()
+                .any(|(p, id)| *p == provider && *id == listing.id);
+
+            let mut line = row![column![
+                text(listing.name.clone()).size(14),
+                text(format!(
+                    "{}{}{}",
+                    provider,
+                    listing.author.as_deref().map(|a| format!(" · {a}")).unwrap_or_default(),
+                    match listing.downloads {
+                        0 => String::new(),
+                        n => format!(" · {n} downloads"),
+                    }
+                ))
+                .size(11)
+                .color(theme::SUBTEXT),
+            ]
+            .spacing(2)]
+            .spacing(8)
+            .align_y(Alignment::Center);
+
+            line = line.push(Space::with_width(Length::Fill));
+            if let Some(url) = &listing.website_url {
+                line = line.push(
+                    button(text("Page").size(12))
+                        .on_press(Message::OpenUrl(url.clone()))
+                        .style(theme::quiet)
+                        .padding([4, 10]),
+                );
+            }
+            line = line.push(match already {
+                true => button(text("Installed").size(12)).style(theme::quiet).padding([4, 10]),
+                false => {
+                    let install = button(text("Install").size(12))
+                        .style(theme::filled(theme::INSTALL))
+                        .padding([4, 10]);
+                    match self.addons_busy {
+                        true => install,
+                        false => install.on_press(Message::InstallAddon(
+                            provider.clone(),
+                            listing.id.clone(),
+                        )),
+                    }
+                }
+            });
+            body = body.push(line);
+        }
+        body.into()
     }
 
     /// First-run provisioning: what is missing, and one button to fix it.

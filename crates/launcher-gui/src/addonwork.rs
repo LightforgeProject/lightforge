@@ -48,7 +48,7 @@ pub async fn list(layout: Layout, code: ProductCode) -> Listing {
         let installed = addons::scan(&dir).unwrap_or_default();
         let ledger = AppDirs::discover()
             .ok()
-            .map(|dirs| manage::ledger_path(dirs.data_dir(), &code))
+            .map(|dirs| manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
             .and_then(|path| Ledger::load(&path).ok())
             .unwrap_or_default();
 
@@ -187,7 +187,7 @@ fn options(layout: &Layout, code: &ProductCode, pinned: bool) -> Option<Options>
     Some(Options {
         flavor: addons::flavor_of(code).to_owned(),
         addons_dir: layout.addons_dir(code),
-        ledger_path: manage::ledger_path(dirs.data_dir(), code),
+        ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(code), code),
         pinned,
     })
 }
@@ -224,7 +224,7 @@ pub async fn update(
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Report, String> {
     let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
-    let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &code))
+    let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
         .map_err(|e| e.to_string())?;
     let requests: Vec<Request> = ledger
         .addons
@@ -279,6 +279,74 @@ async fn run(
     };
 
     manage::install_all(&http, catalog.as_ref(), &requests, &options, on_event)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Search every provider that can answer.
+pub async fn search(layout: Layout, code: ProductCode, query: String) -> SearchOutcome {
+    use lightforge_core::addons::browse;
+
+    let Ok(dirs) = AppDirs::discover() else {
+        return SearchOutcome::default();
+    };
+    let Ok(http) = Http::new() else {
+        return SearchOutcome::default();
+    };
+    let _ = &layout;
+
+    let results = browse::search(
+        &http,
+        catalog().as_ref(),
+        dirs.cache_dir(),
+        &query,
+        addons::flavor_of(&code),
+        30,
+    )
+    .await;
+
+    SearchOutcome {
+        query,
+        listings: results.listings,
+        problems: results.problems,
+    }
+}
+
+/// A completed search, kept with its query so a late reply cannot overwrite
+/// the results of a newer one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SearchOutcome {
+    pub query: String,
+    pub listings: Vec<lightforge_core::addons::browse::Listing>,
+    pub problems: Vec<String>,
+}
+
+/// Install one addon by provider and id.
+pub async fn install_one(
+    layout: Layout,
+    code: ProductCode,
+    provider: String,
+    id: String,
+    tx: tokio::sync::watch::Sender<Progress>,
+) -> Result<Report, String> {
+    run(
+        layout,
+        code,
+        vec![Request { provider, id, version_id: None }],
+        false,
+        tx,
+    )
+    .await
+}
+
+/// Ask what has updates, without installing anything.
+pub async fn check_updates(
+    layout: Layout,
+    code: ProductCode,
+) -> Result<Vec<manage::UpdateStatus>, String> {
+    let options = options(&layout, &code, false).ok_or("no data directory available")?;
+    let http = Http::new().map_err(|e| e.to_string())?;
+    manage::check_updates(&http, catalog().as_ref(), &options)
         .await
         .map_err(|e| e.to_string())
 }

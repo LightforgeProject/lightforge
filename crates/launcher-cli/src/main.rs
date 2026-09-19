@@ -229,6 +229,28 @@ enum Command {
         #[arg(long)]
         token: Option<String>,
     },
+    /// Search for addons across every provider that can answer.
+    AddonSearch {
+        /// What to search for, or `owner/repo` for a GitHub addon.
+        query: String,
+        #[arg(long, default_value = "wow")]
+        product: String,
+        #[arg(long, default_value_t = 15)]
+        limit: usize,
+        #[arg(long)]
+        catalog: Option<String>,
+    },
+    /// Install an addon by provider and id.
+    AddonInstall {
+        /// Provider id: a number, a slug, or `owner/repo`.
+        id: String,
+        #[arg(long, default_value = "wowinterface")]
+        provider: String,
+        #[arg(long, default_value = "wow")]
+        product: String,
+        #[arg(long)]
+        catalog: Option<String>,
+    },
     /// Install or update addons from a WoWUp import token.
     AddonImport {
         /// The token, or `@path` to read it from a file.
@@ -1326,6 +1348,70 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        Command::AddonSearch { query, product, limit, catalog } => {
+            use lightforge_core::addons::{self, browse, catalog::Catalog};
+            use lightforge_core::net::Http;
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let catalog = addon_origin(catalog.as_deref(), &dirs).map(Catalog::new);
+            let http = Http::new()?;
+
+            let found = browse::search(
+                &http,
+                catalog.as_ref(),
+                dirs.cache_dir(),
+                &query,
+                addons::flavor_of(&code),
+                limit,
+            )
+            .await;
+
+            println!("{:<14} {:<22} {:<40} DOWNLOADS", "PROVIDER", "ID", "NAME");
+            for listing in &found.listings {
+                println!(
+                    "{:<14} {:<22} {:<40} {}",
+                    listing.provider.as_str(),
+                    truncate(&listing.id, 22),
+                    truncate(&listing.name, 40),
+                    match listing.downloads {
+                        0 => "-".to_owned(),
+                        n => n.to_string(),
+                    }
+                );
+            }
+            println!("\n{} results", found.listings.len());
+            for problem in &found.problems {
+                eprintln!("  ! {problem}");
+            }
+        }
+        Command::AddonInstall { id, provider, product, catalog } => {
+            use lightforge_core::addons::{self, catalog::Catalog, catalog::Request, manage};
+            use lightforge_core::net::Http;
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let catalog = addon_origin(catalog.as_deref(), &dirs).map(Catalog::new);
+            let options = manage::Options {
+                flavor: addons::flavor_of(&code).to_owned(),
+                addons_dir: layout.addons_dir(&code),
+                ledger_path: manage::ledger_path(
+                    dirs.data_dir(),
+                    &layout.addons_dir(&code),
+                    &code,
+                ),
+                pinned: false,
+            };
+
+            let requests = vec![Request { provider, id, version_id: None }];
+            let http = Http::new()?;
+            let report =
+                manage::install_all(&http, catalog.as_ref(), &requests, &options, |event| {
+                    print_addon_event(&event)
+                })
+                .await?;
+            print_addon_report(&report);
+        }
         Command::AddonImport { token, product, catalog, pinned, dry_run } => {
             use lightforge_core::addons::{self, catalog::Catalog, manage};
             use lightforge_core::net::Http;
@@ -1356,7 +1442,7 @@ async fn main() -> Result<()> {
             let options = manage::Options {
                 flavor: addons::flavor_of(&code).to_owned(),
                 addons_dir: layout.addons_dir(&code),
-                ledger_path: manage::ledger_path(dirs.data_dir(), &code),
+                ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code),
                 pinned,
             };
             println!("addons dir      {}", options.addons_dir.display());
@@ -1407,7 +1493,7 @@ async fn main() -> Result<()> {
             let options = manage::Options {
                 flavor: addons::flavor_of(&code).to_owned(),
                 addons_dir: layout.addons_dir(&code),
-                ledger_path: manage::ledger_path(dirs.data_dir(), &code),
+                ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code),
                 pinned: false,
             };
 
@@ -1426,7 +1512,7 @@ async fn main() -> Result<()> {
             let options = manage::Options {
                 flavor: addons::flavor_of(&code).to_owned(),
                 addons_dir: layout.addons_dir(&code),
-                ledger_path: manage::ledger_path(dirs.data_dir(), &code),
+                ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code),
                 pinned: false,
             };
 

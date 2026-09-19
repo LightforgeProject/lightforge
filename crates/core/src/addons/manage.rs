@@ -255,6 +255,72 @@ fn verify_md5(package: &[u8], expected: Option<&str>, name: &str) -> Result<(), 
     Ok(())
 }
 
+/// What an update check found for one tracked addon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateStatus {
+    pub provider: String,
+    pub id: String,
+    pub name: String,
+    /// File id currently installed.
+    pub installed: Option<String>,
+    /// Newest the provider offers, when it could be asked.
+    pub available: Option<String>,
+    /// Why there is no answer, if there isn't one.
+    pub problem: Option<String>,
+}
+
+impl UpdateStatus {
+    pub fn has_update(&self) -> bool {
+        match (&self.installed, &self.available) {
+            (Some(installed), Some(available)) => installed != available,
+            // Never installed-with-no-record vs unknown: without both sides
+            // this is "unknown", not "update available". Badging every addon
+            // as outdated because a provider is down would be worse than
+            // saying nothing.
+            _ => false,
+        }
+    }
+}
+
+/// Ask every provider what the tracked addons are at now, without installing.
+pub async fn check_updates(
+    http: &Http,
+    catalog: Option<&Catalog>,
+    options: &Options,
+) -> Result<Vec<UpdateStatus>, ManageError> {
+    let ledger = Ledger::load(&options.ledger_path)?;
+    let requests: Vec<Request> = ledger
+        .addons
+        .iter()
+        .map(|record| Request {
+            provider: record.provider.clone(),
+            id: record.id.clone(),
+            version_id: None,
+        })
+        .collect();
+    if requests.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let resolved = resolve_everywhere(http, catalog, &requests, &options.flavor).await?;
+
+    Ok(ledger
+        .addons
+        .iter()
+        .map(|record| {
+            let found = resolved.iter().find(|r| r.id == record.id);
+            UpdateStatus {
+                provider: record.provider.clone(),
+                id: record.id.clone(),
+                name: record.name.clone(),
+                installed: record.file_id.clone(),
+                available: found.and_then(|r| r.file_id.clone()),
+                problem: found.and_then(|r| r.unavailable_reason().or_else(|| r.note.clone())),
+            }
+        })
+        .collect())
+}
+
 /// Remove an addon Lightforge installed.
 pub fn remove(options: &Options, provider: &str, id: &str) -> Result<Vec<String>, ManageError> {
     let mut ledger = Ledger::load(&options.ledger_path)?;
@@ -282,9 +348,13 @@ pub fn unsupported(collection: &super::Collection) -> Vec<&super::Entry> {
         .collect()
 }
 
-/// The ledger path for a product under Lightforge's data directory.
-pub fn ledger_path(data_dir: &Path, code: &crate::product::ProductCode) -> PathBuf {
-    Ledger::path_for(data_dir, code)
+/// The ledger path for one install of a product.
+pub fn ledger_path(
+    data_dir: &Path,
+    addons_dir: &Path,
+    code: &crate::product::ProductCode,
+) -> PathBuf {
+    Ledger::path_for(data_dir, addons_dir, code)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -361,6 +431,25 @@ mod tests {
 
         let err = verify_md5(b"tampered", Some(&digest), "BigWigs").unwrap_err();
         assert!(matches!(err, ManageError::Checksum { .. }), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_remote_version_is_not_an_update() {
+        let status = |installed: Option<&str>, available: Option<&str>| UpdateStatus {
+            provider: "curse".into(),
+            id: "1".into(),
+            name: "Thing".into(),
+            installed: installed.map(str::to_owned),
+            available: available.map(str::to_owned),
+            problem: None,
+        };
+
+        assert!(status(Some("100"), Some("101")).has_update());
+        assert!(!status(Some("100"), Some("100")).has_update());
+        // Provider down, or an addon with no recorded version: unknown, and
+        // unknown must not render as "update available".
+        assert!(!status(Some("100"), None).has_update());
+        assert!(!status(None, Some("101")).has_update());
     }
 
     #[test]
