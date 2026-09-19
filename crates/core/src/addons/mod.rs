@@ -19,6 +19,14 @@
 //! is `Curse` rather than `curseforge`, its ids are strings, and every entry
 //! pins an exact `version_id` — a *file* id, not just a project.
 
+pub mod catalog;
+pub mod install;
+pub mod manage;
+
+pub use catalog::{Catalog, Origin, Resolved, Status};
+pub use install::{Ledger, Record};
+pub use manage::{Options as ManageOptions, Report};
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -240,6 +248,18 @@ fn same_name(a: &str, b: &str) -> bool {
             .to_lowercase()
     };
     normalise(a) == normalise(b)
+}
+
+/// The flavor name the addon proxy (and CurseForge behind it) uses for a
+/// product. Addon packages are published per flavor, not per product code.
+pub fn flavor_of(code: &ProductCode) -> &'static str {
+    match code {
+        ProductCode::Retail | ProductCode::Ptr | ProductCode::Beta => "retail",
+        ProductCode::Classic | ProductCode::ClassicPtr => "classic",
+        ProductCode::ClassicEra => "classic_era",
+        // An unknown or custom product is almost always a retail-line server.
+        ProductCode::Custom(_) => "retail",
+    }
 }
 
 /// A parsed `.toc` file: the `## Key: value` header block.

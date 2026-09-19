@@ -229,6 +229,38 @@ enum Command {
         #[arg(long)]
         token: Option<String>,
     },
+    /// Install or update addons from a WoWUp import token.
+    AddonImport {
+        /// The token, or `@path` to read it from a file.
+        token: String,
+        #[arg(long, default_value = "wow")]
+        product: String,
+        /// Catalog base URL, or a fixture directory. Defaults to config.
+        #[arg(long)]
+        catalog: Option<String>,
+        /// Install the exact files the export pinned, rather than the newest.
+        #[arg(long)]
+        pinned: bool,
+        /// Resolve and report without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Update every addon Lightforge installed for a product.
+    AddonUpdate {
+        #[arg(long, default_value = "wow")]
+        product: String,
+        #[arg(long)]
+        catalog: Option<String>,
+    },
+    /// Remove an addon Lightforge installed.
+    AddonRemove {
+        /// Provider id, e.g. `2382`.
+        id: String,
+        #[arg(long, default_value = "curse")]
+        provider: String,
+        #[arg(long, default_value = "wow")]
+        product: String,
+    },
     /// Decode a WoWUp import token and print what it contains.
     AddonToken {
         /// The token, or `@path` to read it from a file.
@@ -1294,6 +1326,104 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        Command::AddonImport { token, product, catalog, pinned, dry_run } => {
+            use lightforge_core::addons::{self, catalog::Catalog, manage};
+            use lightforge_core::net::Http;
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let collection = addons::Collection::parse(&read_token(&token)?)?;
+
+            println!("collection      {}", collection.collection_name);
+            println!("exported from   {}", collection.client_type);
+            if let Some(exported) = collection.product() {
+                if exported != code {
+                    println!(
+                        "NOTE            exported from {} but installing into {}",
+                        exported.as_str(),
+                        code.as_str()
+                    );
+                }
+            }
+
+            let requests = manage::requests_from(&collection);
+            for entry in manage::unsupported(&collection) {
+                println!("skipping        {} ({})", entry.name, entry.provider);
+            }
+
+            let catalog = Catalog::new(addon_origin(catalog.as_deref(), &dirs)?);
+            let options = manage::Options {
+                flavor: addons::flavor_of(&code).to_owned(),
+                addons_dir: layout.addons_dir(&code),
+                ledger_path: manage::ledger_path(dirs.data_dir(), &code),
+                pinned,
+            };
+            println!("addons dir      {}", options.addons_dir.display());
+            println!("flavor          {}\n", options.flavor);
+
+            let http = Http::new()?;
+            if dry_run {
+                let resolved = catalog.resolve(&http, &options.flavor, &requests).await?;
+                for entry in &resolved {
+                    println!(
+                        "{:<44} {}",
+                        truncate(entry.name.as_deref().unwrap_or(&entry.id), 44),
+                        entry.unavailable_reason().unwrap_or_else(|| format!(
+                            "{} ({} bytes)",
+                            entry.file_name.as_deref().unwrap_or("-"),
+                            entry.file_length.unwrap_or(0)
+                        ))
+                    );
+                }
+                println!("\n--dry-run: nothing written");
+                return Ok(());
+            }
+
+            let report = manage::install_all(&http, &catalog, &requests, &options, |event| {
+                print_addon_event(&event)
+            })
+            .await?;
+            print_addon_report(&report);
+        }
+        Command::AddonUpdate { product, catalog } => {
+            use lightforge_core::addons::{self, catalog::Catalog, manage};
+            use lightforge_core::net::Http;
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let catalog = Catalog::new(addon_origin(catalog.as_deref(), &dirs)?);
+            let options = manage::Options {
+                flavor: addons::flavor_of(&code).to_owned(),
+                addons_dir: layout.addons_dir(&code),
+                ledger_path: manage::ledger_path(dirs.data_dir(), &code),
+                pinned: false,
+            };
+
+            let http = Http::new()?;
+            let report = manage::update_all(&http, &catalog, &options, |event| {
+                print_addon_event(&event)
+            })
+            .await?;
+            print_addon_report(&report);
+        }
+        Command::AddonRemove { id, provider, product } => {
+            use lightforge_core::addons::{self, manage};
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let options = manage::Options {
+                flavor: addons::flavor_of(&code).to_owned(),
+                addons_dir: layout.addons_dir(&code),
+                ledger_path: manage::ledger_path(dirs.data_dir(), &code),
+                pinned: false,
+            };
+
+            let removed = manage::remove(&options, &provider, &id)?;
+            match removed.is_empty() {
+                true => println!("nothing to delete — the folders were already gone"),
+                false => println!("removed         {}", removed.join(", ")),
+            }
+        }
         Command::AddonToken { token } => {
             use lightforge_core::addons;
 
@@ -1873,6 +2003,56 @@ fn read_token(token: &str) -> Result<String> {
             .map(|s| s.trim().to_owned()),
         None => Ok(token.trim().to_owned()),
     }
+}
+
+/// Where the addon catalog lives: the flag, else config, else the public
+/// endpoint. A path without a scheme is a fixture directory.
+fn addon_origin(
+    flag: Option<&str>,
+    dirs: &AppDirs,
+) -> Result<lightforge_core::addons::catalog::Origin> {
+    use lightforge_core::addons::catalog::Origin;
+    use lightforge_core::config::Config;
+
+    let configured = Config::load_or_default(&dirs.config_file())
+        .ok()
+        .and_then(|c| c.addon_catalog);
+    let source = flag
+        .map(str::to_owned)
+        .or(configured)
+        .context("no addon catalog configured — pass --catalog or set addon_catalog")?;
+
+    Ok(match source.contains("://") {
+        true => Origin::Http(source),
+        false => Origin::Dir(PathBuf::from(source)),
+    })
+}
+
+fn print_addon_event(event: &lightforge_core::addons::manage::Event) {
+    use lightforge_core::addons::manage::Event;
+    match event {
+        Event::Resolving { count } => println!("resolving       {count} addons"),
+        Event::Resolved { ok, unavailable } => {
+            println!("resolved        {ok} available, {unavailable} not\n")
+        }
+        Event::Downloading { name } => println!("  fetching {name}"),
+        Event::Installed { name, folders } => {
+            println!("ok  {:<44} {}", truncate(name, 44), folders.join(", "))
+        }
+        Event::UpToDate { name } => println!("==  {:<44} up to date", truncate(name, 44)),
+        Event::Unavailable { name, reason } => {
+            println!("--  {:<44} {reason}", truncate(name, 44))
+        }
+    }
+}
+
+fn print_addon_report(report: &lightforge_core::addons::manage::Report) {
+    println!(
+        "\ninstalled       {}\nup to date      {}\nunavailable     {}",
+        report.installed.len(),
+        report.up_to_date.len(),
+        report.unavailable.len()
+    );
 }
 
 fn truncate(text: &str, width: usize) -> String {

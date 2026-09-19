@@ -125,6 +125,58 @@ impl Http {
         Ok(Some(body.to_vec()))
     }
 
+    /// Fetch and deserialize JSON, without caching.
+    pub async fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+    ) -> Result<T, NetError> {
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
+
+        let bytes = check_status(url, response)?
+            .bytes()
+            .await
+            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
+
+        serde_json::from_slice(&bytes).map_err(|e| NetError::Decode {
+            url: url.to_owned(),
+            source: e,
+        })
+    }
+
+    /// POST JSON and deserialize the reply.
+    ///
+    /// The addon catalog resolves a whole import list in one request, which is
+    /// a body rather than a query string — twenty round trips to answer one
+    /// paste is not a design.
+    pub async fn post_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+        body: &B,
+    ) -> Result<T, NetError> {
+        let response = self
+            .client
+            .post(url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
+
+        let bytes = check_status(url, response)?
+            .bytes()
+            .await
+            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
+
+        serde_json::from_slice(&bytes).map_err(|e| NetError::Decode {
+            url: url.to_owned(),
+            source: e,
+        })
+    }
+
     /// Fetch a small document as text, without caching.
     pub async fn get_text(&self, url: &str) -> Result<String, NetError> {
         let response = self

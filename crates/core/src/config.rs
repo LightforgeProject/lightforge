@@ -30,6 +30,9 @@ pub struct Config {
     /// directory while the Tuxcore endpoint is not live yet. `None` means the
     /// UI uses its built-in art and never touches the network for theming.
     pub assets_source: Option<String>,
+    /// Base URL of the addon catalog proxy, or a local fixture directory.
+    /// `None` disables addon management rather than failing at use.
+    pub addon_catalog: Option<String>,
     /// Every product Lightforge manages, official and custom alike.
     pub products: Vec<Product>,
 }
@@ -42,6 +45,7 @@ impl Default for Config {
             battle_net_proton: ProtonPin::default(),
             default_proton: ProtonPin::default(),
             assets_source: None,
+            addon_catalog: None,
             products: Vec::new(),
         }
     }
