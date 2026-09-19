@@ -73,6 +73,14 @@ pub async fn theme(pipeline: Option<Pipeline>, code: ProductCode) -> Option<Bran
 pub struct TransferState {
     pub stage: String,
     pub progress: Progress,
+    /// Bytes of this product already in the store when the run started.
+    ///
+    /// Without it the bar restarts at zero on every resume: `progress` counts
+    /// only what *this* run stored, and a resumed plan excludes everything
+    /// already on disk. The download was never starting over; the readout was.
+    pub baseline: u64,
+    /// Bytes the whole product needs, present ones included.
+    pub product_bytes: u64,
 }
 
 /// A live download: what to read, and how to stop it.
@@ -134,21 +142,37 @@ pub async fn download(
                 // worth publishing, progress is not.
                 let mut last = Instant::now() - Duration::from_secs(1);
                 let mut stage = String::from("preparing");
+                // The product's full size, and how much of it the plan still
+                // has to fetch — the difference is what the store already had.
+                let mut product_bytes = 0u64;
+                let mut baseline = 0u64;
+
                 let on_event = move |event: Event| {
-                    let state = match &event {
+                    let progress = match &event {
                         Event::Progress(p) => {
                             if last.elapsed() < Duration::from_millis(50) {
                                 return;
                             }
                             last = Instant::now();
-                            TransferState { stage: stage.clone(), progress: *p }
+                            *p
                         }
                         other => {
+                            if let Event::Wanted { bytes, .. } = other {
+                                product_bytes = *bytes;
+                            }
+                            if let Event::Planned { bytes, .. } = other {
+                                baseline = product_bytes.saturating_sub(*bytes);
+                            }
                             stage = describe(other);
-                            TransferState { stage: stage.clone(), progress: Progress::default() }
+                            Progress::default()
                         }
                     };
-                    let _ = tx.send(state);
+                    let _ = tx.send(TransferState {
+                        stage: stage.clone(),
+                        progress,
+                        baseline,
+                        product_bytes,
+                    });
                 };
 
                 install::run(&http, &dest, &code, &options, &cancel, on_event)

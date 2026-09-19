@@ -198,12 +198,12 @@ impl Lightforge {
         state::decide(&self.local, self.remote.as_ref(), transfer)
     }
 
+    /// Progress against the whole product, not against this run.
+    ///
+    /// A resumed run plans only what is missing, so run-relative numbers read
+    /// as "starting over" every time a download is paused and picked up again.
     fn live_progress(&self) -> state::Progress {
-        state::Progress {
-            downloaded_bytes: self.sample.progress.bytes_stored,
-            total_bytes: self.sample.progress.bytes_total,
-            bytes_per_second: self.rate.per_second,
-        }
+        product_progress(&self.sample, self.rate.per_second)
     }
 
     fn start_download(&mut self) -> Task<Message> {
@@ -307,6 +307,8 @@ impl Lightforge {
                     return Task::none();
                 };
                 self.sample = transfer.rx.borrow().clone();
+                // Rate is measured on what this run has stored; the baseline is
+                // a constant offset and would only mute the first sample.
                 self.rate.sample(self.sample.progress.bytes_stored);
                 Task::none()
             }
@@ -566,6 +568,19 @@ impl Lightforge {
     }
 }
 
+/// Map a transfer sample onto the whole product.
+fn product_progress(sample: &TransferState, bytes_per_second: u64) -> state::Progress {
+    let (downloaded, total) = match sample.product_bytes {
+        // Before the plan is known, run-relative is all there is.
+        0 => (sample.progress.bytes_stored, sample.progress.bytes_total),
+        product => (
+            (sample.baseline + sample.progress.bytes_stored).min(product),
+            product,
+        ),
+    };
+    state::Progress { downloaded_bytes: downloaded, total_bytes: total, bytes_per_second }
+}
+
 /// Progress carried by the two transfer states, if this is one of them.
 fn progress_of(action: &ActionState) -> Option<state::Progress> {
     match action {
@@ -645,6 +660,42 @@ fn eta_of(progress: state::Progress) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_resumed_run_shows_product_progress_not_run_progress() {
+        // The symptom this guards: pause at 3 GiB, resume, and the bar reads
+        // 0.00 GiB because the new plan excludes what is already on disk.
+        let gib = 1024u64 * 1024 * 1024;
+        let mut sample = TransferState {
+            product_bytes: 75 * gib,
+            baseline: 3 * gib,
+            ..TransferState::default()
+        };
+
+        // Nothing stored yet this run, but 3 GiB are already there.
+        let resumed = product_progress(&sample, 0);
+        assert_eq!(resumed.downloaded_bytes, 3 * gib);
+        assert_eq!(resumed.total_bytes, 75 * gib);
+        assert!(resumed.fraction() > 0.0);
+
+        // A run byte moves the product readout by one byte.
+        sample.progress.bytes_stored = gib;
+        assert_eq!(product_progress(&sample, 0).downloaded_bytes, 4 * gib);
+    }
+
+    #[test]
+    fn progress_stays_run_relative_until_the_plan_is_known() {
+        let sample = TransferState {
+            progress: lightforge_core::tact::download::Progress {
+                bytes_stored: 500,
+                bytes_total: 1000,
+                ..Default::default()
+            },
+            ..TransferState::default()
+        };
+        let p = product_progress(&sample, 0);
+        assert_eq!((p.downloaded_bytes, p.total_bytes), (500, 1000));
+    }
 
     #[test]
     fn the_rate_meter_smooths_rather_than_tracking_one_tick() {
