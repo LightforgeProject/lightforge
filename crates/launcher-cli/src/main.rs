@@ -213,6 +213,23 @@ enum Command {
         #[arg(long, default_value_t = 4096)]
         checkpoint_mib: u64,
     },
+    /// Probe Blizzard's version service for which product codes are live.
+    ///
+    /// There is no listing endpoint any more, so this asks about a built-in
+    /// list of candidate codes and reports what answers.
+    Products {
+        #[arg(long, default_value = "eu")]
+        region: String,
+        /// Extra codes to probe beyond the built-in list.
+        #[arg(long = "code", value_name = "CODE")]
+        codes: Vec<String>,
+        /// Show codes that answered 404 as well.
+        #[arg(long)]
+        all: bool,
+        /// Simultaneous probes.
+        #[arg(long, default_value_t = 8)]
+        concurrency: usize,
+    },
     /// Resolve a product's themed branding through the asset pipeline.
     Assets {
         /// Product code to theme, e.g. `wow`.
@@ -1373,6 +1390,44 @@ async fn main() -> Result<()> {
                     if want == bytes { "identical" } else { "DIFFERS" }
                 );
             }
+        }
+        Command::Products { region, codes, all, concurrency } => {
+            use lightforge_core::net::Http;
+            use lightforge_core::tact::version::{self, Region, KNOWN_PRODUCTS};
+
+            let region: Region = region.parse().context("parsing --region")?;
+
+            let mut candidates: Vec<&str> = KNOWN_PRODUCTS.iter().map(|(c, _)| *c).collect();
+            for code in &codes {
+                if !candidates.contains(&code.as_str()) {
+                    candidates.push(code);
+                }
+            }
+
+            let http = Http::new()?;
+            let found = version::probe_all(&http, region, &candidates, concurrency).await;
+
+            println!("{:<22} {:<24} {:<18} BUILD", "CODE", "LABEL", "VERSION");
+            for status in &found {
+                match &status.version {
+                    Some(v) => println!(
+                        "{:<22} {:<24} {:<18} {}",
+                        status.code,
+                        status.label.as_deref().unwrap_or("-"),
+                        v.versions_name,
+                        v.build_id
+                    ),
+                    None if all => println!(
+                        "{:<22} {:<24} {:<18} not served",
+                        status.code,
+                        status.label.as_deref().unwrap_or("-"),
+                        "-"
+                    ),
+                    None => {}
+                }
+            }
+            let live = found.iter().filter(|s| s.exists()).count();
+            println!("\n{live} of {} probed codes are live in {}", found.len(), region.as_str());
         }
         Command::Assets { product, source } => {
             use lightforge_core::assets::{Origin, Pipeline, Store};

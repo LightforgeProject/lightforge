@@ -149,6 +149,109 @@ pub async fn cdns(http: &Http, region: Region, product: &str) -> Result<Vec<Cdn>
         .collect()
 }
 
+/// A product code Lightforge knows by name, and the label the UI prints for it.
+///
+/// Stable labels, never expansion names: `wow_classic` is "Classic" whether it
+/// is currently serving Mists of Pandaria or whatever follows it.
+pub const KNOWN_PRODUCTS: &[(&str, &str)] = &[
+    ("wow", "Retail"),
+    ("wowt", "Retail PTR"),
+    ("wowxptr", "Retail PTR 2"),
+    ("wow_beta", "Retail Beta"),
+    ("wow_classic", "Classic"),
+    ("wow_classic_ptr", "Classic PTR"),
+    ("wow_classic_beta", "Classic Beta"),
+    ("wow_classic_era", "Classic Era"),
+    ("wow_classic_era_ptr", "Classic Era PTR"),
+    ("wow_anniversary", "Anniversary"),
+    ("osi", "Diablo II: Resurrected"),
+    ("d3", "Diablo III"),
+    ("fenris", "Diablo IV"),
+    ("anbs", "Diablo Immortal"),
+    ("hsb", "Hearthstone"),
+    ("w1r", "Warcraft I Remastered"),
+    ("w2r", "Warcraft II Remastered"),
+    ("w3", "Warcraft III: Reforged"),
+    ("s1", "StarCraft Remastered"),
+    ("s2", "StarCraft II"),
+    ("pro", "Overwatch 2"),
+];
+
+/// What a probe found out about one product code.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProductStatus {
+    pub code: String,
+    pub label: Option<String>,
+    /// `None` when the service has no such product (404).
+    pub version: Option<Version>,
+}
+
+impl ProductStatus {
+    pub fn exists(&self) -> bool {
+        self.version.is_some()
+    }
+}
+
+/// Ask whether one product code is live, and what it currently ships.
+///
+/// `Ok(None)` is the service saying there is no such product, which is an
+/// answer rather than a failure; anything else is a real error.
+///
+/// There is no product *listing* to ask for. Blizzard's `summary` endpoint is
+/// gone from this host (404), and port 1119 no longer speaks Ribbit at all —
+/// it answers HTTP 400 to both protocol versions, which is the same wall
+/// documented at the top of this module. So enumeration is probing a list of
+/// candidate codes, and [`KNOWN_PRODUCTS`] is that list.
+pub async fn probe(
+    http: &Http,
+    region: Region,
+    product: &str,
+) -> Result<Option<Version>, VersionError> {
+    match versions(http, region, product).await {
+        Ok(rows) => Ok(for_region(&rows, region, |v| &v.region).cloned()),
+        Err(VersionError::Net(NetError::Status { status: 404, .. })) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Probe many codes at once, preserving the order given.
+///
+/// A code that errors outright (rather than answering 404) is reported as
+/// absent with its error dropped: this is a discovery tool, and one flaky
+/// request should not take the whole table down.
+pub async fn probe_all(
+    http: &Http,
+    region: Region,
+    codes: &[&str],
+    concurrency: usize,
+) -> Vec<ProductStatus> {
+    use futures_util::StreamExt;
+
+    let label = |code: &str| {
+        KNOWN_PRODUCTS
+            .iter()
+            .find(|(c, _)| *c == code)
+            .map(|(_, l)| (*l).to_owned())
+    };
+
+    let mut found: Vec<ProductStatus> = futures_util::stream::iter(codes.iter().copied())
+        .map(|code| async move {
+            ProductStatus {
+                code: code.to_owned(),
+                label: label(code),
+                version: probe(http, region, code).await.ok().flatten(),
+            }
+        })
+        .buffer_unordered(concurrency.max(1))
+        .collect()
+        .await;
+
+    // `buffer_unordered` yields as results arrive; the caller asked for a list
+    // in the order it gave.
+    found.sort_by_key(|s| codes.iter().position(|c| *c == s.code).unwrap_or(usize::MAX));
+    found
+}
+
 /// Pick one region's row out of a table, falling back to the first.
 ///
 /// The fallback matters: every region currently reports the same build, and a
@@ -315,6 +418,28 @@ mod tests {
     /// Captured verbatim from `https://eu.version.battle.net/wow/versions`,
     /// including the `## seqn` line and the lower-case `String` type that the
     /// service really does emit for one column.
+    #[test]
+    fn known_product_codes_are_unique_and_labelled() {
+        let mut codes: Vec<&str> = KNOWN_PRODUCTS.iter().map(|(c, _)| *c).collect();
+        let total = codes.len();
+        codes.sort_unstable();
+        codes.dedup();
+        assert_eq!(codes.len(), total, "a duplicate code would probe twice and label once");
+        assert!(KNOWN_PRODUCTS.iter().all(|(_, label)| !label.is_empty()));
+    }
+
+    #[test]
+    fn labels_name_the_stream_not_the_expansion() {
+        // The whole point: wow_classic stays "Classic" when the progression
+        // expansion rolls over, so nothing here may name one.
+        let banned = ["Midnight", "Pandaria", "Mists", "Burning Crusade", "Wrath", "Cataclysm"];
+        for (code, label) in KNOWN_PRODUCTS {
+            for word in banned {
+                assert!(!label.contains(word), "{code} is labelled with an expansion: {label}");
+            }
+        }
+    }
+
     const VERSIONS: &str = "\
 Region!STRING:0|BuildConfig!HEX:16|CDNConfig!HEX:16|KeyRing!HEX:16|BuildId!DEC:4|VersionsName!String:0|ProductConfig!HEX:16
 ## seqn = 4019651
