@@ -1110,10 +1110,14 @@ impl Lightforge {
         self.page(
             "Addons",
             Some(format!(
-                "{} · {} installed, {} managed by Lightforge",
+                "{} · {} installed, {} managed by Lightforge{}",
                 self.selected.label,
                 self.addons.rows.len(),
-                self.addons.managed
+                self.addons.managed,
+                match self.addons.stale {
+                    0 => String::new(),
+                    n => format!(" · {n} recorded but missing from disk"),
+                }
             )),
             body.into(),
         )

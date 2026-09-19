@@ -1,6 +1,6 @@
-9/19 01:32:59.911  vendor: AuthenticAMD
-9/19 01:32:59.911  branding: AMD Ryzen 7 9800X3D 8-Core Processor           
-9/19 01:32:59.911  features: lahf64 cmpxchg16b sse sse2 sse3 ssse3 sse41 sse42 avx avx2 avx512f aesni clmul sha rdrand 
-9/19 01:32:59.911  sockets: 1
-9/19 01:32:59.911  cores: 8
-9/19 01:32:59.911  threads: 16
+9/19 16:50:44.869  vendor: AuthenticAMD
+9/19 16:50:44.869  branding: AMD Ryzen 7 9800X3D 8-Core Processor           
+9/19 16:50:44.869  features: lahf64 cmpxchg16b sse sse2 sse3 ssse3 sse41 sse42 avx avx2 avx512f aesni clmul sha rdrand 
+9/19 16:50:44.869  sockets: 1
+9/19 16:50:44.869  cores: 8
+9/19 16:50:44.869  threads: 16

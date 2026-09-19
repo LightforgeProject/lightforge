@@ -37,7 +37,12 @@ pub struct Managed {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Listing {
     pub rows: Vec<Row>,
+    /// Ledger entries whose folders are actually on disk.
     pub managed: usize,
+    /// Ledger entries whose folders are gone — deleted by hand, or the game
+    /// reinstalled. Counted separately because claiming to manage something
+    /// that is not there is how "0 installed · 3 managed" happens.
+    pub stale: usize,
     pub dir: PathBuf,
 }
 
@@ -52,8 +57,17 @@ pub async fn list(layout: Layout, code: ProductCode) -> Listing {
             .and_then(|path| Ledger::load(&path).ok())
             .unwrap_or_default();
 
+        let present: std::collections::BTreeSet<&str> =
+            installed.iter().map(|a| a.folder.as_str()).collect();
+        let managed = ledger
+            .addons
+            .iter()
+            .filter(|record| record.folders.iter().any(|f| present.contains(f.as_str())))
+            .count();
+
         Listing {
-            managed: ledger.addons.len(),
+            managed,
+            stale: ledger.addons.len() - managed,
             rows: rows_from(&installed, &ledger),
             dir,
         }
@@ -156,6 +170,29 @@ mod tests {
         // put it there and must not delete it.
         assert!(rows[0].managed.is_none());
         assert!(rows[0].child_of.is_none());
+    }
+
+    #[test]
+    fn a_stale_ledger_entry_is_not_counted_as_managed() {
+        // Seen for real: the game folder was deleted by hand and the screen
+        // then read "0 installed · 1 managed", which is a contradiction.
+        let mut ledger = Ledger::default();
+        ledger.record(Record {
+            provider: "wowinterface".into(),
+            id: "5086".into(),
+            name: "BigWigs".into(),
+            file_id: None,
+            folders: vec!["BigWigs".into()],
+        });
+
+        let present: std::collections::BTreeSet<&str> = Default::default();
+        let managed = ledger
+            .addons
+            .iter()
+            .filter(|r| r.folders.iter().any(|f| present.contains(f.as_str())))
+            .count();
+        assert_eq!(managed, 0);
+        assert_eq!(ledger.addons.len() - managed, 1, "it is stale, not managed");
     }
 
     #[test]

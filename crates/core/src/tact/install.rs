@@ -387,13 +387,20 @@ pub async fn execute(
         )
         .await?;
         on_event(Event::Extracted { files: report.written.len(), bytes: report.bytes() });
+        install_complete = report.is_complete();
 
         // Agent writes this and the install manifest does not list it; without
         // it the client cannot tell which product it is.
-        let flavor_dir = dest.join(&options.flavor);
-        download::write_flavor_info(&flavor_dir, code)
-            .map_err(|source| InstallError::Io { path: flavor_dir, source })?;
-        install_complete = report.is_complete();
+        //
+        // Only on a complete extraction, though: a `.flavor.info` sitting in a
+        // directory with no game in it claims a product that is not installed.
+        // A cancelled run used to leave exactly that behind, and Battle.net
+        // scanning the install then sees a flavor it cannot account for.
+        if install_complete {
+            let flavor_dir = dest.join(&options.flavor);
+            download::write_flavor_info(&flavor_dir, code)
+                .map_err(|source| InstallError::Io { path: flavor_dir, source })?;
+        }
     }
 
     let mut reasons = Vec::new();
