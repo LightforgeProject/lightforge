@@ -218,6 +218,22 @@ enum Command {
         #[arg(long)]
         cancel_after: Option<u64>,
     },
+    /// List the addons installed for a product.
+    Addons {
+        #[arg(long, default_value = "wow")]
+        product: String,
+        /// Read this AddOns directory instead of the product's own.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Reconcile against a WoWUp import token (or `@file`).
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Decode a WoWUp import token and print what it contains.
+    AddonToken {
+        /// The token, or `@path` to read it from a file.
+        token: String,
+    },
     /// Report or run first-run provisioning: Proton, prefix, Battle.net.
     Setup {
         /// Only report what is missing; provision nothing.
@@ -1224,6 +1240,89 @@ async fn main() -> Result<()> {
                 );
             }
         }
+        Command::Addons { product, path, token } => {
+            use lightforge_core::addons;
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let dir = path.unwrap_or_else(|| layout.addons_dir(&code));
+            let installed = addons::scan(&dir)
+                .with_context(|| format!("reading {}", dir.display()))?;
+
+            println!("addons dir      {}", dir.display());
+            println!("installed       {}\n", installed.len());
+
+            for addon in &installed {
+                let ids: Vec<String> = addon
+                    .ids
+                    .iter()
+                    .map(|(provider, id)| format!("{}:{id}", provider.as_str()))
+                    .collect();
+                println!(
+                    "{:<34} {:<18} {}",
+                    addon.folder,
+                    addon.version.as_deref().unwrap_or("-"),
+                    ids.join(" ")
+                );
+            }
+
+            if let Some(token) = token {
+                let collection = addons::Collection::parse(&read_token(&token)?)?;
+                println!(
+                    "\ncollection      {} ({} addons, exported from {})",
+                    collection.collection_name,
+                    collection.addons.len(),
+                    collection.client_type
+                );
+
+                let report = collection.reconcile(&installed);
+                let have = report.iter().filter(|r| r.is_installed()).count();
+                println!("already present {have} of {}\n", report.len());
+                for item in &report {
+                    println!(
+                        "{} {:<44} {:<14} {:<22} {}",
+                        if item.is_installed() { "ok " } else { "-- " },
+                        truncate(&item.entry.name, 44),
+                        format!("{}:{}", item.entry.provider().as_str(), item.entry.id),
+                        item.version.as_deref().unwrap_or("not installed"),
+                        // How it matched matters: an id match is certain, a
+                        // name match is a guess and should look like one.
+                        item.matched_by.map_or(String::new(), |how| match how.is_certain() {
+                            true => format!("by {}", how.as_str()),
+                            false => format!("by {} (guess)", how.as_str()),
+                        })
+                    );
+                }
+            }
+        }
+        Command::AddonToken { token } => {
+            use lightforge_core::addons;
+
+            let collection = addons::Collection::parse(&read_token(&token)?)?;
+            println!("collection      {}", collection.collection_name);
+            println!("client type     {}", collection.client_type);
+            println!(
+                "product         {}",
+                collection.product().map_or("unrecognised".to_owned(), |p| p.as_str().to_owned())
+            );
+            println!("addons          {}\n", collection.addons.len());
+
+            for (provider, entries) in collection.by_provider() {
+                println!(
+                    "{} — {} addon(s){}",
+                    provider.as_str(),
+                    entries.len(),
+                    if provider.is_supported() { "" } else { "  [not resolvable]" }
+                );
+                for entry in entries {
+                    println!(
+                        "  {:<46} id {:<10} file {}",
+                        truncate(&entry.name, 46),
+                        entry.id,
+                        entry.version_id.as_deref().unwrap_or("-")
+                    );
+                }
+            }
+        }
         Command::Setup { status, proton } => {
             use lightforge_core::config::Config;
             use lightforge_core::setup::{self, Event};
@@ -1763,6 +1862,24 @@ fn proton_runner(
         ProtonRunner::steam_client_path(steam.as_ref(), &dirs),
     );
     Ok((runner, build.clone()))
+}
+
+/// A token given inline, or `@path` to read it from a file — export strings
+/// are long enough that pasting one into a shell is its own hazard.
+fn read_token(token: &str) -> Result<String> {
+    match token.strip_prefix('@') {
+        Some(path) => std::fs::read_to_string(path)
+            .with_context(|| format!("reading {path}"))
+            .map(|s| s.trim().to_owned()),
+        None => Ok(token.trim().to_owned()),
+    }
+}
+
+fn truncate(text: &str, width: usize) -> String {
+    match text.chars().count() > width {
+        true => format!("{}…", text.chars().take(width - 1).collect::<String>()),
+        false => text.to_owned(),
+    }
 }
 
 /// One-line rendering of the symlink's state for the CLI.
