@@ -17,13 +17,15 @@
 //!   pre-flight does before launching Battle.net, which is why the same guard
 //!   serves both.
 
+mod provision;
 mod tasks;
 mod theme;
 
 use std::time::{Duration, Instant};
 
 use iced::widget::{
-    button, column, container, image, pick_list, progress_bar, row, stack, text, Space,
+    button, column, container, horizontal_rule, image, pick_list, progress_bar, row, scrollable,
+    stack, text, text_input, Space,
 };
 use iced::{Alignment, ContentFit, Element, Length, Subscription, Task};
 
@@ -33,6 +35,8 @@ use lightforge_core::debug::DebugInfo;
 use lightforge_core::paths::{AppDirs, Layout};
 use lightforge_core::product::ProductCode;
 use lightforge_core::state::{self, ActionState, Local};
+use lightforge_core::proton::ProtonPin;
+use lightforge_core::setup::Status as SetupStatus;
 use lightforge_core::tact::download::Cancel;
 use lightforge_core::tact::version::Region;
 
@@ -68,6 +72,38 @@ enum Message {
     ManageSubscription,
     OpenFiles,
     CopyDebug,
+
+    Show(Screen),
+    SetupStatus(Option<Box<SetupStatus>>),
+    RunSetup,
+    SetupFinished(Result<Box<SetupStatus>, String>),
+    PinDefaultProton(ProtonChoice),
+    PinProductProton(ProtonChoice),
+    AssetsSourceChanged(String),
+    SaveSettings,
+    CheckProton,
+    ProtonChecked(Result<Option<String>, String>),
+}
+
+/// Which screen is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Screen {
+    Dashboard,
+    Setup,
+    Settings,
+}
+
+/// A Proton build in a picker, or the "follow the default" entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProtonChoice(Option<String>);
+
+impl std::fmt::Display for ProtonChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            Some(version) => f.write_str(version),
+            None => f.write_str("Newest installed"),
+        }
+    }
 }
 
 /// The parts of a finished run the UI actually shows. `install::Summary` is not
@@ -96,6 +132,8 @@ impl std::fmt::Display for Choice {
 
 struct Lightforge {
     layout: Layout,
+    dirs: Option<AppDirs>,
+    config: Config,
     region: Region,
     pipeline: Option<Pipeline>,
     choices: Vec<Choice>,
@@ -119,16 +157,27 @@ struct Lightforge {
     /// Set when the window has asked to close and a transfer is still coming
     /// to rest; the window closes once it has.
     closing: Option<iced::window::Id>,
+
+    screen: Screen,
+    setup: Option<SetupStatus>,
+    /// Live setup progress, sampled off the same tick as a download.
+    setup_rx: Option<tokio::sync::watch::Receiver<provision::Progress>>,
+    setup_sample: provision::Progress,
+    setup_running: bool,
+    /// Editable copy of `assets_source`, committed on save.
+    assets_input: String,
+    proton_notice: Option<String>,
 }
 
 impl Lightforge {
     fn new() -> (Self, Task<Message>) {
-        let layout = Layout::default_for_user().unwrap_or_else(|_| Layout::with_root("."));
         let dirs = AppDirs::discover().ok();
         let config = dirs
             .as_ref()
             .and_then(|d| Config::load_or_default(&d.config_file()).ok())
             .unwrap_or_else(Config::with_default_products);
+        // Honours `blizzard_root`, the same way the CLI does.
+        let layout = config.layout().unwrap_or_else(|_| Layout::with_root("."));
 
         let choices: Vec<Choice> = config
             .products
@@ -149,8 +198,12 @@ impl Lightforge {
             _ => None,
         };
 
+
+        let assets_input = config.assets_source.clone().unwrap_or_default();
         let app = Self {
             layout,
+            dirs,
+            config,
             region: Region::default(),
             pipeline,
             choices,
@@ -167,8 +220,23 @@ impl Lightforge {
             status: "checking…".to_owned(),
             error: None,
             closing: None,
+            screen: Screen::Dashboard,
+            setup: None,
+            setup_rx: None,
+            setup_sample: provision::Progress::default(),
+            setup_running: false,
+            assets_input,
+            proton_notice: None,
         };
-        let task = app.reload(selected.code);
+
+        // What is provisioned decides which screen opens: a machine that has
+        // never run the CLI cannot install or launch anything, and a dashboard
+        // whose only working button is an error is worse than saying so.
+        let probe = Task::perform(
+            provision::status(app.layout.clone(), app.config.clone()),
+            |status| Message::SetupStatus(status.map(Box::new)),
+        );
+        let task = Task::batch([app.reload(selected.code), probe]);
         (app, task)
     }
 
@@ -303,6 +371,9 @@ impl Lightforge {
             },
 
             Message::Tick => {
+                if let Some(rx) = &self.setup_rx {
+                    self.setup_sample = rx.borrow().clone();
+                }
                 let Some(transfer) = &self.transfer else {
                     return Task::none();
                 };
@@ -402,6 +473,129 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::Show(screen) => {
+                self.screen = screen;
+                self.error = None;
+                Task::none()
+            }
+
+            Message::SetupStatus(status) => {
+                let status = status.map(|boxed| *boxed);
+                // Open on setup when the machine cannot launch anything yet,
+                // but never yank the user out of a screen they chose.
+                if let Some(status) = &status {
+                    if !status.is_ready() && self.screen == Screen::Dashboard && !self.setup_running
+                    {
+                        self.screen = Screen::Setup;
+                    }
+                }
+                self.setup = status;
+                Task::none()
+            }
+
+            Message::RunSetup => {
+                let (tx, rx) = tokio::sync::watch::channel(provision::Progress::default());
+                self.setup_rx = Some(rx);
+                self.setup_sample = provision::Progress::default();
+                self.setup_running = true;
+                self.error = None;
+
+                Task::perform(
+                    provision::run(
+                        self.layout.clone(),
+                        self.config.clone(),
+                        self.config.default_proton.version().map(str::to_owned),
+                        tx,
+                    ),
+                    |result| Message::SetupFinished(result.map(Box::new)),
+                )
+            }
+
+            Message::SetupFinished(result) => {
+                self.setup_running = false;
+                self.setup_rx = None;
+                match result {
+                    Ok(status) => {
+                        let ready = status.is_ready();
+                        self.setup = Some(*status);
+                        if ready {
+                            self.screen = Screen::Dashboard;
+                        }
+                        // Provisioning changes what the disk holds, so the
+                        // action button has to be re-resolved.
+                        self.reload(self.selected.code.clone())
+                    }
+                    Err(e) => {
+                        self.error = Some(e);
+                        Task::none()
+                    }
+                }
+            }
+
+            Message::PinDefaultProton(choice) => {
+                self.config.default_proton = ProtonPin::from(choice.0);
+                self.save_config();
+                Task::none()
+            }
+
+            Message::PinProductProton(choice) => {
+                if let Some(product) = self.config.product_mut(&self.selected.code) {
+                    product.profile.proton_ge_version = choice.0;
+                }
+                self.save_config();
+                Task::none()
+            }
+
+            Message::AssetsSourceChanged(value) => {
+                self.assets_input = value;
+                Task::none()
+            }
+
+            Message::SaveSettings => {
+                let trimmed = self.assets_input.trim();
+                self.config.assets_source = (!trimmed.is_empty()).then(|| trimmed.to_owned());
+                self.save_config();
+
+                // Theming comes from the source that was just saved, so rebuild
+                // the pipeline and re-resolve rather than waiting for a restart.
+                self.pipeline = match (self.config.asset_origin(), self.dirs.as_ref()) {
+                    (Some(origin), Some(dirs)) => {
+                        Some(Pipeline::new(origin, Store::new(dirs.asset_cache_dir())))
+                    }
+                    _ => None,
+                };
+                self.branding = None;
+                self.reload(self.selected.code.clone())
+            }
+
+            Message::CheckProton => {
+                let installed = self
+                    .setup
+                    .as_ref()
+                    .and_then(|s| s.proton.as_ref())
+                    .map(|p| p.version.clone());
+                match installed {
+                    Some(version) => {
+                        self.proton_notice = Some("checking…".to_owned());
+                        Task::perform(provision::check_proton(version), Message::ProtonChecked)
+                    }
+                    None => {
+                        self.proton_notice = Some("no Proton build installed yet".to_owned());
+                        Task::none()
+                    }
+                }
+            }
+
+            Message::ProtonChecked(result) => {
+                self.proton_notice = Some(match result {
+                    // Notify-only by policy: nothing updates itself.
+                    Ok(Some(version)) => format!("{version} is available — install it from setup"),
+                    Ok(None) => "up to date".to_owned(),
+                    Err(e) => format!("check failed: {e}"),
+                });
+                Task::none()
+            }
+
             Message::CopyDebug => {
                 let action = self.action();
                 let info = DebugInfo::gather(
@@ -416,33 +610,73 @@ impl Lightforge {
         }
     }
 
+    /// Persist the config, surfacing a write failure rather than swallowing it.
+    fn save_config(&mut self) {
+        let Some(dirs) = self.dirs.as_ref() else {
+            self.error = Some("no config directory available".to_owned());
+            return;
+        };
+        if let Err(e) = self.config.save(&dirs.config_file()) {
+            self.error = Some(e.to_string());
+        }
+    }
+
     fn subscription(&self) -> Subscription<Message> {
         // Only while something is moving: an idle dashboard should wake up for
         // nothing.
         let closing = iced::window::close_requests().map(Message::CloseRequested);
-        match self.transfer {
-            Some(_) => Subscription::batch([
+        match self.transfer.is_some() || self.setup_running {
+            true => Subscription::batch([
                 closing,
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),
             ]),
-            None => closing,
+            false => closing,
         }
     }
 
     fn view(&self) -> Element<'_, Message> {
-        let action = self.action();
+        match self.screen {
+            Screen::Dashboard => self.dashboard(),
+            Screen::Setup => self.setup_screen(),
+            Screen::Settings => self.settings(),
+        }
+    }
 
-        let header = row![
-            text("LIGHTFORGE").size(22),
-            Space::with_width(Length::Fill),
-            pick_list(
-                self.choices.as_slice(),
-                Some(self.selected.clone()),
-                Message::Selected
-            )
-            .padding(8),
-        ]
-        .align_y(Alignment::Center);
+    /// Title, product picker, and the links to the other screens.
+    fn header(&self) -> Element<'_, Message> {
+        let nav = |label: &'static str, screen: Screen| {
+            button(text(label).size(13))
+                .on_press(Message::Show(screen))
+                .style(theme::quiet)
+                .padding([6, 12])
+        };
+
+        let mut bar = row![text("LIGHTFORGE").size(22), Space::with_width(Length::Fill)]
+            .align_y(Alignment::Center)
+            .spacing(8);
+
+        if self.screen == Screen::Dashboard {
+            bar = bar.push(
+                pick_list(
+                    self.choices.as_slice(),
+                    Some(self.selected.clone()),
+                    Message::Selected,
+                )
+                .padding(8),
+            );
+        }
+        // Setup stays reachable once done — a prefix can always be rebuilt.
+        bar = bar.push(nav("Setup", Screen::Setup));
+        bar = bar.push(nav("Settings", Screen::Settings));
+        if self.screen != Screen::Dashboard {
+            bar = bar.push(nav("Back", Screen::Dashboard));
+        }
+        bar.into()
+    }
+
+    fn dashboard(&self) -> Element<'_, Message> {
+        let action = self.action();
+        let header = self.header();
 
         let logo: Element<Message> = match self.branding.as_ref() {
             Some(b) => image(image::Handle::from_path(&b.logo.path))
@@ -473,6 +707,208 @@ impl Lightforge {
             .into(),
             None => content.into(),
         }
+    }
+
+    /// First-run provisioning: what is missing, and one button to fix it.
+    fn setup_screen(&self) -> Element<'_, Message> {
+        let mut body = column![text("Set up Lightforge").size(26)].spacing(12);
+        body = body.push(
+            text(
+                "Proton, the Wine prefix and Battle.net. Each step is skipped if \
+                 it is already done, so this is safe to run again.",
+            )
+            .size(13)
+            .color(theme::SUBTEXT),
+        );
+        body = body.push(horizontal_rule(1));
+
+        match &self.setup {
+            None => body = body.push(text("checking what is installed…").size(13)),
+            Some(status) => {
+                let line = |done: bool, label: &str, detail: String| {
+                    row![
+                        text(if done { "✓" } else { "•" })
+                            .size(15)
+                            .color(if done { theme::PLAY } else { theme::SUBTEXT }),
+                        column![
+                            text(label.to_owned()).size(15),
+                            text(detail).size(12).color(theme::SUBTEXT),
+                        ]
+                        .spacing(2),
+                    ]
+                    .spacing(10)
+                };
+
+                body = body.push(line(
+                    status.proton.is_some(),
+                    "Proton-GE",
+                    match &status.proton {
+                        Some(build) => {
+                            format!("{} — {}", build.version, lightforge_core::setup::describe_source(build))
+                        }
+                        None => "not installed".to_owned(),
+                    },
+                ));
+                body = body.push(line(
+                    status.prefix.is_ready(),
+                    "Wine prefix",
+                    match status.prefix.is_ready() {
+                        true => status.prefix.prefix.display().to_string(),
+                        false => "not built, or the game link is missing".to_owned(),
+                    },
+                ));
+                body = body.push(line(
+                    status.battle_net,
+                    "Battle.net",
+                    match status.battle_net {
+                        true => self.layout.battle_net_dir().display().to_string(),
+                        false => "not installed in the prefix".to_owned(),
+                    },
+                ));
+            }
+        }
+
+        if self.setup_running {
+            body = body.push(horizontal_rule(1));
+            for entry in &self.setup_sample.log {
+                body = body.push(text(entry.clone()).size(12).color(theme::SUBTEXT));
+            }
+            body = body.push(match self.setup_sample.fraction() {
+                Some(fraction) => Element::from(progress_bar(0.0..=1.0, fraction).height(10)),
+                // An install with no content-length still has to look alive.
+                None => Element::from(
+                    text(format!("{:.0} MB", self.setup_sample.done as f64 / 1e6))
+                        .size(12)
+                        .color(theme::SUBTEXT),
+                ),
+            });
+        }
+
+        if let Some(e) = &self.error {
+            body = body.push(text(format!("⚠ {e}")).size(13).color(theme::ERROR));
+        }
+
+        let ready = self.setup.as_ref().is_some_and(|s| s.is_ready());
+        let label = match (self.setup_running, ready) {
+            (true, _) => "Working…",
+            (false, true) => "Re-run setup",
+            (false, false) => "Set up Lightforge",
+        };
+        let action = button(text(label).size(18))
+            .style(theme::filled(if ready { theme::PAUSE } else { theme::INSTALL }))
+            .padding([12, 24])
+            .width(Length::Fixed(240.0));
+        body = body.push(match self.setup_running {
+            true => action,
+            false => action.on_press(Message::RunSetup),
+        });
+
+        column![self.header(), Space::with_height(Length::Fixed(8.0)), body]
+            .spacing(12)
+            .padding(24)
+            .into()
+    }
+
+    /// Proton pinning, asset source, and the notify-only update check.
+    fn settings(&self) -> Element<'_, Message> {
+        let installed: Vec<ProtonChoice> = std::iter::once(ProtonChoice(None))
+            .chain(
+                self.setup
+                    .iter()
+                    .flat_map(|s| s.installed.iter())
+                    .map(|build| ProtonChoice(Some(build.version.clone()))),
+            )
+            .collect();
+
+        let product_pin = self
+            .config
+            .product(&self.selected.code)
+            .and_then(|p| p.profile.proton_ge_version.clone());
+
+        let mut body = column![text("Settings").size(26)].spacing(14);
+
+        body = body.push(text("Proton").size(17));
+        body = body.push(
+            row![
+                text("Default").size(13).width(Length::Fixed(140.0)),
+                pick_list(
+                    installed.clone(),
+                    Some(ProtonChoice(self.config.default_proton.version().map(str::to_owned))),
+                    Message::PinDefaultProton,
+                )
+                .padding(8),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        );
+        body = body.push(
+            row![
+                text(self.selected.label.clone()).size(13).width(Length::Fixed(140.0)),
+                pick_list(installed, Some(ProtonChoice(product_pin)), Message::PinProductProton)
+                    .padding(8),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        );
+        body = body.push(
+            text("A product with no pin of its own follows the default.")
+                .size(11)
+                .color(theme::SUBTEXT),
+        );
+        body = body.push(
+            row![
+                button(text("Check for updates").size(13))
+                    .on_press(Message::CheckProton)
+                    .style(theme::quiet)
+                    .padding([6, 12]),
+                text(self.proton_notice.clone().unwrap_or_default())
+                    .size(12)
+                    .color(theme::SUBTEXT),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+        );
+
+        body = body.push(horizontal_rule(1));
+        body = body.push(text("Theming").size(17));
+        body = body.push(
+            text_input("https://lightforge.tuxcore.pro/assets/manifest.json", &self.assets_input)
+                .on_input(Message::AssetsSourceChanged)
+                .on_submit(Message::SaveSettings)
+                .padding(8),
+        );
+        body = body.push(
+            text("A URL, or a local directory to theme from while the endpoint is not live. Empty means no theming.")
+                .size(11)
+                .color(theme::SUBTEXT),
+        );
+        body = body.push(
+            button(text("Save").size(14))
+                .on_press(Message::SaveSettings)
+                .style(theme::filled(theme::BATTLE_NET))
+                .padding([8, 20]),
+        );
+
+        if let Some(dirs) = &self.dirs {
+            body = body.push(horizontal_rule(1));
+            body = body.push(
+                text(format!("config: {}", dirs.config_file().display()))
+                    .size(11)
+                    .color(theme::SUBTEXT),
+            );
+        }
+        if let Some(e) = &self.error {
+            body = body.push(text(format!("⚠ {e}")).size(13).color(theme::ERROR));
+        }
+
+        column![
+            self.header(),
+            Space::with_height(Length::Fixed(8.0)),
+            scrollable(body).height(Length::Fill),
+        ]
+        .spacing(12)
+        .padding(24)
+        .into()
     }
 
     /// The action panel: status, progress, and every button.

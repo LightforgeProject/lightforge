@@ -19,6 +19,7 @@ pub mod prefix;
 pub mod preflight;
 pub mod product;
 pub mod proton;
+pub mod setup;
 pub mod state;
 pub mod steam;
 

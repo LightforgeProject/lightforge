@@ -218,6 +218,15 @@ enum Command {
         #[arg(long)]
         cancel_after: Option<u64>,
     },
+    /// Report or run first-run provisioning: Proton, prefix, Battle.net.
+    Setup {
+        /// Only report what is missing; provision nothing.
+        #[arg(long)]
+        status: bool,
+        /// Proton-GE release to install if one is needed.
+        #[arg(long)]
+        proton: Option<String>,
+    },
     /// Probe Blizzard's version service for which product codes are live.
     ///
     /// There is no listing endpoint any more, so this asks about a built-in
@@ -334,9 +343,16 @@ async fn main() -> Result<()> {
     restore_sigpipe();
     let cli = Cli::parse();
 
+    // `--root` overrides everything; otherwise the config decides, and only
+    // then the default. The GUI resolves it through the same function.
     let layout = match &cli.root {
         Some(root) => Layout::with_root(root),
-        None => Layout::default_for_user().context("resolving the default Blizzard root")?,
+        None => AppDirs::discover()
+            .ok()
+            .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
+            .unwrap_or_default()
+            .layout()
+            .context("resolving the Blizzard root")?,
     };
 
     match cli.command {
@@ -1207,6 +1223,73 @@ async fn main() -> Result<()> {
                     if want == bytes { "identical" } else { "DIFFERS" }
                 );
             }
+        }
+        Command::Setup { status, proton } => {
+            use lightforge_core::config::Config;
+            use lightforge_core::setup::{self, Event};
+
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let config = Config::load_or_default(&dirs.config_file())?;
+            let current = setup::Status::inspect(&layout, &dirs, &config);
+
+            let mark = |done: bool| if done { "ok " } else { "-- " };
+            println!(
+                "{}proton          {}",
+                mark(current.proton.is_some()),
+                match &current.proton {
+                    Some(b) => format!("{} ({})", b.version, setup::describe_source(b)),
+                    None => "not installed".to_owned(),
+                }
+            );
+            println!(
+                "{}prefix          {}",
+                mark(current.prefix.is_ready()),
+                current.prefix.prefix.display()
+            );
+            println!(
+                "{}battle.net      {}",
+                mark(current.battle_net),
+                layout.battle_net_dir().display()
+            );
+            println!("   builds seen     {}", current.installed.len());
+            println!(
+                "\nready           {}  outstanding: {:?}",
+                current.is_ready(),
+                current.outstanding()
+            );
+
+            if status {
+                return Ok(());
+            }
+
+            let mut last = std::time::Instant::now();
+            let final_status = setup::run(&layout, &dirs, &config, proton.as_deref(), |event| {
+                match event {
+                    Event::Started(step) => println!("\n> {} — {}", step.label(), step.detail()),
+                    Event::Progress { done, total } => {
+                        if last.elapsed().as_millis() >= 500 {
+                            last = std::time::Instant::now();
+                            match total {
+                                Some(total) => println!(
+                                    "  {:.0}%  {:.0}/{:.0} MB",
+                                    done as f64 / total as f64 * 100.0,
+                                    done as f64 / 1e6,
+                                    total as f64 / 1e6
+                                ),
+                                None => println!("  {:.0} MB", done as f64 / 1e6),
+                            }
+                        }
+                    }
+                    Event::Finished { step, skipped, note } => println!(
+                        "  {} {} — {note}",
+                        step.label(),
+                        if skipped { "already done" } else { "done" }
+                    ),
+                }
+            })
+            .await?;
+
+            println!("\nready           {}", final_status.is_ready());
         }
         Command::Products { region, codes, all, concurrency } => {
             use lightforge_core::net::Http;

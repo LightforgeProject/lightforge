@@ -81,6 +81,32 @@ impl Config {
         toml::from_str(s).map_err(ConfigError::Deserialize)
     }
 
+    /// Write `config.toml` atomically: temp file in the same directory, then
+    /// rename. A settings screen saves on every change, so a crash mid-write
+    /// must not be able to leave a half-written file behind — losing the user's
+    /// Proton pins to a truncated table would be worse than losing the edit.
+    pub fn save(&self, path: &std::path::Path) -> Result<(), ConfigError> {
+        let text = self.to_toml()?;
+        let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        std::fs::create_dir_all(dir).map_err(|source| ConfigError::Io {
+            path: dir.to_path_buf(),
+            source,
+        })?;
+
+        let temp = dir.join(format!(
+            ".{}.tmp",
+            path.file_name().and_then(|n| n.to_str()).unwrap_or("config.toml")
+        ));
+        std::fs::write(&temp, text.as_bytes()).map_err(|source| ConfigError::Io {
+            path: temp.clone(),
+            source,
+        })?;
+        std::fs::rename(&temp, path).map_err(|source| ConfigError::Io {
+            path: path.to_path_buf(),
+            source,
+        })
+    }
+
     pub fn to_toml(&self) -> Result<String, ConfigError> {
         toml::to_string_pretty(self).map_err(ConfigError::Serialize)
     }
@@ -100,6 +126,19 @@ impl Config {
         }
         self.products.push(product);
         Ok(())
+    }
+
+    /// The layout this config describes: `blizzard_root` when set, else the
+    /// default under the user's home.
+    ///
+    /// Both front-ends resolve it through here. A `blizzard_root` that only the
+    /// CLI honoured would mean the GUI quietly managing a different install
+    /// than the one the user configured.
+    pub fn layout(&self) -> Result<crate::paths::Layout, crate::paths::PathError> {
+        match &self.blizzard_root {
+            Some(root) => Ok(crate::paths::Layout::with_root(root)),
+            None => crate::paths::Layout::default_for_user(),
+        }
     }
 
     /// Where the asset pipeline should read from, if configured.
@@ -172,6 +211,36 @@ mod tests {
             Some("set realmlist test.example".into());
 
         assert!(config.product(&ProductCode::Retail).unwrap().profile.realmlist_override.is_none());
+    }
+
+    #[test]
+    fn a_configured_root_wins_over_the_default() {
+        let mut config = Config::default();
+        assert!(config.blizzard_root.is_none());
+
+        config.blizzard_root = Some(PathBuf::from("/mnt/games/blizzard"));
+        assert_eq!(config.layout().unwrap().root(), PathBuf::from("/mnt/games/blizzard"));
+    }
+
+    #[test]
+    fn saving_and_loading_round_trips_through_a_real_file() {
+        let dir = std::env::temp_dir().join("lightforge-config-save");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("config.toml");
+
+        let mut config = Config::with_default_products();
+        config.assets_source = Some("https://lightforge.tuxcore.pro/assets/".into());
+        config.default_proton = ProtonPin::Pinned("GE-Proton11-7".into());
+        config.save(&path).unwrap();
+
+        assert_eq!(Config::load_or_default(&path).unwrap(), config);
+        // No temp file survives a successful save.
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with('.'))
+            .collect();
+        assert!(leftovers.is_empty(), "temp file left behind");
     }
 
     #[test]
