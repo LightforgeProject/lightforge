@@ -25,6 +25,12 @@ use crate::product::ProductCode;
 
 /// Directory name used for the WoW install on both sides of the symlink.
 const WOW_DIR: &str = "World of Warcraft";
+
+/// The install root as Windows sees it inside the prefix.
+///
+/// Not cosmetic: `.product.db` records this string, and Battle.net matches the
+/// install by it. It must be the path the symlink presents, not the Linux one.
+pub const WINDOWS_WOW_PATH: &str = "C:/Program Files (x86)/World of Warcraft";
 /// Windows-side parent that CEF expects the game to live under.
 const WINDOWS_PROGRAM_FILES: &str = "Program Files (x86)";
 

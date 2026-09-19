@@ -26,6 +26,7 @@ pub mod indices;
 pub mod install;
 pub mod manifest;
 pub mod plan;
+pub mod productdb;
 pub mod storage;
 pub mod version;
 pub mod writer;

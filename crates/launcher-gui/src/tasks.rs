@@ -208,6 +208,7 @@ fn describe(event: &Event) -> String {
         Event::InstallFile { path, .. } => format!("extracting {}", path.display()),
         Event::Extracted { files, .. } => format!("extracted {files} install files"),
         Event::BuildInfo { version, .. } => format!("finished — {version}"),
+        Event::ProductDb { .. } => "registered with Battle.net".to_owned(),
         Event::Incomplete { reasons } => format!("incomplete: {}", reasons.join(", ")),
     }
 }

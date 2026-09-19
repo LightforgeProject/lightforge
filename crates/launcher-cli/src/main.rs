@@ -288,6 +288,26 @@ enum Command {
         /// The token, or `@path` to read it from a file.
         token: String,
     },
+    /// Write `.product.db` so Battle.net will adopt an existing install.
+    ///
+    /// Agent refuses to locate an install without this file (error 2800). The
+    /// record is built from `.build.info`, so it cannot disagree with it.
+    ProductDb {
+        /// Install root. Defaults to the managed WoW install.
+        path: Option<PathBuf>,
+        /// Products to record. Defaults to every row in `.build.info`.
+        #[arg(long = "product", value_name = "CODE")]
+        products: Vec<String>,
+        /// Account country as Battle.net reports it, e.g. `AUT`.
+        #[arg(long, default_value = "")]
+        account_country: String,
+        /// GeoIP country, e.g. `AT`.
+        #[arg(long, default_value = "")]
+        geo_country: String,
+        /// Print what would be written without writing it.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Report or run first-run provisioning: Proton, prefix, Battle.net.
     Setup {
         /// Only report what is missing; provision nothing.
@@ -1023,6 +1043,7 @@ async fn main() -> Result<()> {
                 limit_archives,
                 limit_runs,
                 skip_loose,
+                ..InstallOptions::default()
             };
 
             // Event printing, shared by the dry run and the real one. The
@@ -1094,6 +1115,9 @@ async fn main() -> Result<()> {
                 ),
                 Event::BuildInfo { path, version } => {
                     println!("\n.build.info     {} ({version})", path.display())
+                }
+                Event::ProductDb { path } => {
+                    println!(".product.db     {}", path.display())
                 }
                 Event::Incomplete { reasons } => {
                     println!("\n.build.info     NOT written — this run is not a complete install");
@@ -1548,6 +1572,45 @@ async fn main() -> Result<()> {
                         entry.id,
                         entry.version_id.as_deref().unwrap_or("-")
                     );
+                }
+            }
+        }
+        Command::ProductDb { path, products, account_country, geo_country, dry_run } => {
+            use lightforge_core::paths::WINDOWS_WOW_PATH;
+            use lightforge_core::tact::productdb::{self, ProductInstall};
+
+            let install = path.unwrap_or_else(|| layout.wow_install());
+            let info = BuildInfo::load(install.join(".build.info"))
+                .with_context(|| format!("reading {}/.build.info", install.display()))?;
+
+            // Every product the install actually has a row for, unless told
+            // otherwise — a `.product.db` naming a product that is not there is
+            // exactly the inconsistency Agent refuses.
+            let codes: Vec<ProductCode> = match products.is_empty() {
+                false => products
+                    .iter()
+                    .map(|p| p.parse().expect("product codes are infallible"))
+                    .collect(),
+                true => info.products().collect(),
+            };
+
+            let mut records = Vec::new();
+            for code in &codes {
+                let record = ProductInstall::from_build_info(&info, code, WINDOWS_WOW_PATH)?
+                    .with_countries(&account_country, &geo_country);
+                println!(
+                    "{:<18} {:<16} {:<22} {}",
+                    record.product, record.version, record.flavor_dir, record.build_key
+                );
+                records.push(record);
+            }
+
+            match dry_run {
+                true => println!("\n--dry-run: nothing written"),
+                false => {
+                    let written = productdb::write(&install, &records)?;
+                    println!("\nwrote           {} ({} bytes)", written.display(), std::fs::metadata(&written)?.len());
+                    println!("install path    {WINDOWS_WOW_PATH}");
                 }
             }
         }

@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use crate::product::ProductCode;
 
 /// Column whose value identifies the product a row belongs to.
-const COL_PRODUCT: &str = "Product";
+pub const COL_PRODUCT: &str = "Product";
 /// Columns the update engine compares against Ribbit.
 pub const COL_BUILD_KEY: &str = "Build Key";
 pub const COL_CDN_KEY: &str = "CDN Key";
@@ -101,6 +101,20 @@ impl BuildInfo {
 
     pub fn rows(&self) -> &[Row] {
         &self.rows
+    }
+
+    /// Every product this file has a row for.
+    ///
+    /// The `Product` column is the last one, and it is what Agent keys on — a
+    /// file can carry several products sharing one install root.
+    pub fn products(&self) -> impl Iterator<Item = ProductCode> + '_ {
+        self.rows().iter().filter_map(|row| {
+            self.column(COL_PRODUCT)
+                .ok()
+                .and_then(|index| row.cells.get(index))
+                .filter(|code| !code.is_empty())
+                .map(|code| code.parse().expect("product codes are infallible"))
+        })
     }
 
     /// The row belonging to `code`, if the product is installed.

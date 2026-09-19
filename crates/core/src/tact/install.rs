@@ -63,6 +63,13 @@ pub struct Options {
     pub limit_runs: Option<usize>,
     /// Skip the loose (unarchived) files — development only.
     pub skip_loose: bool,
+    /// The install's path as Windows sees it, e.g.
+    /// `C:/Program Files (x86)/World of Warcraft`. `None` skips writing
+    /// `.product.db`, which only matters for Battle.net adoption.
+    pub windows_path: Option<String>,
+    /// Account and GeoIP country, as Agent would record them. Empty is fine.
+    pub account_country: String,
+    pub geo_country: String,
 }
 
 impl Default for Options {
@@ -80,6 +87,9 @@ impl Default for Options {
             limit_archives: None,
             limit_runs: None,
             skip_loose: false,
+            windows_path: Some(crate::paths::WINDOWS_WOW_PATH.to_owned()),
+            account_country: String::new(),
+            geo_country: String::new(),
         }
     }
 }
@@ -156,6 +166,9 @@ pub enum Event {
     BuildInfo {
         path: PathBuf,
         version: String,
+    },
+    ProductDb {
+        path: PathBuf,
     },
     /// The run finished short of a complete install, and why.
     Incomplete {
@@ -443,6 +456,20 @@ pub async fn execute(
             path: info_path,
             version: remote.versions_name.clone(),
         });
+
+        // Battle.net will not adopt an install without `.product.db`: its
+        // Locate flow reads the file and answers error 2800 when it is absent.
+        // Written from `.build.info`, so the two can never disagree.
+        if let Some(windows_path) = &options.windows_path {
+            let record = crate::tact::productdb::ProductInstall::from_build_info(
+                &info,
+                code,
+                windows_path,
+            )?
+            .with_countries(&options.account_country, &options.geo_country);
+            let path = crate::tact::productdb::write(dest, &[record])?;
+            on_event(Event::ProductDb { path });
+        }
         Some(remote.versions_name.clone())
     } else {
         on_event(Event::Incomplete { reasons });
@@ -497,6 +524,9 @@ pub enum InstallError {
 
     #[error(transparent)]
     BuildInfo(#[from] crate::buildinfo::BuildInfoError),
+
+    #[error(transparent)]
+    ProductDb(#[from] crate::tact::productdb::ProductDbError),
 
     #[error("the {0} table is empty for this region")]
     EmptyTable(&'static str),
