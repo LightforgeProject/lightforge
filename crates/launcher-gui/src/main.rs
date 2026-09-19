@@ -25,7 +25,7 @@ mod theme;
 use std::time::{Duration, Instant};
 
 use iced::widget::{
-    button, column, container, horizontal_rule, image, pick_list, progress_bar, row, scrollable,
+    button, column, container, image, pick_list, progress_bar, row, scrollable,
     stack, text, text_input, Space,
 };
 use iced::{Alignment, ContentFit, Element, Length, Subscription, Task};
@@ -49,7 +49,7 @@ const ACCOUNT_URL: &str = "https://account.battle.net/games";
 fn main() -> iced::Result {
     iced::application("Lightforge", Lightforge::update, Lightforge::view)
         .subscription(Lightforge::subscription)
-        .theme(|_| iced::Theme::Dark)
+        .theme(|_| theme::base())
         .window_size((980.0, 660.0))
         // Closing is handled by the app, so a transfer can checkpoint first.
         .exit_on_close_request(false)
@@ -857,60 +857,95 @@ impl Lightforge {
         }
     }
 
-    /// Title, product picker, and the links to the other screens.
+    /// Title, product picker, and navigation.
     fn header(&self) -> Element<'_, Message> {
         let nav = |label: &'static str, screen: Screen| {
-            button(text(label).size(13))
-                .on_press(Message::Show(screen))
-                .style(theme::quiet)
-                .padding([6, 12])
+            let entry = button(text(label).size(theme::LABEL)).padding([theme::SM, theme::MD]);
+            match self.screen == screen {
+                true => entry.style(theme::selected),
+                false => entry.style(theme::ghost).on_press(Message::Show(screen)),
+            }
         };
 
-        let mut bar = row![text("LIGHTFORGE").size(22), Space::with_width(Length::Fill)]
+        let mut bar = row![text("LIGHTFORGE").size(theme::TITLE)]
             .align_y(Alignment::Center)
-            .spacing(8);
+            .spacing(theme::SM);
 
         if self.screen == Screen::Dashboard {
+            bar = bar.push(Space::with_width(Length::Fixed(theme::MD as f32)));
             bar = bar.push(
                 pick_list(
                     self.choices.as_slice(),
                     Some(self.selected.clone()),
                     Message::Selected,
                 )
-                .padding(8),
+                .text_size(theme::BODY)
+                .padding([theme::SM, theme::MD]),
             );
         }
-        // Setup stays reachable once done — a prefix can always be rebuilt.
+
+        bar = bar.push(Space::with_width(Length::Fill));
+        bar = bar.push(nav("Play", Screen::Dashboard));
         bar = bar.push(nav("Addons", Screen::Addons));
         bar = bar.push(nav("Setup", Screen::Setup));
         bar = bar.push(nav("Settings", Screen::Settings));
-        if self.screen != Screen::Dashboard {
-            bar = bar.push(nav("Back", Screen::Dashboard));
-        }
         bar.into()
+    }
+
+    /// A screen that is not the dashboard: header, title, content.
+    fn page<'a>(
+        &'a self,
+        title: &'a str,
+        subtitle: Option<String>,
+        content: Element<'a, Message>,
+    ) -> Element<'a, Message> {
+        let mut heading = column![text(title).size(theme::TITLE)].spacing(theme::XS);
+        if let Some(subtitle) = subtitle {
+            heading = heading.push(muted(subtitle, theme::LABEL));
+        }
+
+        column![
+            self.header(),
+            heading,
+            scrollable(content).height(Length::Fill),
+        ]
+        .spacing(theme::LG)
+        .padding(theme::LG)
+        .into()
     }
 
     fn dashboard(&self) -> Element<'_, Message> {
         let action = self.action();
-        let header = self.header();
 
         let logo: Element<Message> = match self.branding.as_ref() {
             Some(b) => image(image::Handle::from_path(&b.logo.path))
                 .content_fit(ContentFit::Contain)
-                .height(Length::Fixed(180.0))
+                .height(Length::Fixed(190.0))
                 .into(),
-            None => text(self.selected.label.clone()).size(44).into(),
+            None => column![
+                text(self.selected.label.clone()).size(theme::DISPLAY),
+                muted(
+                    match &self.branding {
+                        Some(b) => b.label.clone(),
+                        None => "no artwork configured".to_owned(),
+                    },
+                    theme::LABEL,
+                ),
+            ]
+            .spacing(theme::XS)
+            .align_x(Alignment::Center)
+            .into(),
         };
 
         let content = column![
-            header,
+            self.header(),
             Space::with_height(Length::Fill),
             container(logo).center_x(Length::Fill),
-            Space::with_height(Length::Fixed(16.0)),
-            self.panel(&action),
+            Space::with_height(Length::Fill),
+            self.action_panel(&action),
         ]
-        .spacing(12)
-        .padding(24);
+        .spacing(theme::MD)
+        .padding(theme::LG);
 
         match self.branding.as_ref() {
             Some(b) => stack![
@@ -918,6 +953,20 @@ impl Lightforge {
                     .content_fit(ContentFit::Cover)
                     .width(Length::Fill)
                     .height(Length::Fill),
+                // A scrim: art is chosen to look good, not to be legible behind
+                // text, so the page darkens it towards the bottom where the
+                // controls live.
+                container(Space::with_height(Length::Fill))
+                    .width(Length::Fill)
+                    .style(|_| container::Style {
+                        background: Some(iced::Background::Gradient(iced::Gradient::Linear(
+                            iced::gradient::Linear::new(0.0)
+                                .add_stop(0.0, iced::Color { a: 0.95, ..theme::BG })
+                                .add_stop(0.45, iced::Color { a: 0.35, ..theme::BG })
+                                .add_stop(1.0, iced::Color { a: 0.15, ..theme::BG }),
+                        ))),
+                        ..container::Style::default()
+                    }),
                 content,
             ]
             .into(),
@@ -925,49 +974,132 @@ impl Lightforge {
         }
     }
 
-    /// Addon management for the selected product.
-    ///
-    /// Two tabs, because they answer different questions: *My Addons* is what
-    /// is installed and what has updates; *Browse* is what exists and could be.
+    /// Status, progress, and every action for the selected product.
+    fn action_panel(&self, action: &ActionState) -> Element<'_, Message> {
+        let color = match action {
+            ActionState::Install => theme::INSTALL,
+            ActionState::Update { .. } => theme::UPDATE,
+            ActionState::Play => theme::PLAY,
+            ActionState::Downloading(_) | ActionState::Paused(_) => theme::PAUSE,
+            ActionState::Error { .. } => theme::ERROR,
+            ActionState::Unknown => theme::PAUSE,
+        };
+
+        let mut left = column![].spacing(theme::SM).width(Length::Fill);
+        left = left.push(match &self.error {
+            Some(e) => text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR),
+            None => text(self.status.clone()).size(theme::LABEL).color(theme::MUTED),
+        });
+
+        if let Some(progress) = progress_of(action) {
+            left = left.push(progress_bar(0.0..=1.0, progress.fraction()).height(6));
+            left = left.push(
+                row![
+                    mono(bytes_of(progress.downloaded_bytes, progress.total_bytes)),
+                    dot(),
+                    mono(rate_of(progress.bytes_per_second)),
+                    dot(),
+                    mono(eta_of(progress)),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
+            );
+            if !self.sample.stage.is_empty() {
+                left = left.push(muted(self.sample.stage.clone(), theme::CAPTION));
+            }
+        } else if let Some(version) = &self.local.version {
+            left = left.push(
+                row![muted("installed".to_owned(), theme::CAPTION), mono(version.clone())]
+                    .spacing(theme::SM)
+                    .align_y(Alignment::Center),
+            );
+        }
+
+        left = left.push(
+            row![
+                button(text("Manage Subscription").size(theme::LABEL))
+                    .on_press(Message::ManageSubscription)
+                    .style(theme::ghost)
+                    .padding([theme::XS, theme::SM]),
+                button(text("Open Files").size(theme::LABEL))
+                    .on_press(Message::OpenFiles)
+                    .style(theme::ghost)
+                    .padding([theme::XS, theme::SM]),
+                button(text("Copy Debug Info").size(theme::LABEL))
+                    .on_press(Message::CopyDebug)
+                    .style(theme::ghost)
+                    .padding([theme::XS, theme::SM]),
+            ]
+            .spacing(theme::XS),
+        );
+
+        let primary = button(
+            container(text(action.label()).size(theme::HEADING)).center_x(Length::Fill),
+        )
+        .style(theme::filled(color))
+        .padding([theme::MD, theme::LG])
+        .width(Length::Fixed(240.0));
+        let battle_net = button(
+            container(text("Launch via Battle.net").size(theme::LABEL)).center_x(Length::Fill),
+        )
+        .style(theme::outlined)
+        .padding([theme::SM, theme::MD])
+        .width(Length::Fixed(240.0));
+
+        let right = column![
+            match self.busy || matches!(action, ActionState::Unknown) {
+                true => primary,
+                false => primary.on_press(Message::Primary),
+            },
+            match self.busy {
+                true => battle_net,
+                false => battle_net.on_press(Message::BattleNet),
+            },
+            muted(
+                "Signs in through Battle.net so the in-game shop works.".to_owned(),
+                theme::CAPTION,
+            ),
+        ]
+        .spacing(theme::SM)
+        .align_x(Alignment::Center)
+        .width(Length::Shrink);
+
+        container(row![left, right].spacing(theme::XL).align_y(Alignment::Center))
+            .padding(theme::LG)
+            .style(theme::floating)
+            .into()
+    }
+
+    /// Addon management: what is installed, and what could be.
     fn addons_screen(&self) -> Element<'_, Message> {
         let tab = |label: &'static str, which: AddonTab| {
-            let button = button(text(label).size(13)).padding([6, 14]);
+            let entry = button(text(label).size(theme::LABEL)).padding([theme::SM, theme::MD]);
             match self.addon_tab == which {
-                true => button.style(theme::filled(theme::BATTLE_NET)),
-                false => button.style(theme::quiet).on_press(Message::AddonTab(which)),
+                true => entry.style(theme::selected),
+                false => entry.style(theme::ghost).on_press(Message::AddonTab(which)),
             }
         };
 
-        let mut body = column![
-            row![
-                text("Addons").size(26),
-                Space::with_width(Length::Fixed(16.0)),
-                tab("My Addons", AddonTab::Mine),
-                tab("Browse", AddonTab::Browse),
-                Space::with_width(Length::Fill),
-                text(format!(
-                    "{} installed · {} managed",
-                    self.addons.rows.len(),
-                    self.addons.managed
-                ))
-                .size(12)
-                .color(theme::SUBTEXT),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center)
+        let mut body = column![row![
+            tab("My Addons", AddonTab::Mine),
+            tab("Browse", AddonTab::Browse),
         ]
-        .spacing(12);
+        .spacing(theme::XS)]
+        .spacing(theme::MD);
 
         if self.addons_busy {
             let progress = &self.addon_sample;
             body = body.push(
-                text(format!("{}  ({}/{})", progress.line, progress.done, progress.total))
-                    .size(12)
-                    .color(theme::SUBTEXT),
+                row![
+                    text(progress.line.clone()).size(theme::LABEL),
+                    mono(format!("{}/{}", progress.done, progress.total)),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
             );
         }
         if let Some(e) = &self.error {
-            body = body.push(text(format!("⚠ {e}")).size(13).color(theme::ERROR));
+            body = body.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
         }
 
         body = body.push(match self.addon_tab {
@@ -975,107 +1107,91 @@ impl Lightforge {
             AddonTab::Browse => self.addons_browse(),
         });
 
-        column![
-            self.header(),
-            Space::with_height(Length::Fixed(8.0)),
-            scrollable(body).height(Length::Fill),
-        ]
-        .spacing(12)
-        .padding(24)
-        .into()
+        self.page(
+            "Addons",
+            Some(format!(
+                "{} · {} installed, {} managed by Lightforge",
+                self.selected.label,
+                self.addons.rows.len(),
+                self.addons.managed
+            )),
+            body.into(),
+        )
     }
 
-    /// Installed addons, update badges, import and removal.
     fn addons_mine(&self) -> Element<'_, Message> {
-        let mut body = column![].spacing(10);
-
-        body = body.push(
-            row![
-                text_input("Paste a WoWUp import token…", &self.token_input)
-                    .on_input(Message::TokenChanged)
-                    .on_submit(Message::ImportToken)
-                    .padding(8),
-                {
-                    let import = button(text("Import").size(14))
-                        .style(theme::filled(theme::BATTLE_NET))
-                        .padding([8, 18]);
-                    match self.addons_busy || self.token_input.trim().is_empty() {
-                        true => import,
-                        false => import.on_press(Message::ImportToken),
-                    }
-                },
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-        );
-
         let outdated = self.updates.iter().filter(|u| u.has_update()).count();
-        body = body.push(
-            row![
-                {
-                    let check = button(text("Check for updates").size(13))
-                        .style(theme::quiet)
-                        .padding([6, 12]);
-                    match self.addons_busy || self.addons.managed == 0 {
-                        true => check,
-                        false => check.on_press(Message::CheckAddonUpdates),
-                    }
-                },
-                {
-                    let update = button(text("Update all").size(13))
-                        .style(theme::filled(match outdated {
+
+        let toolbar = container(
+            column![
+                row![
+                    text_input("Paste a WoWUp import token…", &self.token_input)
+                        .on_input(Message::TokenChanged)
+                        .on_submit(Message::ImportToken)
+                        .style(theme::field)
+                        .size(theme::BODY)
+                        .padding(theme::SM),
+                    action_button("Import", theme::ACCENT, Message::ImportToken)
+                        .enabled(!self.addons_busy && !self.token_input.trim().is_empty()),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
+                row![
+                    secondary("Check for updates", Message::CheckAddonUpdates)
+                        .enabled(!self.addons_busy && self.addons.managed > 0),
+                    action_button(
+                        "Update all",
+                        match outdated {
                             0 => theme::PAUSE,
                             _ => theme::UPDATE,
-                        }))
-                        .padding([6, 12]);
-                    match self.addons_busy || self.addons.managed == 0 {
-                        true => update,
-                        false => update.on_press(Message::UpdateAddons),
-                    }
-                },
-                text(match (self.updates.is_empty(), outdated) {
-                    (true, _) => String::new(),
-                    (false, 0) => "everything is up to date".to_owned(),
-                    (false, n) => format!("{n} have updates"),
-                })
-                .size(12)
-                .color(theme::SUBTEXT),
+                        },
+                        Message::UpdateAddons,
+                    )
+                    .enabled(!self.addons_busy && self.addons.managed > 0),
+                    muted(
+                        match (self.updates.is_empty(), outdated) {
+                            (true, _) => String::new(),
+                            (false, 0) => "everything is up to date".to_owned(),
+                            (false, n) => format!("{n} have updates"),
+                        },
+                        theme::LABEL,
+                    ),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
             ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-        );
+            .spacing(theme::SM),
+        )
+        .padding(theme::MD)
+        .style(theme::card);
+
+        let mut body = column![toolbar].spacing(theme::SM);
 
         if let Some(report) = &self.addon_report {
             for item in &report.unavailable {
                 let mut line = row![column![
-                    text(item.name.clone()).size(13),
-                    text(item.reason.clone()).size(11).color(theme::SUBTEXT),
+                    text(item.name.clone()).size(theme::BODY),
+                    muted(item.reason.clone(), theme::CAPTION),
                 ]
-                .spacing(2)]
-                .spacing(8)
+                .spacing(theme::XS)]
+                .spacing(theme::SM)
                 .align_y(Alignment::Center);
 
+                line = line.push(Space::with_width(Length::Fill));
                 if let Some(url) = &item.website_url {
-                    line = line.push(Space::with_width(Length::Fill));
                     line = line.push(
-                        button(text("Open page").size(12))
-                            .on_press(Message::OpenUrl(url.clone()))
-                            .style(theme::quiet)
-                            .padding([4, 10]),
+                        secondary("Open page", Message::OpenUrl(url.clone())).enabled(true),
                     );
                 }
-                body = body.push(line);
+                body = body.push(container(line).padding(theme::MD).style(theme::row));
             }
         }
 
-        body = body.push(horizontal_rule(1));
-
         if self.addons.rows.is_empty() {
-            body = body.push(
-                text("Nothing installed for this product yet — search under Browse, or paste an import token.")
-                    .size(13)
-                    .color(theme::SUBTEXT),
-            );
+            body = body.push(empty(
+                "Nothing installed for this product yet.",
+                "Search under Browse, or paste an import token above.",
+            ));
         }
 
         for addon in &self.addons.rows {
@@ -1096,105 +1212,95 @@ impl Lightforge {
                     .find(|u| u.id == m.id && u.provider == m.provider)
             });
 
-            let mut heading = row![
-                text(addon.title.clone()).size(14),
-                text(addon.version.clone()).size(12).color(theme::SUBTEXT),
-            ]
-            .spacing(10)
-            .align_y(Alignment::Center);
+            let mut heading = row![text(addon.title.clone()).size(theme::BODY), mono(addon.version.clone())]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center);
             if status.is_some_and(|s| s.has_update()) {
-                heading = heading.push(
-                    text(format!(
-                        "update → {}",
-                        status.and_then(|s| s.available.clone()).unwrap_or_default()
-                    ))
-                    .size(11)
-                    .color(theme::UPDATE),
-                );
+                heading = heading.push(pill(
+                    format!("→ {}", status.and_then(|s| s.available.clone()).unwrap_or_default()),
+                    theme::UPDATE,
+                ));
             }
 
             let mut line = row![column![
                 heading,
-                text(match (&addon.managed, extra) {
-                    (Some(m), 0) => format!("{} · managed", m.provider),
-                    (Some(m), n) => format!("{} · managed · +{n} folders", m.provider),
-                    (None, _) => "installed by hand".to_owned(),
-                })
-                .size(11)
-                .color(theme::SUBTEXT),
+                muted(
+                    match (&addon.managed, extra) {
+                        (Some(m), 0) => format!("{} · managed", m.provider),
+                        (Some(m), n) => format!("{} · managed · +{n} folders", m.provider),
+                        (None, _) => "installed by hand".to_owned(),
+                    },
+                    theme::CAPTION,
+                ),
             ]
-            .spacing(2)]
-            .spacing(8)
+            .spacing(theme::XS)]
+            .spacing(theme::SM)
             .align_y(Alignment::Center);
 
             line = line.push(Space::with_width(Length::Fill));
             if let Some(managed) = &addon.managed {
                 line = line.push(
-                    button(text("Remove").size(12))
-                        .on_press(Message::RemoveAddon(
-                            managed.provider.clone(),
-                            managed.id.clone(),
-                        ))
-                        .style(theme::quiet)
-                        .padding([4, 10]),
+                    secondary(
+                        "Remove",
+                        Message::RemoveAddon(managed.provider.clone(), managed.id.clone()),
+                    )
+                    .enabled(!self.addons_busy),
                 );
             }
-            body = body.push(line);
+            body = body.push(container(line).padding(theme::MD).style(theme::row));
         }
 
-        body = body.push(
-            text(self.addons.dir.display().to_string())
-                .size(11)
-                .color(theme::SUBTEXT),
-        );
+        body = body.push(mono(self.addons.dir.display().to_string()));
         body.into()
     }
 
-    /// Search across providers, and install from the results.
     fn addons_browse(&self) -> Element<'_, Message> {
-        let mut body = column![].spacing(10);
-
-        body = body.push(
-            row![
-                text_input("Search addons…", &self.search_input)
-                    .on_input(Message::SearchChanged)
-                    .on_submit(Message::RunSearch)
-                    .padding(8),
-                {
-                    let search = button(text("Search").size(14))
-                        .style(theme::filled(theme::BATTLE_NET))
-                        .padding([8, 18]);
-                    match self.searching || self.search_input.trim().is_empty() {
-                        true => search,
-                        false => search.on_press(Message::RunSearch),
-                    }
-                },
+        let search = container(
+            column![
+                row![
+                    text_input("Search addons…", &self.search_input)
+                        .on_input(Message::SearchChanged)
+                        .on_submit(Message::RunSearch)
+                        .style(theme::field)
+                        .size(theme::BODY)
+                        .padding(theme::SM),
+                    action_button("Search", theme::ACCENT, Message::RunSearch)
+                        .enabled(!self.searching && !self.search_input.trim().is_empty()),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
+                muted(
+                    "WoWInterface, Tukui and GitHub (type owner/repo). CurseForge needs a catalog in Settings."
+                        .to_owned(),
+                    theme::CAPTION,
+                ),
             ]
-            .spacing(8)
-            .align_y(Alignment::Center),
-        );
-        body = body.push(
-            text("WoWInterface, Tukui and GitHub (type owner/repo). CurseForge needs a catalog in Settings.")
-                .size(11)
-                .color(theme::SUBTEXT),
-        );
+            .spacing(theme::SM),
+        )
+        .padding(theme::MD)
+        .style(theme::card);
+
+        let mut body = column![search].spacing(theme::SM);
 
         // A provider that could not answer is said out loud: an empty list
         // otherwise reads as "nothing matched".
         for problem in &self.search.problems {
-            body = body.push(text(format!("⚠ {problem}")).size(11).color(theme::UPDATE));
+            body = body.push(text(format!("⚠ {problem}")).size(theme::CAPTION).color(theme::UPDATE));
         }
 
-        body = body.push(horizontal_rule(1));
-
         if self.searching {
-            body = body.push(text("searching…").size(13).color(theme::SUBTEXT));
-        } else if self.search.listings.is_empty() && !self.search.query.is_empty() {
-            body = body.push(
-                text(format!("Nothing found for “{}”.", self.search.query))
-                    .size(13)
-                    .color(theme::SUBTEXT),
-            );
+            body = body.push(muted("searching…".to_owned(), theme::BODY));
+        } else if self.search.listings.is_empty() {
+            body = body.push(match self.search.query.is_empty() {
+                true => empty(
+                    "Search for an addon.",
+                    "Results come from WoWInterface and Tukui; type owner/repo for GitHub.",
+                ),
+                false => empty(
+                    &format!("Nothing found for “{}”.", self.search.query),
+                    "It may be a CurseForge addon, which needs a catalog configured.",
+                ),
+            });
         }
 
         let installed_ids: Vec<(&str, &str)> = self
@@ -1212,93 +1318,85 @@ impl Lightforge {
                 .any(|(p, id)| *p == provider && *id == listing.id);
 
             let mut line = row![column![
-                text(listing.name.clone()).size(14),
-                text(format!(
-                    "{}{}{}",
-                    provider,
-                    listing.author.as_deref().map(|a| format!(" · {a}")).unwrap_or_default(),
-                    match listing.downloads {
-                        0 => String::new(),
-                        n => format!(" · {n} downloads"),
-                    }
-                ))
-                .size(11)
-                .color(theme::SUBTEXT),
+                row![
+                    text(listing.name.clone()).size(theme::BODY),
+                    pill(provider.clone(), theme::ACCENT),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
+                muted(
+                    format!(
+                        "{}{}",
+                        listing.author.as_deref().unwrap_or("unknown author"),
+                        match listing.downloads {
+                            0 => String::new(),
+                            n => format!(" · {n} downloads"),
+                        }
+                    ),
+                    theme::CAPTION,
+                ),
             ]
-            .spacing(2)]
-            .spacing(8)
+            .spacing(theme::XS)]
+            .spacing(theme::SM)
             .align_y(Alignment::Center);
 
             line = line.push(Space::with_width(Length::Fill));
             if let Some(url) = &listing.website_url {
-                line = line.push(
-                    button(text("Page").size(12))
-                        .on_press(Message::OpenUrl(url.clone()))
-                        .style(theme::quiet)
-                        .padding([4, 10]),
-                );
+                line = line.push(secondary("Page", Message::OpenUrl(url.clone())).enabled(true));
             }
             line = line.push(match already {
-                true => button(text("Installed").size(12)).style(theme::quiet).padding([4, 10]),
-                false => {
-                    let install = button(text("Install").size(12))
-                        .style(theme::filled(theme::INSTALL))
-                        .padding([4, 10]);
-                    match self.addons_busy {
-                        true => install,
-                        false => install.on_press(Message::InstallAddon(
-                            provider.clone(),
-                            listing.id.clone(),
-                        )),
-                    }
-                }
+                true => pill("installed".to_owned(), theme::PLAY),
+                false => action_button(
+                    "Install",
+                    theme::INSTALL,
+                    Message::InstallAddon(provider.clone(), listing.id.clone()),
+                )
+                .enabled(!self.addons_busy)
+                .into(),
             });
-            body = body.push(line);
+            body = body.push(container(line).padding(theme::MD).style(theme::row));
         }
         body.into()
     }
 
     /// First-run provisioning: what is missing, and one button to fix it.
     fn setup_screen(&self) -> Element<'_, Message> {
-        let mut body = column![text("Set up Lightforge").size(26)].spacing(12);
-        body = body.push(
-            text(
-                "Proton, the Wine prefix and Battle.net. Each step is skipped if \
-                 it is already done, so this is safe to run again.",
+        let mut body = column![].spacing(theme::SM);
+
+        let step = |done: bool, label: &'static str, detail: String| {
+            container(
+                row![
+                    container(text(if done { "✓" } else { "•" }).size(theme::BODY))
+                        .padding([theme::XS, theme::SM])
+                        .style(theme::badge(match done {
+                            true => theme::PLAY,
+                            false => theme::MUTED,
+                        })),
+                    column![text(label).size(theme::BODY), mono(detail)].spacing(theme::XS),
+                ]
+                .spacing(theme::MD)
+                .align_y(Alignment::Center),
             )
-            .size(13)
-            .color(theme::SUBTEXT),
-        );
-        body = body.push(horizontal_rule(1));
+            .padding(theme::MD)
+            .style(theme::row)
+        };
 
         match &self.setup {
-            None => body = body.push(text("checking what is installed…").size(13)),
+            None => body = body.push(muted("checking what is installed…".to_owned(), theme::BODY)),
             Some(status) => {
-                let line = |done: bool, label: &str, detail: String| {
-                    row![
-                        text(if done { "✓" } else { "•" })
-                            .size(15)
-                            .color(if done { theme::PLAY } else { theme::SUBTEXT }),
-                        column![
-                            text(label.to_owned()).size(15),
-                            text(detail).size(12).color(theme::SUBTEXT),
-                        ]
-                        .spacing(2),
-                    ]
-                    .spacing(10)
-                };
-
-                body = body.push(line(
+                body = body.push(step(
                     status.proton.is_some(),
                     "Proton-GE",
                     match &status.proton {
-                        Some(build) => {
-                            format!("{} — {}", build.version, lightforge_core::setup::describe_source(build))
-                        }
+                        Some(build) => format!(
+                            "{} — {}",
+                            build.version,
+                            lightforge_core::setup::describe_source(build)
+                        ),
                         None => "not installed".to_owned(),
                     },
                 ));
-                body = body.push(line(
+                body = body.push(step(
                     status.prefix.is_ready(),
                     "Wine prefix",
                     match status.prefix.is_ready() {
@@ -1306,7 +1404,7 @@ impl Lightforge {
                         false => "not built, or the game link is missing".to_owned(),
                     },
                 ));
-                body = body.push(line(
+                body = body.push(step(
                     status.battle_net,
                     "Battle.net",
                     match status.battle_net {
@@ -1318,23 +1416,23 @@ impl Lightforge {
         }
 
         if self.setup_running {
-            body = body.push(horizontal_rule(1));
+            let mut log = column![].spacing(theme::XS);
             for entry in &self.setup_sample.log {
-                body = body.push(text(entry.clone()).size(12).color(theme::SUBTEXT));
+                log = log.push(muted(entry.clone(), theme::CAPTION));
             }
-            body = body.push(match self.setup_sample.fraction() {
-                Some(fraction) => Element::from(progress_bar(0.0..=1.0, fraction).height(10)),
-                // An install with no content-length still has to look alive.
-                None => Element::from(
-                    text(format!("{:.0} MB", self.setup_sample.done as f64 / 1e6))
-                        .size(12)
-                        .color(theme::SUBTEXT),
-                ),
+            log = log.push(match self.setup_sample.fraction() {
+                Some(fraction) => Element::from(progress_bar(0.0..=1.0, fraction).height(6)),
+                // A download with no content-length still has to look alive.
+                None => Element::from(mono(format!(
+                    "{:.0} MB",
+                    self.setup_sample.done as f64 / 1e6
+                ))),
             });
+            body = body.push(container(log).padding(theme::MD).style(theme::card));
         }
 
         if let Some(e) = &self.error {
-            body = body.push(text(format!("⚠ {e}")).size(13).color(theme::ERROR));
+            body = body.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
         }
 
         let ready = self.setup.as_ref().is_some_and(|s| s.is_ready());
@@ -1343,19 +1441,27 @@ impl Lightforge {
             (false, true) => "Re-run setup",
             (false, false) => "Set up Lightforge",
         };
-        let action = button(text(label).size(18))
-            .style(theme::filled(if ready { theme::PAUSE } else { theme::INSTALL }))
-            .padding([12, 24])
-            .width(Length::Fixed(240.0));
-        body = body.push(match self.setup_running {
-            true => action,
-            false => action.on_press(Message::RunSetup),
-        });
+        body = body.push(
+            action_button(
+                label,
+                match ready {
+                    true => theme::PAUSE,
+                    false => theme::INSTALL,
+                },
+                Message::RunSetup,
+            )
+            .width(220.0)
+            .enabled(!self.setup_running),
+        );
 
-        column![self.header(), Space::with_height(Length::Fixed(8.0)), body]
-            .spacing(12)
-            .padding(24)
-            .into()
+        self.page(
+            "Set up Lightforge",
+            Some(
+                "Proton, the Wine prefix and Battle.net. Each step is skipped if it is already done."
+                    .to_owned(),
+            ),
+            body.into(),
+        )
     }
 
     /// Proton pinning, asset source, and the notify-only update check.
@@ -1374,183 +1480,170 @@ impl Lightforge {
             .product(&self.selected.code)
             .and_then(|p| p.profile.proton_ge_version.clone());
 
-        let mut body = column![text("Settings").size(26)].spacing(14);
+        fn field_row<'a>(
+            label: String,
+            control: Element<'a, Message>,
+        ) -> iced::widget::Row<'a, Message> {
+            row![muted(label, theme::LABEL).width(Length::Fixed(150.0)), control]
+                .spacing(theme::MD)
+                .align_y(Alignment::Center)
+        }
 
-        body = body.push(text("Proton").size(17));
-        body = body.push(
-            row![
-                text("Default").size(13).width(Length::Fixed(140.0)),
-                pick_list(
-                    installed.clone(),
-                    Some(ProtonChoice(self.config.default_proton.version().map(str::to_owned))),
-                    Message::PinDefaultProton,
+        let proton = container(
+            column![
+                text("Proton").size(theme::HEADING),
+                field_row(
+                    "Default".to_owned(),
+                    pick_list(
+                        installed.clone(),
+                        Some(ProtonChoice(
+                            self.config.default_proton.version().map(str::to_owned)
+                        )),
+                        Message::PinDefaultProton,
+                    )
+                    .text_size(theme::BODY)
+                    .padding(theme::SM)
+                    .into(),
+                ),
+                field_row(
+                    self.selected.label.clone(),
+                    pick_list(installed, Some(ProtonChoice(product_pin)), Message::PinProductProton)
+                        .text_size(theme::BODY)
+                        .padding(theme::SM)
+                        .into(),
+                ),
+                muted(
+                    "A product with no pin of its own follows the default.".to_owned(),
+                    theme::CAPTION,
+                ),
+                row![
+                    secondary("Check for updates", Message::CheckProton).enabled(true),
+                    muted(self.proton_notice.clone().unwrap_or_default(), theme::LABEL),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
+            ]
+            .spacing(theme::SM),
+        )
+        .padding(theme::MD)
+        .style(theme::card);
+
+        let theming = container(
+            column![
+                text("Theming").size(theme::HEADING),
+                text_input(
+                    "https://lightforge.tuxcore.pro/assets/manifest.json",
+                    &self.assets_input
                 )
-                .padding(8),
-            ]
-            .spacing(10)
-            .align_y(Alignment::Center),
-        );
-        body = body.push(
-            row![
-                text(self.selected.label.clone()).size(13).width(Length::Fixed(140.0)),
-                pick_list(installed, Some(ProtonChoice(product_pin)), Message::PinProductProton)
-                    .padding(8),
-            ]
-            .spacing(10)
-            .align_y(Alignment::Center),
-        );
-        body = body.push(
-            text("A product with no pin of its own follows the default.")
-                .size(11)
-                .color(theme::SUBTEXT),
-        );
-        body = body.push(
-            row![
-                button(text("Check for updates").size(13))
-                    .on_press(Message::CheckProton)
-                    .style(theme::quiet)
-                    .padding([6, 12]),
-                text(self.proton_notice.clone().unwrap_or_default())
-                    .size(12)
-                    .color(theme::SUBTEXT),
-            ]
-            .spacing(10)
-            .align_y(Alignment::Center),
-        );
-
-        body = body.push(horizontal_rule(1));
-        body = body.push(text("Theming").size(17));
-        body = body.push(
-            text_input("https://lightforge.tuxcore.pro/assets/manifest.json", &self.assets_input)
                 .on_input(Message::AssetsSourceChanged)
                 .on_submit(Message::SaveSettings)
-                .padding(8),
-        );
-        body = body.push(
-            text("A URL, or a local directory to theme from while the endpoint is not live. Empty means no theming.")
-                .size(11)
-                .color(theme::SUBTEXT),
-        );
-        body = body.push(
-            button(text("Save").size(14))
-                .on_press(Message::SaveSettings)
-                .style(theme::filled(theme::BATTLE_NET))
-                .padding([8, 20]),
-        );
+                .style(theme::field)
+                .size(theme::BODY)
+                .padding(theme::SM),
+                muted(
+                    "A URL, or a local directory to theme from. Empty means no theming."
+                        .to_owned(),
+                    theme::CAPTION,
+                ),
+                action_button("Save", theme::ACCENT, Message::SaveSettings).enabled(true),
+            ]
+            .spacing(theme::SM),
+        )
+        .padding(theme::MD)
+        .style(theme::card);
 
+        let mut body = column![proton, theming].spacing(theme::MD);
         if let Some(dirs) = &self.dirs {
-            body = body.push(horizontal_rule(1));
-            body = body.push(
-                text(format!("config: {}", dirs.config_file().display()))
-                    .size(11)
-                    .color(theme::SUBTEXT),
-            );
+            body = body.push(mono(format!("config: {}", dirs.config_file().display())));
         }
         if let Some(e) = &self.error {
-            body = body.push(text(format!("⚠ {e}")).size(13).color(theme::ERROR));
+            body = body.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
         }
 
-        column![
-            self.header(),
-            Space::with_height(Length::Fixed(8.0)),
-            scrollable(body).height(Length::Fill),
-        ]
-        .spacing(12)
-        .padding(24)
+        self.page("Settings", None, body.into())
+    }
+}
+
+/// Secondary text at a given size.
+fn muted<'a>(content: String, size: u16) -> iced::widget::Text<'a> {
+    text(content).size(size).color(theme::MUTED)
+}
+
+/// Machine text — versions, paths, ids. Monospaced so a version number cannot
+/// be mistaken for prose, and so columns line up without a table.
+fn mono<'a>(content: String) -> iced::widget::Text<'a> {
+    text(content)
+        .size(theme::CAPTION)
+        .font(theme::MONO)
+        .color(theme::MUTED)
+}
+
+/// A status pill.
+fn pill<'a>(content: String, color: iced::Color) -> Element<'a, Message> {
+    container(text(content).size(theme::CAPTION))
+        .padding([2, theme::SM])
+        .style(theme::badge(color))
         .into()
-    }
+}
 
-    /// The action panel: status, progress, and every button.
-    fn panel(&self, action: &ActionState) -> Element<'_, Message> {
-        let color = match action {
-            ActionState::Install => theme::INSTALL,
-            ActionState::Update { .. } => theme::UPDATE,
-            ActionState::Play => theme::PLAY,
-            ActionState::Downloading(_) | ActionState::Paused(_) => theme::PAUSE,
-            ActionState::Error { .. } => theme::ERROR,
-            ActionState::Unknown => theme::PAUSE,
-        };
+/// An empty state: what happened, and what to do about it.
+fn empty<'a>(headline: &str, hint: &str) -> Element<'a, Message> {
+    container(
+        column![
+            text(headline.to_owned()).size(theme::BODY),
+            muted(hint.to_owned(), theme::CAPTION),
+        ]
+        .spacing(theme::XS)
+        .align_x(Alignment::Center),
+    )
+    .padding(theme::XL)
+    .center_x(Length::Fill)
+    .style(theme::card)
+    .into()
+}
 
-        let mut panel = column![].spacing(10);
+/// A button that is disabled rather than absent when it cannot be used —
+/// buttons appearing and disappearing makes a UI feel unstable.
+struct Action<'a> {
+    inner: button::Button<'a, Message>,
+    message: Message,
+}
 
-        // Status line: the error if there is one, else what we last learned.
-        panel = panel.push(match &self.error {
-            Some(e) => text(format!("⚠ {e}")).size(13).color(theme::ERROR),
-            None => text(self.status.clone()).size(13).color(theme::SUBTEXT),
-        });
-
-        if let Some(progress) = progress_of(action) {
-            panel = panel.push(progress_bar(0.0..=1.0, progress.fraction()).height(10));
-            panel = panel.push(
-                text(format!(
-                    "{}  ·  {}  ·  {}",
-                    bytes_of(progress.downloaded_bytes, progress.total_bytes),
-                    rate_of(progress.bytes_per_second),
-                    eta_of(progress),
-                ))
-                .size(12)
-                .color(theme::SUBTEXT),
-            );
-            if !self.sample.stage.is_empty() {
-                panel = panel.push(text(self.sample.stage.clone()).size(12).color(theme::SUBTEXT));
-            }
+impl<'a> Action<'a> {
+    fn enabled(self, enabled: bool) -> button::Button<'a, Message> {
+        match enabled {
+            true => self.inner.on_press(self.message),
+            false => self.inner,
         }
-
-        // Manage Subscription sits directly above the primary button, per spec:
-        // subscription status is something a player checks per title.
-        panel = panel.push(
-            button(text("Manage Subscription").size(13))
-                .on_press(Message::ManageSubscription)
-                .style(theme::quiet)
-                .padding([6, 12]),
-        );
-
-        let primary = button(text(action.label()).size(20))
-            .style(theme::filled(color))
-            .padding([14, 28])
-            .width(Length::Fixed(260.0));
-        panel = panel.push(match self.busy || matches!(action, ActionState::Unknown) {
-            true => primary,
-            false => primary.on_press(Message::Primary),
-        });
-
-        let battle_net = button(text("Launch via Battle.net").size(14))
-            .style(theme::filled(theme::BATTLE_NET))
-            .padding([8, 20])
-            .width(Length::Fixed(260.0));
-        panel = panel.push(match self.busy {
-            true => battle_net,
-            false => battle_net.on_press(Message::BattleNet),
-        });
-        panel = panel.push(
-            text("Signs in through Battle.net so the in-game shop works.")
-                .size(11)
-                .color(theme::SUBTEXT),
-        );
-
-        panel = panel.push(
-            row![
-                button(text("Open Files").size(13))
-                    .on_press(Message::OpenFiles)
-                    .style(theme::quiet)
-                    .padding([6, 12]),
-                button(text("Copy Debug Info").size(13))
-                    .on_press(Message::CopyDebug)
-                    .style(theme::quiet)
-                    .padding([6, 12]),
-            ]
-            .spacing(8),
-        );
-
-        container(panel)
-            .padding(20)
-            .style(|_| container::Style {
-                background: Some(theme::PANEL.into()),
-                border: iced::Border { radius: 10.0.into(), ..Default::default() },
-                ..Default::default()
-            })
-            .into()
     }
+
+    fn width(mut self, width: f32) -> Self {
+        self.inner = self.inner.width(Length::Fixed(width));
+        self
+    }
+}
+
+fn action_button(label: &str, color: iced::Color, message: Message) -> Action<'static> {
+    Action {
+        inner: button(text(label.to_owned()).size(theme::LABEL))
+            .style(theme::filled(color))
+            .padding([theme::SM, theme::MD]),
+        message,
+    }
+}
+
+fn secondary(label: &str, message: Message) -> Action<'static> {
+    Action {
+        inner: button(text(label.to_owned()).size(theme::LABEL))
+            .style(theme::outlined)
+            .padding([theme::XS, theme::MD]),
+        message,
+    }
+}
+
+/// A separator between inline facts.
+fn dot<'a>() -> Element<'a, Message> {
+    text("·").size(theme::CAPTION).color(theme::MUTED).into()
 }
 
 /// Map a transfer sample onto the whole product.

@@ -55,9 +55,14 @@ impl Config {
     /// Config seeded with the official products, for a first run.
     pub fn with_default_products() -> Self {
         Self {
+            // The live WoW products, named the way Battle.net names them.
+            // Labels stay generic where the content rotates: "Classic" is
+            // whatever expansion the progression realms are on.
             products: vec![
                 Product::new(ProductCode::Retail, "World of Warcraft"),
-                Product::new(ProductCode::Classic, "WoW Classic"),
+                Product::new(ProductCode::ClassicEra, "World of Warcraft Classic"),
+                Product::new(ProductCode::Classic, "WoW Classic (progression)"),
+                Product::new(ProductCode::ClassicBeta, "World of Warcraft: Forever — Beta"),
                 Product::new(ProductCode::Ptr, "WoW PTR"),
             ],
             ..Self::default()

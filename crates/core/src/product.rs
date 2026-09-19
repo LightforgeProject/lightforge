@@ -29,8 +29,11 @@ pub enum ProductCode {
     Ptr,
     /// Classic PTR — `wow_classic_ptr`
     ClassicPtr,
-    /// Beta — `wow_beta`
+    /// Retail beta — `wow_beta`
     Beta,
+    /// Classic-line beta — `wow_classic_beta`. Currently the "World of
+    /// Warcraft: Forever" beta, which ships on the 1.x line.
+    ClassicBeta,
     /// Any code Lightforge doesn't model explicitly, including custom entries.
     Custom(String),
 }
@@ -44,6 +47,7 @@ impl ProductCode {
             Self::Ptr => "wowt",
             Self::ClassicPtr => "wow_classic_ptr",
             Self::Beta => "wow_beta",
+            Self::ClassicBeta => "wow_classic_beta",
             Self::Custom(code) => code,
         }
     }
@@ -59,7 +63,7 @@ impl ProductCode {
         match self {
             Self::Retail | Self::Ptr => "Wow.exe",
             Self::Classic | Self::ClassicEra | Self::ClassicPtr => "WowClassic.exe",
-            Self::Beta => "WowB.exe",
+            Self::Beta | Self::ClassicBeta => "WowB.exe",
             Self::Custom(_) => "Wow.exe",
         }
     }
@@ -74,6 +78,8 @@ impl ProductCode {
             Self::Ptr => "_ptr_",
             Self::ClassicPtr => "_classic_ptr_",
             Self::Beta => "_beta_",
+            // A real install carries `_classic_beta_/WowB.exe`.
+            Self::ClassicBeta => "_classic_beta_",
             Self::Custom(code) => code,
         }
     }
@@ -95,6 +101,7 @@ impl FromStr for ProductCode {
             "wowt" => Self::Ptr,
             "wow_classic_ptr" => Self::ClassicPtr,
             "wow_beta" => Self::Beta,
+            "wow_classic_beta" => Self::ClassicBeta,
             other => Self::Custom(other.to_owned()),
         })
     }
