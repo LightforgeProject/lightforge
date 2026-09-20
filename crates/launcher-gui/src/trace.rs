@@ -8,17 +8,28 @@
 //!
 //! Off by default and free when off: one atomic read per call.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::Instant;
 
 static START: OnceLock<Instant> = OnceLock::new();
 static ON: OnceLock<bool> = OnceLock::new();
+static FRAMES: OnceLock<bool> = OnceLock::new();
+/// Microseconds since [`begin`] at the end of the previous frame.
+static LAST_FRAME: AtomicU64 = AtomicU64::new(0);
 
 /// Start the clock. Called as early as `main` can manage.
 pub fn begin() {
+    let value = std::env::var("LIGHTFORGE_TRACE").unwrap_or_default();
     let _ = START.set(Instant::now());
     let _ = ON.set(std::env::var_os("LIGHTFORGE_TRACE").is_some());
+    // Per-frame timing is noisy enough to want asking for by name.
+    let _ = FRAMES.set(value.split(',').any(|v| v.trim() == "frames"));
     mark("process start");
+}
+
+fn micros() -> u64 {
+    START.get().map(|s| s.elapsed().as_micros() as u64).unwrap_or(0)
 }
 
 /// Stamp one moment.
@@ -40,4 +51,21 @@ pub fn once(slot: &'static std::sync::atomic::AtomicBool, what: impl std::fmt::D
     if !slot.swap(true, Ordering::Relaxed) {
         mark(what);
     }
+}
+
+/// Stamp one rendered frame: how long the view tree took to build, and how
+/// long since the previous frame.
+///
+/// The gap matters as much as the cost. A resize that feels delayed while
+/// frames stay cheap is the window system throttling redraws, not the UI
+/// being slow to draw — two problems with nothing in common.
+pub fn frame(build: std::time::Duration) {
+    if !FRAMES.get().copied().unwrap_or(false) {
+        return;
+    }
+    let now = micros();
+    let previous = LAST_FRAME.swap(now, Ordering::Relaxed);
+    let gap = now.saturating_sub(previous) as f64 / 1000.0;
+    let build = build.as_secs_f64() * 1000.0;
+    eprintln!("[frame] {:>9.1} ms  build {build:>6.2} ms  gap {gap:>7.1} ms", now as f64 / 1000.0);
 }

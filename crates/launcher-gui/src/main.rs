@@ -943,12 +943,15 @@ impl Lightforge {
             trace::once(&THEMED, "first frame with branding");
         }
 
-        match self.screen {
+        let started = Instant::now();
+        let screen = match self.screen {
             Screen::Dashboard => self.dashboard(),
             Screen::Setup => self.setup_screen(),
             Screen::Settings => self.settings(),
             Screen::Addons => self.addons_screen(),
-        }
+        };
+        trace::frame(started.elapsed());
+        screen
     }
 
     /// Title, product picker, and navigation.
