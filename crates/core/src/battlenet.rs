@@ -545,8 +545,11 @@ impl Launch {
 fn game_uid(code: &ProductCode) -> String {
     match code {
         // PTR and beta builds of retail live in the retail tile's version list.
-        ProductCode::Retail | ProductCode::Ptr | ProductCode::Beta => "WoW",
-        ProductCode::Classic | ProductCode::ClassicEra | ProductCode::ClassicPtr => "WoWC",
+        ProductCode::Retail | ProductCode::Ptr | ProductCode::Ptr2 | ProductCode::Beta => "WoW",
+        ProductCode::Classic
+        | ProductCode::ClassicEra
+        | ProductCode::ClassicPtr
+        | ProductCode::EraPtr => "WoWC",
         ProductCode::ClassicBeta => "WoWF",
         // An unknown product is likelier to be a retail-line server than
         // anything else, and the retail tile at least exists.

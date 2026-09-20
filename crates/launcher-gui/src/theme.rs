@@ -15,7 +15,7 @@
 //! iced gives no cascade, so "restraint" here means type, spacing and one
 //! accent rather than effects.
 
-use iced::widget::{button, container, text_input};
+use iced::widget::{button, container, overlay, pick_list, text_input};
 use iced::{Background, Border, Color, Font, Theme};
 
 // ---------------------------------------------------------------- palette --
@@ -170,6 +170,30 @@ pub fn floating(_theme: &Theme) -> container::Style {
     }
 }
 
+/// The header band, running edge to edge across the top of every screen.
+///
+/// The band is the point. On the dashboard the header sits directly on
+/// product artwork, and a title over a bright sky is unreadable — so it gets
+/// the same ground the action panel stands on, which also brackets the art
+/// between two matching strips instead of letting it run under loose text.
+pub fn ribbon(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(PANEL)),
+        ..container::Style::default()
+    }
+}
+
+/// The hairline closing the band off from the artwork below it.
+///
+/// Its own element because a [`Border`] applies to all four sides and only
+/// the bottom edge wants a line here.
+pub fn ribbon_edge(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(BORDER_OVER_ART)),
+        ..container::Style::default()
+    }
+}
+
 /// One row in a list. Quiet enough to repeat forty times.
 pub fn row(_theme: &Theme) -> container::Style {
     container::Style {
@@ -255,6 +279,44 @@ pub fn selected(_theme: &Theme, _status: button::Status) -> button::Style {
         text_color: ACCENT,
         border: Border { radius: RADIUS_SM.into(), ..Border::default() },
         ..button::Style::default()
+    }
+}
+
+/// The branch picker, and the list it drops down.
+///
+/// iced's default is a light control, which was tolerable when the picker sat
+/// on the page and is not once it sits inside the header band. Both halves are
+/// styled: the closed control and its overlay menu are separate types, and
+/// styling only one leaves a pale list hanging off a dark button.
+pub fn picker(_theme: &Theme, status: pick_list::Status) -> pick_list::Style {
+    let hovered = matches!(status, pick_list::Status::Hovered | pick_list::Status::Opened);
+    pick_list::Style {
+        background: Background::Color(match hovered {
+            true => RAISED,
+            false => SURFACE,
+        }),
+        text_color: TEXT,
+        placeholder_color: MUTED,
+        handle_color: MUTED,
+        border: Border {
+            color: match hovered {
+                true => BORDER_OVER_ART,
+                false => BORDER,
+            },
+            width: 1.0,
+            radius: RADIUS_SM.into(),
+        },
+    }
+}
+
+/// The open list behind [`picker`].
+pub fn picker_menu(_theme: &Theme) -> overlay::menu::Style {
+    overlay::menu::Style {
+        background: Background::Color(SURFACE),
+        text_color: TEXT,
+        border: Border { color: BORDER, width: 1.0, radius: RADIUS_SM.into() },
+        selected_background: Background::Color(Color { a: 0.18, ..ACCENT }),
+        selected_text_color: TEXT,
     }
 }
 

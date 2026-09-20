@@ -38,7 +38,7 @@ use lightforge_core::config::Config;
 use lightforge_core::debug::DebugInfo;
 use lightforge_core::net::Http;
 use lightforge_core::paths::{AppDirs, Layout};
-use lightforge_core::product::ProductCode;
+use lightforge_core::product::{Branch, Product, ProductCode, ProductLine};
 use lightforge_core::state::{self, ActionState, Local};
 use lightforge_core::proton::ProtonPin;
 use lightforge_core::setup::Status as SetupStatus;
@@ -107,9 +107,13 @@ fn main() -> iced::Result {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Selected(Choice),
     Refreshed(ProductCode, Box<Refreshed>),
     Themed(ProductCode, Box<tasks::Themed>),
+    /// A tile in the product bar was clicked.
+    LineSelected(ProductLine),
+    /// A branch was picked for the selected line. Adds the product first when
+    /// the branch was on offer but not configured.
+    BranchSelected(BranchChoice),
     /// Pre-flight finished; `Launch` says what it was clearing the way for.
     PreflightDone(Launch, Result<(), String>),
     /// Diagnostic only: subscribed to solely under `LIGHTFORGE_TRACE=frames`.
@@ -210,6 +214,30 @@ impl std::fmt::Display for Choice {
     }
 }
 
+/// One entry in the branch dropdown: a build of the selected line.
+///
+/// Carries whether the product is configured so the list can offer branches
+/// the user has never set up — picking one is how you add it, which beats
+/// hand-editing `config.toml` to try a PTR.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BranchChoice {
+    code: ProductCode,
+    branch: Branch,
+    configured: bool,
+}
+
+impl std::fmt::Display for BranchChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.configured {
+            true => f.write_str(self.branch.label()),
+            // Said plainly in the list rather than greyed out: iced's
+            // pick_list cannot style one entry differently, and a silently
+            // different-looking row explains nothing anyway.
+            false => write!(f, "{} — add", self.branch.label()),
+        }
+    }
+}
+
 /// What a pre-flight pass is clearing the way for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Launch {
@@ -232,6 +260,9 @@ struct Lightforge {
     manifest: Option<Arc<Manifest>>,
     /// Every configured product's bar icon, for those that have one.
     icons: HashMap<ProductCode, std::path::PathBuf>,
+    /// The branch last used in each line, so returning to a tile returns to
+    /// the build you were on rather than snapping back to live.
+    last_branch: HashMap<ProductLine, ProductCode>,
     choices: Vec<Choice>,
     selected: Choice,
 
@@ -317,6 +348,7 @@ impl Lightforge {
             pipeline,
             manifest: None,
             icons: HashMap::new(),
+            last_branch: HashMap::new(),
             choices,
             selected: selected.clone(),
             local: Local::default(),
@@ -472,16 +504,24 @@ impl Lightforge {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Selected(choice) => {
-                if choice == self.selected {
-                    return Task::none();
+            Message::LineSelected(line) => self.select_line(&line),
+
+            Message::BranchSelected(pick) => {
+                // An unconfigured branch is offered, not hidden — picking it
+                // is how it gets added, which beats hand-editing config.toml
+                // to try a PTR for an afternoon.
+                if !pick.configured {
+                    let label = format!("{} {}", pick.code.line().label(), pick.branch.label());
+                    self.config
+                        .products
+                        .push(Product::new(pick.code.clone(), label.clone()));
+                    self.save_config();
+                    self.choices.push(Choice { code: pick.code.clone(), label });
                 }
-                self.selected = choice.clone();
-                self.local = Local::default();
-                self.remote = None;
-                self.branding = None;
-                self.status = "checking…".to_owned();
-                self.reload(choice.code)
+                let Some(choice) = self.choices.iter().find(|c| c.code == pick.code).cloned() else {
+                    return Task::none();
+                };
+                self.select(choice)
             }
 
             Message::Refreshed(code, refreshed) => {
@@ -1099,29 +1139,56 @@ impl Lightforge {
         bar = bar.push(nav("Addons", Screen::Addons));
         bar = bar.push(nav("Setup", Screen::Setup));
         bar = bar.push(nav("Settings", Screen::Settings));
-        bar.into()
+
+        column![
+            container(bar).width(Length::Fill).padding([theme::SM, theme::LG]).style(theme::ribbon),
+            container(Space::with_height(Length::Fixed(1.0)))
+                .width(Length::Fill)
+                .style(theme::ribbon_edge),
+        ]
+        .into()
     }
 
-    /// One tile per configured product, the selected one marked.
+    /// The configured lines, in the order their first product appears.
     ///
-    /// A product with no icon in the manifest falls back to its short name,
-    /// so the bar is complete and usable before any art exists and fills in
-    /// one product at a time as art is published. Both kinds carry a tooltip
-    /// with the full display name, which is the only place the long
-    /// user-configured name still fits.
-    fn product_bar(&self) -> Vec<Element<'_, Message>> {
-        self.choices
-            .iter()
-            .map(|choice| {
-                let selected = choice.code == self.selected.code;
+    /// A line, not a product: PTR and beta are builds of a game, not games
+    /// beside it, so five World of Warcrafts collapse to three tiles and a
+    /// version picker.
+    fn lines(&self) -> Vec<ProductLine> {
+        let mut lines: Vec<ProductLine> = Vec::new();
+        for choice in &self.choices {
+            let line = choice.code.line();
+            if !lines.contains(&line) {
+                lines.push(line);
+            }
+        }
+        lines
+    }
 
-                let face: Element<Message> = match self.icons.get(&choice.code) {
+    /// One tile per configured line, the selected one marked.
+    ///
+    /// A line with no icon in the manifest falls back to its label, so the bar
+    /// is complete and usable before any art exists and fills in one line at a
+    /// time as art is published.
+    fn product_bar(&self) -> Vec<Element<'_, Message>> {
+        let current = self.selected.code.line();
+
+        self.lines()
+            .into_iter()
+            .map(|line| {
+                let selected = line == current;
+                let head = line.head();
+
+                // The line's mark is its live build's, since that is the
+                // product the art was published against; a PTR is the same
+                // game wearing the same face.
+                let face: Element<Message> = match self.icons.get(&head) {
                     Some(path) => image(image::Handle::from_path(path))
                         .content_fit(ContentFit::Contain)
                         .width(Length::Fixed(theme::TILE))
                         .height(Length::Fixed(theme::TILE))
                         .into(),
-                    None => container(text(choice.code.short_name()).size(theme::LABEL))
+                    None => container(text(line.label().to_owned()).size(theme::LABEL))
                         .center_x(Length::Shrink)
                         .center_y(Length::Fixed(theme::TILE))
                         .into(),
@@ -1130,14 +1197,12 @@ impl Lightforge {
                 let tile = button(face).padding([theme::XS, theme::SM]);
                 let tile = match selected {
                     true => tile.style(theme::selected),
-                    false => tile
-                        .style(theme::ghost)
-                        .on_press(Message::Selected(choice.clone())),
+                    false => tile.style(theme::ghost).on_press(Message::LineSelected(line.clone())),
                 };
 
                 tooltip(
                     tile,
-                    container(text(choice.label.clone()).size(theme::LABEL))
+                    container(text(line.label().to_owned()).size(theme::LABEL))
                         .padding([theme::XS, theme::SM])
                         .style(theme::floating),
                     tooltip::Position::Bottom,
@@ -1145,6 +1210,68 @@ impl Lightforge {
                 .into()
             })
             .collect()
+    }
+
+    /// Every branch of the selected line, configured or not.
+    ///
+    /// `None` when the line has exactly one branch to offer — a picker with a
+    /// single entry is furniture.
+    fn branch_choices(&self) -> Option<(Vec<BranchChoice>, BranchChoice)> {
+        let line = self.selected.code.line();
+        let choices: Vec<BranchChoice> = line
+            .branches()
+            .into_iter()
+            .map(|code| BranchChoice {
+                configured: self.choices.iter().any(|c| c.code == code),
+                branch: code.branch(),
+                code,
+            })
+            .collect();
+
+        if choices.len() < 2 {
+            return None;
+        }
+        let current = choices.iter().find(|c| c.code == self.selected.code)?.clone();
+        Some((choices, current))
+    }
+
+    /// Switch to `line`, keeping whichever of its branches was last in use.
+    ///
+    /// Falls back to the line's live build, then to whatever of it *is*
+    /// configured: selecting a tile must always land somewhere.
+    fn select_line(&mut self, line: &ProductLine) -> Task<Message> {
+        let remembered = self.last_branch.get(line).cloned();
+        let configured = |code: &ProductCode| self.choices.iter().find(|c| &c.code == code).cloned();
+
+        let choice = remembered
+            .as_ref()
+            .and_then(configured)
+            .or_else(|| configured(&line.head()))
+            .or_else(|| {
+                self.choices
+                    .iter()
+                    .find(|c| &c.code.line() == line)
+                    .cloned()
+            });
+
+        match choice {
+            Some(choice) => self.select(choice),
+            None => Task::none(),
+        }
+    }
+
+    /// Switch to one product, remembering it as its line's current branch.
+    fn select(&mut self, choice: Choice) -> Task<Message> {
+        if choice.code == self.selected.code {
+            return Task::none();
+        }
+        self.last_branch.insert(choice.code.line(), choice.code.clone());
+        self.selected = choice.clone();
+        self.local = Local::default();
+        self.remote = None;
+        self.branding = None;
+        self.status = "checking…".to_owned();
+        self.reload(choice.code)
     }
 
     /// A screen that is not the dashboard: header, title, content.
@@ -1161,11 +1288,10 @@ impl Lightforge {
 
         column![
             self.header(),
-            heading,
-            scrollable(content).height(Length::Fill),
+            column![heading, scrollable(content).height(Length::Fill)]
+                .spacing(theme::LG)
+                .padding(theme::LG),
         ]
-        .spacing(theme::LG)
-        .padding(theme::LG)
         .into()
     }
 
@@ -1191,18 +1317,20 @@ impl Lightforge {
 
         let content = column![
             self.header(),
-            // Extra room above: at the column's own spacing the wordmark
-            // crowds the title and the pair reads as one jammed corner rather
-            // than as the app's name with a product under it.
-            container(logo)
-                .align_x(Alignment::Start)
-                .width(Length::Fill)
-                .padding([theme::MD, 0]),
-            Space::with_height(Length::Fill),
-            self.action_panel(&action),
-        ]
-        .spacing(theme::MD)
-        .padding(theme::LG);
+            column![
+                // Extra room above: at the column's own spacing the wordmark
+                // crowds the band and the pair reads as one jammed corner
+                // rather than as the app's name with a product under it.
+                container(logo)
+                    .align_x(Alignment::Start)
+                    .width(Length::Fill)
+                    .padding([theme::MD, 0]),
+                Space::with_height(Length::Fill),
+                self.action_panel(&action),
+            ]
+            .spacing(theme::MD)
+            .padding(theme::LG),
+        ];
 
         match self.branding.as_ref() {
             Some(b) => stack![
@@ -1243,6 +1371,26 @@ impl Lightforge {
         };
 
         let mut left = column![].spacing(theme::SM).width(Length::Fill);
+
+        // The branch belongs here rather than in the header: it is not
+        // navigation, it decides what every line below it refers to — which
+        // version is "latest", which install "installed", which files "Open
+        // Files" opens. Only shown where there is a choice to make.
+        if let Some((branches, current)) = self.branch_choices() {
+            left = left.push(
+                row![
+                    muted("version".to_owned(), theme::CAPTION),
+                    pick_list(branches, Some(current), Message::BranchSelected)
+                        .text_size(theme::LABEL)
+                        .padding([theme::XS, theme::SM])
+                        .style(theme::picker)
+                        .menu_style(theme::picker_menu),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
+            );
+        }
+
         left = left.push(match &self.error {
             Some(e) => text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR),
             None => text(self.status.clone()).size(theme::LABEL).color(theme::MUTED),

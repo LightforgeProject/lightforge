@@ -27,8 +27,13 @@ pub enum ProductCode {
     ClassicEra,
     /// Retail PTR — `wowt`
     Ptr,
+    /// The second retail PTR realm — `wowxptr`. Blizzard runs two at once
+    /// during a patch cycle, and they carry different builds.
+    Ptr2,
     /// Classic PTR — `wow_classic_ptr`
     ClassicPtr,
+    /// Classic Era PTR — `wow_classic_era_ptr`
+    EraPtr,
     /// Retail beta — `wow_beta`
     Beta,
     /// Classic-line beta — `wow_classic_beta`. Currently the "World of
@@ -45,10 +50,33 @@ impl ProductCode {
             Self::Classic => "wow_classic",
             Self::ClassicEra => "wow_classic_era",
             Self::Ptr => "wowt",
+            Self::Ptr2 => "wowxptr",
             Self::ClassicPtr => "wow_classic_ptr",
+            Self::EraPtr => "wow_classic_era_ptr",
             Self::Beta => "wow_beta",
             Self::ClassicBeta => "wow_classic_beta",
             Self::Custom(code) => code,
+        }
+    }
+
+    /// Which game this product is a build of.
+    pub fn line(&self) -> ProductLine {
+        match self {
+            Self::Retail | Self::Ptr | Self::Ptr2 | Self::Beta => ProductLine::Retail,
+            Self::Classic | Self::ClassicPtr => ProductLine::Classic,
+            Self::ClassicEra | Self::EraPtr => ProductLine::ClassicEra,
+            Self::ClassicBeta => ProductLine::Forever,
+            Self::Custom(code) => ProductLine::Custom(code.clone()),
+        }
+    }
+
+    /// Which build of its line this product is.
+    pub fn branch(&self) -> Branch {
+        match self {
+            Self::Retail | Self::Classic | Self::ClassicEra | Self::Custom(_) => Branch::Live,
+            Self::Ptr | Self::ClassicPtr | Self::EraPtr => Branch::Ptr,
+            Self::Ptr2 => Branch::Ptr2,
+            Self::Beta | Self::ClassicBeta => Branch::Beta,
         }
     }
 
@@ -67,7 +95,9 @@ impl ProductCode {
             Self::Classic => "Classic",
             Self::ClassicEra => "Era",
             Self::Ptr => "PTR",
+            Self::Ptr2 => "PTR 2",
             Self::ClassicPtr => "C-PTR",
+            Self::EraPtr => "Era PTR",
             Self::Beta => "Beta",
             Self::ClassicBeta => "C-Beta",
             Self::Custom(code) => code,
@@ -83,8 +113,10 @@ impl ProductCode {
     /// flavor nobody has looked inside yet.
     pub fn executable(&self) -> &str {
         match self {
-            Self::Retail | Self::Ptr => "Wow.exe",
-            Self::Classic | Self::ClassicEra | Self::ClassicPtr => "WowClassic.exe",
+            Self::Retail | Self::Ptr | Self::Ptr2 => "Wow.exe",
+            Self::Classic | Self::ClassicEra | Self::ClassicPtr | Self::EraPtr => {
+                "WowClassic.exe"
+            }
             Self::Beta | Self::ClassicBeta => "WowB.exe",
             Self::Custom(_) => "Wow.exe",
         }
@@ -98,7 +130,9 @@ impl ProductCode {
             Self::Classic => "_classic_",
             Self::ClassicEra => "_classic_era_",
             Self::Ptr => "_ptr_",
+            Self::Ptr2 => "_xptr_",
             Self::ClassicPtr => "_classic_ptr_",
+            Self::EraPtr => "_classic_era_ptr_",
             Self::Beta => "_beta_",
             // A real install carries `_classic_beta_/WowB.exe`.
             Self::ClassicBeta => "_classic_beta_",
@@ -121,7 +155,9 @@ impl FromStr for ProductCode {
             "wow_classic" => Self::Classic,
             "wow_classic_era" => Self::ClassicEra,
             "wowt" => Self::Ptr,
+            "wowxptr" => Self::Ptr2,
             "wow_classic_ptr" => Self::ClassicPtr,
+            "wow_classic_era_ptr" => Self::EraPtr,
             "wow_beta" => Self::Beta,
             "wow_classic_beta" => Self::ClassicBeta,
             other => Self::Custom(other.to_owned()),
@@ -152,6 +188,96 @@ impl From<ProductCode> for String {
 impl fmt::Display for ProductCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// Which game a product is, with the branch factored out.
+///
+/// PTR and beta are *versions of* a game, not games beside it — Blizzard's own
+/// launcher presents one tile per line with a version picker behind it, and
+/// showing five World of Warcrafts in a row implies five different games.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ProductLine {
+    Retail,
+    Classic,
+    ClassicEra,
+    /// "World of Warcraft: Forever", currently beta-only. Its own line rather
+    /// than a branch of Era: Battle.net gives it its own game family (`WoWF`,
+    /// see [`crate::battlenet`]) and its own tile, and this bar is modelled on
+    /// that one. Its *addons* are still Era addons — compatibility and
+    /// identity are different questions.
+    Forever,
+    /// A code Lightforge doesn't model. Its own line of one, since nothing
+    /// can be assumed about what a custom server is a branch of.
+    Custom(String),
+}
+
+impl ProductLine {
+    /// The line's own name — no branch in it.
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Retail => "Retail",
+            Self::Classic => "Classic",
+            Self::ClassicEra => "Classic Era",
+            Self::Forever => "Forever",
+            Self::Custom(code) => code,
+        }
+    }
+
+    /// The product this line *is* when nobody has picked a branch: its live
+    /// one. Also what the UI themes a branch from when the branch has no art
+    /// of its own — Classic's PTR should look like Classic, not like whatever
+    /// the manifest happens to default to.
+    pub fn head(&self) -> ProductCode {
+        match self {
+            Self::Retail => ProductCode::Retail,
+            Self::Classic => ProductCode::Classic,
+            Self::ClassicEra => ProductCode::ClassicEra,
+            Self::Forever => ProductCode::ClassicBeta,
+            Self::Custom(code) => ProductCode::Custom(code.clone()),
+        }
+    }
+
+    /// Every branch of this line Lightforge knows, live first.
+    ///
+    /// Knowing about a branch is not the same as having it installed or even
+    /// configured — this is the menu, not the inventory.
+    pub fn branches(&self) -> Vec<ProductCode> {
+        match self {
+            Self::Retail => vec![ProductCode::Retail, ProductCode::Ptr, ProductCode::Ptr2, ProductCode::Beta],
+            Self::Classic => vec![ProductCode::Classic, ProductCode::ClassicPtr],
+            Self::ClassicEra => vec![ProductCode::ClassicEra, ProductCode::EraPtr],
+            Self::Forever => vec![ProductCode::ClassicBeta],
+            // Nothing is known about a custom code beyond itself.
+            Self::Custom(code) => vec![ProductCode::Custom(code.clone())],
+        }
+    }
+}
+
+/// Which build of a line a product is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Branch {
+    Live,
+    Ptr,
+    /// The second PTR realm, which only the retail line runs.
+    Ptr2,
+    Beta,
+}
+
+impl Branch {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Live => "Live",
+            Self::Ptr => "PTR",
+            Self::Ptr2 => "PTR 2",
+            Self::Beta => "Beta",
+        }
+    }
+}
+
+impl fmt::Display for Branch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label())
     }
 }
 
@@ -241,5 +367,66 @@ mod tests {
         assert_eq!(parsed, ProductCode::Custom("turtle_wow".into()));
         assert!(!parsed.is_official());
         assert_eq!(parsed.install_dir(), "turtle_wow");
+    }
+
+    #[test]
+    fn every_known_code_belongs_to_a_line_that_lists_it_back() {
+        let codes = [
+            ProductCode::Retail,
+            ProductCode::Ptr,
+            ProductCode::Ptr2,
+            ProductCode::Beta,
+            ProductCode::Classic,
+            ProductCode::ClassicPtr,
+            ProductCode::ClassicEra,
+            ProductCode::EraPtr,
+            ProductCode::ClassicBeta,
+        ];
+        for code in codes {
+            let line = code.line();
+            assert!(
+                line.branches().contains(&code),
+                "{} claims line {} but that line does not list it",
+                code.as_str(),
+                line.label()
+            );
+        }
+    }
+
+    #[test]
+    fn a_lines_head_is_the_live_branch_of_that_line() {
+        for line in [
+            ProductLine::Retail,
+            ProductLine::Classic,
+            ProductLine::ClassicEra,
+            ProductLine::Forever,
+        ] {
+            let head = line.head();
+            assert_eq!(head.line(), line, "{} head is in another line", line.label());
+            assert_eq!(
+                head,
+                line.branches()[0],
+                "{} head is not its first branch",
+                line.label()
+            );
+        }
+    }
+
+    #[test]
+    fn a_custom_code_is_its_own_line_of_one() {
+        let code = ProductCode::Custom("turtle_wow".into());
+        let line = code.line();
+        assert_eq!(line.branches(), vec![code.clone()]);
+        assert_eq!(line.head(), code);
+        assert_eq!(code.branch(), Branch::Live);
+    }
+
+    #[test]
+    fn the_new_codes_round_trip_through_their_strings() {
+        for code in [ProductCode::Ptr2, ProductCode::EraPtr] {
+            assert_eq!(code.as_str().parse::<ProductCode>().unwrap(), code);
+        }
+        assert_eq!(ProductCode::Ptr2.install_dir(), "_xptr_");
+        assert_eq!(ProductCode::EraPtr.install_dir(), "_classic_era_ptr_");
     }
 }

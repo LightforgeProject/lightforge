@@ -273,10 +273,12 @@ fn same_name(a: &str, b: &str) -> bool {
 /// product. Addon packages are published per flavor, not per product code.
 pub fn flavor_of(code: &ProductCode) -> &'static str {
     match code {
-        ProductCode::Retail | ProductCode::Ptr | ProductCode::Beta => "retail",
+        ProductCode::Retail | ProductCode::Ptr | ProductCode::Ptr2 | ProductCode::Beta => {
+            "retail"
+        }
         ProductCode::Classic | ProductCode::ClassicPtr => "classic",
         // The Forever beta runs on the 1.x line, so its addons are Era addons.
-        ProductCode::ClassicEra | ProductCode::ClassicBeta => "classic_era",
+        ProductCode::ClassicEra | ProductCode::EraPtr | ProductCode::ClassicBeta => "classic_era",
         // An unknown or custom product is almost always a retail-line server.
         ProductCode::Custom(_) => "retail",
     }
