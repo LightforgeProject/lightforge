@@ -210,10 +210,6 @@ enum Command {
         /// bandwidth bound: 8 measured 9-10 MB/s where 32 measured 25.
         #[arg(long, default_value_t = 32)]
         concurrency: usize,
-        /// Connection pools to spread requests over. The CDN speaks HTTP/2 and
-        /// gives one connection per host, which is the real ceiling.
-        #[arg(long, default_value_t = lightforge_core::net::DEFAULT_POOLS)]
-        pools: usize,
         /// Merge files separated by fewer than this many KiB into one request.
         #[arg(long, default_value_t = 64)]
         gap_kib: u32,
@@ -1054,7 +1050,6 @@ async fn main() -> Result<()> {
             checkpoint_mib,
             cancel_after,
             show_install,
-            pools,
         } => {
             use lightforge_core::net::Http;
             use lightforge_core::tact::download::Cancel;
@@ -1161,10 +1156,7 @@ async fn main() -> Result<()> {
                 }
             };
 
-            // Bulk transfer: spread over several connection pools, since the
-            // CDN's HTTP/2 gives one connection per host and that connection
-            // is the ceiling, not the stream count.
-            let http = Http::with_pools(pools)?;
+            let http = Http::new()?;
             let cancel = Cancel::new();
 
             if let Some(secs) = cancel_after {
