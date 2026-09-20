@@ -22,6 +22,7 @@ mod provision;
 mod tasks;
 mod theme;
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use iced::widget::{
@@ -30,9 +31,10 @@ use iced::widget::{
 };
 use iced::{Alignment, ContentFit, Element, Length, Subscription, Task};
 
-use lightforge_core::assets::{Branding, Pipeline, Store};
+use lightforge_core::assets::{Branding, Manifest, Pipeline, Store};
 use lightforge_core::config::Config;
 use lightforge_core::debug::DebugInfo;
+use lightforge_core::net::Http;
 use lightforge_core::paths::{AppDirs, Layout};
 use lightforge_core::product::ProductCode;
 use lightforge_core::state::{self, ActionState, Local};
@@ -63,7 +65,7 @@ fn main() -> iced::Result {
 enum Message {
     Selected(Choice),
     Refreshed(ProductCode, Box<Refreshed>),
-    Themed(ProductCode, Option<Branding>),
+    Themed(ProductCode, Box<tasks::Themed>),
     Primary,
     Tick,
     Downloaded(ProductCode, Result<Complete, String>),
@@ -163,7 +165,12 @@ struct Lightforge {
     dirs: Option<AppDirs>,
     config: Config,
     region: Region,
+    /// One client, one connection pool, for every request the update loop
+    /// starts. `None` only if reqwest failed to build one at startup.
+    http: Option<Http>,
     pipeline: Option<Pipeline>,
+    /// The branding manifest, read once and themed from thereafter.
+    manifest: Option<Arc<Manifest>>,
     choices: Vec<Choice>,
     selected: Choice,
 
@@ -245,7 +252,9 @@ impl Lightforge {
             dirs,
             config,
             region: Region::default(),
+            http: Http::new().ok(),
             pipeline,
+            manifest: None,
             choices,
             selected: selected.clone(),
             local: Local::default(),
@@ -295,16 +304,29 @@ impl Lightforge {
     fn reload(&self, code: ProductCode) -> Task<Message> {
         Task::batch([
             Task::perform(
-                tasks::refresh(self.layout.clone(), code.clone(), self.region),
+                tasks::refresh(
+                    self.http.clone(),
+                    self.layout.clone(),
+                    code.clone(),
+                    self.region,
+                ),
                 {
                     let code = code.clone();
                     move |r| Message::Refreshed(code.clone(), Box::new(r))
                 },
             ),
-            Task::perform(tasks::theme(self.pipeline.clone(), code.clone()), {
-                let code = code.clone();
-                move |b| Message::Themed(code.clone(), b)
-            }),
+            Task::perform(
+                tasks::theme(
+                    self.http.clone(),
+                    self.pipeline.clone(),
+                    self.manifest.clone(),
+                    code.clone(),
+                ),
+                {
+                    let code = code.clone();
+                    move |t| Message::Themed(code.clone(), Box::new(t))
+                },
+            ),
             Task::perform(addonwork::list(self.layout.clone(), code), |listing| {
                 Message::AddonsListed(Box::new(listing))
             }),
@@ -388,9 +410,14 @@ impl Lightforge {
                 Task::none()
             }
 
-            Message::Themed(code, branding) => {
+            Message::Themed(code, themed) => {
+                // The manifest describes every product, so it is kept even
+                // when a switch has already moved on from the one it themed.
+                if themed.manifest.is_some() {
+                    self.manifest = themed.manifest;
+                }
                 if code == self.selected.code {
-                    self.branding = branding;
+                    self.branding = themed.branding;
                 }
                 Task::none()
             }
@@ -623,6 +650,8 @@ impl Lightforge {
                     _ => None,
                 };
                 self.branding = None;
+                // The cached manifest belongs to the old source.
+                self.manifest = None;
                 self.reload(self.selected.code.clone())
             }
 
@@ -635,7 +664,10 @@ impl Lightforge {
                 match installed {
                     Some(version) => {
                         self.proton_notice = Some("checking…".to_owned());
-                        Task::perform(provision::check_proton(version), Message::ProtonChecked)
+                        Task::perform(
+                            provision::check_proton(self.http.clone(), version),
+                            Message::ProtonChecked,
+                        )
                     }
                     None => {
                         self.proton_notice = Some("no Proton build installed yet".to_owned());
@@ -677,6 +709,7 @@ impl Lightforge {
 
                 Task::perform(
                     addonwork::import(
+                        self.http.clone(),
                         self.layout.clone(),
                         self.selected.code.clone(),
                         token,
@@ -694,7 +727,12 @@ impl Lightforge {
                 self.error = None;
 
                 Task::perform(
-                    addonwork::update(self.layout.clone(), self.selected.code.clone(), tx),
+                    addonwork::update(
+                        self.http.clone(),
+                        self.layout.clone(),
+                        self.selected.code.clone(),
+                        tx,
+                    ),
                     |result| Message::AddonsFinished(result.map(Box::new)),
                 )
             }
@@ -764,7 +802,12 @@ impl Lightforge {
                 }
                 self.searching = true;
                 Task::perform(
-                    addonwork::search(self.layout.clone(), self.selected.code.clone(), query),
+                    addonwork::search(
+                        self.http.clone(),
+                        self.layout.clone(),
+                        self.selected.code.clone(),
+                        query,
+                    ),
                     |outcome| Message::SearchDone(Box::new(outcome)),
                 )
             }
@@ -787,6 +830,7 @@ impl Lightforge {
 
                 Task::perform(
                     addonwork::install_one(
+                        self.http.clone(),
                         self.layout.clone(),
                         self.selected.code.clone(),
                         provider,
@@ -798,7 +842,11 @@ impl Lightforge {
             }
 
             Message::CheckAddonUpdates => Task::perform(
-                addonwork::check_updates(self.layout.clone(), self.selected.code.clone()),
+                addonwork::check_updates(
+                    self.http.clone(),
+                    self.layout.clone(),
+                    self.selected.code.clone(),
+                ),
                 Message::AddonUpdatesChecked,
             ),
 

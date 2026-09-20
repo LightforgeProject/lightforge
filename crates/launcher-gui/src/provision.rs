@@ -6,6 +6,7 @@
 //! than one line — it is a handful of strings, and a UI that samples can
 //! otherwise miss a line entirely.
 
+use lightforge_core::net::Http;
 use lightforge_core::config::Config;
 use lightforge_core::paths::{AppDirs, Layout};
 use lightforge_core::setup::{self, Event, Status, Step};
@@ -82,12 +83,15 @@ pub async fn status(layout: Layout, config: Config) -> Option<Status> {
 
 /// Ask GitHub whether a newer Proton-GE exists. Notify-only, per the policy:
 /// nothing here installs anything by itself.
-pub async fn check_proton(installed: String) -> Result<Option<String>, String> {
-    use lightforge_core::net::{ETagCache, Http};
+pub async fn check_proton(
+    http: Option<Http>,
+    installed: String,
+) -> Result<Option<String>, String> {
+    use lightforge_core::net::ETagCache;
     use lightforge_core::proton;
 
     let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
-    let http = Http::new().map_err(|e| e.to_string())?;
+    let http = http.ok_or(crate::tasks::NO_HTTP)?;
     let cache = ETagCache::new(dirs.asset_cache_dir().join("proton-releases.json"));
     let releases = proton::fetch_releases(&http, &cache)
         .await

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use lightforge_core::assets::{Branding, Pipeline};
+use lightforge_core::assets::{Branding, Manifest, Pipeline};
 use lightforge_core::config::Config;
 use lightforge_core::net::Http;
 use lightforge_core::paths::{AppDirs, Layout};
@@ -30,8 +30,16 @@ pub struct Refreshed {
     pub offline: Option<String>,
 }
 
+/// Returned in place of a network error when the shared client never built.
+pub const NO_HTTP: &str = "no HTTP client available";
+
 /// Read the disk and ask the version service what is current.
-pub async fn refresh(layout: Layout, code: ProductCode, region: Region) -> Refreshed {
+pub async fn refresh(
+    http: Option<Http>,
+    layout: Layout,
+    code: ProductCode,
+    region: Region,
+) -> Refreshed {
     let local = {
         let layout = layout.clone();
         let code = code.clone();
@@ -42,25 +50,59 @@ pub async fn refresh(layout: Layout, code: ProductCode, region: Region) -> Refre
             .unwrap_or_default()
     };
 
-    let (remote, offline) = match Http::new() {
-        Ok(http) => match version::versions(&http, region, code.as_str()).await {
+    let (remote, offline) = match &http {
+        Some(http) => match version::versions(http, region, code.as_str()).await {
             Ok(rows) => (
                 version::for_region(&rows, region, |v| &v.region).cloned(),
                 None,
             ),
             Err(e) => (None, Some(e.to_string())),
         },
-        Err(e) => (None, Some(e.to_string())),
+        None => (None, Some(NO_HTTP.to_owned())),
     };
 
     Refreshed { local, remote, offline }
 }
 
-/// Resolve a product's branding, or `None` when theming isn't configured.
-pub async fn theme(pipeline: Option<Pipeline>, code: ProductCode) -> Option<Branding> {
-    let pipeline = pipeline?;
-    let http = Http::new().ok()?;
-    pipeline.resolve(&http, &code).await.ok()
+/// A theming pass: the branding it produced, and the manifest it read.
+///
+/// The manifest comes back so the app can hold onto it — see [`theme`].
+#[derive(Debug, Default, Clone)]
+pub struct Themed {
+    pub manifest: Option<Arc<Manifest>>,
+    pub branding: Option<Branding>,
+}
+
+/// Resolve a product's branding, or an empty [`Themed`] when theming isn't
+/// configured or the manifest can't be read.
+///
+/// The manifest is fetched once per session rather than once per product
+/// switch: one document describes every product, so re-asking for it on each
+/// switch buys a round trip and nothing else. Pass the cached copy back in and
+/// only the two images are revalidated. The app drops its copy when the asset
+/// source changes, which is the only thing that can invalidate it mid-session.
+pub async fn theme(
+    http: Option<Http>,
+    pipeline: Option<Pipeline>,
+    manifest: Option<Arc<Manifest>>,
+    code: ProductCode,
+) -> Themed {
+    let (Some(http), Some(pipeline)) = (http, pipeline) else {
+        return Themed::default();
+    };
+
+    let manifest = match manifest {
+        Some(cached) => cached,
+        None => match pipeline.manifest(&http).await {
+            Ok(fresh) => Arc::new(fresh),
+            Err(_) => return Themed::default(),
+        },
+    };
+
+    // A product missing from the manifest is not a reason to throw the
+    // manifest away, so the branding half fails on its own.
+    let branding = pipeline.resolve_with(&http, &manifest, &code).await.ok();
+    Themed { manifest: Some(manifest), branding }
 }
 
 /// What a running transfer publishes for the UI to read.
@@ -124,6 +166,9 @@ pub async fn download(
             };
 
             let result = runtime.block_on(async move {
+                // Deliberately not the app's shared client: this runtime is
+                // built here and torn down with the thread, and a reqwest
+                // client's connections belong to the runtime that opened them.
                 let http = Http::new().map_err(|e| e.to_string())?;
                 let dest = layout.wow_install();
                 let options = InstallOptions {

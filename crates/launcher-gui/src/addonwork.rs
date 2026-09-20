@@ -241,6 +241,7 @@ fn catalog() -> Option<Catalog> {
 
 /// Install everything a pasted token names.
 pub async fn import(
+    http: Option<Http>,
     layout: Layout,
     code: ProductCode,
     token: String,
@@ -251,11 +252,12 @@ pub async fn import(
     if requests.is_empty() {
         return Err("that token names no addons Lightforge can install".to_owned());
     }
-    run(layout, code, requests, false, tx).await
+    run(http, layout, code, requests, false, tx).await
 }
 
 /// Update everything the ledger tracks.
 pub async fn update(
+    http: Option<Http>,
     layout: Layout,
     code: ProductCode,
     tx: tokio::sync::watch::Sender<Progress>,
@@ -276,10 +278,11 @@ pub async fn update(
     if requests.is_empty() {
         return Ok(Report::default());
     }
-    run(layout, code, requests, false, tx).await
+    run(http, layout, code, requests, false, tx).await
 }
 
 async fn run(
+    http: Option<Http>,
     layout: Layout,
     code: ProductCode,
     requests: Vec<Request>,
@@ -288,7 +291,7 @@ async fn run(
 ) -> Result<Report, String> {
     let options = options(&layout, &code, pinned).ok_or("no data directory available")?;
     let catalog = catalog();
-    let http = Http::new().map_err(|e| e.to_string())?;
+    let http = http.ok_or(crate::tasks::NO_HTTP)?;
 
     let total = requests.len();
     let mut progress = Progress { total, ..Progress::default() };
@@ -321,13 +324,18 @@ async fn run(
 }
 
 /// Search every provider that can answer.
-pub async fn search(layout: Layout, code: ProductCode, query: String) -> SearchOutcome {
+pub async fn search(
+    http: Option<Http>,
+    layout: Layout,
+    code: ProductCode,
+    query: String,
+) -> SearchOutcome {
     use lightforge_core::addons::browse;
 
     let Ok(dirs) = AppDirs::discover() else {
         return SearchOutcome::default();
     };
-    let Ok(http) = Http::new() else {
+    let Some(http) = http else {
         return SearchOutcome::default();
     };
     let _ = &layout;
@@ -360,6 +368,7 @@ pub struct SearchOutcome {
 
 /// Install one addon by provider and id.
 pub async fn install_one(
+    http: Option<Http>,
     layout: Layout,
     code: ProductCode,
     provider: String,
@@ -367,6 +376,7 @@ pub async fn install_one(
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Report, String> {
     run(
+        http,
         layout,
         code,
         vec![Request { provider, id, version_id: None }],
@@ -378,11 +388,12 @@ pub async fn install_one(
 
 /// Ask what has updates, without installing anything.
 pub async fn check_updates(
+    http: Option<Http>,
     layout: Layout,
     code: ProductCode,
 ) -> Result<Vec<manage::UpdateStatus>, String> {
     let options = options(&layout, &code, false).ok_or("no data directory available")?;
-    let http = Http::new().map_err(|e| e.to_string())?;
+    let http = http.ok_or(crate::tasks::NO_HTTP)?;
     manage::check_updates(&http, catalog().as_ref(), &options)
         .await
         .map_err(|e| e.to_string())
