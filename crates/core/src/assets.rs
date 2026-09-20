@@ -609,6 +609,12 @@ mod tests {
         assert_ne!(a, b, "same file name in different directories must not collide");
         assert!(a.ends_with(".png"));
         assert_eq!(a.len(), 16 + ".png".len());
+        // An extension the app does not itself understand still survives to
+        // the cache file. It has to: the decoder picks its format from that
+        // extension, so an `.ico` cached without one cannot be read back.
+        assert!(Store::cache_name("https://cdn.example/retail-icon.ico").ends_with(".ico"));
+        assert!(Store::cache_name("https://cdn.example/retail-icon.ICO").ends_with(".ico"));
+
         // Query strings are not part of the extension, and it is normalized.
         assert!(Store::cache_name("https://cdn.example/bg.JPG?v=2").ends_with(".jpg"));
     }
