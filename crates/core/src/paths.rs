@@ -119,6 +119,15 @@ impl Layout {
 
     /// Agent's directory cache, deleted by pre-flight cleanup.
     pub fn agent_cache_dir(&self) -> PathBuf {
+        self.agent_dir().join("data").join("cache")
+    }
+
+    /// Agent's own directory. **Never delete this**: it holds `product.db`,
+    /// the registry of every game Battle.net knows is installed. Wiping it
+    /// makes the client forget every located install, so the user has to point
+    /// it at their games again after every launch — which is exactly what
+    /// Lightforge did until this was split out.
+    pub fn agent_dir(&self) -> PathBuf {
         self.drive_c()
             .join("ProgramData")
             .join("Battle.net")

@@ -10,8 +10,9 @@
 //! 1. [`scan`] the process table for anything belonging to *this* prefix,
 //! 2. `wineserver -k` for a graceful, prefix-scoped shutdown,
 //! 3. re-scan and signal the stragglers, `SIGTERM` then `SIGKILL`,
-//! 4. with nothing alive: delete Agent's directory cache and the installer's
-//!    staging directory,
+//! 4. with nothing alive: delete Agent's directory *cache* and the installer's
+//!    staging directory — never Agent's own directory, which holds the
+//!    `product.db` registry of installed games,
 //! 5. re-apply the Battle.net config defaults,
 //! 6. pause any download writing to CASC storage.
 //!
@@ -448,7 +449,11 @@ impl Preflight {
         self
     }
 
-    /// Keep Agent's directory cache. Only useful for debugging Agent itself.
+    /// Keep Agent's directory cache.
+    ///
+    /// The cache is `Agent/data/cache` and nothing else. Clearing Agent's whole
+    /// directory would take `product.db` with it, and Battle.net would forget
+    /// every install it has been shown.
     pub fn keep_agent_cache(mut self) -> Self {
         self.clear_agent_cache = false;
         self
@@ -755,6 +760,37 @@ mod tests {
         assert!(!cache.exists());
         // A second pass is the normal case on a healthy system.
         assert_eq!(remove_dir(&cache).unwrap(), None);
+    }
+
+    #[test]
+    fn clearing_the_cache_never_touches_agents_product_registry() {
+        // The bug this guards against cost a real user their install
+        // registration on every launch: `agent_cache_dir` pointed at Agent's
+        // whole directory, so clearing it deleted `product.db` — the list of
+        // games Battle.net knows are installed — and the client then asked to
+        // locate the game again, every single time.
+        let root = scratch("agent-registry");
+        let layout = Layout::with_root(&root);
+
+        let agent = layout.agent_dir();
+        std::fs::create_dir_all(layout.agent_cache_dir()).unwrap();
+        std::fs::write(layout.agent_cache_dir().join("blob"), vec![0u8; 512]).unwrap();
+        std::fs::write(agent.join("product.db"), b"registry").unwrap();
+        std::fs::write(agent.join("Agent.exe"), b"binary").unwrap();
+
+        remove_dir(&layout.agent_cache_dir()).unwrap();
+
+        assert!(!layout.agent_cache_dir().exists(), "the cache goes");
+        assert!(agent.join("product.db").is_file(), "the registry stays");
+        assert!(agent.join("Agent.exe").is_file(), "Agent itself stays");
+    }
+
+    #[test]
+    fn the_cache_is_inside_agents_directory_but_is_not_it() {
+        let layout = Layout::with_root("/games/Blizzard");
+        assert!(layout.agent_cache_dir().starts_with(layout.agent_dir()));
+        assert_ne!(layout.agent_cache_dir(), layout.agent_dir());
+        assert!(layout.agent_cache_dir().ends_with("Agent/data/cache"));
     }
 
     #[test]
