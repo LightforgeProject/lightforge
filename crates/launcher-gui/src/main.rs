@@ -61,8 +61,31 @@ const WINDOW: iced::Size = iced::Size::new(980.0, 660.0);
 /// shrinking — so the window refuses rather than letting it happen.
 const WINDOW_MIN: iced::Size = iced::Size::new(840.0, 560.0);
 
+/// iced's renderer, chosen for us unless the user overrides it.
+///
+/// `wgpu` lags badly when resizing a window on native Wayland — the client
+/// keeps up (a resize is serviced here in well under a millisecond) but the
+/// buffer reaches the compositor late, so the window crawls behind the
+/// pointer. It is an upstream bug, iced-rs/iced#2750, and the software
+/// renderer does not have it.
+///
+/// Nothing is given up by paying for it. This is a launcher: the UI is static,
+/// only redraws when something changes, and never animates. GPU rasterisation
+/// buys frames we do not draw. One renderer everywhere also means what gets
+/// tested is what people run, rather than a path that breaks only on hardware
+/// no one here has.
+///
+/// `ICED_BACKEND` is read by iced itself, so setting it only when unset leaves
+/// the override in the user's hands: `ICED_BACKEND=wgpu` restores the default.
+fn choose_renderer() {
+    if std::env::var_os("ICED_BACKEND").is_none() {
+        std::env::set_var("ICED_BACKEND", "tiny-skia");
+    }
+}
+
 fn main() -> iced::Result {
     trace::begin();
+    choose_renderer();
     iced::application("Lightforge", Lightforge::update, Lightforge::view)
         .subscription(Lightforge::subscription)
         .theme(|_| theme::base())

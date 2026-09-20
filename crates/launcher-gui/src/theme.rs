@@ -16,7 +16,7 @@
 //! accent rather than effects.
 
 use iced::widget::{button, container, text_input};
-use iced::{Background, Border, Color, Font, Shadow, Theme, Vector};
+use iced::{Background, Border, Color, Font, Theme};
 
 // ---------------------------------------------------------------- palette --
 
@@ -29,6 +29,10 @@ pub const SURFACE: Color = rgb(0x14, 0x17, 0x1C);
 pub const RAISED: Color = rgb(0x1B, 0x20, 0x27);
 /// Hairline. Always a translucent white so it works over art too.
 pub const BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
+/// Hairline for a panel laid over artwork, where a hairline meant for a flat
+/// surface disappears. Carries the separation a drop shadow used to — see
+/// [`floating`].
+pub const BORDER_OVER_ART: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.16);
 
 pub const TEXT: Color = rgb(0xE8, 0xED, 0xF2);
 /// Secondary text. Contrast-checked against [`SURFACE`], not against black.
@@ -111,15 +115,24 @@ pub fn card(_theme: &Theme) -> container::Style {
     }
 }
 
-/// A panel that sits over artwork, with a shadow to lift it off the image.
+/// A panel that sits over artwork.
+///
+/// Deliberately **no drop shadow**. The software renderer's damage tracking
+/// sizes a dirty region from the quad's bounds expanded by a single pixel,
+/// with no account of a shadow's blur radius or offset, so the area under a
+/// shadow never gets cleared and the shadow composites over itself on every
+/// hover until it goes black (iced-rs/iced#2712, fixed upstream by #2715,
+/// which landed after the 0.13 we build against).
+///
+/// A brighter hairline does the separating instead. Revisit when we move to
+/// iced 0.14: the shadow can come back as-is.
 pub fn floating(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(PANEL)),
-        border: Border { color: BORDER, width: 1.0, radius: RADIUS.into() },
-        shadow: Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.45),
-            offset: Vector::new(0.0, 8.0),
-            blur_radius: 24.0,
+        border: Border {
+            color: BORDER_OVER_ART,
+            width: 1.0,
+            radius: RADIUS.into(),
         },
         ..container::Style::default()
     }
