@@ -261,13 +261,57 @@ impl Pipeline {
             .theme(code)
             .ok_or_else(|| AssetError::UnknownProduct(code.as_str().to_owned()))?;
 
-        Ok(Branding {
+        // The two images are independent requests against the same host, so
+        // they go out together: on a warm cache this halves the theming pass
+        // to a single round trip, and on a cold one it halves the transfer.
+        let (logo, background) = futures_util::future::try_join(
+            self.asset(http, &theme.logo, Slot::Logo),
+            self.asset(http, &theme.background, Slot::Background),
+        )
+        .await?;
+
+        Ok(Branding { label: theme.label.clone(), logo, background })
+    }
+
+    /// Resolve branding from what is already on disk, touching no network.
+    ///
+    /// A warm cache holds the exact bytes the UI is about to draw, so making
+    /// it wait on a revalidation round trip before painting buys nothing but
+    /// a few hundred milliseconds of unthemed dashboard. This hands back the
+    /// last good art at once; [`Pipeline::resolve_with`] follows behind and
+    /// swaps in whatever actually changed.
+    ///
+    /// `None` whenever the cache cannot fully answer — a missing manifest, an
+    /// unthemed product, an image not fetched yet, or one that no longer
+    /// matches its checksum. Partial branding is not a thing the UI can draw,
+    /// so a half-warm cache simply waits for the network like a cold one.
+    ///
+    /// Blocking file IO: call it off the thread that is drawing.
+    pub fn cached(&self, code: &ProductCode) -> Option<Branding> {
+        let bytes = match &self.origin {
+            Origin::Dir(dir) => read(&dir.join(MANIFEST_FILE)).ok()?,
+            Origin::Http(_) => self.store.manifest_cache().read().ok()?,
+        };
+        let manifest = Manifest::parse(&bytes).ok()?;
+        let theme = manifest.theme(code)?;
+
+        Some(Branding {
             label: theme.label.clone(),
-            logo: self.asset(http, &theme.logo, Slot::Logo).await?,
-            background: self
-                .asset(http, &theme.background, Slot::Background)
-                .await?,
+            logo: self.cached_asset(&theme.logo, Slot::Logo)?,
+            background: self.cached_asset(&theme.background, Slot::Background)?,
         })
+    }
+
+    /// One image from the cache, verified the same way the network path
+    /// verifies it — bytes that would be rejected after a fetch must not be
+    /// painted just because they arrived before one.
+    fn cached_asset(&self, asset: &AssetRef, slot: Slot) -> Option<Asset> {
+        let path = match &self.origin {
+            Origin::Dir(dir) => resolve_fixture(dir, &asset.url, slot).ok()?,
+            Origin::Http(base) => self.store.path_for(&join(base, &asset.url)),
+        };
+        verify(&read(&path).ok()?, asset, slot, &asset.url).ok()?;
+        Some(Asset { path, fetched: false })
     }
 
     /// Fetch (or revalidate) one image and verify it.
@@ -550,6 +594,57 @@ mod tests {
         assert_eq!(branding.logo.path, dir.join("retail-logo.png"));
         assert!(!branding.logo.fetched);
         assert_eq!(std::fs::read(&branding.logo.path).unwrap(), logo);
+    }
+
+    #[test]
+    fn the_cache_paints_before_the_network_is_asked() {
+        let dir = tmpdir("cached-hit");
+        std::fs::write(dir.join(MANIFEST_FILE), FIXTURE).unwrap();
+        std::fs::write(dir.join("retail-logo.png"), b"PNG-logo").unwrap();
+        std::fs::write(dir.join("retail-bg.jpg"), b"JPG-bg").unwrap();
+
+        let pipeline = Pipeline::new(Origin::Dir(dir.clone()), Store::new(tmpdir("cached-hit-c")));
+        let branding = pipeline.cached(&ProductCode::Retail).unwrap();
+
+        assert_eq!(branding.label, "Retail");
+        assert_eq!(branding.logo.path, dir.join("retail-logo.png"));
+        assert!(!branding.logo.fetched);
+    }
+
+    #[test]
+    fn half_a_cache_is_no_cache() {
+        let dir = tmpdir("cached-partial");
+        std::fs::write(dir.join(MANIFEST_FILE), FIXTURE).unwrap();
+        // Logo only: the background was never fetched.
+        std::fs::write(dir.join("retail-logo.png"), b"PNG-logo").unwrap();
+
+        let pipeline = Pipeline::new(Origin::Dir(dir), Store::new(tmpdir("cached-partial-c")));
+        assert!(pipeline.cached(&ProductCode::Retail).is_none());
+    }
+
+    #[test]
+    fn the_cache_refuses_bytes_a_fetch_would_have_refused() {
+        let dir = tmpdir("cached-checksum");
+        // A checksum the files cannot match, standing in for truncation.
+        let body = FIXTURE.replace(
+            "\"url\": \"retail-logo.png\"",
+            "\"url\": \"retail-logo.png\", \"sha256\": \"00\"",
+        );
+        std::fs::write(dir.join(MANIFEST_FILE), body).unwrap();
+        std::fs::write(dir.join("retail-logo.png"), b"PNG-logo").unwrap();
+        std::fs::write(dir.join("retail-bg.jpg"), b"JPG-bg").unwrap();
+
+        let pipeline = Pipeline::new(Origin::Dir(dir), Store::new(tmpdir("cached-checksum-c")));
+        assert!(pipeline.cached(&ProductCode::Retail).is_none());
+    }
+
+    #[test]
+    fn an_empty_cache_is_not_an_error() {
+        let pipeline = Pipeline::new(
+            Origin::Http("https://assets.example/wow/".to_owned()),
+            Store::new(tmpdir("cached-cold")),
+        );
+        assert!(pipeline.cached(&ProductCode::Retail).is_none());
     }
 
     #[tokio::test]

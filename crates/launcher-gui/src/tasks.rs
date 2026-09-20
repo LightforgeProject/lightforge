@@ -64,6 +64,20 @@ pub async fn refresh(
     Refreshed { local, remote, offline }
 }
 
+/// Branding straight off disk, for the frame before [`theme`] answers.
+///
+/// Network-free and typically a few tens of milliseconds, so on every run
+/// after the first the dashboard opens already themed instead of showing its
+/// unthemed card for the length of a revalidation.
+pub async fn cached_theme(pipeline: Option<Pipeline>, code: ProductCode) -> Option<Branding> {
+    let pipeline = pipeline?;
+    // Reads and hashes both images; off the UI thread.
+    tokio::task::spawn_blocking(move || pipeline.cached(&code))
+        .await
+        .ok()
+        .flatten()
+}
+
 /// A theming pass: the branding it produced, and the manifest it read.
 ///
 /// The manifest comes back so the app can hold onto it — see [`theme`].

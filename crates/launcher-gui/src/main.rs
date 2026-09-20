@@ -66,6 +66,8 @@ enum Message {
     Selected(Choice),
     Refreshed(ProductCode, Box<Refreshed>),
     Themed(ProductCode, Box<tasks::Themed>),
+    /// The optimistic, cache-only paint that precedes [`Message::Themed`].
+    CachedTheme(ProductCode, Option<Branding>),
     Primary,
     Tick,
     Downloaded(ProductCode, Result<Complete, String>),
@@ -315,6 +317,16 @@ impl Lightforge {
                     move |r| Message::Refreshed(code.clone(), Box::new(r))
                 },
             ),
+            // Fires first and usually lands first: it reads the cache and
+            // nothing else, so the window opens themed rather than snapping
+            // to art once the revalidation below comes back.
+            Task::perform(
+                tasks::cached_theme(self.pipeline.clone(), code.clone()),
+                {
+                    let code = code.clone();
+                    move |b| Message::CachedTheme(code.clone(), b)
+                },
+            ),
             Task::perform(
                 tasks::theme(
                     self.http.clone(),
@@ -407,6 +419,15 @@ impl Lightforge {
                         .map(|r| format!("latest {}", r.versions_name))
                         .unwrap_or_default(),
                 };
+                Task::none()
+            }
+
+            Message::CachedTheme(code, branding) => {
+                // Strictly a gap-filler: the revalidated answer wins whenever
+                // it happens to arrive first, so this never overwrites it.
+                if code == self.selected.code && self.branding.is_none() {
+                    self.branding = branding;
+                }
                 Task::none()
             }
 
