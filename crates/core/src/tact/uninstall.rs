@@ -200,8 +200,10 @@ pub enum UninstallError {
 mod tests {
     use super::*;
 
-    fn install_with(products: &[(&str, &str)]) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("lightforge-uninstall-{}", products.len()));
+    /// `name` must be unique per test: `scratch` wipes the directory, so two
+    /// tests sharing one race under the parallel runner.
+    fn install_with(name: &str, products: &[(&str, &str)]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("lightforge-uninstall-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("Data/data")).unwrap();
         std::fs::write(dir.join("Data/data/data.000"), vec![0u8; 2048]).unwrap();
@@ -225,7 +227,7 @@ mod tests {
     fn removing_one_of_two_products_keeps_the_shared_store() {
         // The store holds both products' files in the same archives, so
         // deleting it would destroy the product that stays.
-        let dir = install_with(&[("wow", "_retail_"), ("wow_classic_era", "_classic_era_")]);
+        let dir = install_with("two", &[("wow", "_retail_"), ("wow_classic_era", "_classic_era_")]);
         let plan = plan(&dir, &ProductCode::ClassicEra).unwrap();
 
         assert!(plan.store.is_none(), "the store must survive");
@@ -245,7 +247,7 @@ mod tests {
 
     #[test]
     fn removing_the_last_product_takes_the_store_and_the_build_info() {
-        let dir = install_with(&[("wow_classic_era", "_classic_era_")]);
+        let dir = install_with("last", &[("wow_classic_era", "_classic_era_")]);
         let plan = plan(&dir, &ProductCode::ClassicEra).unwrap();
 
         assert!(plan.is_whole_install());
@@ -259,7 +261,7 @@ mod tests {
 
     #[test]
     fn a_product_that_is_not_installed_plans_nothing() {
-        let dir = install_with(&[("wow", "_retail_")]);
+        let dir = install_with("absent", &[("wow", "_retail_")]);
         let plan = plan(&dir, &ProductCode::Beta).unwrap();
 
         assert!(!plan.has_row);
@@ -271,7 +273,7 @@ mod tests {
 
     #[test]
     fn a_path_outside_the_install_is_refused() {
-        let dir = install_with(&[("wow", "_retail_")]);
+        let dir = install_with("outside", &[("wow", "_retail_")]);
         let escaped = Plan {
             flavor_dir: Some(PathBuf::from("/etc")),
             store: None,

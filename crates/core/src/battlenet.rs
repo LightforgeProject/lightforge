@@ -525,12 +525,34 @@ impl Launch {
 
 /// Battle.net's own identifier for a game, as used by `--exec="launch <uid>"`.
 ///
-/// It matches the TACT product code: the client keys its `Games` config block
-/// by the same string (`Games.wow`, `Games.wow_classic`). Custom products get
-/// their code verbatim, which is the best guess available for an entry
-/// Battle.net has never heard of.
+/// **This is not the TACT product code.** The client works in *game family*
+/// ids, one per tile in its library, and the flavor within a tile comes from
+/// its version dropdown. Read out of the client's own log, where each selection
+/// is recorded (`Selecting game family by id: …` followed by
+/// `Active product set to: …`):
+///
+/// ```text
+/// WoW  -> WoWX12_retail
+/// WoWC -> WoW_wow_classic_era, WoW_wow_classic
+/// WoWF -> WoWPTR_wow_classic_beta
+/// W3   -> W3_retail
+/// ```
+///
+/// Passing a TACT code here is not a no-op — it is worse. The client fails to
+/// resolve it and **falls back to the first family it knows, which is
+/// Warcraft III**, so the user lands on a game they may not even own. That was
+/// a real bug: `launch wow_classic_era` put Gabriel on the W3 page every time.
 fn game_uid(code: &ProductCode) -> String {
-    code.as_str().to_owned()
+    match code {
+        // PTR and beta builds of retail live in the retail tile's version list.
+        ProductCode::Retail | ProductCode::Ptr | ProductCode::Beta => "WoW",
+        ProductCode::Classic | ProductCode::ClassicEra | ProductCode::ClassicPtr => "WoWC",
+        ProductCode::ClassicBeta => "WoWF",
+        // An unknown product is likelier to be a retail-line server than
+        // anything else, and the retail tile at least exists.
+        ProductCode::Custom(_) => "WoW",
+    }
+    .to_owned()
 }
 
 /// Start Battle.net and hand the caller the running child.
@@ -643,6 +665,21 @@ impl BattleNetError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn game_uids_are_client_family_ids_not_tact_codes() {
+        use super::*;
+
+        // Verified against the client's log: these ids select these tiles.
+        assert_eq!(game_uid(&ProductCode::Retail), "WoW");
+        assert_eq!(game_uid(&ProductCode::ClassicEra), "WoWC");
+        assert_eq!(game_uid(&ProductCode::Classic), "WoWC");
+        assert_eq!(game_uid(&ProductCode::ClassicBeta), "WoWF");
+
+        // The bug this prevents: a TACT code is unresolvable and the client
+        // falls back to Warcraft III.
+        assert_ne!(game_uid(&ProductCode::ClassicEra), "wow_classic_era");
+    }
+
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
@@ -844,10 +881,12 @@ mod tests {
         let dir = Path::new("/prefix/Battle.net");
         let (exe, args) = Launch::product(ProductCode::Retail).command(dir);
         assert_eq!(exe, dir.join("Battle.net.exe"));
-        assert_eq!(args, ["--productcode=wow", "--exec=launch wow"]);
+        // The exec uid is the client's family id, not the TACT code.
+        assert_eq!(args, ["--productcode=wow", "--exec=launch WoW"]);
 
         let (_, classic) = Launch::product(ProductCode::Classic).command(dir);
-        assert_eq!(classic, ["--productcode=wow_classic", "--exec=launch wow_classic"]);
+        // Every Classic-line product shares one tile.
+        assert_eq!(classic, ["--productcode=wow_classic", "--exec=launch WoWC"]);
     }
 
     #[test]

@@ -80,6 +80,10 @@ enum Command {
         /// Override the `--exec="launch <uid>"` verb Battle.net is given.
         #[arg(long, requires = "product")]
         exec: Option<String>,
+        /// Skip pre-flight. For testing a hand-off against a client that is
+        /// already running, without killing the session first.
+        #[arg(long)]
+        skip_preflight: bool,
     },
     /// Launch the game directly under Proton — the `[ PLAY ]` path.
     ///
@@ -738,7 +742,7 @@ async fn main() -> Result<()> {
                 print_tweaks(&account_tweaks);
             }
         }
-        Command::BattlenetRun { proton, product, exec } => {
+        Command::BattlenetRun { proton, product, exec, skip_preflight } => {
             use lightforge_core::battlenet::{self, Launch};
             use lightforge_core::config::Config;
             use lightforge_core::preflight::{DownloadGuard, NoDownloads, Preflight};
@@ -761,17 +765,21 @@ async fn main() -> Result<()> {
                 Launch::Client => None,
             };
             let mut downloads = NoDownloads;
-            let report = Preflight::new(Config::default().prefix_user)
-                .run(&runner, &layout, code.as_ref(), &mut downloads)
-                .context("pre-flight cleanup")?;
-            print_preflight(&report);
+            let mut download_paused = false;
+            if !skip_preflight {
+                let report = Preflight::new(Config::default().prefix_user)
+                    .run(&runner, &layout, code.as_ref(), &mut downloads)
+                    .context("pre-flight cleanup")?;
+                print_preflight(&report);
+                download_paused = report.download_paused;
+            }
 
             println!("running {}{}", exe.display(), if args.is_empty() { String::new() } else { format!(" {}", args.join(" ")) });
             let mut child = battlenet::launch(&runner, &layout, &launch)
                 .context("launching Battle.net")?;
             let status = child.wait().context("waiting for Battle.net")?;
 
-            if report.download_paused {
+            if download_paused {
                 if let Some(code) = &code {
                     downloads.resume(code).context("resuming the download")?;
                     println!("download        resumed");
