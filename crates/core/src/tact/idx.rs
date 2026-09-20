@@ -72,6 +72,24 @@ pub const DEFAULT_FILE_SIZE: usize = 1_835_008;
 /// Agent's and the client's — is a multiple of this.
 pub const SIZE_GRANULARITY: usize = 65_536;
 
+/// Free space left after the entries, for the client's own use.
+///
+/// **This is not padding.** The running client appends incremental index
+/// updates into the tail of the file — its "KMT update section" — and it must
+/// fit. Size a file to just past its entries and the client reports
+///
+/// ```text
+/// Truncated KMT update section detected.
+/// Failed to bind mapping table `0`
+/// failed to bind Container index at '…/Data/data': 9 (NeedsRepair)
+/// ```
+///
+/// and refuses to open the store at all. That happened on a real 123 GiB
+/// retail install: our sixteen files left 7-13 KiB free where Agent's own
+/// leave 61-91 KiB. One 64 KiB unit of reserve reproduces Agent's sizing for
+/// 17 of its 18 files and is more generous for the eighteenth.
+pub const KMT_RESERVE: usize = 65_536;
+
 /// A sanity bound, far above anything observed (retail's buckets are ~2 MB).
 /// Exceeding it means something is wrong with the caller, not with the format.
 pub const MAX_FILE_SIZE: usize = 64 * 1024 * 1024;
@@ -361,7 +379,11 @@ impl Index {
         // indices at its own size — so the size a file happened to have when
         // it was loaded is not a budget the next generation has to live within.
         let total = data_offset(self.blocks.len()) + 8 + entries.len();
-        let file_size = self.file_size.max(total.div_ceil(SIZE_GRANULARITY) * SIZE_GRANULARITY);
+        // Reserve before rounding: the client needs the tail free, so a file
+        // that ends exactly on a 64 KiB boundary still has to grow.
+        let file_size = self
+            .file_size
+            .max((total + KMT_RESERVE).div_ceil(SIZE_GRANULARITY) * SIZE_GRANULARITY);
         if file_size > MAX_FILE_SIZE {
             return Err(IdxError::BucketFull {
                 bucket: self.bucket,
@@ -662,6 +684,45 @@ mod tests {
         let mut bytes = idx.to_bytes().unwrap();
         bytes[0x28] ^= 0xff; // flip a bit inside an entry
         assert!(matches!(Index::parse(&bytes), Err(IdxError::DataHash { .. })));
+    }
+
+    #[test]
+    fn every_index_keeps_the_clients_update_section_free() {
+        // The failure this prevents: with entries packed to the end of the
+        // file the client reports a truncated KMT update section and declares
+        // the whole container NeedsRepair.
+        for count in [1usize, 1000, 50_000] {
+            let mut idx = Index::new(0);
+            for i in 0..count {
+                let mut key = [0u8; 9];
+                key[..8].copy_from_slice(&(i as u64).to_be_bytes());
+                idx.insert(entry(key, 0, 0, 1));
+            }
+            let bytes = idx.to_bytes().unwrap();
+            let used = data_offset(1) + 8 + count * ENTRY_SIZE;
+
+            assert!(
+                bytes.len() - used >= KMT_RESERVE,
+                "{count} entries left only {} bytes free",
+                bytes.len() - used
+            );
+            assert_eq!(bytes.len() % SIZE_GRANULARITY, 0);
+        }
+    }
+
+    #[test]
+    fn entries_ending_on_a_block_boundary_still_grow() {
+        // Rounding alone would leave zero free space here.
+        let per_block = SIZE_GRANULARITY / ENTRY_SIZE;
+        let mut idx = Index::new(0);
+        for i in 0..per_block * 4 {
+            let mut key = [0u8; 9];
+            key[..8].copy_from_slice(&(i as u64).to_be_bytes());
+            idx.insert(entry(key, 0, 0, 1));
+        }
+        let bytes = idx.to_bytes().unwrap();
+        let used = data_offset(1) + 8 + per_block * 4 * ENTRY_SIZE;
+        assert!(bytes.len() - used >= KMT_RESERVE);
     }
 
     #[test]

@@ -297,6 +297,15 @@ enum Command {
         /// The token, or `@path` to read it from a file.
         token: String,
     },
+    /// Rewrite a store's `.idx` files without touching its archives.
+    ///
+    /// Repairs an install whose indices were written with too little free
+    /// space for the client's update section — the `NeedsRepair` case — in
+    /// seconds, instead of re-downloading the whole product.
+    Reindex {
+        /// Install root. Defaults to the managed WoW install.
+        path: Option<PathBuf>,
+    },
     /// Remove an installed product. Prints the plan unless `--yes` is given.
     Uninstall {
         #[arg(long, default_value = "wow")]
@@ -1609,6 +1618,46 @@ async fn main() -> Result<()> {
                         entry.version_id.as_deref().unwrap_or("-")
                     );
                 }
+            }
+        }
+        Command::Reindex { path } => {
+            use lightforge_core::tact::writer::StoreWriter;
+
+            // Never rewrite indices under a live client: it memory-maps them,
+            // and this is the exact overlap the whole pre-flight design exists
+            // to prevent.
+            let alive = lightforge_core::preflight::scan(&layout);
+            if !alive.is_empty() {
+                for process in &alive {
+                    println!("running         {} (pid {})", process.name, process.pid);
+                }
+                anyhow::bail!("close the game and Battle.net first — the store is in use");
+            }
+
+            let install = path.unwrap_or_else(|| layout.wow_install());
+            let data_dir = install.join("Data").join("data");
+
+            let before: Vec<(String, u64)> = std::fs::read_dir(&data_dir)?
+                .flatten()
+                .filter(|e| e.path().extension().is_some_and(|x| x == "idx"))
+                .map(|e| {
+                    (
+                        e.file_name().to_string_lossy().into_owned(),
+                        e.metadata().map(|m| m.len()).unwrap_or(0),
+                    )
+                })
+                .collect();
+            println!("store           {}", data_dir.display());
+            println!("indices         {} before", before.len());
+
+            // Loading and finishing rewrites every bucket as a new generation,
+            // with the current sizing rules, and prunes the old ones. No
+            // archive is opened, so not a byte of game data is touched.
+            let summary = StoreWriter::create(&data_dir)?.finish()?;
+            println!("rewrote         {} indices", summary.indices.len());
+            for path in &summary.indices {
+                let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                println!("  {}  {size} bytes", path.file_name().unwrap().to_string_lossy());
             }
         }
         Command::Uninstall { product, path, yes } => {
