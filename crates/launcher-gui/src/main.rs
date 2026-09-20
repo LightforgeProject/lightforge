@@ -21,6 +21,7 @@ mod addonwork;
 mod provision;
 mod tasks;
 mod theme;
+mod trace;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -49,6 +50,7 @@ use tasks::{Refreshed, SharedDownloads, Transfer, TransferState};
 const ACCOUNT_URL: &str = "https://account.battle.net/games";
 
 fn main() -> iced::Result {
+    trace::begin();
     iced::application("Lightforge", Lightforge::update, Lightforge::view)
         .subscription(Lightforge::subscription)
         .theme(|_| theme::base())
@@ -57,6 +59,7 @@ fn main() -> iced::Result {
         .exit_on_close_request(false)
         .run_with(|| {
             let (app, task) = Lightforge::new();
+            trace::mark("app constructed, startup tasks queued");
             (app, task)
         })
 }
@@ -423,6 +426,14 @@ impl Lightforge {
             }
 
             Message::CachedTheme(code, branding) => {
+                trace::mark(format_args!(
+                    "cache-first theme for {}: {}",
+                    code.as_str(),
+                    match &branding {
+                        Some(_) => "hit",
+                        None => "MISS — nothing usable on disk",
+                    }
+                ));
                 // Strictly a gap-filler: the revalidated answer wins whenever
                 // it happens to arrive first, so this never overwrites it.
                 if code == self.selected.code && self.branding.is_none() {
@@ -432,6 +443,12 @@ impl Lightforge {
             }
 
             Message::Themed(code, themed) => {
+                trace::mark(format_args!(
+                    "revalidated theme for {}: manifest {}, branding {}",
+                    code.as_str(),
+                    if themed.manifest.is_some() { "ok" } else { "failed" },
+                    if themed.branding.is_some() { "ok" } else { "failed" },
+                ));
                 // The manifest describes every product, so it is kept even
                 // when a switch has already moved on from the one it themed.
                 if themed.manifest.is_some() {
@@ -918,6 +935,14 @@ impl Lightforge {
     }
 
     fn view(&self) -> Element<'_, Message> {
+        use std::sync::atomic::AtomicBool;
+        static FIRST: AtomicBool = AtomicBool::new(false);
+        static THEMED: AtomicBool = AtomicBool::new(false);
+        trace::once(&FIRST, "first frame");
+        if self.branding.is_some() {
+            trace::once(&THEMED, "first frame with branding");
+        }
+
         match self.screen {
             Screen::Dashboard => self.dashboard(),
             Screen::Setup => self.setup_screen(),

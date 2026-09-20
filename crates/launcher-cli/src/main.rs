@@ -1884,16 +1884,37 @@ async fn main() -> Result<()> {
             println!("cache           {}", store.dir().display());
 
             let pipeline = Pipeline::new(origin, store);
+
+            // The cache-only path the GUI paints its first frame from. Shown
+            // before the network runs, because "the dashboard opens unthemed"
+            // is almost always this returning None.
+            let started = std::time::Instant::now();
+            match pipeline.cached(&code) {
+                Some(branding) => println!(
+                    "cache-first     hit in {:?} ({})",
+                    started.elapsed(),
+                    branding.label
+                ),
+                None => println!(
+                    "cache-first     MISS in {:?} — the GUI opens unthemed",
+                    started.elapsed()
+                ),
+            }
+
             let http = Http::new()?;
+            let started = std::time::Instant::now();
             let manifest = pipeline.manifest(&http).await.context("fetching the manifest")?;
+            println!("manifest        {:?}", started.elapsed());
             println!("schema          {}", manifest.schema);
             println!("themes          {}", manifest.products.len());
             println!("default         {}", manifest.default.as_deref().unwrap_or("-"));
 
+            let started = std::time::Instant::now();
             let branding = pipeline
                 .resolve_with(&http, &manifest, &code)
                 .await
                 .with_context(|| format!("resolving branding for {}", code.as_str()))?;
+            println!("images          {:?}", started.elapsed());
 
             println!("\nproduct         {}", code.as_str());
             println!("label           {}", branding.label);

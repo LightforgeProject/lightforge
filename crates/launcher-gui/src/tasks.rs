@@ -102,6 +102,7 @@ pub async fn theme(
     code: ProductCode,
 ) -> Themed {
     let (Some(http), Some(pipeline)) = (http, pipeline) else {
+        crate::trace::mark("theme skipped: no client or no asset source configured");
         return Themed::default();
     };
 
@@ -109,13 +110,22 @@ pub async fn theme(
         Some(cached) => cached,
         None => match pipeline.manifest(&http).await {
             Ok(fresh) => Arc::new(fresh),
-            Err(_) => return Themed::default(),
+            Err(e) => {
+                crate::trace::mark(format_args!("manifest fetch failed: {e}"));
+                return Themed::default();
+            }
         },
     };
 
     // A product missing from the manifest is not a reason to throw the
     // manifest away, so the branding half fails on its own.
-    let branding = pipeline.resolve_with(&http, &manifest, &code).await.ok();
+    let branding = match pipeline.resolve_with(&http, &manifest, &code).await {
+        Ok(branding) => Some(branding),
+        Err(e) => {
+            crate::trace::mark(format_args!("branding failed for {}: {e}", code.as_str()));
+            None
+        }
+    };
     Themed { manifest: Some(manifest), branding }
 }
 
