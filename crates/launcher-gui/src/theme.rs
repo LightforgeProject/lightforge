@@ -64,6 +64,10 @@ pub const BODY: u16 = 14;
 pub const LABEL: u16 = 12;
 pub const CAPTION: u16 = 11;
 
+/// Product wordmark on the dashboard, sitting under the app title. Sized to
+/// read as branding beside `TITLE`, not as the subject of the page.
+pub const LOGO: f32 = 110.0;
+
 /// Corner radius. One value for panels, one for controls.
 pub const RADIUS: f32 = 10.0;
 pub const RADIUS_SM: f32 = 6.0;

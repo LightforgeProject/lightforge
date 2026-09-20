@@ -917,30 +917,26 @@ impl Lightforge {
     fn dashboard(&self) -> Element<'_, Message> {
         let action = self.action();
 
+        // The wordmark hangs under the app title in the top-left rather than
+        // floating mid-page: the centre of the dashboard belongs to the art,
+        // and a product logo reads as branding when it sits with Lightforge's
+        // own rather than competing with the background for the middle.
         let logo: Element<Message> = match self.branding.as_ref() {
             Some(b) => image(image::Handle::from_path(&b.logo.path))
                 .content_fit(ContentFit::Contain)
-                .height(Length::Fixed(190.0))
+                .height(Length::Fixed(theme::LOGO))
                 .into(),
             None => column![
                 text(self.selected.label.clone()).size(theme::DISPLAY),
-                muted(
-                    match &self.branding {
-                        Some(b) => b.label.clone(),
-                        None => "no artwork configured".to_owned(),
-                    },
-                    theme::LABEL,
-                ),
+                muted("no artwork configured".to_owned(), theme::LABEL),
             ]
             .spacing(theme::XS)
-            .align_x(Alignment::Center)
             .into(),
         };
 
         let content = column![
             self.header(),
-            Space::with_height(Length::Fill),
-            container(logo).center_x(Length::Fill),
+            container(logo).align_x(Alignment::Start).width(Length::Fill),
             Space::with_height(Length::Fill),
             self.action_panel(&action),
         ]
