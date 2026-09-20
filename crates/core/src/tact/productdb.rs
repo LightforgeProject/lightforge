@@ -99,7 +99,7 @@ impl ProductInstall {
             locale: locale_from_tags(&tags).unwrap_or_else(|| "enUS".to_owned()),
             account_country: String::new(),
             geo_country: String::new(),
-            flavor_dir: code.install_dir().to_owned(),
+            flavor_dir: code.install_dir().into_owned(),
             version: cell(buildinfo::COL_VERSION)?,
             build_key: cell(buildinfo::COL_BUILD_KEY)?,
             tags,

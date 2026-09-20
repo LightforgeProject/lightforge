@@ -38,7 +38,7 @@ use lightforge_core::config::Config;
 use lightforge_core::debug::DebugInfo;
 use lightforge_core::net::Http;
 use lightforge_core::paths::{AppDirs, Layout};
-use lightforge_core::product::{Branch, Product, ProductCode, ProductLine};
+use lightforge_core::product::{Branch, Catalog, Product, ProductCode, ProductLine};
 use lightforge_core::state::{self, ActionState, Local};
 use lightforge_core::proton::ProtonPin;
 use lightforge_core::setup::Status as SetupStatus;
@@ -109,6 +109,8 @@ fn main() -> iced::Result {
 enum Message {
     Refreshed(ProductCode, Box<Refreshed>),
     Themed(ProductCode, Box<tasks::Themed>),
+    /// Open the Battle.net client on its own — the other-titles path.
+    OpenBattleNet,
     /// A tile in the product bar was clicked.
     LineSelected(ProductLine),
     /// A branch was picked for the selected line. Adds the product first when
@@ -223,6 +225,8 @@ impl std::fmt::Display for Choice {
 struct BranchChoice {
     code: ProductCode,
     branch: Branch,
+    /// The catalog's name for this product, used when adding it to config.
+    label: String,
     configured: bool,
 }
 
@@ -245,6 +249,9 @@ enum Launch {
     Game,
     /// Hand off to Battle.net, so the session is SSO'd and the shop works.
     BattleNet,
+    /// Open the Battle.net client itself, for everything outside the WoW
+    /// family. A pass-through, not a managed install — see `SPEC.md`.
+    Client,
 }
 
 struct Lightforge {
@@ -263,6 +270,9 @@ struct Lightforge {
     /// The branch last used in each line, so returning to a tile returns to
     /// the build you were on rather than snapping back to live.
     last_branch: HashMap<ProductLine, ProductCode>,
+    /// Which products exist and how they group — built in, then whatever the
+    /// manifest states over it.
+    catalog: Catalog,
     choices: Vec<Choice>,
     selected: Choice,
 
@@ -349,6 +359,7 @@ impl Lightforge {
             manifest: None,
             icons: HashMap::new(),
             last_branch: HashMap::new(),
+            catalog: Catalog::builtin(),
             choices,
             selected: selected.clone(),
             local: Local::default(),
@@ -511,7 +522,7 @@ impl Lightforge {
                 // is how it gets added, which beats hand-editing config.toml
                 // to try a PTR for an afternoon.
                 if !pick.configured {
-                    let label = format!("{} {}", pick.code.line().label(), pick.branch.label());
+                    let label = pick.label.clone();
                     self.config
                         .products
                         .push(Product::new(pick.code.clone(), label.clone()));
@@ -562,6 +573,7 @@ impl Lightforge {
                 // it happens to arrive first, so none of this overwrites it.
                 if self.manifest.is_none() {
                     self.manifest = themed.manifest;
+                    self.refresh_catalog();
                 }
                 if self.icons.is_empty() {
                     self.icons = themed.icons;
@@ -583,6 +595,7 @@ impl Lightforge {
                 // when a switch has already moved on from the one it themed.
                 if themed.manifest.is_some() {
                     self.manifest = themed.manifest;
+                    self.refresh_catalog();
                 }
                 if !themed.icons.is_empty() {
                     self.icons = themed.icons;
@@ -691,6 +704,8 @@ impl Lightforge {
 
             Message::BattleNet => self.preflight(Launch::BattleNet),
 
+            Message::OpenBattleNet => self.preflight(Launch::Client),
+
             Message::PreflightDone(what, result) => {
                 if let Err(e) = result {
                     self.busy = false;
@@ -719,6 +734,16 @@ impl Lightforge {
                         self.status = "handing off to Battle.net…".to_owned();
                         Task::perform(
                             tasks::launch_via_battle_net(
+                                self.layout.clone(),
+                                self.selected.code.clone(),
+                            ),
+                            Message::Launched,
+                        )
+                    }
+                    Launch::Client => {
+                        self.status = "opening Battle.net…".to_owned();
+                        Task::perform(
+                            tasks::open_battle_net(
                                 self.layout.clone(),
                                 self.selected.code.clone(),
                             ),
@@ -839,6 +864,7 @@ impl Lightforge {
                 // The cached manifest and its marks belong to the old source.
                 self.manifest = None;
                 self.icons.clear();
+                self.catalog = Catalog::builtin();
                 self.reload(self.selected.code.clone())
             }
 
@@ -1135,6 +1161,27 @@ impl Lightforge {
         }
 
         bar = bar.push(Space::with_width(Length::Fill));
+
+        // App-level, not per-product: everything outside the WoW family is a
+        // hand-off into Battle.net, so it sits with the navigation rather
+        // than on a panel that describes one product.
+        bar = bar.push(
+            tooltip(
+                button(text("Battle.net").size(theme::LABEL))
+                    .padding([theme::SM, theme::MD])
+                    .style(theme::ghost)
+                    .on_press_maybe((!self.busy).then_some(Message::OpenBattleNet)),
+                container(
+                    text("Open Battle.net for other Blizzard titles".to_owned())
+                        .size(theme::LABEL),
+                )
+                .padding([theme::XS, theme::SM])
+                .style(theme::floating),
+                tooltip::Position::Bottom,
+            ),
+        );
+        bar = bar.push(Space::with_width(Length::Fixed(theme::SM as f32)));
+
         bar = bar.push(nav("Play", Screen::Dashboard));
         bar = bar.push(nav("Addons", Screen::Addons));
         bar = bar.push(nav("Setup", Screen::Setup));
@@ -1157,12 +1204,20 @@ impl Lightforge {
     fn lines(&self) -> Vec<ProductLine> {
         let mut lines: Vec<ProductLine> = Vec::new();
         for choice in &self.choices {
-            let line = choice.code.line();
+            let line = self.catalog.line_of(&choice.code);
             if !lines.contains(&line) {
                 lines.push(line);
             }
         }
         lines
+    }
+
+    /// Rebuild the catalog from whatever manifest is in hand.
+    fn refresh_catalog(&mut self) {
+        self.catalog = match &self.manifest {
+            Some(manifest) => manifest.catalog(),
+            None => Catalog::builtin(),
+        };
     }
 
     /// One tile per configured line, the selected one marked.
@@ -1171,7 +1226,7 @@ impl Lightforge {
     /// is complete and usable before any art exists and fills in one line at a
     /// time as art is published.
     fn product_bar(&self) -> Vec<Element<'_, Message>> {
-        let current = self.selected.code.line();
+        let current = self.catalog.line_of(&self.selected.code);
 
         self.lines()
             .into_iter()
@@ -1217,14 +1272,16 @@ impl Lightforge {
     /// `None` when the line has exactly one branch to offer — a picker with a
     /// single entry is furniture.
     fn branch_choices(&self) -> Option<(Vec<BranchChoice>, BranchChoice)> {
-        let line = self.selected.code.line();
-        let choices: Vec<BranchChoice> = line
-            .branches()
+        let line = self.catalog.line_of(&self.selected.code);
+        let choices: Vec<BranchChoice> = self
+            .catalog
+            .branches(&line)
             .into_iter()
-            .map(|code| BranchChoice {
-                configured: self.choices.iter().any(|c| c.code == code),
-                branch: code.branch(),
-                code,
+            .map(|entry| BranchChoice {
+                configured: self.choices.iter().any(|c| c.code == entry.code),
+                branch: entry.branch,
+                code: entry.code.clone(),
+                label: entry.label.clone(),
             })
             .collect();
 
@@ -1250,7 +1307,7 @@ impl Lightforge {
             .or_else(|| {
                 self.choices
                     .iter()
-                    .find(|c| &c.code.line() == line)
+                    .find(|c| &self.catalog.line_of(&c.code) == line)
                     .cloned()
             });
 
@@ -1265,7 +1322,7 @@ impl Lightforge {
         if choice.code == self.selected.code {
             return Task::none();
         }
-        self.last_branch.insert(choice.code.line(), choice.code.clone());
+        self.last_branch.insert(self.catalog.line_of(&choice.code), choice.code.clone());
         self.selected = choice.clone();
         self.local = Local::default();
         self.remote = None;

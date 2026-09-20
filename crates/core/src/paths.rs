@@ -158,7 +158,7 @@ impl Layout {
 
     /// A product's install directory, e.g. `.../World of Warcraft/_retail_`.
     pub fn product_dir(&self, code: &ProductCode) -> PathBuf {
-        self.wow_install().join(code.install_dir())
+        self.wow_install().join(&*code.install_dir())
     }
 
     /// A product's addon directory.

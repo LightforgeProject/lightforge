@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::net::{ETagCache, Http, NetError};
-use crate::product::ProductCode;
+use crate::product::{Branch, Catalog, CatalogEntry, ProductCode};
 
 /// Manifest schema this build understands.
 ///
@@ -55,6 +55,20 @@ pub struct Manifest {
 pub struct Theme {
     /// Stable display name — `Retail`, never `Midnight`.
     pub label: String,
+    /// Which game this product is a build of — `retail`, `classic`,
+    /// `classic_era`, `forever`, or a name of your own.
+    ///
+    /// Optional. Without it the client works the line out from the product
+    /// code, which it can only do for codes it already knows: this field is
+    /// how a product released after the binary lands in the right tile
+    /// instead of appearing as a game of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
+    /// Which build of that line — `live`, `ptr`, `ptr2` or `beta`. Optional,
+    /// on the same terms as `line`. A value outside that set is ignored
+    /// rather than guessed at; the set is closed and the UI has to render it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     pub logo: AssetRef,
     pub background: AssetRef,
     /// Small square mark for the dashboard's product bar.
@@ -135,6 +149,35 @@ impl Manifest {
                 .as_deref()
                 .and_then(|fallback| self.products.get(fallback))
         })
+    }
+}
+
+impl Manifest {
+    /// The product catalog this manifest states, over the built-in one.
+    ///
+    /// A product is only *stated* here — identity, grouping, what to call it.
+    /// Where its files go and what runs stays derived from the code, so a bad
+    /// publish can mislabel a product but never install one over another.
+    pub fn catalog(&self) -> Catalog {
+        Catalog::with(self.products.iter().map(|(code, theme)| {
+            let code = ProductCode::from(code.clone());
+            CatalogEntry {
+                line: match theme.line.as_deref() {
+                    Some(line) => line.parse().unwrap_or_else(|never| match never {}),
+                    None => code.line(),
+                },
+                // An unparseable branch falls back rather than failing the
+                // entry: a product in the wrong slot of a version list still
+                // beats a product missing from the launcher.
+                branch: theme
+                    .branch
+                    .as_deref()
+                    .and_then(|b| b.parse::<Branch>().ok())
+                    .unwrap_or_else(|| code.branch()),
+                label: theme.label.clone(),
+                code,
+            }
+        }))
     }
 }
 
@@ -671,6 +714,59 @@ mod tests {
         assert_eq!(branding.logo.path, dir.join("retail-logo.png"));
         assert!(!branding.logo.fetched);
         assert_eq!(std::fs::read(&branding.logo.path).unwrap(), logo);
+    }
+
+    #[test]
+    fn a_manifest_states_the_catalog_over_the_builtin_one() {
+        let body = r#"{
+            "schema": 1,
+            "products": {
+              "wow_midnight_ptr": {
+                "label": "Midnight PTR",
+                "line": "retail",
+                "branch": "ptr",
+                "logo": { "url": "l.png" },
+                "background": { "url": "b.jpg" }
+              }
+            }
+        }"#;
+        let catalog = Manifest::parse(body.as_bytes()).unwrap().catalog();
+
+        // A code this build never heard of, placed in an existing line.
+        let code = ProductCode::Custom("wow_midnight_ptr".into());
+        let entry = catalog.get(&code).unwrap();
+        assert_eq!(entry.line, crate::product::ProductLine::Retail);
+        assert_eq!(entry.branch, Branch::Ptr);
+        assert_eq!(entry.label, "Midnight PTR");
+
+        // And it joins retail's version list rather than standing alone —
+        // which is the whole point of stating it.
+        let retail = catalog.branches(&crate::product::ProductLine::Retail);
+        assert!(retail.iter().any(|e| e.code == code));
+        assert!(retail.iter().any(|e| e.code == ProductCode::Retail));
+
+        // Everything the binary knows is still there, unmentioned.
+        assert!(catalog.get(&ProductCode::ClassicEra).is_some());
+    }
+
+    #[test]
+    fn a_branch_the_client_cannot_render_falls_back_instead_of_vanishing() {
+        let body = r#"{
+            "schema": 1,
+            "products": {
+              "wowt": {
+                "label": "Retail PTR",
+                "branch": "pre-alpha",
+                "logo": { "url": "l.png" },
+                "background": { "url": "b.jpg" }
+              }
+            }
+        }"#;
+        let catalog = Manifest::parse(body.as_bytes()).unwrap().catalog();
+        let entry = catalog.get(&ProductCode::Ptr).unwrap();
+        // The stated branch is nonsense, so the code's own answer stands.
+        assert_eq!(entry.branch, Branch::Ptr);
+        assert_eq!(entry.label, "Retail PTR");
     }
 
     #[test]

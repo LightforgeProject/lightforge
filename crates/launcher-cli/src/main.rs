@@ -813,7 +813,7 @@ async fn main() -> Result<()> {
             // The game is launched through the symlink, so Wine sees the
             // conventional Windows path — the same thing that keeps CEF happy
             // for the in-game store.
-            let flavor_dir = layout.wow_symlink().join(code.install_dir());
+            let flavor_dir = layout.wow_symlink().join(&*code.install_dir());
             let exe = lightforge_core::paths::game_executable(&flavor_dir, &code);
             if !exe.is_file() {
                 anyhow::bail!(

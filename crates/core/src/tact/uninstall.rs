@@ -55,7 +55,7 @@ pub fn plan(install: &Path, code: &ProductCode) -> Result<Plan, UninstallError> 
         .map(|info| info.products().filter(|p| p != code).collect())
         .unwrap_or_default();
 
-    let flavor = install.join(code.install_dir());
+    let flavor = install.join(&*code.install_dir());
     let flavor_dir = flavor.is_dir().then_some(flavor);
     let store = install.join("Data");
 

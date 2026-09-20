@@ -5,6 +5,7 @@
 //! realmlist/CDN overrides, and its own prefix state — switching one must never
 //! disturb another.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
 
@@ -123,9 +124,13 @@ impl ProductCode {
     }
 
     /// The install subdirectory this product uses beneath the WoW root, e.g.
-    /// `_retail_`. Custom products get their code as the directory name.
-    pub fn install_dir(&self) -> &str {
-        match self {
+    /// `_retail_`.
+    ///
+    /// Borrowed for every code with a fixed answer, owned only for the custom
+    /// `wow_*` codes whose directory is derived — which is why this is a
+    /// [`Cow`] rather than a `&str`.
+    pub fn install_dir(&self) -> Cow<'_, str> {
+        Cow::Borrowed(match self {
             Self::Retail => "_retail_",
             Self::Classic => "_classic_",
             Self::ClassicEra => "_classic_era_",
@@ -136,8 +141,15 @@ impl ProductCode {
             Self::Beta => "_beta_",
             // A real install carries `_classic_beta_/WowB.exe`.
             Self::ClassicBeta => "_classic_beta_",
-            Self::Custom(code) => code,
-        }
+            // A code this build does not know still follows the convention
+            // every known one does: `wow_<flavor>` installs to `_<flavor>_`.
+            // Deriving it beats installing into a literal `wow_foo/` directory
+            // no WoW client would ever look in.
+            Self::Custom(code) => match code.strip_prefix("wow_") {
+                Some(flavor) if !flavor.is_empty() => return Cow::Owned(format!("_{flavor}_")),
+                _ => code,
+            },
+        })
     }
 
     /// Whether this is an official Blizzard product code.
@@ -213,6 +225,17 @@ pub enum ProductLine {
 }
 
 impl ProductLine {
+    /// The stable key a manifest names this line by.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Retail => "retail",
+            Self::Classic => "classic",
+            Self::ClassicEra => "classic_era",
+            Self::Forever => "forever",
+            Self::Custom(code) => code,
+        }
+    }
+
     /// The line's own name — no branch in it.
     pub fn label(&self) -> &str {
         match self {
@@ -254,6 +277,20 @@ impl ProductLine {
     }
 }
 
+impl FromStr for ProductLine {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "retail" => Self::Retail,
+            "classic" => Self::Classic,
+            "classic_era" => Self::ClassicEra,
+            "forever" => Self::Forever,
+            other => Self::Custom(other.to_owned()),
+        })
+    }
+}
+
 /// Which build of a line a product is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Branch {
@@ -275,9 +312,152 @@ impl Branch {
     }
 }
 
+impl Branch {
+    /// The stable key a manifest names this branch by.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Ptr => "ptr",
+            Self::Ptr2 => "ptr2",
+            Self::Beta => "beta",
+        }
+    }
+}
+
+impl FromStr for Branch {
+    type Err = UnknownBranch;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "live" => Ok(Self::Live),
+            "ptr" => Ok(Self::Ptr),
+            "ptr2" => Ok(Self::Ptr2),
+            "beta" => Ok(Self::Beta),
+            other => Err(UnknownBranch(other.to_owned())),
+        }
+    }
+}
+
+/// A manifest named a branch this build does not know.
+///
+/// Unlike a line, a branch cannot be invented: the set is closed, and
+/// guessing would put a product in a version list under a name the UI cannot
+/// render. Callers treat it as "no branch stated" and fall back.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown branch `{0}`")]
+pub struct UnknownBranch(pub String);
+
 impl fmt::Display for Branch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.label())
+    }
+}
+
+/// Every product code this build knows by name, live builds first.
+///
+/// The client's half of the catalog: what Lightforge can describe without
+/// asking anyone. [`Catalog`] layers the hosted manifest on top, so a product
+/// Blizzard adds after this binary shipped still lands in the right place.
+pub const KNOWN_CODES: &[ProductCode] = &[
+    ProductCode::Retail,
+    ProductCode::Ptr,
+    ProductCode::Ptr2,
+    ProductCode::Beta,
+    ProductCode::Classic,
+    ProductCode::ClassicPtr,
+    ProductCode::ClassicEra,
+    ProductCode::EraPtr,
+    ProductCode::ClassicBeta,
+];
+
+/// One product in the catalog: what it is, and where it sits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogEntry {
+    pub code: ProductCode,
+    /// Stable display name. Never an expansion name — see [`ProductLine`].
+    pub label: String,
+    pub line: ProductLine,
+    pub branch: Branch,
+}
+
+/// Which products exist, what they are called, and how they group.
+///
+/// Built into the binary, then overridden by the hosted manifest. The split
+/// matters: Blizzard publishes no product listing — `tact::version` documents
+/// the dead `summary` endpoint — so the set of products is something someone
+/// has to *state*, and stating it in a document that revalidates on every
+/// launch beats stating it in a binary that ships every few weeks.
+///
+/// Only identity is server-driven. Where files go and what runs stays derived
+/// from the code, because a typo in a manifest should mis-*label* a product,
+/// never install one over another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Catalog {
+    entries: Vec<CatalogEntry>,
+}
+
+impl Default for Catalog {
+    fn default() -> Self {
+        Self::builtin()
+    }
+}
+
+impl Catalog {
+    /// What this binary knows on its own, with no manifest in hand.
+    pub fn builtin() -> Self {
+        Self {
+            entries: KNOWN_CODES
+                .iter()
+                .map(|code| CatalogEntry {
+                    label: format!("{} {}", code.line().label(), code.branch().label()),
+                    line: code.line(),
+                    branch: code.branch(),
+                    code: code.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Layer stated entries over the built-in ones.
+    ///
+    /// A stated code replaces its built-in entry; an unknown one is appended.
+    /// Order follows the statement, then whatever built-ins it did not
+    /// mention, so a manifest controls how the bar reads.
+    pub fn with(stated: impl IntoIterator<Item = CatalogEntry>) -> Self {
+        let mut entries: Vec<CatalogEntry> = stated.into_iter().collect();
+        for builtin in Self::builtin().entries {
+            if !entries.iter().any(|e| e.code == builtin.code) {
+                entries.push(builtin);
+            }
+        }
+        Self { entries }
+    }
+
+    pub fn entries(&self) -> &[CatalogEntry] {
+        &self.entries
+    }
+
+    pub fn get(&self, code: &ProductCode) -> Option<&CatalogEntry> {
+        self.entries.iter().find(|e| &e.code == code)
+    }
+
+    /// Which line a code belongs to according to the catalog, falling back to
+    /// what the code itself says.
+    pub fn line_of(&self, code: &ProductCode) -> ProductLine {
+        self.get(code).map(|e| e.line.clone()).unwrap_or_else(|| code.line())
+    }
+
+    /// Every branch of one line, live first, in catalog order.
+    pub fn branches(&self, line: &ProductLine) -> Vec<&CatalogEntry> {
+        let mut found: Vec<&CatalogEntry> =
+            self.entries.iter().filter(|e| &e.line == line).collect();
+        found.sort_by_key(|e| match e.branch {
+            Branch::Live => 0,
+            Branch::Ptr => 1,
+            Branch::Ptr2 => 2,
+            Branch::Beta => 3,
+        });
+        found
     }
 }
 
@@ -367,6 +547,9 @@ mod tests {
         assert_eq!(parsed, ProductCode::Custom("turtle_wow".into()));
         assert!(!parsed.is_official());
         assert_eq!(parsed.install_dir(), "turtle_wow");
+        // A code shaped like a WoW flavor gets a WoW flavor directory.
+        let future: ProductCode = "wow_midnight_ptr".parse().unwrap();
+        assert_eq!(future.install_dir(), "_midnight_ptr_");
     }
 
     #[test]

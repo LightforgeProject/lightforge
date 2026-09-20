@@ -244,7 +244,7 @@ pub async fn download(
                 let dest = layout.wow_install();
                 let options = InstallOptions {
                     region,
-                    flavor: code.install_dir().to_owned(),
+                    flavor: code.install_dir().into_owned(),
                     // Tighter than the CLI's 4 GiB. A checkpoint is a few
                     // milliseconds of index writing, and it bounds what is
                     // lost if the app is killed rather than closed — the CLI
@@ -415,7 +415,7 @@ pub async fn preflight(
 /// dead button.
 pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        let flavor = layout.wow_symlink().join(code.install_dir());
+        let flavor = layout.wow_symlink().join(&*code.install_dir());
         let exe = lightforge_core::paths::game_executable(&flavor, &code);
         if !exe.is_file() {
             return Err(format!("no game at {}", exe.display()));
@@ -444,6 +444,28 @@ pub async fn launch_via_battle_net(
         let launch = Launch::Product { code: code.clone(), exec: None };
         battlenet::launch(&runner, &layout, &launch).map_err(|e| e.to_string())?;
         Ok(format!("Battle.net launching {}", code.as_str()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Open Battle.net with no product: the way to reach everything outside the
+/// WoW family.
+///
+/// Deliberately a hand-off and nothing more. Lightforge does not track,
+/// install or update other Blizzard titles — `SPEC.md` is explicit that it is
+/// WoW-family-primary and a pass-through for the rest — so this opens the
+/// client and stops there.
+///
+/// Still pre-flighted by the caller: a stale wineserver breaks Battle.net
+/// exactly as it breaks a game launch.
+pub async fn open_battle_net(layout: Layout, code: ProductCode) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        use lightforge_core::battlenet::{self, Launch};
+
+        let runner = runner_for(&layout, &code)?;
+        battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| e.to_string())?;
+        Ok("Battle.net opening".to_owned())
     })
     .await
     .map_err(|e| e.to_string())?
