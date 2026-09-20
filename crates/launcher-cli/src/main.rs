@@ -1918,7 +1918,16 @@ async fn main() -> Result<()> {
 
             println!("\nproduct         {}", code.as_str());
             println!("label           {}", branding.label);
-            for (slot, asset) in [("logo", &branding.logo), ("background", &branding.background)] {
+            let slots = [
+                ("logo", Some(&branding.logo)),
+                ("background", Some(&branding.background)),
+                ("icon", branding.icon.as_ref()),
+            ];
+            for (slot, asset) in slots {
+                let Some(asset) = asset else {
+                    println!("{slot:<15} —");
+                    continue;
+                };
                 let size = std::fs::metadata(&asset.path).map(|m| m.len()).unwrap_or(0);
                 let height = match asset.height {
                     Some(h) => format!(", {h}px"),

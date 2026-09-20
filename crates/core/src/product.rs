@@ -52,6 +52,28 @@ impl ProductCode {
         }
     }
 
+    /// A few characters that identify this product in a space too small for
+    /// its display name — the dashboard's product bar, before a product has
+    /// artwork of its own.
+    ///
+    /// Distinguishing, not descriptive: every one of these is a World of
+    /// Warcraft, so the word that tells them apart is the only word worth the
+    /// room. The two betas are separated by line rather than both reading
+    /// "Beta", since a launcher that cannot tell them apart is exactly the
+    /// launcher that installs the wrong one.
+    pub fn short_name(&self) -> &str {
+        match self {
+            Self::Retail => "Retail",
+            Self::Classic => "Classic",
+            Self::ClassicEra => "Era",
+            Self::Ptr => "PTR",
+            Self::ClassicPtr => "C-PTR",
+            Self::Beta => "Beta",
+            Self::ClassicBeta => "C-Beta",
+            Self::Custom(code) => code,
+        }
+    }
+
     /// The game binary this product is expected to ship, by name only.
     ///
     /// A hint, not an authority — see [`crate::paths::Layout::wow_exe`], which

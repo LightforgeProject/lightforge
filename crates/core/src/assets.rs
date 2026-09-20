@@ -57,6 +57,13 @@ pub struct Theme {
     pub label: String,
     pub logo: AssetRef,
     pub background: AssetRef,
+    /// Small square mark for the dashboard's product bar.
+    ///
+    /// Optional, unlike the other two: the bar falls back to
+    /// [`ProductCode::short_name`] for a product with no icon yet, so art can
+    /// be added one product at a time without the bar breaking in between.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<AssetRef>,
 }
 
 /// One image: where it lives, optionally what it must hash to, and optionally
@@ -86,6 +93,7 @@ pub struct AssetRef {
 pub enum Slot {
     Logo,
     Background,
+    Icon,
 }
 
 impl Slot {
@@ -93,6 +101,7 @@ impl Slot {
         match self {
             Self::Logo => "logo",
             Self::Background => "background",
+            Self::Icon => "icon",
         }
     }
 }
@@ -165,6 +174,9 @@ pub struct Branding {
     pub label: String,
     pub logo: Asset,
     pub background: Asset,
+    /// `None` when the theme declares no icon, or when one is declared but
+    /// isn't resolvable — a missing mark costs a fallback label, not a theme.
+    pub icon: Option<Asset>,
 }
 
 /// The cache directory, and the naming rule within it.
@@ -284,7 +296,39 @@ impl Pipeline {
         )
         .await?;
 
-        Ok(Branding { label: theme.label.clone(), logo, background })
+        Ok(Branding {
+            label: theme.label.clone(),
+            logo,
+            background,
+            icon: self.icon(http, manifest, code).await?,
+        })
+    }
+
+    /// Resolve just a product's icon.
+    ///
+    /// Separate from [`Pipeline::resolve_with`] because the product bar wants
+    /// every configured product's mark at once, and pulling three images per
+    /// product to use one of them would make switching products cost five
+    /// times what it needs to.
+    ///
+    /// An icon that fails to fetch or verify is `None` rather than an error:
+    /// the bar has a fallback, and one bad mark must not stop the others.
+    pub async fn icon(
+        &self,
+        http: &Http,
+        manifest: &Manifest,
+        code: &ProductCode,
+    ) -> Result<Option<Asset>, AssetError> {
+        let Some(icon) = manifest.theme(code).and_then(|t| t.icon.as_ref()) else {
+            return Ok(None);
+        };
+        Ok(self.asset(http, icon, Slot::Icon).await.ok())
+    }
+
+    /// The cache-only half of [`Pipeline::icon`].
+    pub fn cached_icon(&self, manifest: &Manifest, code: &ProductCode) -> Option<Asset> {
+        let icon = manifest.theme(code).and_then(|t| t.icon.as_ref())?;
+        self.cached_asset(icon, Slot::Icon)
     }
 
     /// Resolve branding from what is already on disk, touching no network.
@@ -302,18 +346,29 @@ impl Pipeline {
     ///
     /// Blocking file IO: call it off the thread that is drawing.
     pub fn cached(&self, code: &ProductCode) -> Option<Branding> {
-        let bytes = match &self.origin {
-            Origin::Dir(dir) => read(&dir.join(MANIFEST_FILE)).ok()?,
-            Origin::Http(_) => self.store.manifest_cache().read().ok()?,
-        };
-        let manifest = Manifest::parse(&bytes).ok()?;
+        let manifest = self.cached_manifest()?;
         let theme = manifest.theme(code)?;
 
         Some(Branding {
             label: theme.label.clone(),
             logo: self.cached_asset(&theme.logo, Slot::Logo)?,
             background: self.cached_asset(&theme.background, Slot::Background)?,
+            // Optional, so a `?` here would throw away a perfectly good theme
+            // over a mark the bar can do without.
+            icon: theme.icon.as_ref().and_then(|i| self.cached_asset(i, Slot::Icon)),
         })
+    }
+
+    /// The manifest from the cache alone, touching no network.
+    ///
+    /// The product bar needs it separately from [`Pipeline::cached`]: that
+    /// resolves one product, the bar draws every one the manifest names.
+    pub fn cached_manifest(&self) -> Option<Manifest> {
+        let bytes = match &self.origin {
+            Origin::Dir(dir) => read(&dir.join(MANIFEST_FILE)).ok()?,
+            Origin::Http(_) => self.store.manifest_cache().read().ok()?,
+        };
+        Manifest::parse(&bytes).ok()
     }
 
     /// One image from the cache, verified the same way the network path
@@ -610,6 +665,59 @@ mod tests {
         assert_eq!(branding.logo.path, dir.join("retail-logo.png"));
         assert!(!branding.logo.fetched);
         assert_eq!(std::fs::read(&branding.logo.path).unwrap(), logo);
+    }
+
+    #[test]
+    fn a_theme_without_an_icon_is_still_a_theme() {
+        let dir = tmpdir("no-icon");
+        std::fs::write(dir.join(MANIFEST_FILE), FIXTURE).unwrap();
+        std::fs::write(dir.join("retail-logo.png"), b"PNG-logo").unwrap();
+        std::fs::write(dir.join("retail-bg.jpg"), b"JPG-bg").unwrap();
+
+        let pipeline = Pipeline::new(Origin::Dir(dir), Store::new(tmpdir("no-icon-c")));
+        let branding = pipeline.cached(&ProductCode::Retail).unwrap();
+        assert!(branding.icon.is_none());
+    }
+
+    #[test]
+    fn a_declared_icon_resolves_beside_the_rest() {
+        let dir = tmpdir("icon");
+        let body = FIXTURE.replace(
+            "\"background\": { \"url\": \"retail-bg.jpg\" }",
+            "\"background\": { \"url\": \"retail-bg.jpg\" }, \"icon\": { \"url\": \"retail-icon.png\" }",
+        );
+        std::fs::write(dir.join(MANIFEST_FILE), body).unwrap();
+        std::fs::write(dir.join("retail-logo.png"), b"PNG-logo").unwrap();
+        std::fs::write(dir.join("retail-bg.jpg"), b"JPG-bg").unwrap();
+        std::fs::write(dir.join("retail-icon.png"), b"PNG-icon").unwrap();
+
+        let pipeline = Pipeline::new(Origin::Dir(dir.clone()), Store::new(tmpdir("icon-c")));
+        let manifest = pipeline.cached_manifest().unwrap();
+
+        let icon = pipeline.cached_icon(&manifest, &ProductCode::Retail).unwrap();
+        assert_eq!(icon.path, dir.join("retail-icon.png"));
+        assert_eq!(
+            pipeline.cached(&ProductCode::Retail).unwrap().icon,
+            Some(icon)
+        );
+    }
+
+    #[test]
+    fn a_declared_icon_that_is_missing_costs_only_the_icon() {
+        let dir = tmpdir("icon-gone");
+        let body = FIXTURE.replace(
+            "\"background\": { \"url\": \"retail-bg.jpg\" }",
+            "\"background\": { \"url\": \"retail-bg.jpg\" }, \"icon\": { \"url\": \"retail-icon.png\" }",
+        );
+        std::fs::write(dir.join(MANIFEST_FILE), body).unwrap();
+        std::fs::write(dir.join("retail-logo.png"), b"PNG-logo").unwrap();
+        std::fs::write(dir.join("retail-bg.jpg"), b"JPG-bg").unwrap();
+        // No icon file: the bar falls back, the theme survives.
+
+        let pipeline = Pipeline::new(Origin::Dir(dir), Store::new(tmpdir("icon-gone-c")));
+        let branding = pipeline.cached(&ProductCode::Retail).unwrap();
+        assert_eq!(branding.label, "Retail");
+        assert!(branding.icon.is_none());
     }
 
     #[test]

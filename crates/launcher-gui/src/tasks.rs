@@ -5,6 +5,7 @@
 //! each one can be driven by `Task::perform` without the update loop holding a
 //! lock across an await.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -69,22 +70,56 @@ pub async fn refresh(
 /// Network-free and typically a few tens of milliseconds, so on every run
 /// after the first the dashboard opens already themed instead of showing its
 /// unthemed card for the length of a revalidation.
-pub async fn cached_theme(pipeline: Option<Pipeline>, code: ProductCode) -> Option<Branding> {
-    let pipeline = pipeline?;
-    // Reads and hashes both images; off the UI thread.
-    tokio::task::spawn_blocking(move || pipeline.cached(&code))
-        .await
-        .ok()
-        .flatten()
+pub async fn cached_theme(
+    pipeline: Option<Pipeline>,
+    codes: Vec<ProductCode>,
+    code: ProductCode,
+) -> Themed {
+    let Some(pipeline) = pipeline else {
+        return Themed::default();
+    };
+
+    // Reads and hashes every image it returns; off the UI thread.
+    tokio::task::spawn_blocking(move || {
+        let branding = pipeline.cached(&code);
+        let manifest = pipeline.cached_manifest();
+        let icons = match &manifest {
+            Some(manifest) => cached_icons(&pipeline, manifest, &codes),
+            None => HashMap::new(),
+        };
+        Themed { manifest: manifest.map(Arc::new), branding, icons }
+    })
+    .await
+    .unwrap_or_default()
 }
 
-/// A theming pass: the branding it produced, and the manifest it read.
+/// Every product's cached icon, skipping the ones that aren't there yet.
+fn cached_icons(
+    pipeline: &Pipeline,
+    manifest: &Manifest,
+    codes: &[ProductCode],
+) -> HashMap<ProductCode, PathBuf> {
+    codes
+        .iter()
+        .filter_map(|code| {
+            let icon = pipeline.cached_icon(manifest, code)?;
+            Some((code.clone(), icon.path))
+        })
+        .collect()
+}
+
+/// A theming pass: the branding it produced, the manifest it read, and every
+/// configured product's bar icon.
 ///
-/// The manifest comes back so the app can hold onto it — see [`theme`].
+/// The manifest comes back so the app can hold onto it — see [`theme`]. The
+/// icons ride along because the pass already holds the one manifest that names
+/// them all, and the product bar needs the whole set, not just the selected
+/// product's.
 #[derive(Debug, Default, Clone)]
 pub struct Themed {
     pub manifest: Option<Arc<Manifest>>,
     pub branding: Option<Branding>,
+    pub icons: HashMap<ProductCode, PathBuf>,
 }
 
 /// Resolve a product's branding, or an empty [`Themed`] when theming isn't
@@ -99,6 +134,7 @@ pub async fn theme(
     http: Option<Http>,
     pipeline: Option<Pipeline>,
     manifest: Option<Arc<Manifest>>,
+    codes: Vec<ProductCode>,
     code: ProductCode,
 ) -> Themed {
     let (Some(http), Some(pipeline)) = (http, pipeline) else {
@@ -126,7 +162,18 @@ pub async fn theme(
             None
         }
     };
-    Themed { manifest: Some(manifest), branding }
+
+    // Every product's mark, not just the selected one's: the bar shows them
+    // all at once. They are small and revalidate to a 304, so the whole set
+    // costs about what one image does.
+    let mut icons = HashMap::new();
+    for product in &codes {
+        if let Ok(Some(icon)) = pipeline.icon(&http, &manifest, product).await {
+            icons.insert(product.clone(), icon.path);
+        }
+    }
+
+    Themed { manifest: Some(manifest), branding, icons }
 }
 
 /// What a running transfer publishes for the UI to read.

@@ -78,6 +78,10 @@ pub const CAPTION: u16 = 11;
 /// decides what an override is allowed to be.
 pub const LOGO: f32 = 170.0;
 
+/// Edge of a product tile in the header's product bar. Square, so this is
+/// both dimensions; the art inside is drawn to fit.
+pub const TILE: f32 = 38.0;
+
 /// What a manifest's logo height hint is allowed to ask for.
 ///
 /// The manifest is fetched over the network, so a typo or a bad publish must
@@ -328,3 +332,4 @@ mod tests {
         }
     }
 }
+

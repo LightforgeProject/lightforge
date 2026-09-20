@@ -23,12 +23,13 @@ mod tasks;
 mod theme;
 mod trace;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use iced::widget::{
     button, column, container, image, pick_list, progress_bar, row, scrollable,
-    stack, text, text_input, Space,
+    stack, text, text_input, tooltip, Space,
 };
 use iced::{Alignment, ContentFit, Element, Length, Subscription, Task};
 
@@ -114,7 +115,7 @@ enum Message {
     /// Diagnostic only: subscribed to solely under `LIGHTFORGE_TRACE=frames`.
     ResizeTraced(iced::Size),
     /// The optimistic, cache-only paint that precedes [`Message::Themed`].
-    CachedTheme(ProductCode, Option<Branding>),
+    CachedTheme(ProductCode, Box<tasks::Themed>),
     Primary,
     Tick,
     Downloaded(ProductCode, Result<Complete, String>),
@@ -229,6 +230,8 @@ struct Lightforge {
     pipeline: Option<Pipeline>,
     /// The branding manifest, read once and themed from thereafter.
     manifest: Option<Arc<Manifest>>,
+    /// Every configured product's bar icon, for those that have one.
+    icons: HashMap<ProductCode, std::path::PathBuf>,
     choices: Vec<Choice>,
     selected: Choice,
 
@@ -313,6 +316,7 @@ impl Lightforge {
             http: Http::new().ok(),
             pipeline,
             manifest: None,
+            icons: HashMap::new(),
             choices,
             selected: selected.clone(),
             local: Local::default(),
@@ -377,10 +381,10 @@ impl Lightforge {
             // nothing else, so the window opens themed rather than snapping
             // to art once the revalidation below comes back.
             Task::perform(
-                tasks::cached_theme(self.pipeline.clone(), code.clone()),
+                tasks::cached_theme(self.pipeline.clone(), self.product_codes(), code.clone()),
                 {
                     let code = code.clone();
-                    move |b| Message::CachedTheme(code.clone(), b)
+                    move |t| Message::CachedTheme(code.clone(), Box::new(t))
                 },
             ),
             Task::perform(
@@ -388,6 +392,7 @@ impl Lightforge {
                     self.http.clone(),
                     self.pipeline.clone(),
                     self.manifest.clone(),
+                    self.product_codes(),
                     code.clone(),
                 ),
                 {
@@ -399,6 +404,11 @@ impl Lightforge {
                 Message::AddonsListed(Box::new(listing))
             }),
         ])
+    }
+
+    /// Every configured product, in the order the bar draws them.
+    fn product_codes(&self) -> Vec<ProductCode> {
+        self.choices.iter().map(|c| c.code.clone()).collect()
     }
 
     /// Clear the way for a launch, then let [`Message::PreflightDone`] start it.
@@ -498,19 +508,26 @@ impl Lightforge {
                 Task::none()
             }
 
-            Message::CachedTheme(code, branding) => {
+            Message::CachedTheme(code, themed) => {
                 trace::mark(format_args!(
-                    "cache-first theme for {}: {}",
+                    "cache-first theme for {}: {}, {} icon(s)",
                     code.as_str(),
-                    match &branding {
+                    match &themed.branding {
                         Some(_) => "hit",
                         None => "MISS — nothing usable on disk",
-                    }
+                    },
+                    themed.icons.len(),
                 ));
                 // Strictly a gap-filler: the revalidated answer wins whenever
-                // it happens to arrive first, so this never overwrites it.
+                // it happens to arrive first, so none of this overwrites it.
+                if self.manifest.is_none() {
+                    self.manifest = themed.manifest;
+                }
+                if self.icons.is_empty() {
+                    self.icons = themed.icons;
+                }
                 if code == self.selected.code && self.branding.is_none() {
-                    self.branding = branding;
+                    self.branding = themed.branding;
                 }
                 Task::none()
             }
@@ -526,6 +543,9 @@ impl Lightforge {
                 // when a switch has already moved on from the one it themed.
                 if themed.manifest.is_some() {
                     self.manifest = themed.manifest;
+                }
+                if !themed.icons.is_empty() {
+                    self.icons = themed.icons;
                 }
                 if code == self.selected.code {
                     self.branding = themed.branding;
@@ -776,8 +796,9 @@ impl Lightforge {
                     _ => None,
                 };
                 self.branding = None;
-                // The cached manifest belongs to the old source.
+                // The cached manifest and its marks belong to the old source.
                 self.manifest = None;
+                self.icons.clear();
                 self.reload(self.selected.code.clone())
             }
 
@@ -1068,15 +1089,9 @@ impl Lightforge {
 
         if self.screen == Screen::Dashboard {
             bar = bar.push(Space::with_width(Length::Fixed(theme::MD as f32)));
-            bar = bar.push(
-                pick_list(
-                    self.choices.as_slice(),
-                    Some(self.selected.clone()),
-                    Message::Selected,
-                )
-                .text_size(theme::BODY)
-                .padding([theme::SM, theme::MD]),
-            );
+            for tile in self.product_bar() {
+                bar = bar.push(tile);
+            }
         }
 
         bar = bar.push(Space::with_width(Length::Fill));
@@ -1085,6 +1100,51 @@ impl Lightforge {
         bar = bar.push(nav("Setup", Screen::Setup));
         bar = bar.push(nav("Settings", Screen::Settings));
         bar.into()
+    }
+
+    /// One tile per configured product, the selected one marked.
+    ///
+    /// A product with no icon in the manifest falls back to its short name,
+    /// so the bar is complete and usable before any art exists and fills in
+    /// one product at a time as art is published. Both kinds carry a tooltip
+    /// with the full display name, which is the only place the long
+    /// user-configured name still fits.
+    fn product_bar(&self) -> Vec<Element<'_, Message>> {
+        self.choices
+            .iter()
+            .map(|choice| {
+                let selected = choice.code == self.selected.code;
+
+                let face: Element<Message> = match self.icons.get(&choice.code) {
+                    Some(path) => image(image::Handle::from_path(path))
+                        .content_fit(ContentFit::Contain)
+                        .width(Length::Fixed(theme::TILE))
+                        .height(Length::Fixed(theme::TILE))
+                        .into(),
+                    None => container(text(choice.code.short_name()).size(theme::LABEL))
+                        .center_x(Length::Shrink)
+                        .center_y(Length::Fixed(theme::TILE))
+                        .into(),
+                };
+
+                let tile = button(face).padding([theme::XS, theme::SM]);
+                let tile = match selected {
+                    true => tile.style(theme::selected),
+                    false => tile
+                        .style(theme::ghost)
+                        .on_press(Message::Selected(choice.clone())),
+                };
+
+                tooltip(
+                    tile,
+                    container(text(choice.label.clone()).size(theme::LABEL))
+                        .padding([theme::XS, theme::SM])
+                        .style(theme::floating),
+                    tooltip::Position::Bottom,
+                )
+                .into()
+            })
+            .collect()
     }
 
     /// A screen that is not the dashboard: header, title, content.
