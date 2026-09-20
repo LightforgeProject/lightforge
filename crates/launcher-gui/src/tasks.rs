@@ -124,7 +124,8 @@ pub async fn download(
             };
 
             let result = runtime.block_on(async move {
-                let http = Http::new().map_err(|e| e.to_string())?;
+                let http = Http::with_pools(lightforge_core::net::DEFAULT_POOLS)
+                    .map_err(|e| e.to_string())?;
                 let dest = layout.wow_install();
                 let options = InstallOptions {
                     region,

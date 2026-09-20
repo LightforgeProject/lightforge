@@ -25,19 +25,66 @@ const USER_AGENT: &str = concat!("Lightforge/", env!("CARGO_PKG_VERSION"));
 /// and cloned, so hand this around rather than building clients per request.
 #[derive(Debug, Clone)]
 pub struct Http {
-    client: reqwest::Client,
+    /// Several independent connection pools, used round-robin.
+    ///
+    /// Blizzard's CDN speaks HTTP/2, and reqwest keeps **one** connection per
+    /// host and multiplexes every request over it. Measured against the live
+    /// CDN with 48 concurrent 2 MB range requests — the shape a download
+    /// actually makes — one connection sustains 28.8 MB/s and four sustain
+    /// 33.3 MB/s. The streams are not the limit; the single connection is.
+    clients: Vec<reqwest::Client>,
+    next: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
+
+/// Connection pools a bulk download spreads itself across.
+///
+/// Four is where the measured gain flattens; more pools cost handshakes without
+/// buying throughput.
+pub const DEFAULT_POOLS: usize = 4;
 
 impl Http {
     pub fn new() -> Result<Self, NetError> {
-        let client = reqwest::Client::builder()
-            .user_agent(USER_AGENT)
-            .connect_timeout(Duration::from_secs(15))
-            // Deliberately no overall request timeout: a Proton tarball is
-            // ~400 MB and a slow link is not an error.
-            .build()
+        Self::with_pools(1)
+    }
+
+    /// A client whose requests are spread over `pools` connection pools.
+    ///
+    /// One pool is right for anything conversational — the version service, an
+    /// asset manifest — where a second connection is pure handshake. Bulk
+    /// transfers want [`DEFAULT_POOLS`].
+    pub fn with_pools(pools: usize) -> Result<Self, NetError> {
+        let clients = (0..pools.max(1))
+            .map(|_| {
+                reqwest::Client::builder()
+                    .user_agent(USER_AGENT)
+                    .connect_timeout(Duration::from_secs(15))
+                    // Deliberately no overall request timeout: a Proton tarball
+                    // is ~400 MB and a slow link is not an error.
+                    .build()
+            })
+            .collect::<Result<Vec<_>, _>>()
             .map_err(NetError::Client)?;
-        Ok(Self { client })
+
+        Ok(Self {
+            clients,
+            next: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        })
+    }
+
+    /// The next pool in the rotation.
+    fn client(&self) -> &reqwest::Client {
+        match self.clients.len() {
+            1 => &self.clients[0],
+            n => {
+                let i = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                &self.clients[i % n]
+            }
+        }
+    }
+
+    /// How many pools this client spreads across.
+    pub fn pools(&self) -> usize {
+        self.clients.len()
     }
 
     /// Fetch and deserialize JSON, revalidating against `cache` when possible.
@@ -49,7 +96,7 @@ impl Http {
         url: &str,
         cache: &ETagCache,
     ) -> Result<Option<T>, NetError> {
-        let mut request = self.client.get(url);
+        let mut request = self.client().get(url);
         if let Some(etag) = cache.etag() {
             request = request.header(reqwest::header::IF_NONE_MATCH, etag);
         }
@@ -95,7 +142,7 @@ impl Http {
         url: &str,
         cache: &ETagCache,
     ) -> Result<Option<Vec<u8>>, NetError> {
-        let mut request = self.client.get(url);
+        let mut request = self.client().get(url);
         if let Some(etag) = cache.etag() {
             request = request.header(reqwest::header::IF_NONE_MATCH, etag);
         }
@@ -131,7 +178,7 @@ impl Http {
         url: &str,
     ) -> Result<T, NetError> {
         let response = self
-            .client
+            .client()
             .get(url)
             .send()
             .await
@@ -159,7 +206,7 @@ impl Http {
         body: &B,
     ) -> Result<T, NetError> {
         let response = self
-            .client
+            .client()
             .post(url)
             .json(body)
             .send()
@@ -180,7 +227,7 @@ impl Http {
     /// Fetch a small document as text, without caching.
     pub async fn get_text(&self, url: &str) -> Result<String, NetError> {
         let response = self
-            .client
+            .client()
             .get(url)
             .send()
             .await
@@ -211,7 +258,7 @@ impl Http {
     /// disk rather than holding a multi-gigabyte archive in memory.
     pub async fn get_bytes(&self, url: &str) -> Result<Vec<u8>, NetError> {
         let response = self
-            .client
+            .client()
             .get(url)
             .send()
             .await
@@ -233,7 +280,7 @@ impl Http {
     /// silently accepting.
     pub async fn get_range(&self, url: &str, range: &str) -> Result<Vec<u8>, NetError> {
         let response = self
-            .client
+            .client()
             .get(url)
             .header(reqwest::header::RANGE, range)
             .send()
@@ -260,7 +307,7 @@ impl Http {
         mut on_progress: impl FnMut(u64, Option<u64>),
     ) -> Result<String, NetError> {
         let response = self
-            .client
+            .client()
             .get(url)
             .send()
             .await
@@ -494,6 +541,29 @@ mod tests {
 
         assert_eq!(cache.etag(), None);
         assert_eq!(cache.read().unwrap(), b"two");
+    }
+
+    #[test]
+    fn pools_are_used_round_robin() {
+        let http = Http::with_pools(3).unwrap();
+        assert_eq!(http.pools(), 3);
+
+        // Each call advances the rotation, so concurrent requests land on
+        // different connections instead of queueing behind one.
+        let first = http.client() as *const _;
+        let second = http.client() as *const _;
+        let third = http.client() as *const _;
+        assert_ne!(first, second);
+        assert_ne!(second, third);
+        // And it wraps.
+        assert_eq!(http.client() as *const _, first);
+    }
+
+    #[test]
+    fn a_single_pool_client_needs_no_rotation() {
+        let http = Http::new().unwrap();
+        assert_eq!(http.pools(), 1);
+        assert_eq!(http.client() as *const _, http.client() as *const _);
     }
 
     #[test]
