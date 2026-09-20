@@ -449,6 +449,84 @@ pub async fn launch_via_battle_net(
     .map_err(|e| e.to_string())?
 }
 
+/// A game Battle.net installed that Lightforge does not manage.
+///
+/// Shown so the launcher is one place to start things from, and no more than
+/// that: no version check, no update, no play. See `SPEC.md` — Lightforge is
+/// WoW-family-primary and a pass-through for the rest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Handoff {
+    pub code: String,
+    pub label: String,
+    pub version: Option<String>,
+    pub icon: Option<PathBuf>,
+}
+
+/// Read Agent's registry and turn everything non-WoW into a hand-off tile.
+///
+/// Icons come out of each game's own executable and are cached beside the
+/// themed art, keyed by product code: extracting one means reading an ~80 MB
+/// binary, which is worth doing once and not once per launch.
+pub async fn handoffs(layout: Layout, cache: PathBuf) -> Vec<Handoff> {
+    tokio::task::spawn_blocking(move || {
+        use lightforge_core::tact::productdb;
+
+        let Ok(installed) = productdb::read(&layout.agent_dir().join("product.db")) else {
+            return Vec::new();
+        };
+
+        installed
+            .into_iter()
+            .filter(|i| !i.is_infrastructure() && !is_wow(i))
+            .map(|i| {
+                let dir = layout.from_windows_path(&i.install_path);
+                Handoff {
+                    label: label_for(&i.product, dir.as_deref()),
+                    icon: dir.as_deref().and_then(|dir| cached_icon(dir, &i.product, &cache)),
+                    version: i.version,
+                    code: i.product,
+                }
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// The WoW family is Lightforge's own; everything else is a hand-off.
+fn is_wow(installed: &lightforge_core::tact::productdb::Installed) -> bool {
+    installed.family == "wow" || installed.product.starts_with("wow")
+}
+
+/// Agent records no display name, so take the best one available: the table
+/// core already keeps, else the folder Blizzard installed it into — which is
+/// how `C:/Program Files (x86)/Hearthstone` becomes "Hearthstone".
+fn label_for(code: &str, dir: Option<&std::path::Path>) -> String {
+    use lightforge_core::tact::version::KNOWN_PRODUCTS;
+
+    if let Some((_, label)) = KNOWN_PRODUCTS.iter().find(|(c, _)| *c == code) {
+        return (*label).to_owned();
+    }
+    dir.and_then(|dir| dir.file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| code.to_owned())
+}
+
+/// The game's icon, extracted once and kept.
+fn cached_icon(dir: &std::path::Path, code: &str, cache: &std::path::Path) -> Option<PathBuf> {
+    use lightforge_core::peicon;
+
+    let path = cache.join(format!("handoff-{code}.ico"));
+    if path.is_file() {
+        return Some(path);
+    }
+
+    let ico = peicon::extract(&peicon::main_executable(dir)?).ok()?;
+    std::fs::create_dir_all(cache).ok()?;
+    std::fs::write(&path, ico).ok()?;
+    Some(path)
+}
+
 /// Open Battle.net with no product: the way to reach everything outside the
 /// WoW family.
 ///

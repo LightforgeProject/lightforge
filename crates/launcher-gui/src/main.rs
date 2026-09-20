@@ -111,6 +111,10 @@ enum Message {
     Themed(ProductCode, Box<tasks::Themed>),
     /// Open the Battle.net client on its own — the other-titles path.
     OpenBattleNet,
+    /// Agent's registry was read: everything installed that isn't ours.
+    HandoffsFound(Vec<tasks::Handoff>),
+    /// A hand-off tile was clicked, by index into `handoffs`.
+    HandoffSelected(usize),
     /// A tile in the product bar was clicked.
     LineSelected(ProductLine),
     /// A branch was picked for the selected line. Adds the product first when
@@ -273,6 +277,10 @@ struct Lightforge {
     /// Which products exist and how they group — built in, then whatever the
     /// manifest states over it.
     catalog: Catalog,
+    /// Games Battle.net installed that Lightforge only hands off to.
+    handoffs: Vec<tasks::Handoff>,
+    /// Which hand-off tile is open, if any. `None` means a WoW product is.
+    viewing_handoff: Option<usize>,
     choices: Vec<Choice>,
     selected: Choice,
 
@@ -360,6 +368,8 @@ impl Lightforge {
             icons: HashMap::new(),
             last_branch: HashMap::new(),
             catalog: Catalog::builtin(),
+            handoffs: Vec::new(),
+            viewing_handoff: None,
             choices,
             selected: selected.clone(),
             local: Local::default(),
@@ -401,7 +411,17 @@ impl Lightforge {
             provision::status(app.layout.clone(), app.config.clone()),
             |status| Message::SetupStatus(status.map(Box::new)),
         );
-        let task = Task::batch([app.reload(selected.code), probe]);
+        let scan = Task::perform(
+            tasks::handoffs(
+                app.layout.clone(),
+                app.dirs
+                    .as_ref()
+                    .map(|d| d.asset_cache_dir())
+                    .unwrap_or_default(),
+            ),
+            Message::HandoffsFound,
+        );
+        let task = Task::batch([app.reload(selected.code), probe, scan]);
         (app, task)
     }
 
@@ -696,15 +716,40 @@ impl Lightforge {
                 }
                 // A launch may have paused a transfer; the guard records what
                 // is owed, and resuming means planning afresh.
-                match self.downloads.pending().contains(&self.selected.code) {
+                // Opening Battle.net is how a new game appears, so look
+                // again once the user is back.
+                let rescan = Task::perform(
+                    tasks::handoffs(
+                        self.layout.clone(),
+                        self.dirs.as_ref().map(|d| d.asset_cache_dir()).unwrap_or_default(),
+                    ),
+                    Message::HandoffsFound,
+                );
+                let next = match self.downloads.pending().contains(&self.selected.code) {
                     true => self.start_download(),
                     false => self.reload(self.selected.code.clone()),
-                }
+                };
+                Task::batch([next, rescan])
             }
 
             Message::BattleNet => self.preflight(Launch::BattleNet),
 
             Message::OpenBattleNet => self.preflight(Launch::Client),
+
+            Message::HandoffsFound(found) => {
+                // An index into a list that just changed means nothing.
+                if found != self.handoffs {
+                    self.viewing_handoff = None;
+                }
+                self.handoffs = found;
+                Task::none()
+            }
+
+            Message::HandoffSelected(index) => {
+                self.viewing_handoff = (index < self.handoffs.len()).then_some(index);
+                self.error = None;
+                Task::none()
+            }
 
             Message::PreflightDone(what, result) => {
                 if let Err(e) = result {
@@ -1130,7 +1175,10 @@ impl Lightforge {
 
         let started = Instant::now();
         let screen = match self.screen {
-            Screen::Dashboard => self.dashboard(),
+            Screen::Dashboard => match self.viewing_handoff.and_then(|i| self.handoffs.get(i)) {
+                Some(game) => self.handoff_screen(game),
+                None => self.dashboard(),
+            },
             Screen::Setup => self.setup_screen(),
             Screen::Settings => self.settings(),
             Screen::Addons => self.addons_screen(),
@@ -1157,6 +1205,15 @@ impl Lightforge {
             bar = bar.push(Space::with_width(Length::Fixed(theme::MD as f32)));
             for tile in self.product_bar() {
                 bar = bar.push(tile);
+            }
+            // After a gap, and only after: these are games Lightforge shows
+            // but does not manage, and the space says so before the tooltip
+            // has to.
+            if !self.handoffs.is_empty() {
+                bar = bar.push(Space::with_width(Length::Fixed(theme::MD as f32)));
+                for tile in self.handoff_bar() {
+                    bar = bar.push(tile);
+                }
             }
         }
 
@@ -1267,6 +1324,105 @@ impl Lightforge {
             .collect()
     }
 
+    /// One tile per game Battle.net installed that Lightforge doesn't manage.
+    fn handoff_bar(&self) -> Vec<Element<'_, Message>> {
+        self.handoffs
+            .iter()
+            .enumerate()
+            .map(|(i, game)| {
+                let face: Element<Message> = match &game.icon {
+                    Some(path) => image(image::Handle::from_path(path))
+                        .content_fit(ContentFit::Contain)
+                        .width(Length::Fixed(theme::TILE))
+                        .height(Length::Fixed(theme::TILE))
+                        .into(),
+                    None => container(text(game.label.clone()).size(theme::LABEL))
+                        .center_x(Length::Shrink)
+                        .center_y(Length::Fixed(theme::TILE))
+                        .into(),
+                };
+
+                let tile = button(face).padding([theme::XS, theme::SM]);
+                let tile = match self.viewing_handoff == Some(i) {
+                    true => tile.style(theme::selected),
+                    false => tile.style(theme::ghost).on_press(Message::HandoffSelected(i)),
+                };
+
+                tooltip(
+                    tile,
+                    container(
+                        text(format!("{} — via Battle.net", game.label)).size(theme::LABEL),
+                    )
+                    .padding([theme::XS, theme::SM])
+                    .style(theme::floating),
+                    tooltip::Position::Bottom,
+                )
+                .into()
+            })
+            .collect()
+    }
+
+    /// The dashboard for a game Lightforge only hands off to.
+    ///
+    /// Deliberately bare. There is no version to compare, nothing to update
+    /// and nothing to play from here — offering those controls greyed out
+    /// would imply Lightforge could manage this game and merely won't.
+    fn handoff_screen(&self, game: &tasks::Handoff) -> Element<'_, Message> {
+        let mut facts = column![text(game.label.clone()).size(theme::DISPLAY)]
+            .spacing(theme::XS)
+            .align_x(Alignment::Center);
+        if let Some(version) = &game.version {
+            facts = facts.push(row![muted("installed".to_owned(), theme::LABEL), mono(version.clone())]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center));
+        }
+        facts = facts.push(muted(
+            "Installed through Battle.net. Lightforge opens it, nothing more.".to_owned(),
+            theme::CAPTION,
+        ));
+
+        let mut middle = column![].spacing(theme::MD).align_x(Alignment::Center);
+        if let Some(path) = &game.icon {
+            middle = middle.push(
+                image(image::Handle::from_path(path))
+                    .content_fit(ContentFit::Contain)
+                    .height(Length::Fixed(theme::LOGO)),
+            );
+        }
+        middle = middle.push(facts);
+
+        let open = button(
+            container(text("Open via Battle.net").size(theme::BODY)).center_x(Length::Fill),
+        )
+        .padding([theme::MD, theme::LG])
+        .width(Length::Fixed(240.0))
+        .style(theme::outlined);
+
+        column![
+            self.header(),
+            column![
+                Space::with_height(Length::Fill),
+                container(middle).center_x(Length::Fill),
+                Space::with_height(Length::Fill),
+                container(match self.busy {
+                    true => open,
+                    false => open.on_press(Message::OpenBattleNet),
+                })
+                .center_x(Length::Fill),
+                match &self.error {
+                    Some(e) => container(
+                        text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR),
+                    )
+                    .center_x(Length::Fill),
+                    None => container(Space::with_height(Length::Fixed(0.0))),
+                },
+            ]
+            .spacing(theme::MD)
+            .padding(theme::LG),
+        ]
+        .into()
+    }
+
     /// Every branch of the selected line, configured or not.
     ///
     /// `None` when the line has exactly one branch to offer — a picker with a
@@ -1319,7 +1475,8 @@ impl Lightforge {
 
     /// Switch to one product, remembering it as its line's current branch.
     fn select(&mut self, choice: Choice) -> Task<Message> {
-        if choice.code == self.selected.code {
+        let leaving = self.viewing_handoff.take().is_some();
+        if choice.code == self.selected.code && !leaving {
             return Task::none();
         }
         self.last_branch.insert(self.catalog.line_of(&choice.code), choice.code.clone());

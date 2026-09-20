@@ -134,6 +134,20 @@ impl Layout {
             .join("Agent")
     }
 
+    /// Turn a Windows path Agent recorded into a path on this machine.
+    ///
+    /// Only `C:` is resolvable — that is the drive the prefix maps, and a
+    /// game on any other letter is one Lightforge's prefix cannot see.
+    /// Backslashes are accepted because Agent writes both.
+    pub fn from_windows_path(&self, windows: &str) -> Option<PathBuf> {
+        let rest = windows
+            .strip_prefix("C:/")
+            .or_else(|| windows.strip_prefix("C:\\"))
+            .or_else(|| windows.strip_prefix("c:/"))
+            .or_else(|| windows.strip_prefix("c:\\"))?;
+        Some(self.drive_c().join(rest.replace('\\', "/")))
+    }
+
     /// Real game assets root: `~/Games/Blizzard/games`.
     pub fn games_root(&self) -> PathBuf {
         self.root.join("games")

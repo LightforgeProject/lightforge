@@ -530,3 +530,254 @@ mod tests {
         assert_eq!(read_varint(&out, after_key).0, 1_789_676_802_000);
     }
 }
+
+// ---------------------------------------------------------------- reading --
+
+/// One product Agent reports as installed, as far as Lightforge cares.
+///
+/// A deliberately small slice of the record: enough to name a product, find
+/// its files and say what it is on. Everything else in there describes an
+/// install Lightforge does not manage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Installed {
+    /// Product code, e.g. `hs_beta`.
+    pub product: String,
+    /// Windows-visible install root, e.g. `C:/Program Files (x86)/Hearthstone`.
+    pub install_path: String,
+    /// Installed version, when the record carries one.
+    pub version: Option<String>,
+    /// Product family, e.g. `hsb`. Empty when absent.
+    pub family: String,
+}
+
+impl Installed {
+    /// Battle.net's own plumbing rather than a game someone plays.
+    pub fn is_infrastructure(&self) -> bool {
+        matches!(self.product.as_str(), "agent" | "bna" | "battle.net")
+    }
+}
+
+/// Read Agent's `product.db` — what Battle.net has installed, and where.
+///
+/// The counterpart to [`encode`], against the same layout documented at the
+/// top of this module. Written separately rather than derived from a schema
+/// because there is no published schema; the two directions read the same
+/// field numbers and are kept honest by a round-trip test.
+///
+/// Tolerant by design. Unknown fields are skipped, a record missing a field
+/// yields a default for it, and malformed bytes end the scan rather than
+/// failing the file: this is someone else's file, written by a program that
+/// updates on its own schedule, and a launcher that refuses to start because
+/// Agent added a field is worse than one that shows fewer tiles.
+pub fn decode(bytes: &[u8]) -> Vec<Installed> {
+    let mut found = Vec::new();
+    for (field, value) in Fields::new(bytes) {
+        if field == 1 {
+            if let Wire::Bytes(record) = value {
+                if let Some(install) = decode_install(record) {
+                    found.push(install);
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Read `product.db` out of Agent's data directory.
+pub fn read(path: &Path) -> Result<Vec<Installed>, ProductDbError> {
+    let bytes = std::fs::read(path).map_err(|source| ProductDbError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(decode(&bytes))
+}
+
+fn decode_install(bytes: &[u8]) -> Option<Installed> {
+    let mut product = String::new();
+    let mut install_path = String::new();
+    let mut family = String::new();
+    let mut version = None;
+
+    for (field, value) in Fields::new(bytes) {
+        match (field, value) {
+            (1, Wire::Bytes(b)) => product = string(b),
+            (3, Wire::Bytes(settings)) => {
+                for (field, value) in Fields::new(settings) {
+                    if let (1, Wire::Bytes(b)) = (field, value) {
+                        install_path = string(b);
+                    }
+                }
+            }
+            (4, Wire::Bytes(cached)) => {
+                for (field, value) in Fields::new(cached) {
+                    if let (1, Wire::Bytes(base)) = (field, value) {
+                        for (field, value) in Fields::new(base) {
+                            if let (7, Wire::Bytes(b)) = (field, value) {
+                                version = Some(string(b)).filter(|v: &String| !v.is_empty());
+                            }
+                        }
+                    }
+                }
+            }
+            (6, Wire::Bytes(b)) => family = string(b),
+            _ => {}
+        }
+    }
+
+    // A record with no code names nothing; a record with no path points
+    // nowhere. Either way there is no tile to draw.
+    (!product.is_empty() && !install_path.is_empty()).then_some(Installed {
+        product,
+        install_path,
+        version,
+        family,
+    })
+}
+
+fn string(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// One protobuf field's payload, in the two forms this file uses.
+enum Wire<'a> {
+    Bytes(&'a [u8]),
+    /// A varint or fixed-width field. Nothing this reader wants is stored as
+    /// one, so the value is skipped rather than carried.
+    Scalar,
+}
+
+/// Walks the fields of one protobuf message, stopping at the first byte it
+/// cannot make sense of.
+struct Fields<'a> {
+    rest: &'a [u8],
+}
+
+impl<'a> Fields<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { rest: bytes }
+    }
+
+    fn varint(&mut self) -> Option<u64> {
+        let mut value = 0u64;
+        for shift in (0..64).step_by(7) {
+            let (&byte, rest) = self.rest.split_first()?;
+            self.rest = rest;
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Some(value);
+            }
+        }
+        None
+    }
+
+    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+        let (head, rest) = self.rest.split_at_checked(n)?;
+        self.rest = rest;
+        Some(head)
+    }
+}
+
+impl<'a> Iterator for Fields<'a> {
+    type Item = (u32, Wire<'a>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let key = self.varint()?;
+        let field = u32::try_from(key >> 3).ok()?;
+        let value = match key & 7 {
+            0 => {
+                self.varint()?;
+                Wire::Scalar
+            }
+            1 => {
+                self.take(8)?;
+                Wire::Scalar
+            }
+            2 => {
+                let len = usize::try_from(self.varint()?).ok()?;
+                Wire::Bytes(self.take(len)?)
+            }
+            5 => {
+                self.take(4)?;
+                Wire::Scalar
+            }
+            // Groups are long gone from the wire format and Agent emits none.
+            _ => return None,
+        };
+        Some((field, value))
+    }
+}
+
+#[cfg(test)]
+mod read_tests {
+    use super::*;
+
+    /// The two directions must agree, since neither has a schema to check
+    /// against — only each other and a real file.
+    #[test]
+    fn what_we_write_is_what_we_read_back() {
+        let install = ProductInstall {
+            product: "wow_classic_era".into(),
+            install_path: "C:/Program Files (x86)/World of Warcraft".into(),
+            region: "eu".into(),
+            locale: "enUS".into(),
+            account_country: "AUT".into(),
+            geo_country: "AT".into(),
+            flavor_dir: "_classic_era_".into(),
+            version: "1.15.9.69722".into(),
+            build_key: "0".repeat(32),
+            tags: "Windows x86_64".into(),
+            key_ring: None,
+            family: "wow".into(),
+            installed_at_ms: 1_700_000_000_000,
+        };
+
+        let read = decode(&encode(std::slice::from_ref(&install)));
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].product, install.product);
+        assert_eq!(read[0].install_path, install.install_path);
+        assert_eq!(read[0].version.as_deref(), Some(install.version.as_str()));
+        assert_eq!(read[0].family, install.family);
+    }
+
+    #[test]
+    fn agent_and_the_client_are_not_games() {
+        let plumbing = |product: &str| Installed {
+            product: product.into(),
+            install_path: "C:/whatever".into(),
+            version: None,
+            family: String::new(),
+        };
+        assert!(plumbing("agent").is_infrastructure());
+        assert!(plumbing("bna").is_infrastructure());
+        assert!(!plumbing("hs_beta").is_infrastructure());
+    }
+
+    /// Someone else's file, written by a program that updates on its own
+    /// schedule. Every truncation of a good file must end the scan, never
+    /// panic and never hang.
+    #[test]
+    fn a_truncated_file_is_read_as_far_as_it_goes() {
+        let install = ProductInstall {
+            product: "hs_beta".into(),
+            install_path: "C:/Program Files (x86)/Hearthstone".into(),
+            region: "eu".into(),
+            locale: "enUS".into(),
+            account_country: "AUT".into(),
+            geo_country: "AT".into(),
+            flavor_dir: String::new(),
+            version: "36.6.0.251952".into(),
+            build_key: "1".repeat(32),
+            tags: String::new(),
+            key_ring: None,
+            family: "hsb".into(),
+            installed_at_ms: 0,
+        };
+        let whole = encode(&[install]);
+        for cut in 0..whole.len() {
+            let _ = decode(&whole[..cut]);
+        }
+        // And arbitrary bytes are a scan that finds nothing, not a crash.
+        let noise: Vec<u8> = (0..=255u8).cycle().take(4096).collect();
+        let _ = decode(&noise);
+    }
+}
