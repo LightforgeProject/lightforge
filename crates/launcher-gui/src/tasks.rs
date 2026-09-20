@@ -333,11 +333,40 @@ impl DownloadGuard for SharedDownloads {
 ///
 /// Blocking from start to finish: pre-flight spawns processes and the returned
 /// future only resolves when the game exits.
-pub async fn play(
+/// Everything that must be settled before a launch: no stale processes in the
+/// prefix, no transfer mid-flight.
+///
+/// Split from the launch itself because the two take wildly different amounts
+/// of time — this is seconds, the launch is however long someone plays — and a
+/// UI that cannot tell them apart ends up claiming it is still doing pre-flight
+/// an hour into a raid.
+pub async fn preflight(
     layout: Layout,
     code: ProductCode,
     downloads: SharedDownloads,
-) -> Result<String, String> {
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let runner = runner_for(&layout, &code)?;
+        let mut guard = downloads;
+        Preflight::new(Config::default().prefix_user)
+            .run(&runner, &layout, Some(&code), &mut guard)
+            // The report is for the CLI, which prints it. Here the outcome is
+            // binary: the prefix is ready, or the launch does not happen.
+            .map(|_report| ())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Run the game, blocking until it exits.
+///
+/// "Exits" is the whole wine process tree winding down, not the moment the
+/// window disappears, so this returns a little after the game looks closed.
+/// That tail is wanted — it is what makes the *next* launch's pre-flight find
+/// a clean prefix — but it has to be visible as winding down rather than as a
+/// dead button.
+pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         let flavor = layout.wow_symlink().join(code.install_dir());
         let exe = lightforge_core::paths::game_executable(&flavor, &code);
@@ -346,11 +375,6 @@ pub async fn play(
         }
 
         let runner = runner_for(&layout, &code)?;
-        let mut guard = downloads;
-        Preflight::new(Config::default().prefix_user)
-            .run(&runner, &layout, Some(&code), &mut guard)
-            .map_err(|e| e.to_string())?;
-
         let status = runner
             .command("run", &exe, Vec::<String>::new())
             .status()
@@ -365,17 +389,11 @@ pub async fn play(
 pub async fn launch_via_battle_net(
     layout: Layout,
     code: ProductCode,
-    downloads: SharedDownloads,
 ) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         use lightforge_core::battlenet::{self, Launch};
 
         let runner = runner_for(&layout, &code)?;
-        let mut guard = downloads;
-        Preflight::new(Config::default().prefix_user)
-            .run(&runner, &layout, Some(&code), &mut guard)
-            .map_err(|e| e.to_string())?;
-
         let launch = Launch::Product { code: code.clone(), exec: None };
         battlenet::launch(&runner, &layout, &launch).map_err(|e| e.to_string())?;
         Ok(format!("Battle.net launching {}", code.as_str()))

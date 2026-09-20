@@ -70,7 +70,32 @@ pub const CAPTION: u16 = 11;
 
 /// Product wordmark on the dashboard, sitting under the app title. Sized to
 /// read as branding beside `TITLE`, not as the subject of the page.
+///
+/// A manifest may override this per art set — a wide wordmark and a squarish
+/// one drawn to the same height read as different sizes. [`logo_height`]
+/// decides what an override is allowed to be.
 pub const LOGO: f32 = 110.0;
+
+/// What a manifest's logo height hint is allowed to ask for.
+///
+/// The manifest is fetched over the network, so a typo or a bad publish must
+/// not be able to push the wordmark off screen or shrink it to nothing. Below
+/// the floor it stops being legible; above the ceiling it starts eating the
+/// artwork the dashboard exists to show.
+const LOGO_RANGE: std::ops::RangeInclusive<f32> = 60.0..=260.0;
+
+/// The height to draw a product's logo at: its hint, clamped, else [`LOGO`].
+///
+/// A hint that isn't a usable number at all — negative, zero, NaN — is treated
+/// as absent rather than clamped, since there is no reading of it to honour.
+pub fn logo_height(hint: Option<f32>) -> f32 {
+    match hint {
+        Some(height) if height.is_finite() && height > 0.0 => {
+            height.clamp(*LOGO_RANGE.start(), *LOGO_RANGE.end())
+        }
+        _ => LOGO,
+    }
+}
 
 /// Corner radius. One value for panels, one for controls.
 pub const RADIUS: f32 = 10.0;
@@ -84,6 +109,7 @@ pub const MONO: Font = Font::MONOSPACE;
 const _: () = assert!(XS < SM && SM < MD && MD < LG && LG < XL);
 const _: () = assert!(CAPTION < LABEL && LABEL < BODY && BODY < HEADING);
 const _: () = assert!(HEADING < TITLE && TITLE < DISPLAY);
+const _: () = assert!(*LOGO_RANGE.start() <= LOGO && LOGO <= *LOGO_RANGE.end());
 
 const fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::from_rgb(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0)
@@ -275,5 +301,28 @@ mod tests {
         assert!(on(INSTALL).r < 0.5, "light backgrounds need dark text");
         assert_eq!(on(PLAY), Color::WHITE);
         assert!(on(UPDATE).r < 0.5, "orange is light enough for dark text");
+    }
+
+    #[test]
+    fn a_missing_hint_is_the_default() {
+        assert_eq!(logo_height(None), LOGO);
+    }
+
+    #[test]
+    fn a_sane_hint_is_honoured() {
+        assert_eq!(logo_height(Some(150.0)), 150.0);
+    }
+
+    #[test]
+    fn a_wild_hint_is_clamped_rather_than_obeyed() {
+        assert_eq!(logo_height(Some(5_000.0)), *LOGO_RANGE.end());
+        assert_eq!(logo_height(Some(3.0)), *LOGO_RANGE.start());
+    }
+
+    #[test]
+    fn a_hint_that_is_not_a_height_falls_back() {
+        for nonsense in [0.0, -120.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(logo_height(Some(nonsense)), LOGO, "{nonsense}");
+        }
     }
 }

@@ -1920,8 +1920,12 @@ async fn main() -> Result<()> {
             println!("label           {}", branding.label);
             for (slot, asset) in [("logo", &branding.logo), ("background", &branding.background)] {
                 let size = std::fs::metadata(&asset.path).map(|m| m.len()).unwrap_or(0);
+                let height = match asset.height {
+                    Some(h) => format!(", {h}px"),
+                    None => String::new(),
+                };
                 println!(
-                    "{slot:<15} {} ({size} bytes, {})",
+                    "{slot:<15} {} ({size} bytes, {}{height})",
                     asset.path.display(),
                     if asset.fetched { "fetched" } else { "cached" }
                 );

@@ -59,7 +59,8 @@ pub struct Theme {
     pub background: AssetRef,
 }
 
-/// One image: where it lives and, optionally, what it must hash to.
+/// One image: where it lives, optionally what it must hash to, and optionally
+/// how tall to draw it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssetRef {
     /// Absolute, or relative to the manifest's own location.
@@ -68,6 +69,16 @@ pub struct AssetRef {
     /// mismatch discards rather than caches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+    /// Logical height to draw this image at, in pixels. Only meaningful for
+    /// [`Slot::Logo`]; a background is always drawn to fill.
+    ///
+    /// Logos are drawn to a fixed height, so two of them at the same height
+    /// but different aspect ratios read as different sizes — a wide wordmark
+    /// looks twice the size of a square one. How much room a particular piece
+    /// of art wants is a property of that art, so it is declared next to it
+    /// rather than guessed at by the client. Absent means the app's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f32>,
 }
 
 /// Which of a theme's two images, for error messages and cache naming.
@@ -143,6 +154,9 @@ pub struct Asset {
     pub path: PathBuf,
     /// `true` when bytes moved this run; `false` on a `304` or a fixture read.
     pub fetched: bool,
+    /// The manifest's height hint, carried through unverified — see
+    /// [`AssetRef::height`]. The UI decides what is a sane value.
+    pub height: Option<f32>,
 }
 
 /// A product's resolved branding: a label plus two files on disk.
@@ -311,7 +325,7 @@ impl Pipeline {
             Origin::Http(base) => self.store.path_for(&join(base, &asset.url)),
         };
         verify(&read(&path).ok()?, asset, slot, &asset.url).ok()?;
-        Some(Asset { path, fetched: false })
+        Some(Asset { path, fetched: false, height: asset.height })
     }
 
     /// Fetch (or revalidate) one image and verify it.
@@ -329,7 +343,7 @@ impl Pipeline {
             Origin::Dir(dir) => {
                 let path = resolve_fixture(dir, &asset.url, slot)?;
                 verify(&read(&path)?, asset, slot, &asset.url)?;
-                Ok(Asset { path, fetched: false })
+                Ok(Asset { path, fetched: false, height: asset.height })
             }
             Origin::Http(base) => {
                 let url = join(base, &asset.url);
@@ -348,7 +362,7 @@ impl Pipeline {
                     let _ = std::fs::remove_file(format!("{}.etag", path.display()));
                     return Err(e);
                 }
-                Ok(Asset { path, fetched })
+                Ok(Asset { path, fetched, height: asset.height })
             }
         }
     }
@@ -562,6 +576,7 @@ mod tests {
         let asset = AssetRef {
             url: "logo.png".into(),
             sha256: Some("00".repeat(32)),
+            height: None,
         };
         let err = verify(b"bytes", &asset, Slot::Logo, "logo.png").unwrap_err();
         assert!(matches!(err, AssetError::Checksum { slot: Slot::Logo, .. }));
@@ -574,6 +589,7 @@ mod tests {
         let asset = AssetRef {
             url: "logo.png".into(),
             sha256: Some(digest.to_uppercase()),
+            height: None,
         };
         assert!(verify(bytes, &asset, Slot::Logo, "logo.png").is_ok());
     }
@@ -594,6 +610,32 @@ mod tests {
         assert_eq!(branding.logo.path, dir.join("retail-logo.png"));
         assert!(!branding.logo.fetched);
         assert_eq!(std::fs::read(&branding.logo.path).unwrap(), logo);
+    }
+
+    #[test]
+    fn a_logo_height_hint_survives_the_round_trip() {
+        let dir = tmpdir("logo-height");
+        let body = FIXTURE.replace(
+            "\"url\": \"retail-logo.png\"",
+            "\"url\": \"retail-logo.png\", \"height\": 150.0",
+        );
+        std::fs::write(dir.join(MANIFEST_FILE), body).unwrap();
+        std::fs::write(dir.join("retail-logo.png"), b"PNG-logo").unwrap();
+        std::fs::write(dir.join("retail-bg.jpg"), b"JPG-bg").unwrap();
+
+        let pipeline = Pipeline::new(Origin::Dir(dir), Store::new(tmpdir("logo-height-c")));
+        let branding = pipeline.cached(&ProductCode::Retail).unwrap();
+
+        assert_eq!(branding.logo.height, Some(150.0));
+        // A background has no use for one, and none was given.
+        assert_eq!(branding.background.height, None);
+    }
+
+    #[test]
+    fn a_manifest_without_height_hints_still_parses() {
+        let manifest = Manifest::parse(FIXTURE.as_bytes()).unwrap();
+        let theme = manifest.theme(&ProductCode::Retail).unwrap();
+        assert_eq!(theme.logo.height, None);
     }
 
     #[test]

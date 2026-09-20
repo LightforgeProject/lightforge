@@ -109,6 +109,8 @@ enum Message {
     Selected(Choice),
     Refreshed(ProductCode, Box<Refreshed>),
     Themed(ProductCode, Box<tasks::Themed>),
+    /// Pre-flight finished; `Launch` says what it was clearing the way for.
+    PreflightDone(Launch, Result<(), String>),
     /// Diagnostic only: subscribed to solely under `LIGHTFORGE_TRACE=frames`.
     ResizeTraced(iced::Size),
     /// The optimistic, cache-only paint that precedes [`Message::Themed`].
@@ -205,6 +207,15 @@ impl std::fmt::Display for Choice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.label)
     }
+}
+
+/// What a pre-flight pass is clearing the way for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Launch {
+    /// Straight to the game executable.
+    Game,
+    /// Hand off to Battle.net, so the session is SSO'd and the shop works.
+    BattleNet,
 }
 
 struct Lightforge {
@@ -390,6 +401,21 @@ impl Lightforge {
         ])
     }
 
+    /// Clear the way for a launch, then let [`Message::PreflightDone`] start it.
+    fn preflight(&mut self, what: Launch) -> Task<Message> {
+        self.busy = true;
+        self.error = None;
+        self.status = "pre-flight…".to_owned();
+        Task::perform(
+            tasks::preflight(
+                self.layout.clone(),
+                self.selected.code.clone(),
+                self.downloads.clone(),
+            ),
+            move |result| Message::PreflightDone(what, result),
+        )
+    }
+
     /// The button state, which is core's decision and not the GUI's.
     fn action(&self) -> ActionState {
         let transfer = match (&self.transfer, self.paused_at) {
@@ -522,18 +548,7 @@ impl Lightforge {
                     Task::none()
                 }
                 ActionState::Paused(_) => self.start_download(),
-                ActionState::Play => {
-                    self.busy = true;
-                    self.status = "pre-flight…".to_owned();
-                    Task::perform(
-                        tasks::play(
-                            self.layout.clone(),
-                            self.selected.code.clone(),
-                            self.downloads.clone(),
-                        ),
-                        Message::Launched,
-                    )
-                }
+                ActionState::Play => self.preflight(Launch::Game),
                 ActionState::Unknown => Task::none(),
             },
 
@@ -614,17 +629,43 @@ impl Lightforge {
                 }
             }
 
-            Message::BattleNet => {
-                self.busy = true;
-                self.status = "handing off to Battle.net…".to_owned();
-                Task::perform(
-                    tasks::launch_via_battle_net(
-                        self.layout.clone(),
-                        self.selected.code.clone(),
-                        self.downloads.clone(),
-                    ),
-                    Message::Launched,
-                )
+            Message::BattleNet => self.preflight(Launch::BattleNet),
+
+            Message::PreflightDone(what, result) => {
+                if let Err(e) = result {
+                    self.busy = false;
+                    self.error = Some(e);
+                    return Task::none();
+                }
+
+                // The long wait starts here, so say what it actually is. The
+                // old code left "pre-flight…" on screen for the whole session
+                // and the wind-down after it, which reads as a stuck launcher
+                // rather than a running game.
+                match what {
+                    Launch::Game => {
+                        // Names the tail too: the wine process tree takes a
+                        // few seconds to wind down after the window closes,
+                        // and an unexplained dead button in that window is
+                        // exactly what reads as a hung launcher.
+                        self.status =
+                            "running — Play unlocks once the game has fully exited".to_owned();
+                        Task::perform(
+                            tasks::run_game(self.layout.clone(), self.selected.code.clone()),
+                            Message::Launched,
+                        )
+                    }
+                    Launch::BattleNet => {
+                        self.status = "handing off to Battle.net…".to_owned();
+                        Task::perform(
+                            tasks::launch_via_battle_net(
+                                self.layout.clone(),
+                                self.selected.code.clone(),
+                            ),
+                            Message::Launched,
+                        )
+                    }
+                }
             }
 
             Message::ManageSubscription => {
@@ -1078,7 +1119,7 @@ impl Lightforge {
         let logo: Element<Message> = match self.branding.as_ref() {
             Some(b) => image(image::Handle::from_path(&b.logo.path))
                 .content_fit(ContentFit::Contain)
-                .height(Length::Fixed(theme::LOGO))
+                .height(Length::Fixed(theme::logo_height(b.logo.height)))
                 .into(),
             None => column![
                 text(self.selected.label.clone()).size(theme::DISPLAY),
@@ -1090,7 +1131,13 @@ impl Lightforge {
 
         let content = column![
             self.header(),
-            container(logo).align_x(Alignment::Start).width(Length::Fill),
+            // Extra room above: at the column's own spacing the wordmark
+            // crowds the title and the pair reads as one jammed corner rather
+            // than as the app's name with a product under it.
+            container(logo)
+                .align_x(Alignment::Start)
+                .width(Length::Fill)
+                .padding([theme::MD, 0]),
             Space::with_height(Length::Fill),
             self.action_panel(&action),
         ]
