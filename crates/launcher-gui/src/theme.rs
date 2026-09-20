@@ -68,21 +68,23 @@ pub const BODY: u16 = 14;
 pub const LABEL: u16 = 12;
 pub const CAPTION: u16 = 11;
 
-/// Product wordmark on the dashboard, sitting under the app title. Sized to
-/// read as branding beside `TITLE`, not as the subject of the page.
+/// Product wordmark on the dashboard, sitting under the app title.
+///
+/// Large on purpose: the artwork behind it is the product's identity and the
+/// wordmark is the label on it, so it is a headline rather than a footnote.
 ///
 /// A manifest may override this per art set — a wide wordmark and a squarish
 /// one drawn to the same height read as different sizes. [`logo_height`]
 /// decides what an override is allowed to be.
-pub const LOGO: f32 = 110.0;
+pub const LOGO: f32 = 170.0;
 
 /// What a manifest's logo height hint is allowed to ask for.
 ///
 /// The manifest is fetched over the network, so a typo or a bad publish must
 /// not be able to push the wordmark off screen or shrink it to nothing. Below
-/// the floor it stops being legible; above the ceiling it starts eating the
-/// artwork the dashboard exists to show.
-const LOGO_RANGE: std::ops::RangeInclusive<f32> = 60.0..=260.0;
+/// the floor it stops being legible; above the ceiling it crowds the action
+/// panel at [`crate::WINDOW_MIN`]'s height, which is where the room runs out.
+const LOGO_RANGE: std::ops::RangeInclusive<f32> = 60.0..=440.0;
 
 /// The height to draw a product's logo at: its hint, clamped, else [`LOGO`].
 ///
