@@ -15,7 +15,7 @@ use std::time::Instant;
 static START: OnceLock<Instant> = OnceLock::new();
 static ON: OnceLock<bool> = OnceLock::new();
 static FRAMES: OnceLock<bool> = OnceLock::new();
-/// Microseconds since [`begin`] at the end of the previous frame.
+/// Microseconds since [`begin`] at the end of the previous view build.
 static LAST_FRAME: AtomicU64 = AtomicU64::new(0);
 
 /// Start the clock. Called as early as `main` can manage.
@@ -53,13 +53,18 @@ pub fn once(slot: &'static std::sync::atomic::AtomicBool, what: impl std::fmt::D
     }
 }
 
-/// Stamp one rendered frame: how long the view tree took to build, and how
-/// long since the previous frame.
+/// Whether per-event tracing was asked for.
+pub fn frames() -> bool {
+    FRAMES.get().copied().unwrap_or(false)
+}
+
+/// Stamp one rebuild of the view tree.
 ///
-/// The gap matters as much as the cost. A resize that feels delayed while
-/// frames stay cheap is the window system throttling redraws, not the UI
-/// being slow to draw — two problems with nothing in common.
-pub fn frame(build: std::time::Duration) {
+/// **Not** one frame. iced only calls `view` when application state changed;
+/// a resize relayouts the existing tree and redraws it without ever asking
+/// for a new one. So silence here during a resize is expected and says
+/// nothing about how fast the window is repainting.
+pub fn view_built(build: std::time::Duration) {
     if !FRAMES.get().copied().unwrap_or(false) {
         return;
     }
@@ -67,5 +72,5 @@ pub fn frame(build: std::time::Duration) {
     let previous = LAST_FRAME.swap(now, Ordering::Relaxed);
     let gap = now.saturating_sub(previous) as f64 / 1000.0;
     let build = build.as_secs_f64() * 1000.0;
-    eprintln!("[frame] {:>9.1} ms  build {build:>6.2} ms  gap {gap:>7.1} ms", now as f64 / 1000.0);
+    eprintln!("[view]  {:>9.1} ms  build {build:>6.2} ms  gap {gap:>7.1} ms", now as f64 / 1000.0);
 }

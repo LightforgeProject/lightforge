@@ -49,13 +49,30 @@ use tasks::{Refreshed, SharedDownloads, Transfer, TransferState};
 /// Where a player manages their subscription, per the spec.
 const ACCOUNT_URL: &str = "https://account.battle.net/games";
 
+/// Opening size.
+const WINDOW: iced::Size = iced::Size::new(980.0, 660.0);
+
+/// Floor for resizing.
+///
+/// Set by the header, which is the widest thing that cannot wrap: the title,
+/// the product picker (whose longest entry is a user-supplied display name),
+/// and four navigation buttons. Below roughly this width they start colliding,
+/// and every screen under them is unusable well before the window stops
+/// shrinking — so the window refuses rather than letting it happen.
+const WINDOW_MIN: iced::Size = iced::Size::new(840.0, 560.0);
+
 fn main() -> iced::Result {
     trace::begin();
     iced::application("Lightforge", Lightforge::update, Lightforge::view)
         .subscription(Lightforge::subscription)
         .theme(|_| theme::base())
-        .window_size((980.0, 660.0))
+        .window(iced::window::Settings {
+            size: WINDOW,
+            min_size: Some(WINDOW_MIN),
+            ..iced::window::Settings::default()
+        })
         // Closing is handled by the app, so a transfer can checkpoint first.
+        // Set after `window`, which replaces the settings wholesale.
         .exit_on_close_request(false)
         .run_with(|| {
             let (app, task) = Lightforge::new();
@@ -69,6 +86,8 @@ enum Message {
     Selected(Choice),
     Refreshed(ProductCode, Box<Refreshed>),
     Themed(ProductCode, Box<tasks::Themed>),
+    /// Diagnostic only: subscribed to solely under `LIGHTFORGE_TRACE=frames`.
+    ResizeTraced(iced::Size),
     /// The optimistic, cache-only paint that precedes [`Message::Themed`].
     CachedTheme(ProductCode, Option<Branding>),
     Primary,
@@ -422,6 +441,11 @@ impl Lightforge {
                         .map(|r| format!("latest {}", r.versions_name))
                         .unwrap_or_default(),
                 };
+                Task::none()
+            }
+
+            Message::ResizeTraced(size) => {
+                trace::mark(format_args!("resize {}x{}", size.width, size.height));
                 Task::none()
             }
 
@@ -925,12 +949,22 @@ impl Lightforge {
         // Only while something is moving: an idle dashboard should wake up for
         // nothing.
         let closing = iced::window::close_requests().map(Message::CloseRequested);
+
+        // Resize events are only interesting to a human reading a trace, and
+        // subscribing to them makes every resize step rebuild the view, so
+        // this stays out of a normal run entirely.
+        let resizes = match trace::frames() {
+            true => iced::window::resize_events().map(|(_, size)| Message::ResizeTraced(size)),
+            false => Subscription::none(),
+        };
+
         match self.transfer.is_some() || self.setup_running || self.addons_busy {
             true => Subscription::batch([
                 closing,
+                resizes,
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),
             ]),
-            false => closing,
+            false => Subscription::batch([closing, resizes]),
         }
     }
 
@@ -950,7 +984,7 @@ impl Lightforge {
             Screen::Settings => self.settings(),
             Screen::Addons => self.addons_screen(),
         };
-        trace::frame(started.elapsed());
+        trace::view_built(started.elapsed());
         screen
     }
 
