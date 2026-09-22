@@ -174,6 +174,7 @@ impl Manifest {
                     .as_deref()
                     .and_then(|b| b.parse::<Branch>().ok())
                     .unwrap_or_else(|| code.branch()),
+                kind: crate::product::Kind::of(&code),
                 label: theme.label.clone(),
                 code,
             }

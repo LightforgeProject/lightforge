@@ -444,6 +444,24 @@ pub async fn launch_via_battle_net(
     .map_err(|e| e.to_string())?
 }
 
+/// What Battle.net reports as installed, keyed by product code.
+///
+/// Read when the browse panel opens, never on a timer and never to decide
+/// what the header shows — it labels a list the user asked to see.
+pub async fn installed_versions(layout: Layout) -> HashMap<String, String> {
+    tokio::task::spawn_blocking(move || {
+        use lightforge_core::tact::productdb;
+
+        productdb::read(&layout.agent_dir().join("product.db"))
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|i| Some((i.product, i.version?)))
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
 /// Open Battle.net with no product: the way to reach everything outside the
 /// WoW family.
 ///

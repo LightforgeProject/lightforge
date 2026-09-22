@@ -370,6 +370,33 @@ pub const KNOWN_CODES: &[ProductCode] = &[
     ProductCode::ClassicBeta,
 ];
 
+/// Whether Lightforge installs a product itself, or hands it to Battle.net.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// The WoW family: Lightforge plans, downloads and launches it.
+    Managed,
+    /// Everything else. `SPEC.md` is explicit that Lightforge is
+    /// WoW-family-primary and a pass-through for the rest, so these are
+    /// listed and started, never downloaded or updated here.
+    HandOff,
+}
+
+impl Kind {
+    /// Which side of that line a product code falls on.
+    ///
+    /// By code shape rather than by a table, so a product Blizzard ships
+    /// after this binary lands in the right half. A custom server whose code
+    /// does not mention `wow` is read as a hand-off, which is the safe way to
+    /// be wrong: it offers less rather than promising an install Lightforge
+    /// cannot actually perform.
+    pub fn of(code: &ProductCode) -> Self {
+        match matches!(code, ProductCode::Custom(_)) && !code.as_str().starts_with("wow") {
+            true => Self::HandOff,
+            false => Self::Managed,
+        }
+    }
+}
+
 /// One product in the catalog: what it is, and where it sits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogEntry {
@@ -378,6 +405,7 @@ pub struct CatalogEntry {
     pub label: String,
     pub line: ProductLine,
     pub branch: Branch,
+    pub kind: Kind,
 }
 
 /// Which products exist, what they are called, and how they group.
@@ -405,17 +433,35 @@ impl Default for Catalog {
 impl Catalog {
     /// What this binary knows on its own, with no manifest in hand.
     pub fn builtin() -> Self {
-        Self {
-            entries: KNOWN_CODES
-                .iter()
-                .map(|code| CatalogEntry {
-                    label: format!("{} {}", code.line().label(), code.branch().label()),
-                    line: code.line(),
-                    branch: code.branch(),
-                    code: code.clone(),
-                })
-                .collect(),
-        }
+        let wow = KNOWN_CODES.iter().map(|code| CatalogEntry {
+            label: format!("{} {}", code.line().label(), code.branch().label()),
+            line: code.line(),
+            branch: code.branch(),
+            kind: Kind::of(code),
+            code: code.clone(),
+        });
+
+        // Everything else Blizzard publishes, from the table the version
+        // service already probes against. This is why that table and this
+        // catalog are one list rather than two that drift.
+        //
+        // Filtered by what is already covered rather than by kind: the table
+        // holds WoW products that are not `ProductCode` variants —
+        // `wow_anniversary` is one — and dropping those would lose them from
+        // the catalog altogether.
+        let rest = crate::tact::version::KNOWN_PRODUCTS
+            .iter()
+            .map(|(code, label)| (ProductCode::from((*code).to_owned()), *label))
+            .filter(|(code, _)| !KNOWN_CODES.contains(code))
+            .map(|(code, label)| CatalogEntry {
+                label: label.to_owned(),
+                line: code.line(),
+                branch: code.branch(),
+                kind: Kind::of(&code),
+                code,
+            });
+
+        Self { entries: wow.chain(rest).collect() }
     }
 
     /// Layer stated entries over the built-in ones.
@@ -445,6 +491,16 @@ impl Catalog {
     /// what the code itself says.
     pub fn line_of(&self, code: &ProductCode) -> ProductLine {
         self.get(code).map(|e| e.line.clone()).unwrap_or_else(|| code.line())
+    }
+
+    /// Products Lightforge downloads itself.
+    pub fn managed(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries.iter().filter(|e| e.kind == Kind::Managed)
+    }
+
+    /// Products that are Battle.net's to install and start.
+    pub fn hand_offs(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries.iter().filter(|e| e.kind == Kind::HandOff)
     }
 
     /// Every branch of one line, live first, in catalog order.
@@ -550,6 +606,41 @@ mod tests {
         // A code shaped like a WoW flavor gets a WoW flavor directory.
         let future: ProductCode = "wow_midnight_ptr".parse().unwrap();
         assert_eq!(future.install_dir(), "_midnight_ptr_");
+    }
+
+    #[test]
+    fn the_catalog_is_one_list_rather_than_two_that_drift() {
+        let catalog = Catalog::builtin();
+
+        // The WoW family, which Lightforge downloads.
+        for code in KNOWN_CODES {
+            let entry = catalog.get(code).unwrap_or_else(|| panic!("{}", code.as_str()));
+            assert_eq!(entry.kind, Kind::Managed, "{}", code.as_str());
+        }
+
+        // And everything the version service probes for, which it does not.
+        for (code, label) in crate::tact::version::KNOWN_PRODUCTS {
+            let code = ProductCode::from((*code).to_owned());
+            let entry = catalog.get(&code).unwrap_or_else(|| panic!("{}", code.as_str()));
+            if entry.kind == Kind::HandOff {
+                assert_eq!(&entry.label, label, "{}", code.as_str());
+            }
+        }
+
+        assert!(catalog.hand_offs().any(|e| e.label == "Hearthstone"));
+        assert!(catalog.managed().any(|e| e.code == ProductCode::Retail));
+    }
+
+    #[test]
+    fn what_lightforge_will_not_install_is_decided_by_the_code_shape() {
+        // Blizzard's other titles.
+        for code in ["hsb", "d3", "fenris", "pro"] {
+            assert_eq!(Kind::of(&ProductCode::from(code.to_owned())), Kind::HandOff, "{code}");
+        }
+        // The WoW family, known and not yet known alike.
+        for code in ["wow", "wowt", "wow_classic_era", "wow_midnight_ptr", "wow_anniversary"] {
+            assert_eq!(Kind::of(&ProductCode::from(code.to_owned())), Kind::Managed, "{code}");
+        }
     }
 
     #[test]

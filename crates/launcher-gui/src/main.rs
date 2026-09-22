@@ -114,6 +114,12 @@ enum Message {
     OpenBattleNet,
     /// Show or hide the download manager.
     ToggleManager,
+    /// Show or hide the catalog of products that could be added.
+    ToggleBrowse,
+    /// What Battle.net reports as installed, for the catalog's labels.
+    InstalledVersions(HashMap<String, String>),
+    /// Track a product from the catalog, putting it in the header.
+    AddProduct(ProductCode),
     /// Pause one product's transfer from the manager.
     PauseDownload(ProductCode),
     /// Resume or re-queue one product's transfer from the manager.
@@ -349,6 +355,10 @@ struct Lightforge {
     queue: Vec<Download>,
     /// Whether the download manager panel is open.
     manager_open: bool,
+    /// Whether the catalog panel is open.
+    browse_open: bool,
+    /// Versions Battle.net reports installed, read when the catalog opens.
+    installed_versions: HashMap<String, String>,
     /// Transfers paused for a play session, to be put back afterwards.
     resume_after_play: Vec<ProductCode>,
     /// A cancelled transfer whose task has not reported back yet.
@@ -448,6 +458,8 @@ impl Lightforge {
             branding: None,
             queue: Vec::new(),
             manager_open: false,
+            browse_open: false,
+            installed_versions: HashMap::new(),
             resume_after_play: Vec::new(),
             winding_down: None,
             downloads: SharedDownloads::default(),
@@ -937,6 +949,44 @@ impl Lightforge {
 
             Message::ToggleManager => {
                 self.manager_open = !self.manager_open;
+                if self.manager_open {
+                    self.browse_open = false;
+                }
+                Task::none()
+            }
+
+            Message::ToggleBrowse => {
+                self.browse_open = !self.browse_open;
+                if !self.browse_open {
+                    return Task::none();
+                }
+                self.manager_open = false;
+                // Read on open, so the list says what is already on the
+                // machine without anything running in the background.
+                Task::perform(
+                    tasks::installed_versions(self.layout.clone()),
+                    Message::InstalledVersions,
+                )
+            }
+
+            Message::InstalledVersions(found) => {
+                self.installed_versions = found;
+                Task::none()
+            }
+
+            Message::AddProduct(code) => {
+                if self.choices.iter().any(|c| c.code == code) {
+                    return Task::none();
+                }
+                let label = self
+                    .catalog
+                    .get(&code)
+                    .map(|e| e.label.clone())
+                    .unwrap_or_else(|| code.as_str().to_owned());
+
+                self.config.products.push(Product::new(code.clone(), label.clone()));
+                self.save_config();
+                self.choices.push(Choice { code, label });
                 Task::none()
             }
 
@@ -1495,10 +1545,17 @@ impl Lightforge {
         // that is exactly when you want to look at it. iced 0.13 has no
         // popover, so it is a stacked layer pinned to the top right, padded
         // clear of the ribbon it drops out of.
-        let screen = match self.manager_open && !self.queue.is_empty() {
-            true => stack![
+        let overlay: Option<Element<Message>> =
+            match (self.manager_open && !self.queue.is_empty(), self.browse_open) {
+                (true, _) => Some(self.manager()),
+                (_, true) => Some(self.browse()),
+                _ => None,
+            };
+
+        let screen = match overlay {
+            Some(panel) => stack![
                 screen,
-                container(self.manager())
+                container(panel)
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .align_x(Alignment::End)
@@ -1506,7 +1563,7 @@ impl Lightforge {
                     .padding([theme::XL + theme::LG, theme::LG]),
             ]
             .into(),
-            false => screen,
+            None => screen,
         };
 
         trace::view_built(started.elapsed());
@@ -1532,6 +1589,20 @@ impl Lightforge {
             for tile in self.product_bar() {
                 bar = bar.push(tile);
             }
+            bar = bar.push(Space::with_width(Length::Fixed(theme::SM as f32)));
+            bar = bar.push(tooltip(
+                button(text("+").size(theme::BODY))
+                    .padding([theme::SM, theme::MD])
+                    .style(match self.browse_open {
+                        true => theme::selected,
+                        false => theme::ghost,
+                    })
+                    .on_press(Message::ToggleBrowse),
+                container(text("Add a game".to_owned()).size(theme::LABEL))
+                    .padding([theme::XS, theme::SM])
+                    .style(theme::floating),
+                tooltip::Position::Bottom,
+            ));
         }
 
         bar = bar.push(Space::with_width(Length::Fill));
@@ -1615,6 +1686,78 @@ impl Lightforge {
             Some(manifest) => manifest.catalog(),
             None => Catalog::builtin(),
         };
+    }
+
+    /// The catalog: everything that could be added to the header.
+    ///
+    /// Two halves, because they behave differently and saying so once here
+    /// beats a surprise at the button. The WoW family Lightforge downloads;
+    /// everything else is Battle.net's to install and start.
+    fn browse(&self) -> Element<'_, Message> {
+        use lightforge_core::product::CatalogEntry;
+
+        let tracked = |code: &ProductCode| self.choices.iter().any(|c| &c.code == code);
+        let mut rows = column![text("Add a game").size(theme::HEADING)]
+            .spacing(theme::SM)
+            .width(Length::Fixed(400.0));
+
+        let row_for = |entry: &CatalogEntry| -> Element<Message> {
+            let mut facts = column![text(entry.label.clone()).size(theme::BODY)];
+            if let Some(version) = self.installed_versions.get(entry.code.as_str()) {
+                facts = facts.push(
+                    row![muted("installed".to_owned(), theme::CAPTION), mono(version.clone())]
+                        .spacing(theme::XS)
+                        .align_y(Alignment::Center),
+                );
+            }
+            let action: Element<Message> = match tracked(&entry.code) {
+                true => muted("added".to_owned(), theme::CAPTION).into(),
+                false => secondary("Add", Message::AddProduct(entry.code.clone()))
+                    .enabled(true)
+                    .into(),
+            };
+            container(
+                row![facts.width(Length::Fill), action]
+                    .spacing(theme::MD)
+                    .align_y(Alignment::Center),
+            )
+            .padding(theme::SM)
+            .style(theme::row)
+            .into()
+        };
+
+        // Only line heads: a line's other branches are reached from the
+        // version picker, not added here as games of their own.
+        let managed: Vec<&CatalogEntry> = self
+            .catalog
+            .managed()
+            .filter(|e| e.branch == Branch::Live && !tracked(&e.code))
+            .collect();
+        if !managed.is_empty() {
+            rows = rows.push(muted("World of Warcraft".to_owned(), theme::LABEL));
+            rows = rows.push(muted(
+                "Downloaded and launched by Lightforge.".to_owned(),
+                theme::CAPTION,
+            ));
+            for entry in managed {
+                rows = rows.push(row_for(entry));
+            }
+        }
+
+        rows = rows.push(muted("Other Blizzard games".to_owned(), theme::LABEL));
+        rows = rows.push(muted(
+            "Installed and started through Battle.net. Lightforge only opens them.".to_owned(),
+            theme::CAPTION,
+        ));
+        for entry in self.catalog.hand_offs() {
+            rows = rows.push(row_for(entry));
+        }
+
+        container(scrollable(rows))
+            .padding(theme::MD)
+            .max_height(560.0)
+            .style(theme::floating)
+            .into()
     }
 
     /// The download manager: every transfer this session knows about.
