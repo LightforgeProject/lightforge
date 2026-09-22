@@ -23,9 +23,11 @@ tact-parser.workspace = true
 tar.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "rt"] }
+# `time` is for the download rate limiter's sleeps; relying on another
+# crate to enable it would break the moment that dependency changed.
+tokio = { workspace = true, features = ["fs", "io-util", "rt", "time"] }
 toml.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "test-util", "time"] }

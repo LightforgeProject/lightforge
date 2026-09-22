@@ -63,11 +63,85 @@ impl Cancel {
     }
 }
 
+/// A shared cap on how fast the loop may pull bytes.
+///
+/// A token bucket in front of each request rather than a throttle on the byte
+/// stream: the plan already knows how large every fetch is, so the cost can be
+/// paid before the request goes out, and the bytes themselves never pass
+/// through an extra layer. The average converges on the limit; the wire is
+/// bursty within one request, which is the trade for leaving the hot path
+/// untouched.
+///
+/// Cloneable and shared by every task in one run. `None` is the ordinary case
+/// and costs a single `Option` check per request.
+#[derive(Debug, Clone)]
+pub struct RateLimit {
+    inner: Arc<tokio::sync::Mutex<Bucket>>,
+    /// Bytes per second.
+    rate: u64,
+}
+
+#[derive(Debug)]
+struct Bucket {
+    /// Tokens available now, in bytes.
+    tokens: f64,
+    /// Most tokens the bucket may hold — one second of the limit, so a quiet
+    /// moment buys a short burst and no more.
+    capacity: f64,
+    /// Read from tokio's clock, not the system one: it is the clock
+    /// [`tokio::time::sleep`] obeys, so the two cannot drift apart — and it
+    /// makes the limiter testable without spending real seconds.
+    last: tokio::time::Instant,
+}
+
+impl RateLimit {
+    /// A limit of `bytes_per_second`, or `None` for no limit at all.
+    pub fn new(bytes_per_second: u64) -> Option<Self> {
+        (bytes_per_second > 0).then(|| Self {
+            inner: Arc::new(tokio::sync::Mutex::new(Bucket {
+                tokens: bytes_per_second as f64,
+                capacity: bytes_per_second as f64,
+                last: tokio::time::Instant::now(),
+            })),
+            rate: bytes_per_second,
+        })
+    }
+
+    /// Wait until `bytes` may be fetched.
+    ///
+    /// A request larger than the bucket holds is allowed through once the
+    /// bucket is full rather than deadlocking against a capacity it can never
+    /// reach — it simply overdraws, and the negative balance is repaid before
+    /// the next request starts.
+    pub async fn acquire(&self, bytes: u64) {
+        let want = bytes as f64;
+        loop {
+            let wait = {
+                let mut bucket = self.inner.lock().await;
+                let now = tokio::time::Instant::now();
+                let elapsed = now.duration_since(bucket.last).as_secs_f64();
+                bucket.last = now;
+                bucket.tokens = (bucket.tokens + elapsed * self.rate as f64).min(bucket.capacity);
+
+                let affordable = want.min(bucket.capacity);
+                if bucket.tokens >= affordable {
+                    bucket.tokens -= want;
+                    return;
+                }
+                (affordable - bucket.tokens) / self.rate as f64
+            };
+            tokio::time::sleep(std::time::Duration::from_secs_f64(wait.max(0.001))).await;
+        }
+    }
+}
+
 /// How the loop is tuned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Options {
     /// Requests in flight at once.
     pub concurrency: usize,
+    /// Cap on how fast bytes may be pulled, shared across the run.
+    pub limit: Option<RateLimit>,
     /// Upper bound on the bytes stored between checkpoints.
     ///
     /// An *upper* bound, not the interval: a plan smaller than this would
@@ -81,7 +155,7 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Self { concurrency: 8, checkpoint_bytes: 4 << 30 }
+        Self { concurrency: 8, limit: None, checkpoint_bytes: 4 << 30 }
     }
 }
 
@@ -188,7 +262,7 @@ pub fn default_key_service() -> KeyService {
 }
 
 /// Drives a plan into a store.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Downloader {
     options: Options,
 }
@@ -225,6 +299,7 @@ impl Downloader {
             since_checkpoint: 0,
         };
         let checkpoint_every = self.options.interval_for(plan.bytes());
+        let limit = self.options.limit.clone();
 
         // Runs first: they are the bulk, and the loose files are large enough
         // that leaving them last keeps the tail of the download responsive.
@@ -235,9 +310,16 @@ impl Downloader {
             .chain(plan.loose.iter().map(Work::Loose));
 
         let mut fetches = stream::iter(work)
-            .map(|item| async move {
+            .map(|item| {
+                let limit = limit.clone();
+                async move {
                 if cancel.is_cancelled() {
                     return Fetched::Skipped;
+                }
+                // Paid before the request goes out, so the limit shapes what
+                // is asked for rather than what has already arrived.
+                if let Some(limit) = &limit {
+                    limit.acquire(item.bytes()).await;
                 }
                 match &item {
                     Work::Run(run) => match client.fetch_range(http, &run.archive, &run.range()).await {
@@ -256,6 +338,7 @@ impl Downloader {
                             },
                         }
                     }
+                }
                 }
             })
             .buffer_unordered(self.options.concurrency.max(1));
@@ -732,6 +815,16 @@ enum Work<'a> {
     Loose(&'a super::plan::Loose),
 }
 
+impl Work<'_> {
+    /// Bytes this piece of work will pull off the wire.
+    fn bytes(&self) -> u64 {
+        match self {
+            Self::Run(run) => u64::from(run.length),
+            Self::Loose(loose) => u64::from(loose.size),
+        }
+    }
+}
+
 enum Fetched<'a> {
     Run { run: &'a super::plan::Run, body: Vec<u8> },
     Loose { ekey: EKey, ckey: Option<CKey>, body: Vec<u8> },
@@ -1088,5 +1181,57 @@ mod tests {
         outcome.cancelled = false;
         outcome.failed.push(Failure { ekey: [0; 16], reason: "timed out".into() });
         assert!(!outcome.is_complete());
+    }
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+
+    #[test]
+    fn no_limit_is_no_limiter_at_all() {
+        assert!(RateLimit::new(0).is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_average_converges_on_the_limit() {
+        // 1 MB/s, so ten 1 MB requests must take about ten seconds — minus
+        // the first, which the full bucket pays for outright.
+        let limit = RateLimit::new(1_000_000).unwrap();
+        let started = tokio::time::Instant::now();
+        for _ in 0..10 {
+            limit.acquire(1_000_000).await;
+        }
+        let elapsed = started.elapsed().as_secs_f64();
+        assert!((8.5..=10.5).contains(&elapsed), "took {elapsed}s");
+        // Not merely slow: an unlimited loop would finish instantly.
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_burst_is_bounded_by_one_second_of_the_limit() {
+        let limit = RateLimit::new(1_000_000).unwrap();
+
+        // The bucket starts full, so exactly one second's worth is free.
+        let free = tokio::time::Instant::now();
+        limit.acquire(1_000_000).await;
+        assert!(free.elapsed().as_secs_f64() < 0.1, "the first second should not wait");
+
+        // The next one has to be earned.
+        let earned = tokio::time::Instant::now();
+        limit.acquire(1_000_000).await;
+        assert!(earned.elapsed().as_secs_f64() >= 0.9, "a second burst was let through");
+    }
+
+    /// A single run can be larger than the bucket holds — 8 MiB against a
+    /// 1 MB/s cap. It has to go through anyway, or the download deadlocks
+    /// against a capacity it can never reach.
+    #[tokio::test(start_paused = true)]
+    async fn a_request_larger_than_the_bucket_still_goes_through() {
+        let limit = RateLimit::new(1_000_000).unwrap();
+        limit.acquire(8 * 1024 * 1024).await;
+        // And the overdraft is repaid before the next one starts.
+        let started = tokio::time::Instant::now();
+        limit.acquire(1).await;
+        assert!(started.elapsed().as_secs_f64() >= 7.0, "overdraft was not repaid");
     }
 }

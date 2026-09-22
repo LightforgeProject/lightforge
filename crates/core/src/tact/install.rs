@@ -51,6 +51,11 @@ pub struct Options {
     /// Flavor directory the install files are extracted into, e.g. `_retail_`.
     pub flavor: String,
     pub concurrency: usize,
+    /// Cap on download speed in bytes per second; `0` is no cap.
+    ///
+    /// Bytes rather than a friendlier unit because this is the layer that
+    /// spends them — the UI converts from whatever it shows the user.
+    pub limit_bytes_per_second: u64,
     /// Ranges this far apart are merged into one request.
     pub gap_bytes: u32,
     /// Upper bound on the checkpoint interval; scaled down for small products.
@@ -81,6 +86,7 @@ impl Default for Options {
             // 32 measured 2.4x the throughput of 8 on a real product: these
             // transfers are request-latency-bound, not bandwidth-bound.
             concurrency: 32,
+            limit_bytes_per_second: 0,
             gap_bytes: 64 * 1024,
             checkpoint_bytes: 4096 * 1024 * 1024,
             install_files: true,
@@ -379,6 +385,7 @@ pub async fn execute(
     let source = Source { http, client: &client, keys: Some(&keys) };
     let downloader = Downloader::new(DownloadOptions {
         concurrency: options.concurrency,
+        limit: download::RateLimit::new(options.limit_bytes_per_second),
         checkpoint_bytes: options.checkpoint_bytes,
     });
 

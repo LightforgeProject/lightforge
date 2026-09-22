@@ -33,9 +33,27 @@ pub struct Config {
     /// Base URL of the addon catalog proxy, or a local fixture directory.
     /// `None` disables addon management rather than failing at use.
     pub addon_catalog: Option<String>,
+    /// Cap on game download speed, in megabytes per second. `None` is
+    /// unlimited.
+    ///
+    /// MB rather than MiB because it is the unit the progress readout already
+    /// uses, and a limit that does not match the number beside it is a support
+    /// question waiting to happen.
+    pub download_limit_mbps: Option<u64>,
+    /// Whether launching a game also pauses downloads for *other* products.
+    ///
+    /// The launched product's own download is always paused — that one is a
+    /// correctness guard, not a preference, since the client and the
+    /// downloader would be reading and writing one CASC store. This governs
+    /// the rest of the queue, which shares that same store and the same
+    /// connection.
+    pub pause_downloads_while_playing: bool,
     /// Every product Lightforge manages, official and custom alike.
     pub products: Vec<Product>,
 }
+
+/// Bytes in the megabyte this config counts in.
+const BYTES_PER_MB: u64 = 1_000_000;
 
 impl Default for Config {
     fn default() -> Self {
@@ -46,6 +64,8 @@ impl Default for Config {
             default_proton: ProtonPin::default(),
             assets_source: None,
             addon_catalog: None,
+            download_limit_mbps: None,
+            pause_downloads_while_playing: true,
             products: Vec::new(),
         }
     }
@@ -174,6 +194,14 @@ impl Config {
             .or_else(|| self.default_proton.version())
     }
 
+    /// The download cap in bytes per second, `0` meaning unlimited.
+    ///
+    /// A configured `0` is unlimited too rather than a cap of nothing, which
+    /// would be a download that never moves.
+    pub fn download_limit_bytes(&self) -> u64 {
+        self.download_limit_mbps.unwrap_or(0).saturating_mul(BYTES_PER_MB)
+    }
+
     /// Everything pinned to `version`, named the way the user named it.
     ///
     /// Only *explicit* pins count. A product following the app default is not
@@ -217,6 +245,30 @@ pub enum ConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_download_cap_is_read_in_megabytes_and_spent_in_bytes() {
+        let mut config = Config::default();
+        assert_eq!(config.download_limit_bytes(), 0, "no cap by default");
+
+        config.download_limit_mbps = Some(10);
+        assert_eq!(config.download_limit_bytes(), 10_000_000);
+
+        // A configured zero is unlimited, not a download that never moves.
+        config.download_limit_mbps = Some(0);
+        assert_eq!(config.download_limit_bytes(), 0);
+    }
+
+    #[test]
+    fn pausing_while_playing_is_on_unless_turned_off() {
+        // The launched product's own download is paused regardless; this
+        // covers the rest of the queue, which shares the same CASC store.
+        assert!(Config::default().pause_downloads_while_playing);
+
+        let toml = toml::to_string(&Config::with_default_products()).unwrap();
+        let read: Config = toml::from_str(&toml).unwrap();
+        assert!(read.pause_downloads_while_playing);
+    }
 
     #[test]
     fn defaults_round_trip_through_toml() {

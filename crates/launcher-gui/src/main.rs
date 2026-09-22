@@ -148,6 +148,10 @@ enum Message {
     PinDefaultProton(ProtonChoice),
     PinProductProton(ProtonChoice),
     AssetsSourceChanged(String),
+    /// The download cap field changed.
+    DownloadLimitChanged(String),
+    /// The pause-while-playing switch was flipped.
+    PauseWhilePlaying(bool),
     SaveSettings,
     CheckProton,
     ProtonChecked(Result<provision::ProtonReleases, String>),
@@ -345,6 +349,8 @@ struct Lightforge {
     queue: Vec<Download>,
     /// Whether the download manager panel is open.
     manager_open: bool,
+    /// Transfers paused for a play session, to be put back afterwards.
+    resume_after_play: Vec<ProductCode>,
     /// A cancelled transfer whose task has not reported back yet.
     ///
     /// Pausing flips the UI at once, but the run keeps going for a moment —
@@ -369,6 +375,8 @@ struct Lightforge {
     setup_running: bool,
     /// Editable copy of `assets_source`, committed on save.
     assets_input: String,
+    /// Editable copy of the download cap, in MB/s. Empty means unlimited.
+    limit_input: String,
     proton_notice: Option<String>,
     /// Stable releases that could be installed, newest first.
     proton_available: Vec<String>,
@@ -421,6 +429,7 @@ impl Lightforge {
 
 
         let assets_input = config.assets_source.clone().unwrap_or_default();
+        let limit_input = config.download_limit_mbps.map(|v| v.to_string()).unwrap_or_default();
         let app = Self {
             layout,
             dirs,
@@ -439,6 +448,7 @@ impl Lightforge {
             branding: None,
             queue: Vec::new(),
             manager_open: false,
+            resume_after_play: Vec::new(),
             winding_down: None,
             downloads: SharedDownloads::default(),
             busy: false,
@@ -451,6 +461,7 @@ impl Lightforge {
             setup_sample: provision::Progress::default(),
             setup_running: false,
             assets_input,
+            limit_input,
             proton_notice: None,
             proton_available: Vec::new(),
             proton_choice: None,
@@ -533,6 +544,24 @@ impl Lightforge {
         self.busy = true;
         self.error = None;
         self.status = "pre-flight…".to_owned();
+
+        // Pre-flight pauses the launched product's own download by itself —
+        // that one is a correctness guard, since the client and the
+        // downloader would share one CASC store. The rest of the queue shares
+        // that store too, so it is paused here when asked, and resumed when
+        // the game exits.
+        if self.config.pause_downloads_while_playing {
+            let others: Vec<ProductCode> = self
+                .queue
+                .iter()
+                .filter(|d| matches!(d.stage, Stage::Running { .. } | Stage::Queued))
+                .map(|d| d.code.clone())
+                .collect();
+            for code in others {
+                self.pause(&code);
+                self.resume_after_play.push(code);
+            }
+        }
         Task::perform(
             tasks::preflight(
                 self.layout.clone(),
@@ -621,7 +650,14 @@ impl Lightforge {
             TransferState { stage: "preparing".to_owned(), ..TransferState::default() };
 
         Task::perform(
-            tasks::download(self.layout.clone(), code.clone(), self.region, cancel, tx),
+            tasks::download(
+                self.layout.clone(),
+                code.clone(),
+                self.region,
+                self.config.download_limit_bytes(),
+                cancel,
+                tx,
+            ),
             move |result| {
                 let mapped = result.map(|summary| Complete {
                     complete: summary.complete,
@@ -874,12 +910,25 @@ impl Lightforge {
                     Ok(note) => self.status = note,
                     Err(e) => self.error = Some(e),
                 }
-                // A launch may have paused a transfer; the guard records what
-                // is owed, and resuming means planning afresh.
-                match self.downloads.pending().contains(&self.selected.code) {
-                    true => self.enqueue(),
-                    false => self.reload(self.selected.code.clone()),
+                // A launch may have paused transfers — its own product through
+                // pre-flight's guard, and the rest of the queue through the
+                // setting. Both are owed a restart, and resuming means
+                // planning afresh.
+                for code in std::mem::take(&mut self.resume_after_play) {
+                    if let Some(at) = self.queue.iter().position(|d| d.code == code) {
+                        self.queue[at].stage = Stage::Queued;
+                        self.queue[at].sample.stage = "queued".to_owned();
+                    }
                 }
+                let owed = self.downloads.pending().contains(&self.selected.code);
+                if owed {
+                    if let Some(at) =
+                        self.queue.iter().position(|d| d.code == self.selected.code)
+                    {
+                        self.queue[at].stage = Stage::Queued;
+                    }
+                }
+                Task::batch([self.pump(), self.reload(self.selected.code.clone())])
             }
 
             Message::BattleNet => self.preflight(Launch::BattleNet),
@@ -1063,6 +1112,25 @@ impl Lightforge {
 
             Message::AssetsSourceChanged(value) => {
                 self.assets_input = value;
+                Task::none()
+            }
+
+            Message::DownloadLimitChanged(value) => {
+                // Digits only, so the field cannot hold something that is not
+                // a speed. Clearing it is how you say "unlimited".
+                self.limit_input = value.chars().filter(char::is_ascii_digit).collect();
+                let trimmed = self.limit_input.trim();
+                self.config.download_limit_mbps = match trimmed.parse::<u64>() {
+                    Ok(0) | Err(_) => None,
+                    Ok(mbps) => Some(mbps),
+                };
+                self.save_config();
+                Task::none()
+            }
+
+            Message::PauseWhilePlaying(on) => {
+                self.config.pause_downloads_while_playing = on;
+                self.save_config();
                 Task::none()
             }
 
@@ -2502,6 +2570,45 @@ impl Lightforge {
             .padding(theme::MD)
             .style(theme::card);
 
+        let downloads = container(
+            column![
+                text("Downloads").size(theme::HEADING),
+                row![
+                    muted("Speed limit".to_owned(), theme::LABEL).width(Length::Fixed(150.0)),
+                    text_input("unlimited", &self.limit_input)
+                        .on_input(Message::DownloadLimitChanged)
+                        .style(theme::field)
+                        .size(theme::BODY)
+                        .padding(theme::SM)
+                        .width(Length::Fixed(110.0)),
+                    muted("MB/s".to_owned(), theme::LABEL),
+                ]
+                .spacing(theme::MD)
+                .align_y(Alignment::Center),
+                muted(
+                    "Applies to game downloads. Proton builds and addons are not capped."
+                        .to_owned(),
+                    theme::CAPTION,
+                ),
+                iced::widget::checkbox(
+                    "Pause downloads while a game is running",
+                    self.config.pause_downloads_while_playing,
+                )
+                .on_toggle(Message::PauseWhilePlaying)
+                .text_size(theme::BODY),
+                muted(
+                    "The game you launch always pauses its own download — it and the \
+                     launcher would be sharing one storage file. This covers the rest \
+                     of the queue."
+                        .to_owned(),
+                    theme::CAPTION,
+                ),
+            ]
+            .spacing(theme::SM),
+        )
+        .padding(theme::MD)
+        .style(theme::card);
+
         let theming = container(
             column![
                 text("Theming").size(theme::HEADING),
@@ -2526,7 +2633,7 @@ impl Lightforge {
         .padding(theme::MD)
         .style(theme::card);
 
-        let mut body = column![proton, builds, theming].spacing(theme::MD);
+        let mut body = column![proton, builds, downloads, theming].spacing(theme::MD);
         if let Some(dirs) = &self.dirs {
             body = body.push(mono(format!("config: {}", dirs.config_file().display())));
         }

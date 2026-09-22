@@ -205,6 +205,7 @@ pub async fn download(
     layout: Layout,
     code: ProductCode,
     region: Region,
+    limit_bytes_per_second: u64,
     cancel: Cancel,
     tx: tokio::sync::watch::Sender<TransferState>,
 ) -> Result<Summary, String> {
@@ -244,6 +245,7 @@ pub async fn download(
                     // is a foreground process someone is watching, a launcher
                     // is not.
                     checkpoint_bytes: 512 * 1024 * 1024,
+                    limit_bytes_per_second,
                     ..InstallOptions::default()
                 };
 
