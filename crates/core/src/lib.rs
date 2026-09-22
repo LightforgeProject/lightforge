@@ -15,7 +15,6 @@ pub mod debug;
 pub mod error;
 pub mod net;
 pub mod paths;
-pub mod peicon;
 pub mod prefix;
 pub mod preflight;
 pub mod product;
