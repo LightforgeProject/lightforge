@@ -40,6 +40,11 @@ pub enum ActionState {
         local_build: String,
         remote_build: String,
     },
+    /// Waiting for another product's download to finish.
+    ///
+    /// One transfer runs at a time: two would split one connection and write
+    /// into the same CASC store, making both slower and both ETAs fiction.
+    Queued,
     /// A download or patch is running. Carries live progress for the speed/ETA UI.
     Downloading(Progress),
     /// Download is paused, either by the user or by pre-flight before launching
@@ -58,6 +63,7 @@ impl ActionState {
             Self::Unknown => "…",
             Self::Install => "INSTALL",
             Self::Update { .. } => "UPDATE",
+            Self::Queued => "QUEUED",
             Self::Downloading(_) => "PAUSE",
             Self::Paused(_) => "RESUME",
             Self::Play => "PLAY",
@@ -165,6 +171,8 @@ impl Local {
 /// A transfer this process is running for the product.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transfer {
+    /// Accepted, but another product is downloading first.
+    Queued,
     Running(Progress),
     Paused(Progress),
 }
@@ -177,6 +185,7 @@ pub enum Transfer {
 pub fn decide(local: &Local, remote: Option<&Version>, transfer: Option<Transfer>) -> ActionState {
     // What is happening now beats what the disk said a moment ago.
     match transfer {
+        Some(Transfer::Queued) => return ActionState::Queued,
         Some(Transfer::Running(progress)) => return ActionState::Downloading(progress),
         Some(Transfer::Paused(progress)) => return ActionState::Paused(progress),
         None => {}
@@ -331,5 +340,43 @@ mod tests {
         };
         assert_eq!(p.eta().unwrap().as_secs(), 10);
         assert!((p.fraction() - 1.0 / 3.0).abs() < f32::EPSILON);
+    }
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::*;
+
+    fn installed() -> Local {
+        Local {
+            build_key: Some("abc".into()),
+            version: Some("1.0.0".into()),
+            executable: Some(PathBuf::from("/games/_retail_/Wow.exe")),
+            store_files: 1,
+        }
+    }
+
+    /// The bug this whole model exists to prevent: one product's transfer
+    /// deciding another product's button.
+    #[test]
+    fn a_transfer_only_speaks_for_the_product_it_belongs_to() {
+        let running = Some(Transfer::Running(Progress::default()));
+        assert!(matches!(
+            decide(&installed(), None, running),
+            ActionState::Downloading(_)
+        ));
+        // The same disk state with no transfer of its own is simply ready.
+        assert_eq!(decide(&installed(), None, None), ActionState::Play);
+    }
+
+    #[test]
+    fn a_queued_product_says_so_rather_than_looking_ready() {
+        // Not installed and waiting its turn: neither Install nor Downloading
+        // is honest, which is why Queued exists.
+        assert_eq!(
+            decide(&Local::default(), None, Some(Transfer::Queued)),
+            ActionState::Queued
+        );
+        assert_eq!(ActionState::Queued.label(), "QUEUED");
     }
 }

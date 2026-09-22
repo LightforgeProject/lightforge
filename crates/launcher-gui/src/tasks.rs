@@ -196,13 +196,6 @@ pub struct TransferState {
     pub product_bytes: u64,
 }
 
-/// A live download: what to read, and how to stop it.
-#[derive(Debug, Clone)]
-pub struct Transfer {
-    pub rx: tokio::sync::watch::Receiver<TransferState>,
-    pub cancel: Cancel,
-}
-
 /// Download `code` into its install directory, publishing progress to `tx`.
 ///
 /// Returns the run's summary. A paused transfer is not an error: `pause` trips

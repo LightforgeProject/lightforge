@@ -46,7 +46,7 @@ use lightforge_core::setup::Status as SetupStatus;
 use lightforge_core::tact::download::Cancel;
 use lightforge_core::tact::version::Region;
 
-use tasks::{Refreshed, SharedDownloads, Transfer, TransferState};
+use tasks::{Refreshed, SharedDownloads, TransferState};
 
 /// Where a player manages their subscription, per the spec.
 const ACCOUNT_URL: &str = "https://account.battle.net/games";
@@ -112,6 +112,14 @@ enum Message {
     Themed(ProductCode, Box<tasks::Themed>),
     /// Open the Battle.net client on its own — the other-titles path.
     OpenBattleNet,
+    /// Show or hide the download manager.
+    ToggleManager,
+    /// Pause one product's transfer from the manager.
+    PauseDownload(ProductCode),
+    /// Resume or re-queue one product's transfer from the manager.
+    ResumeDownload(ProductCode),
+    /// Drop a transfer from the queue entirely.
+    CancelDownload(ProductCode),
     /// A tile in the product bar was clicked.
     LineSelected(ProductLine),
     /// A branch was picked for the selected line. Adds the product first when
@@ -252,6 +260,48 @@ impl std::fmt::Display for BranchChoice {
     }
 }
 
+/// Where one product's transfer has got to.
+///
+/// Keyed to a product rather than held app-wide, which is the whole point:
+/// the old single `Option<Transfer>` meant every product you switched to
+/// inherited whichever one happened to be running.
+enum Stage {
+    /// Accepted, waiting for the running one to finish.
+    Queued,
+    Running {
+        rx: tokio::sync::watch::Receiver<TransferState>,
+        cancel: Cancel,
+    },
+    /// Stopped with work outstanding. Keeps the progress it reached so the bar
+    /// does not snap back to zero on resume.
+    Paused(state::Progress),
+}
+
+/// One product's place in the download queue.
+struct Download {
+    code: ProductCode,
+    label: String,
+    stage: Stage,
+    /// Newest sample off the channel, kept after a pause so the manager can
+    /// still say how far it got.
+    sample: TransferState,
+    rate: Rate,
+}
+
+impl Download {
+    fn progress(&self) -> state::Progress {
+        product_progress(&self.sample, self.rate.per_second)
+    }
+
+    fn transfer(&self) -> state::Transfer {
+        match &self.stage {
+            Stage::Queued => state::Transfer::Queued,
+            Stage::Running { .. } => state::Transfer::Running(self.progress()),
+            Stage::Paused(progress) => state::Transfer::Paused(*progress),
+        }
+    }
+}
+
 /// What a pre-flight pass is clearing the way for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Launch {
@@ -290,12 +340,18 @@ struct Lightforge {
     remote: Option<lightforge_core::tact::version::Version>,
     branding: Option<Branding>,
 
-    transfer: Option<Transfer>,
-    /// Last sample read off the transfer's watch channel.
-    sample: TransferState,
-    rate: Rate,
-    /// Progress kept after a pause, so the bar doesn't jump back to zero.
-    paused_at: Option<state::Progress>,
+    /// Every transfer this session knows about, in queue order. At most one
+    /// is [`Stage::Running`].
+    queue: Vec<Download>,
+    /// Whether the download manager panel is open.
+    manager_open: bool,
+    /// A cancelled transfer whose task has not reported back yet.
+    ///
+    /// Pausing flips the UI at once, but the run keeps going for a moment —
+    /// it finishes the requests already in flight and checkpoints the store.
+    /// Starting anything before it lands would put two writers on the same
+    /// CASC store, which is the corruption pre-flight exists to prevent.
+    winding_down: Option<ProductCode>,
 
     downloads: SharedDownloads,
     busy: bool,
@@ -381,10 +437,9 @@ impl Lightforge {
             local: Local::default(),
             remote: None,
             branding: None,
-            transfer: None,
-            sample: TransferState::default(),
-            rate: Rate::default(),
-            paused_at: None,
+            queue: Vec::new(),
+            manager_open: false,
+            winding_down: None,
             downloads: SharedDownloads::default(),
             busy: false,
             status: "checking…".to_owned(),
@@ -490,11 +545,9 @@ impl Lightforge {
 
     /// The button state, which is core's decision and not the GUI's.
     fn action(&self) -> ActionState {
-        let transfer = match (&self.transfer, self.paused_at) {
-            (Some(_), _) => Some(state::Transfer::Running(self.live_progress())),
-            (None, Some(progress)) => Some(state::Transfer::Paused(progress)),
-            (None, None) => None,
-        };
+        // Only this product's own transfer. Anything else is another game's
+        // business, however loudly it is downloading.
+        let transfer = self.download_for(&self.selected.code).map(Download::transfer);
         state::decide(&self.local, self.remote.as_ref(), transfer)
     }
 
@@ -502,21 +555,70 @@ impl Lightforge {
     ///
     /// A resumed run plans only what is missing, so run-relative numbers read
     /// as "starting over" every time a download is paused and picked up again.
-    fn live_progress(&self) -> state::Progress {
-        product_progress(&self.sample, self.rate.per_second)
+    /// Refresh only when the finished product is the one on screen.
+    fn reload_if_showing(&mut self, code: &ProductCode) -> Task<Message> {
+        match code == &self.selected.code {
+            true => self.reload(code.clone()),
+            false => Task::none(),
+        }
     }
 
-    fn start_download(&mut self) -> Task<Message> {
+    fn download_for(&self, code: &ProductCode) -> Option<&Download> {
+        self.queue.iter().find(|d| &d.code == code)
+    }
+
+    /// The one transfer actually moving bytes, if any.
+    fn running(&self) -> Option<&Download> {
+        self.queue.iter().find(|d| matches!(d.stage, Stage::Running { .. }))
+    }
+
+    /// Put the selected product in the queue, starting it if nothing is running.
+    fn enqueue(&mut self) -> Task<Message> {
         let code = self.selected.code.clone();
+        let label = self.selected.label.clone();
+        self.error = None;
+
+        // Already in the queue: a queued entry stays put, a paused one is
+        // being resumed.
+        if let Some(existing) = self.queue.iter().position(|d| d.code == code) {
+            if matches!(self.queue[existing].stage, Stage::Queued) {
+                return Task::none();
+            }
+            self.queue.remove(existing);
+        }
+
+        self.queue.push(Download {
+            code,
+            label,
+            stage: Stage::Queued,
+            sample: TransferState { stage: "queued".to_owned(), ..TransferState::default() },
+            rate: Rate::default(),
+        });
+        self.pump()
+    }
+
+    /// Start the first queued transfer, if the line is free.
+    ///
+    /// One at a time on purpose: two downloads would split one connection and
+    /// write into the same CASC store, making both slower and both ETAs
+    /// fiction.
+    fn pump(&mut self) -> Task<Message> {
+        if self.running().is_some() || self.winding_down.is_some() {
+            return Task::none();
+        }
+        let Some(next) = self.queue.iter().position(|d| matches!(d.stage, Stage::Queued)) else {
+            return Task::none();
+        };
+
         let cancel = Cancel::new();
         let (tx, rx) = tokio::sync::watch::channel(TransferState::default());
+        let code = self.queue[next].code.clone();
 
         self.downloads.register(code.clone(), cancel.clone());
-        self.transfer = Some(Transfer { rx, cancel: cancel.clone() });
-        self.paused_at = None;
-        self.rate = Rate::default();
-        self.sample = TransferState { stage: "preparing".to_owned(), ..TransferState::default() };
-        self.error = None;
+        self.queue[next].stage = Stage::Running { rx, cancel: cancel.clone() };
+        self.queue[next].rate = Rate::default();
+        self.queue[next].sample =
+            TransferState { stage: "preparing".to_owned(), ..TransferState::default() };
 
         Task::perform(
             tasks::download(self.layout.clone(), code.clone(), self.region, cancel, tx),
@@ -530,6 +632,26 @@ impl Lightforge {
                 Message::Downloaded(code.clone(), mapped)
             },
         )
+    }
+
+    /// Stop one product's transfer, keeping what it reached.
+    fn pause(&mut self, code: &ProductCode) {
+        let Some(entry) = self.queue.iter_mut().find(|d| &d.code == code) else {
+            return;
+        };
+        match &entry.stage {
+            Stage::Running { cancel, .. } => {
+                cancel.cancel();
+                // Shown as paused immediately — the click is answered now,
+                // not when the run finishes winding down.
+                entry.stage = Stage::Paused(product_progress(&entry.sample, 0));
+                self.winding_down = Some(code.clone());
+                self.status = "pausing…".to_owned();
+            }
+            // Never started, so there is nothing to wind down.
+            Stage::Queued => entry.stage = Stage::Paused(state::Progress::default()),
+            Stage::Paused(_) => {}
+        }
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -627,19 +749,21 @@ impl Lightforge {
 
             Message::Primary => match self.action() {
                 ActionState::Install | ActionState::Update { .. } | ActionState::Error { .. } => {
-                    self.start_download()
+                    self.enqueue()
                 }
-                ActionState::Downloading(progress) => {
+                ActionState::Downloading(_) => {
                     // Pause: trip the token. The loop stops between chunks and
                     // the store keeps everything already written.
-                    if let Some(transfer) = &self.transfer {
-                        transfer.cancel.cancel();
-                    }
-                    self.paused_at = Some(progress);
-                    self.status = "pausing…".to_owned();
+                    self.pause(&self.selected.code.clone());
                     Task::none()
                 }
-                ActionState::Paused(_) => self.start_download(),
+                ActionState::Paused(_) => self.enqueue(),
+                // Leaving the queue is pausing: nothing has started, so there
+                // is nothing to stop, but the intent is the same.
+                ActionState::Queued => {
+                    self.pause(&self.selected.code.clone());
+                    Task::none()
+                }
                 ActionState::Play => self.preflight(Launch::Game),
                 ActionState::Unknown => Task::none(),
             },
@@ -651,22 +775,28 @@ impl Lightforge {
                 if let Some(rx) = &self.addon_rx {
                     self.addon_sample = rx.borrow().clone();
                 }
-                let Some(transfer) = &self.transfer else {
-                    return Task::none();
-                };
-                self.sample = transfer.rx.borrow().clone();
-                // Rate is measured on what this run has stored; the baseline is
-                // a constant offset and would only mute the first sample.
-                self.rate.sample(self.sample.progress.bytes_stored);
+                if let Some(entry) = self
+                    .queue
+                    .iter_mut()
+                    .find(|d| matches!(d.stage, Stage::Running { .. }))
+                {
+                    if let Stage::Running { rx, .. } = &entry.stage {
+                        entry.sample = rx.borrow().clone();
+                    }
+                    // Rate is measured on what this run has stored; the
+                    // baseline is a constant offset and would only mute the
+                    // first sample.
+                    entry.rate.sample(entry.sample.progress.bytes_stored);
+                }
                 Task::none()
             }
 
             Message::CloseRequested(id) => {
                 // Closing mid-transfer must not orphan what was fetched: trip
                 // the token, let the run checkpoint its store, then close.
-                match &self.transfer {
-                    Some(transfer) => {
-                        transfer.cancel.cancel();
+                match self.running().map(|d| d.code.clone()) {
+                    Some(code) => {
+                        self.pause(&code);
                         self.closing = Some(id);
                         self.status = "finishing the download safely…".to_owned();
                         Task::none()
@@ -677,32 +807,63 @@ impl Lightforge {
 
             Message::Downloaded(code, result) => {
                 self.downloads.finished(&code);
-                self.transfer = None;
+                if self.winding_down.as_ref() == Some(&code) {
+                    self.winding_down = None;
+                }
                 if let Some(id) = self.closing.take() {
                     return iced::window::close(id);
                 }
+
+                // Status and errors describe the selected product. A transfer
+                // that finished while the user was looking elsewhere updates
+                // the queue and says nothing.
+                let showing = code == self.selected.code;
+                let entry = self.queue.iter().position(|d| d.code == code);
+                let note = |app: &mut Self, text: String| {
+                    if showing {
+                        app.status = text;
+                    }
+                };
+
                 match result {
                     Ok(done) if done.complete => {
-                        self.paused_at = None;
-                        self.status = match done.version {
-                            Some(v) => format!("installed {v}"),
-                            None => format!("stored {} files", done.files),
-                        };
-                        self.reload(code)
+                        if let Some(at) = entry {
+                            self.queue.remove(at);
+                        }
+                        note(
+                            self,
+                            match done.version {
+                                Some(v) => format!("installed {v}"),
+                                None => format!("stored {} files", done.files),
+                            },
+                        );
+                        Task::batch([self.pump(), self.reload_if_showing(&code)])
                     }
                     Ok(done) if done.cancelled => {
-                        self.status = "paused".to_owned();
-                        Task::none()
+                        // Paused, so it keeps its place with what it reached.
+                        if let Some(at) = entry {
+                            let reached = product_progress(&self.queue[at].sample, 0);
+                            self.queue[at].stage = Stage::Paused(reached);
+                        }
+                        note(self, "paused".to_owned());
+                        self.pump()
                     }
                     Ok(_) => {
-                        self.status = "stopped — run again to continue".to_owned();
-                        self.paused_at = None;
-                        self.reload(code)
+                        if let Some(at) = entry {
+                            let reached = product_progress(&self.queue[at].sample, 0);
+                            self.queue[at].stage = Stage::Paused(reached);
+                        }
+                        note(self, "stopped — run again to continue".to_owned());
+                        Task::batch([self.pump(), self.reload_if_showing(&code)])
                     }
                     Err(e) => {
-                        self.paused_at = None;
-                        self.error = Some(e);
-                        Task::none()
+                        if let Some(at) = entry {
+                            self.queue.remove(at);
+                        }
+                        if showing {
+                            self.error = Some(e);
+                        }
+                        self.pump()
                     }
                 }
             }
@@ -716,7 +877,7 @@ impl Lightforge {
                 // A launch may have paused a transfer; the guard records what
                 // is owed, and resuming means planning afresh.
                 match self.downloads.pending().contains(&self.selected.code) {
-                    true => self.start_download(),
+                    true => self.enqueue(),
                     false => self.reload(self.selected.code.clone()),
                 }
             }
@@ -724,6 +885,36 @@ impl Lightforge {
             Message::BattleNet => self.preflight(Launch::BattleNet),
 
             Message::OpenBattleNet => self.preflight(Launch::Client),
+
+            Message::ToggleManager => {
+                self.manager_open = !self.manager_open;
+                Task::none()
+            }
+
+            Message::PauseDownload(code) => {
+                self.pause(&code);
+                Task::none()
+            }
+
+            Message::ResumeDownload(code) => {
+                // Back to the end of the queue rather than jumping the line:
+                // whatever is running was started first.
+                if let Some(at) = self.queue.iter().position(|d| d.code == code) {
+                    self.queue[at].stage = Stage::Queued;
+                    self.queue[at].sample.stage = "queued".to_owned();
+                }
+                self.pump()
+            }
+
+            Message::CancelDownload(code) => {
+                self.pause(&code);
+                self.queue.retain(|d| d.code != code);
+                self.downloads.finished(&code);
+                if self.queue.is_empty() {
+                    self.manager_open = false;
+                }
+                self.pump()
+            }
 
             Message::PreflightDone(what, result) => {
                 if let Err(e) = result {
@@ -1204,7 +1395,7 @@ impl Lightforge {
             false => Subscription::none(),
         };
 
-        match self.transfer.is_some() || self.setup_running || self.addons_busy {
+        match self.running().is_some() || self.setup_running || self.addons_busy {
             true => Subscription::batch([
                 closing,
                 resizes,
@@ -1230,6 +1421,26 @@ impl Lightforge {
             Screen::Settings => self.settings(),
             Screen::Addons => self.addons_screen(),
         };
+
+        // The manager hangs under its button on every screen, not just the
+        // dashboard: a download keeps running while you are in Settings, and
+        // that is exactly when you want to look at it. iced 0.13 has no
+        // popover, so it is a stacked layer pinned to the top right, padded
+        // clear of the ribbon it drops out of.
+        let screen = match self.manager_open && !self.queue.is_empty() {
+            true => stack![
+                screen,
+                container(self.manager())
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Alignment::End)
+                    .align_y(Alignment::Start)
+                    .padding([theme::XL + theme::LG, theme::LG]),
+            ]
+            .into(),
+            false => screen,
+        };
+
         trace::view_built(started.elapsed());
         screen
     }
@@ -1256,6 +1467,29 @@ impl Lightforge {
         }
 
         bar = bar.push(Space::with_width(Length::Fill));
+
+        // Only while something is in flight. An idle launcher has no
+        // downloads to manage, and a permanent button that opens an empty
+        // panel is furniture.
+        if !self.queue.is_empty() {
+            let count = self.queue.len();
+            bar = bar.push(
+                button(
+                    text(match count {
+                        1 => "↓ 1".to_owned(),
+                        n => format!("↓ {n}"),
+                    })
+                    .size(theme::LABEL),
+                )
+                .padding([theme::SM, theme::MD])
+                .style(match self.manager_open {
+                    true => theme::selected,
+                    false => theme::ghost,
+                })
+                .on_press(Message::ToggleManager),
+            );
+            bar = bar.push(Space::with_width(Length::Fixed(theme::SM as f32)));
+        }
 
         // App-level, not per-product: everything outside the WoW family is a
         // hand-off into Battle.net, so it sits with the navigation rather
@@ -1313,6 +1547,94 @@ impl Lightforge {
             Some(manifest) => manifest.catalog(),
             None => Catalog::builtin(),
         };
+    }
+
+    /// The download manager: every transfer this session knows about.
+    ///
+    /// One row each, with the controls that row can actually offer — a queued
+    /// transfer has no progress to show and a running one cannot be resumed.
+    fn manager(&self) -> Element<'_, Message> {
+        let mut rows = column![
+            row![
+                text("Downloads").size(theme::HEADING),
+                Space::with_width(Length::Fill),
+                muted(
+                    match self.queue.len() {
+                        1 => "1 in queue".to_owned(),
+                        n => format!("{n} in queue"),
+                    },
+                    theme::CAPTION,
+                ),
+            ]
+            .align_y(Alignment::Center),
+        ]
+        .spacing(theme::SM)
+        .width(Length::Fixed(380.0));
+
+        for entry in &self.queue {
+            let mut item = column![text(entry.label.clone()).size(theme::BODY)].spacing(theme::XS);
+
+            match &entry.stage {
+                Stage::Queued => {
+                    item = item.push(muted("waiting".to_owned(), theme::CAPTION));
+                }
+                Stage::Running { .. } => {
+                    let progress = entry.progress();
+                    item = item.push(progress_bar(0.0..=1.0, progress.fraction()).height(5));
+                    item = item.push(
+                        row![
+                            mono(bytes_of(progress.downloaded_bytes, progress.total_bytes)),
+                            dot(),
+                            mono(rate_of(progress.bytes_per_second)),
+                            dot(),
+                            mono(eta_of(progress)),
+                        ]
+                        .spacing(theme::XS)
+                        .align_y(Alignment::Center),
+                    );
+                }
+                Stage::Paused(progress) => {
+                    item = item.push(progress_bar(0.0..=1.0, progress.fraction()).height(5));
+                    item = item.push(muted("paused".to_owned(), theme::CAPTION));
+                }
+            }
+
+            let control: Element<Message> = match &entry.stage {
+                Stage::Running { .. } => {
+                    secondary("Pause", Message::PauseDownload(entry.code.clone()))
+                        .enabled(true)
+                        .into()
+                }
+                Stage::Queued | Stage::Paused(_) => {
+                    secondary("Resume", Message::ResumeDownload(entry.code.clone()))
+                        .enabled(true)
+                        .into()
+                }
+            };
+
+            rows = rows.push(
+                container(
+                    row![
+                        item.width(Length::Fill),
+                        column![
+                            control,
+                            secondary("Remove", Message::CancelDownload(entry.code.clone()))
+                                .enabled(true),
+                        ]
+                        .spacing(theme::XS),
+                    ]
+                    .spacing(theme::MD)
+                    .align_y(Alignment::Center),
+                )
+                .padding(theme::SM)
+                .style(theme::row),
+            );
+        }
+
+        container(rows)
+            .padding(theme::MD)
+            .style(theme::floating)
+            .into()
     }
 
     /// One tile per configured line, the selected one marked.
@@ -1517,7 +1839,9 @@ impl Lightforge {
             ActionState::Install => theme::INSTALL,
             ActionState::Update { .. } => theme::UPDATE,
             ActionState::Play => theme::PLAY,
-            ActionState::Downloading(_) | ActionState::Paused(_) => theme::PAUSE,
+            ActionState::Downloading(_) | ActionState::Paused(_) | ActionState::Queued => {
+                theme::PAUSE
+            }
             ActionState::Error { .. } => theme::ERROR,
             ActionState::Unknown => theme::PAUSE,
         };
@@ -1561,8 +1885,12 @@ impl Lightforge {
                 .spacing(theme::SM)
                 .align_y(Alignment::Center),
             );
-            if !self.sample.stage.is_empty() {
-                left = left.push(muted(self.sample.stage.clone(), theme::CAPTION));
+            let stage = self
+                .download_for(&self.selected.code)
+                .map(|d| d.sample.stage.clone())
+                .unwrap_or_default();
+            if !stage.is_empty() {
+                left = left.push(muted(stage, theme::CAPTION));
             }
         } else if let Some(version) = &self.local.version {
             left = left.push(
