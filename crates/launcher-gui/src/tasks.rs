@@ -34,12 +34,18 @@ pub struct Refreshed {
 /// Returned in place of a network error when the shared client never built.
 pub const NO_HTTP: &str = "no HTTP client available";
 
-/// Read the disk and ask the version service what is current.
+/// Read the disk and, when `check_remote`, ask the version service what is
+/// current.
+///
+/// `check_remote` is `false` for a product Blizzard does not serve us builds
+/// for: the probe can only fail there, and would report itself as the version
+/// service being down.
 pub async fn refresh(
     http: Option<Http>,
     layout: Layout,
     code: ProductCode,
     region: Region,
+    check_remote: bool,
 ) -> Refreshed {
     let local = {
         let layout = layout.clone();
@@ -50,6 +56,10 @@ pub async fn refresh(
             .await
             .unwrap_or_default()
     };
+
+    if !check_remote {
+        return Refreshed { local, remote: None, offline: None };
+    }
 
     let (remote, offline) = match &http {
         Some(http) => match version::versions(http, region, code.as_str()).await {

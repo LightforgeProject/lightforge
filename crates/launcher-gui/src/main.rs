@@ -39,7 +39,7 @@ use lightforge_core::config::Config;
 use lightforge_core::debug::DebugInfo;
 use lightforge_core::net::Http;
 use lightforge_core::paths::{AppDirs, Layout};
-use lightforge_core::product::{Branch, Catalog, Product, ProductCode, ProductLine};
+use lightforge_core::product::{Branch, Catalog, Kind, Product, ProductCode, ProductLine};
 use lightforge_core::state::{self, ActionState, Local};
 use lightforge_core::proton::ProtonPin;
 use lightforge_core::setup::Status as SetupStatus;
@@ -120,6 +120,8 @@ enum Message {
     InstalledVersions(HashMap<String, String>),
     /// Track a product from the catalog, putting it in the header.
     AddProduct(ProductCode),
+    /// Stop tracking one, taking it out of the header.
+    RemoveProduct(ProductCode),
     /// Pause one product's transfer from the manager.
     PauseDownload(ProductCode),
     /// Resume or re-queue one product's transfer from the manager.
@@ -498,7 +500,11 @@ impl Lightforge {
             provision::status(app.layout.clone(), app.config.clone()),
             |status| Message::SetupStatus(status.map(Box::new)),
         );
-        let task = Task::batch([app.reload(selected.code), probe]);
+        let installed = Task::perform(
+            tasks::installed_versions(app.layout.clone()),
+            Message::InstalledVersions,
+        );
+        let task = Task::batch([app.reload(selected.code), probe, installed]);
         (app, task)
     }
 
@@ -511,6 +517,7 @@ impl Lightforge {
                     self.layout.clone(),
                     code.clone(),
                     self.region,
+                    self.kind_of(&code) == Kind::Managed,
                 ),
                 {
                     let code = code.clone();
@@ -584,6 +591,61 @@ impl Lightforge {
         )
     }
 
+    /// Whether Lightforge installs this product or hands it to Battle.net.
+    ///
+    /// The catalog's answer where it has one, the code's shape otherwise, so a
+    /// product added before the manifest was read is still classified.
+    fn kind_of(&self, code: &ProductCode) -> Kind {
+        self.catalog.get(code).map(|e| e.kind).unwrap_or_else(|| Kind::of(code))
+    }
+
+    /// The action panel for a game Battle.net installs and starts.
+    ///
+    /// Deliberately bare: no Install, no Update, no Play, not even greyed out.
+    /// Offering those disabled would say Lightforge could manage this game and
+    /// merely will not.
+    fn handoff_panel(&self) -> Element<'_, Message> {
+        let mut left = column![].spacing(theme::SM).width(Length::Fill);
+        left = left.push(match &self.error {
+            Some(e) => text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR),
+            None => text(self.status.clone()).size(theme::LABEL).color(theme::MUTED),
+        });
+        if let Some(version) = self.installed_versions.get(self.selected.code.as_str()) {
+            left = left.push(
+                row![muted("installed".to_owned(), theme::LABEL), mono(version.clone())]
+                    .spacing(theme::SM)
+                    .align_y(Alignment::Center),
+            );
+        }
+        left = left.push(muted(
+            "Installed and updated through Battle.net. Lightforge opens it, nothing more."
+                .to_owned(),
+            theme::CAPTION,
+        ));
+
+        let open = button(
+            container(text("Open Battle.net").size(theme::BODY)).center_x(Length::Fill),
+        )
+        .style(theme::outlined)
+        .padding([theme::MD, theme::LG])
+        .width(Length::Fixed(240.0));
+
+        container(
+            row![
+                left,
+                match self.busy {
+                    true => open,
+                    false => open.on_press(Message::OpenBattleNet),
+                },
+            ]
+            .spacing(theme::XL)
+            .align_y(Alignment::Center),
+        )
+        .padding(theme::LG)
+        .style(theme::floating)
+        .into()
+    }
+
     /// The button state, which is core's decision and not the GUI's.
     fn action(&self) -> ActionState {
         // Only this product's own transfer. Anything else is another game's
@@ -616,6 +678,12 @@ impl Lightforge {
     /// Put the selected product in the queue, starting it if nothing is running.
     fn enqueue(&mut self) -> Task<Message> {
         let code = self.selected.code.clone();
+        // The panel above should never offer this, but the download path is
+        // the one that writes to disk, so it checks for itself.
+        if self.kind_of(&code) == Kind::HandOff {
+            self.error = Some(format!("{} is installed through Battle.net", self.selected.label));
+            return Task::none();
+        }
         let label = self.selected.label.clone();
         self.error = None;
 
@@ -972,6 +1040,37 @@ impl Lightforge {
             Message::InstalledVersions(found) => {
                 self.installed_versions = found;
                 Task::none()
+            }
+
+            Message::RemoveProduct(code) => {
+                // The header cannot be empty: with nothing tracked there is no
+                // product to show and no way back to this panel.
+                if self.choices.len() <= 1 {
+                    self.error =
+                        Some("that is the only game left — add another first".to_owned());
+                    return Task::none();
+                }
+
+                // A transfer for a product nobody is tracking has nowhere to
+                // report to, so it stops here rather than running on unseen.
+                self.pause(&code);
+                self.queue.retain(|d| d.code != code);
+                self.downloads.finished(&code);
+
+                self.config.products.retain(|p| p.code != code);
+                self.save_config();
+                self.choices.retain(|c| c.code != code);
+                self.last_branch.retain(|_, branch| branch != &code);
+
+                match self.selected.code == code {
+                    // Standing on the one just removed: move to whatever the
+                    // header now starts with.
+                    true => {
+                        let next = self.choices[0].clone();
+                        self.select(next)
+                    }
+                    false => Task::none(),
+                }
             }
 
             Message::AddProduct(code) => {
@@ -1711,7 +1810,9 @@ impl Lightforge {
                 );
             }
             let action: Element<Message> = match tracked(&entry.code) {
-                true => muted("added".to_owned(), theme::CAPTION).into(),
+                true => secondary("Remove", Message::RemoveProduct(entry.code.clone()))
+                    .enabled(self.choices.len() > 1)
+                    .into(),
                 false => secondary("Add", Message::AddProduct(entry.code.clone()))
                     .enabled(true)
                     .into(),
@@ -1728,11 +1829,9 @@ impl Lightforge {
 
         // Only line heads: a line's other branches are reached from the
         // version picker, not added here as games of their own.
-        let managed: Vec<&CatalogEntry> = self
-            .catalog
-            .managed()
-            .filter(|e| e.branch == Branch::Live && !tracked(&e.code))
-            .collect();
+        // Tracked lines stay listed, or there would be no way to remove one.
+        let managed: Vec<&CatalogEntry> =
+            self.catalog.managed().filter(|e| e.branch == Branch::Live).collect();
         if !managed.is_empty() {
             rows = rows.push(muted("World of Warcraft".to_owned(), theme::LABEL));
             rows = rows.push(muted(
@@ -1848,6 +1947,21 @@ impl Lightforge {
             .into()
     }
 
+    /// What to call a line on screen.
+    ///
+    /// The name the user gave it first, then the catalog's, and only then the
+    /// line's own — which for a line Lightforge does not model is the bare
+    /// product code, and `hs_beta` is not a thing to label a tile with.
+    fn name_of(&self, line: &ProductLine) -> String {
+        let head = line.head();
+        self.choices
+            .iter()
+            .find(|c| c.code == head)
+            .map(|c| c.label.clone())
+            .or_else(|| self.catalog.get(&head).map(|e| e.label.clone()))
+            .unwrap_or_else(|| line.label().to_owned())
+    }
+
     /// One tile per configured line, the selected one marked.
     ///
     /// A line with no icon in the manifest falls back to its label, so the bar
@@ -1865,13 +1979,21 @@ impl Lightforge {
                 // The line's mark is its live build's, since that is the
                 // product the art was published against; a PTR is the same
                 // game wearing the same face.
-                let face: Element<Message> = match self.icons.get(&head) {
+                //
+                // Except for a hand-off: the manifest's `default` answers for
+                // every code it does not name, so asking would put Retail's
+                // mark on Hearthstone.
+                let icon = match self.kind_of(&head) {
+                    Kind::Managed => self.icons.get(&head),
+                    Kind::HandOff => None,
+                };
+                let face: Element<Message> = match icon {
                     Some(path) => image(image::Handle::from_path(path))
                         .content_fit(ContentFit::Contain)
                         .width(Length::Fixed(theme::TILE))
                         .height(Length::Fixed(theme::TILE))
                         .into(),
-                    None => container(text(line.label().to_owned()).size(theme::LABEL))
+                    None => container(text(self.name_of(&line)).size(theme::LABEL))
                         .center_x(Length::Shrink)
                         .center_y(Length::Fixed(theme::TILE))
                         .into(),
@@ -1885,7 +2007,7 @@ impl Lightforge {
 
                 tooltip(
                     tile,
-                    container(text(line.label().to_owned()).size(theme::LABEL))
+                    container(text(self.name_of(&line)).size(theme::LABEL))
                         .padding([theme::XS, theme::SM])
                         .style(theme::floating),
                     tooltip::Position::Bottom,
@@ -1982,12 +2104,21 @@ impl Lightforge {
 
     fn dashboard(&self) -> Element<'_, Message> {
         let action = self.action();
+        let kind = self.kind_of(&self.selected.code);
+
+        // A hand-off product wears no art. The manifest's `default` catches
+        // every code it does not name, so theming Hearthstone would dress it
+        // in Retail's logo and key art — worse than no art at all.
+        let branding = match kind {
+            Kind::Managed => self.branding.as_ref(),
+            Kind::HandOff => None,
+        };
 
         // The wordmark hangs under the app title in the top-left rather than
         // floating mid-page: the centre of the dashboard belongs to the art,
         // and a product logo reads as branding when it sits with Lightforge's
         // own rather than competing with the background for the middle.
-        let logo: Element<Message> = match self.branding.as_ref() {
+        let logo: Element<Message> = match branding {
             Some(b) => image(image::Handle::from_path(&b.logo.path))
                 .content_fit(ContentFit::Contain)
                 .height(Length::Fixed(theme::logo_height(b.logo.height)))
@@ -2011,13 +2142,21 @@ impl Lightforge {
                     .width(Length::Fill)
                     .padding([theme::MD, 0]),
                 Space::with_height(Length::Fill),
-                self.action_panel(&action),
+                // A product Battle.net owns gets a panel that offers only what
+                // Lightforge can actually do for it. Running the normal one
+                // would put an INSTALL button on a game this launcher has no
+                // way to install — and, worse, one that would plan a CASC
+                // download into the WoW directory.
+                match kind {
+                    Kind::Managed => self.action_panel(&action),
+                    Kind::HandOff => self.handoff_panel(),
+                },
             ]
             .spacing(theme::MD)
             .padding(theme::LG),
         ];
 
-        match self.branding.as_ref() {
+        match branding {
             Some(b) => stack![
                 image(image::Handle::from_path(&b.background.path))
                     .content_fit(ContentFit::Cover)
