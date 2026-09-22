@@ -173,6 +173,29 @@ impl Config {
             .and_then(|p| p.profile.proton_ge_version.as_deref())
             .or_else(|| self.default_proton.version())
     }
+
+    /// Everything pinned to `version`, named the way the user named it.
+    ///
+    /// Only *explicit* pins count. A product following the app default is not
+    /// listed even though it currently launches under this build: unpinning
+    /// the default is one edit that moves all of them, and naming every
+    /// follower would make an ordinary default look like a thicket of pins.
+    pub fn pinned_to(&self, version: &str) -> Vec<String> {
+        let mut users = Vec::new();
+        if self.default_proton.version() == Some(version) {
+            users.push("the app default".to_owned());
+        }
+        if self.battle_net_proton.version() == Some(version) {
+            users.push("Battle.net".to_owned());
+        }
+        users.extend(
+            self.products
+                .iter()
+                .filter(|p| p.profile.proton_ge_version.as_deref() == Some(version))
+                .map(|p| p.display_name.clone()),
+        );
+        users
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

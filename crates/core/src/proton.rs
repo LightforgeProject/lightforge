@@ -319,6 +319,78 @@ mod tests {
         assert!(!ProtonFlavor::Other.is_supported());
     }
 
+    /// A real build directory under `root`, complete enough for discovery.
+    fn installed(root: &Path, version: &str) -> ProtonRelease {
+        let dir = root.join(format!("{version}-x86_64"));
+        std::fs::create_dir_all(dir.join("files")).unwrap();
+        std::fs::write(dir.join("proton"), b"#!/usr/bin/env python3\n").unwrap();
+        std::fs::write(dir.join("version"), format!("1787951532 {version}\n")).unwrap();
+        std::fs::write(dir.join("files/blob"), vec![0u8; 4096]).unwrap();
+        ProtonRelease::read_from_dir(&dir, ProtonSource::Managed).unwrap()
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("lightforge-proton-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_unused_managed_build_can_be_removed() {
+        let root = scratch("remove-ok");
+        let build = installed(&root, "GE-Proton11-7");
+        assert!(build.path.is_dir());
+
+        remove_build(&build, &root, &[]).unwrap();
+        assert!(!build.path.exists());
+    }
+
+    #[test]
+    fn a_build_something_is_pinned_to_is_refused_by_name() {
+        let root = scratch("remove-pinned");
+        let build = installed(&root, "GE-Proton11-7");
+
+        let err = remove_build(&build, &root, &["the app default".into(), "WoW PTR".into()])
+            .unwrap_err();
+        // The message has to say what to unpin, or "no" is unactionable.
+        let message = err.to_string();
+        assert!(message.contains("the app default"), "{message}");
+        assert!(message.contains("WoW PTR"), "{message}");
+        assert!(build.path.is_dir(), "a refused removal must delete nothing");
+    }
+
+    #[test]
+    fn a_build_we_did_not_install_is_never_deleted() {
+        let root = scratch("remove-theirs");
+        let elsewhere = scratch("remove-steam");
+        let build = installed(&elsewhere, "GE-Proton11-7");
+
+        // Right shape, wrong directory: this is Steam's, or hand-placed.
+        let err = remove_build(&build, &root, &[]).unwrap_err();
+        assert!(matches!(err, ProtonError::NotOurs(_)));
+        assert!(build.path.is_dir());
+
+        // And the same build claiming a non-managed source, even in our dir.
+        let mut theirs = installed(&root, "GE-Proton11-6");
+        theirs.source = ProtonSource::SystemCompatTools;
+        assert!(matches!(
+            remove_build(&theirs, &root, &[]).unwrap_err(),
+            ProtonError::NotOurs(_)
+        ));
+        assert!(theirs.path.is_dir());
+    }
+
+    #[test]
+    fn size_counts_the_whole_tree() {
+        let root = scratch("size");
+        let build = installed(&root, "GE-Proton11-7");
+        // The 4 KiB blob plus the two small text files.
+        assert!(size_on_disk(&build.path) > 4096);
+        // A path that is not there is zero, not a panic.
+        assert_eq!(size_on_disk(&root.join("nothing")), 0);
+    }
+
     fn build(version: &str, built_at: Option<u64>, flavor: ProtonFlavor) -> ProtonRelease {
         ProtonRelease {
             version: version.to_owned(),
@@ -642,6 +714,58 @@ pub fn check_for_update(installed: &str, releases: &[UpstreamRelease]) -> Option
     })
 }
 
+/// Delete a Proton build Lightforge installed.
+///
+/// Refuses two things outright, because both are someone else's files:
+///
+/// - a build outside `proton_dir`, which means a Steam install or a
+///   hand-placed `compatibilitytools.d` entry;
+/// - a build something is still pinned to, named in the error so the caller
+///   can say what to unpin rather than just "no".
+///
+/// Unpinning first is deliberate rather than doing it here. A pin is a
+/// decision the user made about how a game launches, and quietly rewriting it
+/// as a side effect of freeing disk space is the kind of helpfulness that
+/// loses a working configuration.
+pub fn remove_build(
+    build: &ProtonRelease,
+    proton_dir: &Path,
+    pinned_by: &[String],
+) -> Result<(), ProtonError> {
+    if build.source != ProtonSource::Managed || !build.path.starts_with(proton_dir) {
+        return Err(ProtonError::NotOurs(build.path.clone()));
+    }
+    if !pinned_by.is_empty() {
+        return Err(ProtonError::StillPinned {
+            version: build.version.clone(),
+            users: pinned_by.join(", "),
+        });
+    }
+
+    std::fs::remove_dir_all(&build.path).map_err(|source| ProtonError::Io {
+        path: build.path.clone(),
+        source,
+    })
+}
+
+/// How much disk a build occupies, following no symlinks.
+///
+/// Best effort: an unreadable entry contributes nothing rather than failing
+/// the total, since this only ever labels a button.
+pub fn size_on_disk(path: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| match entry.file_type() {
+            Ok(kind) if kind.is_dir() => size_on_disk(&entry.path()),
+            Ok(kind) if kind.is_file() => entry.metadata().map(|m| m.len()).unwrap_or(0),
+            _ => 0,
+        })
+        .sum()
+}
+
 /// Download, verify, and unpack a release into `dest_root`.
 ///
 /// The tarball unpacks to a single top-level directory named for the release,
@@ -755,6 +879,12 @@ fn parse_sha512sum(contents: &str) -> Option<String> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProtonError {
+    #[error("{0} is not a build Lightforge installed")]
+    NotOurs(PathBuf),
+
+    #[error("{version} is still pinned by {users}")]
+    StillPinned { version: String, users: String },
+
     #[error(transparent)]
     Net(#[from] crate::net::NetError),
 

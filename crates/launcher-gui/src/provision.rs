@@ -10,6 +10,7 @@ use lightforge_core::net::Http;
 use lightforge_core::config::Config;
 use lightforge_core::paths::{AppDirs, Layout};
 use lightforge_core::setup::{self, Event, Status, Step};
+use lightforge_core::proton::ProtonRelease;
 
 /// What setup publishes while it runs.
 #[derive(Debug, Clone, Default)]
@@ -83,10 +84,23 @@ pub async fn status(layout: Layout, config: Config) -> Option<Status> {
 
 /// Ask GitHub whether a newer Proton-GE exists. Notify-only, per the policy:
 /// nothing here installs anything by itself.
+/// What one trip to GitHub tells us: whether a newer build exists, and every
+/// build that could be installed.
+///
+/// Both come out of the same release list, so they are fetched together — the
+/// request is ETag-revalidated and asking twice would buy nothing.
+#[derive(Debug, Clone, Default)]
+pub struct ProtonReleases {
+    /// A newer stable release than the installed one, if there is one.
+    pub update: Option<String>,
+    /// Every installable stable tag, newest first.
+    pub available: Vec<String>,
+}
+
 pub async fn check_proton(
     http: Option<Http>,
-    installed: String,
-) -> Result<Option<String>, String> {
+    installed: Option<String>,
+) -> Result<ProtonReleases, String> {
     use lightforge_core::net::ETagCache;
     use lightforge_core::proton;
 
@@ -97,5 +111,50 @@ pub async fn check_proton(
         .await
         .map_err(|e| e.to_string())?;
 
-    Ok(proton::check_for_update(&installed, &releases).map(|notice| notice.available))
+    // Pre-releases are deliberately not offered: `latest_stable` skips them
+    // for the update check, and a list that could install one would make the
+    // two disagree about what "available" means.
+    let available = releases
+        .iter()
+        .filter(|release| !release.prerelease && release.tarball().is_some())
+        .map(|release| release.tag_name.clone())
+        .collect();
+
+    Ok(ProtonReleases {
+        update: installed
+            .and_then(|installed| proton::check_for_update(&installed, &releases))
+            .map(|notice| notice.available),
+        available,
+    })
+}
+
+/// Measure every installed build, off the UI thread.
+///
+/// A Proton build is ~400 MB across thousands of files, so this is a task and
+/// its answer is kept — walking it from `view` would cost that on every frame.
+pub async fn measure(builds: Vec<std::path::PathBuf>) -> Vec<(std::path::PathBuf, u64)> {
+    tokio::task::spawn_blocking(move || {
+        builds
+            .into_iter()
+            .map(|path| {
+                let size = lightforge_core::proton::size_on_disk(&path);
+                (path, size)
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Delete a managed build, refusing anything still pinned.
+pub async fn remove_proton(config: Config, build: ProtonRelease) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
+        let pinned_by = config.pinned_to(&build.version);
+        lightforge_core::proton::remove_build(&build, &dirs.proton_dir(), &pinned_by)
+            .map_err(|e| e.to_string())?;
+        Ok(format!("removed {}", build.version))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

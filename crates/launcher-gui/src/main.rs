@@ -24,6 +24,7 @@ mod theme;
 mod trace;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -141,7 +142,16 @@ enum Message {
     AssetsSourceChanged(String),
     SaveSettings,
     CheckProton,
-    ProtonChecked(Result<Option<String>, String>),
+    ProtonChecked(Result<provision::ProtonReleases, String>),
+    /// A version was chosen in the "install another build" picker.
+    ChooseProtonVersion(ProtonChoice),
+    /// Install the chosen version.
+    InstallProton,
+    /// Delete one managed build, by version.
+    RemoveProton(String),
+    ProtonRemoved(Result<String, String>),
+    /// Measured sizes for the installed builds.
+    ProtonSizes(Vec<(PathBuf, u64)>),
 
     AddonsListed(Box<addonwork::Listing>),
     TokenChanged(String),
@@ -266,7 +276,7 @@ struct Lightforge {
     /// The branding manifest, read once and themed from thereafter.
     manifest: Option<Arc<Manifest>>,
     /// Every configured product's bar icon, for those that have one.
-    icons: HashMap<ProductCode, std::path::PathBuf>,
+    icons: HashMap<ProductCode, PathBuf>,
     /// The branch last used in each line, so returning to a tile returns to
     /// the build you were on rather than snapping back to live.
     last_branch: HashMap<ProductLine, ProductCode>,
@@ -304,6 +314,12 @@ struct Lightforge {
     /// Editable copy of `assets_source`, committed on save.
     assets_input: String,
     proton_notice: Option<String>,
+    /// Stable releases that could be installed, newest first.
+    proton_available: Vec<String>,
+    /// The one picked in the install picker, if any.
+    proton_choice: Option<String>,
+    /// Measured size of each installed build, keyed by its directory.
+    proton_sizes: HashMap<PathBuf, u64>,
 
     addons: addonwork::Listing,
     token_input: String,
@@ -381,6 +397,9 @@ impl Lightforge {
             setup_running: false,
             assets_input,
             proton_notice: None,
+            proton_available: Vec::new(),
+            proton_choice: None,
+            proton_sizes: HashMap::new(),
             addons: addonwork::Listing::default(),
             token_input: String::new(),
             addon_rx: None,
@@ -777,6 +796,15 @@ impl Lightforge {
 
             Message::SetupStatus(status) => {
                 let status = status.map(|boxed| *boxed);
+                let measure = match &status {
+                    Some(status) => Task::perform(
+                        provision::measure(
+                            status.installed.iter().map(|b| b.path.clone()).collect(),
+                        ),
+                        Message::ProtonSizes,
+                    ),
+                    None => Task::none(),
+                };
                 // Open on setup when the machine cannot launch anything yet,
                 // but never yank the user out of a screen they chose.
                 if let Some(status) = &status {
@@ -786,7 +814,7 @@ impl Lightforge {
                     }
                 }
                 self.setup = status;
-                Task::none()
+                measure
             }
 
             Message::RunSetup => {
@@ -869,33 +897,100 @@ impl Lightforge {
             }
 
             Message::CheckProton => {
+                // Runs with no build installed too: the release list is what
+                // fills the install picker, and needing a build before you can
+                // find one to install is the wrong way round.
                 let installed = self
                     .setup
                     .as_ref()
                     .and_then(|s| s.proton.as_ref())
                     .map(|p| p.version.clone());
-                match installed {
-                    Some(version) => {
-                        self.proton_notice = Some("checking…".to_owned());
-                        Task::perform(
-                            provision::check_proton(self.http.clone(), version),
-                            Message::ProtonChecked,
-                        )
-                    }
-                    None => {
-                        self.proton_notice = Some("no Proton build installed yet".to_owned());
-                        Task::none()
-                    }
-                }
+                self.proton_notice = Some("checking…".to_owned());
+                Task::perform(
+                    provision::check_proton(self.http.clone(), installed),
+                    Message::ProtonChecked,
+                )
             }
 
             Message::ProtonChecked(result) => {
-                self.proton_notice = Some(match result {
-                    // Notify-only by policy: nothing updates itself.
-                    Ok(Some(version)) => format!("{version} is available — install it from setup"),
-                    Ok(None) => "up to date".to_owned(),
-                    Err(e) => format!("check failed: {e}"),
-                });
+                match result {
+                    Ok(releases) => {
+                        self.proton_notice = Some(match &releases.update {
+                            // Notify-only by policy: nothing updates itself.
+                            Some(version) => format!("{version} is available"),
+                            None => match self.setup.as_ref().and_then(|s| s.proton.as_ref()) {
+                                Some(_) => "up to date".to_owned(),
+                                None => "nothing installed yet".to_owned(),
+                            },
+                        });
+                        self.proton_available = releases.available;
+                    }
+                    Err(e) => self.proton_notice = Some(format!("check failed: {e}")),
+                }
+                Task::none()
+            }
+
+            Message::ChooseProtonVersion(choice) => {
+                self.proton_choice = choice.0;
+                Task::none()
+            }
+
+            Message::InstallProton => {
+                let Some(version) = self.proton_choice.clone() else {
+                    return Task::none();
+                };
+                let (tx, rx) = tokio::sync::watch::channel(provision::Progress::default());
+                self.setup_rx = Some(rx);
+                self.setup_sample = provision::Progress::default();
+                self.setup_running = true;
+                self.error = None;
+                self.screen = Screen::Setup;
+
+                Task::perform(
+                    provision::run(
+                        self.layout.clone(),
+                        self.config.clone(),
+                        Some(version),
+                        tx,
+                    ),
+                    |result| Message::SetupFinished(result.map(Box::new)),
+                )
+            }
+
+            Message::RemoveProton(version) => {
+                let Some(build) = self
+                    .setup
+                    .as_ref()
+                    .and_then(|s| s.installed.iter().find(|b| b.version == version))
+                    .cloned()
+                else {
+                    return Task::none();
+                };
+                self.proton_notice = Some(format!("removing {version}…"));
+                Task::perform(
+                    provision::remove_proton(self.config.clone(), build),
+                    Message::ProtonRemoved,
+                )
+            }
+
+            Message::ProtonRemoved(result) => {
+                match result {
+                    Ok(note) => {
+                        self.proton_notice = Some(note);
+                        // What is installed just changed, so re-probe rather
+                        // than editing the list we happen to be holding.
+                        return Task::perform(
+                            provision::status(self.layout.clone(), self.config.clone()),
+                            |status| Message::SetupStatus(status.map(Box::new)),
+                        );
+                    }
+                    Err(e) => self.proton_notice = Some(e),
+                }
+                Task::none()
+            }
+
+            Message::ProtonSizes(sizes) => {
+                self.proton_sizes = sizes.into_iter().collect();
                 Task::none()
             }
 
@@ -1930,6 +2025,87 @@ impl Lightforge {
         )
     }
 
+    /// Every Proton build on the machine, and how to add or remove one.
+    fn proton_builds(&self) -> Element<'_, Message> {
+        let mut rows = column![text("Proton builds").size(theme::HEADING)].spacing(theme::SM);
+
+        let installed = self.setup.as_ref().map(|s| s.installed.as_slice()).unwrap_or_default();
+        if installed.is_empty() {
+            rows = rows.push(muted("none found yet".to_owned(), theme::LABEL));
+        }
+
+        for build in installed {
+            let pinned_by = self.config.pinned_to(&build.version);
+            let managed = build.source == lightforge_core::proton::ProtonSource::Managed;
+
+            let mut facts = row![
+                mono(build.version.clone()),
+                dot(),
+                muted(lightforge_core::setup::describe_source(build).to_owned(), theme::CAPTION),
+            ]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center);
+
+            // Absent until the measuring task answers, rather than a zero
+            // that would read as an empty directory.
+            if let Some(size) = self.proton_sizes.get(&build.path) {
+                facts = facts.push(dot());
+                facts = facts.push(muted(bytes_of(*size, 0), theme::CAPTION));
+            }
+
+            // Only managed builds are ours to delete, and only when nothing
+            // points at them — the reason is shown instead of a dead button,
+            // since "why can't I remove this" is the whole question here.
+            let action: Element<Message> = match (managed, pinned_by.is_empty()) {
+                (false, _) => muted("not managed here".to_owned(), theme::CAPTION).into(),
+                (true, false) => {
+                    muted(format!("pinned by {}", pinned_by.join(", ")), theme::CAPTION).into()
+                }
+                (true, true) => secondary("Remove", Message::RemoveProton(build.version.clone()))
+                    .enabled(!self.setup_running)
+                    .into(),
+            };
+
+            rows = rows.push(
+                row![facts, Space::with_width(Length::Fill), action]
+                    .spacing(theme::MD)
+                    .align_y(Alignment::Center),
+            );
+        }
+
+        // The picker is only useful once the release list has been fetched,
+        // and saying so beats an empty dropdown.
+        let install: Element<Message> = match self.proton_available.is_empty() {
+            true => muted(
+                "Check for updates to list installable versions.".to_owned(),
+                theme::CAPTION,
+            )
+            .into(),
+            false => row![
+                pick_list(
+                    self.proton_available
+                        .iter()
+                        .map(|v| ProtonChoice(Some(v.clone())))
+                        .collect::<Vec<_>>(),
+                    self.proton_choice.clone().map(|v| ProtonChoice(Some(v))),
+                    Message::ChooseProtonVersion,
+                )
+                .placeholder("Choose a version")
+                .text_size(theme::BODY)
+                .padding(theme::SM),
+                secondary("Install", Message::InstallProton)
+                    .enabled(self.proton_choice.is_some() && !self.setup_running),
+            ]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center)
+            .into(),
+        };
+
+        rows = rows.push(Space::with_height(Length::Fixed(theme::XS as f32)));
+        rows = rows.push(install);
+        rows.into()
+    }
+
     /// Proton pinning, asset source, and the notify-only update check.
     fn settings(&self) -> Element<'_, Message> {
         let installed: Vec<ProtonChoice> = std::iter::once(ProtonChoice(None))
@@ -1994,6 +2170,10 @@ impl Lightforge {
         .padding(theme::MD)
         .style(theme::card);
 
+        let builds = container(self.proton_builds())
+            .padding(theme::MD)
+            .style(theme::card);
+
         let theming = container(
             column![
                 text("Theming").size(theme::HEADING),
@@ -2018,7 +2198,7 @@ impl Lightforge {
         .padding(theme::MD)
         .style(theme::card);
 
-        let mut body = column![proton, theming].spacing(theme::MD);
+        let mut body = column![proton, builds, theming].spacing(theme::MD);
         if let Some(dirs) = &self.dirs {
             body = body.push(mono(format!("config: {}", dirs.config_file().display())));
         }
