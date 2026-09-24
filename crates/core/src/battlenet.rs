@@ -344,6 +344,31 @@ pub fn configure(layout: &Layout, user: &str, tweaks: &[Tweak]) -> Result<PathBu
     Ok(path)
 }
 
+/// Product codes the client itself records, read from `Battle.net.config`.
+///
+/// The `Games` object is keyed by the code Battle.net uses for each title it
+/// knows about, and that is not always the code Lightforge's own tables carry:
+/// `version::KNOWN_PRODUCTS` holds `hsb` for Hearthstone while the client and
+/// `product.db` both say `hs_beta`. This is the client's own answer, so it is
+/// the one that matches everywhere else on the machine.
+///
+/// An absent or unreadable file yields nothing rather than an error — the
+/// client writes it on first launch, and a machine that has not run it yet is
+/// not a broken one.
+pub fn known_product_codes(layout: &Layout, user: &str) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(layout.battle_net_config(user)) else {
+        return Vec::new();
+    };
+    let Ok(config) = serde_json::from_str::<Value>(&text) else {
+        return Vec::new();
+    };
+    config
+        .get("Games")
+        .and_then(Value::as_object)
+        .map(|games| games.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
 /// Apply `tweaks` to every per-account config next to `Battle.net.config`,
 /// returning the files changed.
 ///
@@ -512,13 +537,28 @@ impl Launch {
     pub fn command(&self, install_dir: &Path) -> (PathBuf, Vec<String>) {
         match self {
             Self::Client => (install_dir.join("Battle.net Launcher.exe"), Vec::new()),
-            Self::Product { code, exec } => (
-                install_dir.join("Battle.net.exe"),
-                vec![
-                    format!("--productcode={code}"),
-                    format!("--exec=launch {}", exec.clone().unwrap_or_else(|| game_uid(code))),
-                ],
-            ),
+            Self::Product { code, exec } => match exec.clone().or_else(|| game_uid(code)) {
+                Some(uid) => (
+                    install_dir.join("Battle.net.exe"),
+                    vec![
+                        format!("--productcode={code}"),
+                        format!("--exec=launch {uid}"),
+                    ],
+                ),
+                // No family id for this product, so there is nothing safe to
+                // ask for. Opening the client leaves the user one click away
+                // from the right tile; guessing puts them on the wrong game.
+                None => Self::Client.command(install_dir),
+            },
+        }
+    }
+
+    /// Whether this launch can actually hand off, or would only open the
+    /// client. Lets a caller label the button for what it will really do.
+    pub fn hands_off(&self) -> bool {
+        match self {
+            Self::Client => false,
+            Self::Product { code, exec } => exec.is_some() || game_uid(code).is_some(),
         }
     }
 }
@@ -542,8 +582,8 @@ impl Launch {
 /// resolve it and **falls back to the first family it knows, which is
 /// Warcraft III**, so the user lands on a game they may not even own. That was
 /// a real bug: `launch wow_classic_era` put Gabriel on the W3 page every time.
-fn game_uid(code: &ProductCode) -> String {
-    match code {
+pub fn game_uid(code: &ProductCode) -> Option<String> {
+    let uid = match code {
         // PTR and beta builds of retail live in the retail tile's version list.
         ProductCode::Retail | ProductCode::Ptr | ProductCode::Ptr2 | ProductCode::Beta => "WoW",
         ProductCode::Classic
@@ -551,11 +591,16 @@ fn game_uid(code: &ProductCode) -> String {
         | ProductCode::ClassicPtr
         | ProductCode::EraPtr => "WoWC",
         ProductCode::ClassicBeta => "WoWF",
-        // An unknown product is likelier to be a retail-line server than
-        // anything else, and the retail tile at least exists.
-        ProductCode::Custom(_) => "WoW",
-    }
-    .to_owned()
+        // Families read out of a real client log, same as the WoW ones above.
+        // Only codes actually observed are listed: a guess here does not
+        // degrade to "nothing happens", it opens somebody else's game.
+        ProductCode::Custom(code) => match code.as_str() {
+            "hsb" | "hs_beta" => "WTCG",
+            "osi" => "OSI",
+            _ => return None,
+        },
+    };
+    Some(uid.to_owned())
 }
 
 /// Start Battle.net and hand the caller the running child.
@@ -673,14 +718,15 @@ mod tests {
         use super::*;
 
         // Verified against the client's log: these ids select these tiles.
-        assert_eq!(game_uid(&ProductCode::Retail), "WoW");
-        assert_eq!(game_uid(&ProductCode::ClassicEra), "WoWC");
-        assert_eq!(game_uid(&ProductCode::Classic), "WoWC");
-        assert_eq!(game_uid(&ProductCode::ClassicBeta), "WoWF");
+        let uid = |code| game_uid(&code).unwrap();
+        assert_eq!(uid(ProductCode::Retail), "WoW");
+        assert_eq!(uid(ProductCode::ClassicEra), "WoWC");
+        assert_eq!(uid(ProductCode::Classic), "WoWC");
+        assert_eq!(uid(ProductCode::ClassicBeta), "WoWF");
 
         // The bug this prevents: a TACT code is unresolvable and the client
         // falls back to Warcraft III.
-        assert_ne!(game_uid(&ProductCode::ClassicEra), "wow_classic_era");
+        assert_ne!(uid(ProductCode::ClassicEra), "wow_classic_era");
     }
 
     use super::*;
@@ -877,6 +923,35 @@ mod tests {
         let (exe, args) = Launch::Client.command(dir);
         assert_eq!(exe, dir.join("Battle.net Launcher.exe"));
         assert!(args.is_empty());
+    }
+
+    /// The failure this guards is not "nothing happens": the client cannot
+    /// resolve an unknown uid and falls back to the first family it knows,
+    /// which is Warcraft III. Opening the client is the honest alternative.
+    #[test]
+    fn a_product_with_no_known_family_opens_the_client_instead_of_guessing() {
+        let dir = Path::new("/prefix/Battle.net");
+        let unknown = Launch::product(ProductCode::Custom("turtle_wow".into()));
+
+        assert!(!unknown.hands_off());
+        assert_eq!(unknown.command(dir), Launch::Client.command(dir));
+    }
+
+    #[test]
+    fn the_families_read_from_a_real_client_log_hand_off() {
+        let dir = Path::new("/prefix/Battle.net");
+        for (code, uid) in [
+            ("hs_beta", "WTCG"),
+            ("hsb", "WTCG"),
+            ("osi", "OSI"),
+        ] {
+            let launch = Launch::product(ProductCode::Custom(code.into()));
+            assert!(launch.hands_off(), "{code}");
+            let (exe, args) = launch.command(dir);
+            assert_eq!(exe, dir.join("Battle.net.exe"), "{code}");
+            assert!(args.contains(&format!("--exec=launch {uid}")), "{code}: {args:?}");
+            assert!(args.contains(&format!("--productcode={code}")), "{code}: {args:?}");
+        }
     }
 
     #[test]

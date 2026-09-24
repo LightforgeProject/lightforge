@@ -493,6 +493,36 @@ impl Catalog {
         self.get(code).map(|e| e.line.clone()).unwrap_or_else(|| code.line())
     }
 
+    /// Adopt the product codes Battle.net itself uses.
+    ///
+    /// `version::KNOWN_PRODUCTS` carries `hsb` for Hearthstone; the client and
+    /// `product.db` both say `hs_beta`. Nothing lines up while the catalog
+    /// holds one and the machine holds the other — the browse panel adds a
+    /// code that never matches what is installed.
+    ///
+    /// Two codes are the same game when they resolve to the same Battle.net
+    /// game family, which is the client's own notion of identity and the only
+    /// one available: the codes themselves share no pattern.
+    pub fn reconcile(&mut self, known: &[String]) {
+        for entry in &mut self.entries {
+            if entry.kind != Kind::HandOff {
+                continue;
+            }
+            let Some(family) = crate::battlenet::game_uid(&entry.code) else {
+                continue;
+            };
+            let theirs = known.iter().find(|code| {
+                code.as_str() != entry.code.as_str()
+                    && crate::battlenet::game_uid(&ProductCode::from((*code).clone()))
+                        .as_deref()
+                        == Some(family.as_str())
+            });
+            if let Some(code) = theirs {
+                entry.code = ProductCode::from(code.clone());
+            }
+        }
+    }
+
     /// Products Lightforge downloads itself.
     pub fn managed(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.entries.iter().filter(|e| e.kind == Kind::Managed)
@@ -629,6 +659,31 @@ mod tests {
 
         assert!(catalog.hand_offs().any(|e| e.label == "Hearthstone"));
         assert!(catalog.managed().any(|e| e.code == ProductCode::Retail));
+    }
+
+    #[test]
+    fn the_clients_own_code_wins_over_our_table() {
+        let mut catalog = Catalog::builtin();
+        // What our table calls Hearthstone before anyone asks the client.
+        assert!(catalog.get(&ProductCode::from("hsb".to_owned())).is_some());
+
+        catalog.reconcile(&["battle_net".into(), "hs_beta".into(), "wow".into()]);
+
+        // Now it is the code `product.db` and the browse panel will agree on.
+        assert!(catalog.get(&ProductCode::from("hs_beta".to_owned())).is_some());
+        assert!(catalog.get(&ProductCode::from("hsb".to_owned())).is_none());
+
+        // And a managed product is never rewritten by what Battle.net thinks.
+        assert!(catalog.get(&ProductCode::Retail).is_some());
+    }
+
+    #[test]
+    fn reconciling_against_an_unknown_machine_changes_nothing() {
+        let mut catalog = Catalog::builtin();
+        let before = catalog.clone();
+        // No Battle.net config, or a client that has never seen these games.
+        catalog.reconcile(&[]);
+        assert_eq!(catalog, before);
     }
 
     #[test]

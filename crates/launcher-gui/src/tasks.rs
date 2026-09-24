@@ -458,6 +458,16 @@ pub async fn launch_via_battle_net(
 ///
 /// Read when the browse panel opens, never on a timer and never to decide
 /// what the header shows — it labels a list the user asked to see.
+/// The product codes Battle.net's own config lists, so the catalog can use
+/// the codes the client uses rather than the ones our table happens to carry.
+pub async fn known_codes(layout: Layout, user: String) -> Vec<String> {
+    tokio::task::spawn_blocking(move || {
+        lightforge_core::battlenet::known_product_codes(&layout, &user)
+    })
+    .await
+    .unwrap_or_default()
+}
+
 pub async fn installed_versions(layout: Layout) -> HashMap<String, String> {
     tokio::task::spawn_blocking(move || {
         use lightforge_core::tact::productdb;

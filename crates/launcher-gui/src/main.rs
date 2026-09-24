@@ -118,6 +118,8 @@ enum Message {
     ToggleBrowse,
     /// What Battle.net reports as installed, for the catalog's labels.
     InstalledVersions(HashMap<String, String>),
+    /// The product codes Battle.net's own config uses.
+    KnownCodes(Vec<String>),
     /// Track a product from the catalog, putting it in the header.
     AddProduct(ProductCode),
     /// Stop tracking one, taking it out of the header.
@@ -361,6 +363,8 @@ struct Lightforge {
     browse_open: bool,
     /// Versions Battle.net reports installed, read when the catalog opens.
     installed_versions: HashMap<String, String>,
+    /// Product codes Battle.net itself uses, folded into the catalog.
+    known_codes: Vec<String>,
     /// Transfers paused for a play session, to be put back afterwards.
     resume_after_play: Vec<ProductCode>,
     /// A cancelled transfer whose task has not reported back yet.
@@ -462,6 +466,7 @@ impl Lightforge {
             manager_open: false,
             browse_open: false,
             installed_versions: HashMap::new(),
+            known_codes: Vec::new(),
             resume_after_play: Vec::new(),
             winding_down: None,
             downloads: SharedDownloads::default(),
@@ -504,7 +509,11 @@ impl Lightforge {
             tasks::installed_versions(app.layout.clone()),
             Message::InstalledVersions,
         );
-        let task = Task::batch([app.reload(selected.code), probe, installed]);
+        let codes = Task::perform(
+            tasks::known_codes(app.layout.clone(), app.config.prefix_user.clone()),
+            Message::KnownCodes,
+        );
+        let task = Task::batch([app.reload(selected.code), probe, installed, codes]);
         (app, task)
     }
 
@@ -623,19 +632,35 @@ impl Lightforge {
             theme::CAPTION,
         ));
 
+        // Labelled for what it will actually do. Without a known game family
+        // the client cannot be told which tile to open, so the button says so
+        // rather than promising a hand-off that lands on someone else's game.
+        let launches = lightforge_core::battlenet::game_uid(&self.selected.code).is_some();
         let open = button(
-            container(text("Open Battle.net").size(theme::BODY)).center_x(Length::Fill),
+            container(
+                text(match launches {
+                    true => "Play via Battle.net",
+                    false => "Open Battle.net",
+                })
+                .size(theme::BODY),
+            )
+            .center_x(Length::Fill),
         )
         .style(theme::outlined)
         .padding([theme::MD, theme::LG])
         .width(Length::Fixed(240.0));
+
+        let press = match launches {
+            true => Message::BattleNet,
+            false => Message::OpenBattleNet,
+        };
 
         container(
             row![
                 left,
                 match self.busy {
                     true => open,
-                    false => open.on_press(Message::OpenBattleNet),
+                    false => open.on_press(press),
                 },
             ]
             .spacing(theme::XL)
@@ -1039,6 +1064,12 @@ impl Lightforge {
 
             Message::InstalledVersions(found) => {
                 self.installed_versions = found;
+                Task::none()
+            }
+
+            Message::KnownCodes(codes) => {
+                self.known_codes = codes;
+                self.refresh_catalog();
                 Task::none()
             }
 
@@ -1781,10 +1812,12 @@ impl Lightforge {
 
     /// Rebuild the catalog from whatever manifest is in hand.
     fn refresh_catalog(&mut self) {
-        self.catalog = match &self.manifest {
+        let mut catalog = match &self.manifest {
             Some(manifest) => manifest.catalog(),
             None => Catalog::builtin(),
         };
+        catalog.reconcile(&self.known_codes);
+        self.catalog = catalog;
     }
 
     /// The catalog: everything that could be added to the header.
