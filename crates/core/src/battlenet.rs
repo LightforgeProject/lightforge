@@ -604,6 +604,49 @@ pub fn registry_tweaks() -> Vec<RegValue> {
             data: "",
             reason: "stop the installer writing Windows shortcuts into the desktop's app menu",
         },
+        // Subpixel font smoothing, the four values `winetricks fontsmooth=rgb`
+        // writes. Wine ships with smoothing off, and the storefront is a CEF
+        // browser rendering text under Wine's font stack — unsmoothed it is
+        // the thing that most obviously looks broken next to the same page in
+        // a native browser.
+        //
+        // Prefix-wide rather than Battle.net-only because the registry has no
+        // per-application scope for these. WoW draws its own text and is
+        // unaffected.
+        RegValue {
+            key: r"HKEY_CURRENT_USER\Control Panel\Desktop",
+            name: "FontSmoothing",
+            // A string, not a DWORD — Windows stores this one as text, and a
+            // DWORD here is silently ignored.
+            kind: "REG_SZ",
+            data: "2",
+            reason: "turn font smoothing on for the CEF storefront",
+        },
+        RegValue {
+            key: r"HKEY_CURRENT_USER\Control Panel\Desktop",
+            name: "FontSmoothingType",
+            kind: "REG_DWORD",
+            data: "2",
+            reason: "subpixel rather than greyscale smoothing",
+        },
+        RegValue {
+            key: r"HKEY_CURRENT_USER\Control Panel\Desktop",
+            name: "FontSmoothingOrientation",
+            kind: "REG_DWORD",
+            data: "1",
+            reason: "RGB subpixel order, which is what desktop panels use",
+        },
+        RegValue {
+            key: r"HKEY_CURRENT_USER\Control Panel\Desktop",
+            name: "FontSmoothingGamma",
+            kind: "REG_DWORD",
+            data: "1400",
+            reason: "the gamma winetricks pairs with subpixel smoothing",
+        },
+        // Deliberately no `LogPixels`: Wine's default of 96 is right at 1x,
+        // writing 96 is a no-op, and any other value needs a display scale
+        // that cannot be read from inside the prefix. A wrong one makes the
+        // storefront unusable, so it stays a thing the user asks for.
     ]
 }
 
@@ -1036,6 +1079,49 @@ mod tests {
     /// The failure this guards is not "nothing happens": the client cannot
     /// resolve an unknown uid and falls back to the first family it knows,
     /// which is Warcraft III. Opening the client is the honest alternative.
+    #[test]
+    fn registry_tweaks_are_well_formed_reg_add_arguments() {
+        for value in registry_tweaks() {
+            let args = value.args();
+            assert_eq!(args[0], "add", "{}", value.name);
+            assert!(args.contains(&"/f".to_owned()), "{} is not forced", value.name);
+            assert!(!value.reason.is_empty(), "{} has no reason", value.name);
+
+            // `reg add /t REG_DWORD` takes its data as digits; anything else
+            // is rejected by reg.exe at runtime, where nobody is watching.
+            if value.kind == "REG_DWORD" {
+                assert!(
+                    value.data.chars().all(|c| c.is_ascii_digit()),
+                    "{} is a DWORD but its data is {:?}",
+                    value.name,
+                    value.data
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn font_smoothing_is_on_and_subpixel() {
+        let by_name = |name: &str| {
+            registry_tweaks()
+                .into_iter()
+                .find(|v| v.name == name)
+                .unwrap_or_else(|| panic!("{name} is not set"))
+        };
+
+        // The one that is a string rather than a DWORD. Getting this wrong
+        // leaves smoothing off with no error anywhere.
+        let on = by_name("FontSmoothing");
+        assert_eq!((on.kind, on.data), ("REG_SZ", "2"));
+
+        assert_eq!(by_name("FontSmoothingType").data, "2");
+        assert_eq!(by_name("FontSmoothingOrientation").data, "1");
+        assert_eq!(by_name("FontSmoothingGamma").data, "1400");
+
+        // DPI is deliberately not written — see the comment beside the list.
+        assert!(registry_tweaks().iter().all(|v| v.name != "LogPixels"));
+    }
+
     #[test]
     fn only_managed_products_have_their_updates_switched_off() {
         let tweaks = product_tweaks(&[ProductCode::Retail, ProductCode::ClassicEra]);

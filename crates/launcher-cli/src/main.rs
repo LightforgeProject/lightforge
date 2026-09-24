@@ -739,7 +739,10 @@ async fn main() -> Result<()> {
 
             let user = Config::default().prefix_user;
 
-            let tweaks = battlenet::default_tweaks();
+            // The same set setup and pre-flight write, so running this by
+            // hand cannot leave a config the next launch disagrees with.
+            let mut tweaks = battlenet::default_tweaks();
+            tweaks.extend(battlenet::product_tweaks(&managed_products()));
             let path = battlenet::configure(&layout, &user, &tweaks)
                 .context("writing Battle.net.config")?;
             println!("{}", path.display());
