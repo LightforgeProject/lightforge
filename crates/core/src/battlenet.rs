@@ -280,6 +280,76 @@ pub fn default_tweaks() -> Vec<Tweak> {
     ]
 }
 
+/// The download limit Battle.net applies to its own transfers, in bytes per
+/// second, or `None` when it has none set.
+pub const DOWNLOAD_LIMIT_KEY: &str = "Client.Install.LastUserDownloadLimitNextPatchInBps";
+
+/// Read Battle.net's own download limit out of its config.
+///
+/// The client stores it as a string; a value it cannot be read as a number is
+/// reported as no limit rather than as an error, since a launcher has nothing
+/// useful to do with a malformed one.
+pub fn download_limit(layout: &Layout, user: &str) -> Option<u64> {
+    let text = std::fs::read_to_string(layout.battle_net_config(user)).ok()?;
+    let config: Value = serde_json::from_str(&text).ok()?;
+    let mut node = &config;
+    for key in DOWNLOAD_LIMIT_KEY.split('.') {
+        node = node.get(key)?;
+    }
+    node.as_str()?.parse().ok().filter(|bps| *bps > 0)
+}
+
+/// Set or clear Battle.net's own download limit.
+///
+/// `None` removes the key rather than writing a zero: the client wrote this
+/// from its own settings dropdown and absent is the shape it uses before
+/// anyone has chosen, which is the closest thing to "no limit" that can be
+/// written without guessing at a sentinel value.
+pub fn set_download_limit(
+    layout: &Layout,
+    user: &str,
+    bytes_per_second: Option<u64>,
+) -> Result<(), BattleNetError> {
+    match bytes_per_second {
+        Some(bps) => {
+            let tweak = Tweak::new(
+                DOWNLOAD_LIMIT_KEY,
+                json!(bps.to_string()),
+                "download limit Battle.net applies to its own transfers",
+            );
+            merge_file(&layout.battle_net_config(user), &[tweak], true)?;
+        }
+        None => remove_key(&layout.battle_net_config(user), DOWNLOAD_LIMIT_KEY)?,
+    }
+    Ok(())
+}
+
+/// Keep Agent's hands off a product Lightforge downloads itself.
+///
+/// Only for managed products. Battle.net owns the titles it installed, and
+/// switching their updates off would be taking something away rather than
+/// protecting anything: the hazard here is specific to a CASC store that two
+/// programs both believe they maintain.
+pub fn product_tweaks(codes: &[ProductCode]) -> Vec<Tweak> {
+    codes
+        .iter()
+        .flat_map(|code| {
+            [
+                Tweak::new(
+                    &format!("Games.{code}.AutoUpdate"),
+                    json!("false"),
+                    "Lightforge patches this product; Agent must not race it into the store",
+                ),
+                Tweak::new(
+                    &format!("Games.{code}.DownloadAllUpdates"),
+                    json!("false"),
+                    "no background pre-fetching into a store Lightforge owns",
+                ),
+            ]
+        })
+        .collect()
+}
+
 /// Defaults for a per-account `<hash>.config`.
 ///
 /// "Full quit, never tray-minimize" lives here rather than in
@@ -414,6 +484,41 @@ fn account_configs(entries: std::fs::ReadDir) -> Vec<PathBuf> {
 ///
 /// `seed` decides what a missing file means: the global config is created from
 /// nothing, while a per-account file is the client's to invent.
+/// Delete one dotted key, leaving the rest of the file alone.
+///
+/// A missing file or a key that was never there is success: the caller asked
+/// for it to be absent, and it is.
+fn remove_key(path: &Path, key: &str) -> Result<(), BattleNetError> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Ok(());
+    };
+    let mut config: Value = serde_json::from_str(&text)
+        .map_err(|e| BattleNetError::MalformedConfig { path: path.to_path_buf(), source: e })?;
+
+    let parts: Vec<&str> = key.split('.').collect();
+    let Some((last, parents)) = parts.split_last() else {
+        return Ok(());
+    };
+    let mut node = &mut config;
+    for parent in parents {
+        match node.get_mut(*parent) {
+            Some(next) => node = next,
+            None => return Ok(()),
+        }
+    }
+    let Some(object) = node.as_object_mut() else {
+        return Ok(());
+    };
+    if object.remove(*last).is_none() {
+        return Ok(());
+    }
+
+    let mut text = serde_json::to_string_pretty(&config)
+        .map_err(|e| BattleNetError::MalformedConfig { path: path.to_path_buf(), source: e })?;
+    text.push('\n');
+    write_atomic(path, text.as_bytes())
+}
+
 fn merge_file(path: &Path, tweaks: &[Tweak], seed: bool) -> Result<bool, BattleNetError> {
     let mut config = match std::fs::read_to_string(path) {
         Ok(text) => serde_json::from_str(&text)
@@ -644,6 +749,7 @@ pub fn provision(
     layout: &Layout,
     user: &str,
     installer: &Path,
+    managed: &[ProductCode],
 ) -> Result<SetupReport, BattleNetError> {
     if !layout.prefix().join("system.reg").is_file() {
         return Err(BattleNetError::PrefixNotReady(layout.prefix()));
@@ -656,7 +762,9 @@ pub fn provision(
 
     // Last, and only with nothing running: the client rewrites this file when
     // it exits, so an injection before the teardown above would be lost.
-    let config_path = configure(layout, user, &default_tweaks())?;
+    let mut tweaks = default_tweaks();
+    tweaks.extend(product_tweaks(managed));
+    let config_path = configure(layout, user, &tweaks)?;
     let account_configs = configure_accounts(layout, user, &account_tweaks())?;
 
     Ok(SetupReport {
@@ -929,6 +1037,59 @@ mod tests {
     /// resolve an unknown uid and falls back to the first family it knows,
     /// which is Warcraft III. Opening the client is the honest alternative.
     #[test]
+    fn only_managed_products_have_their_updates_switched_off() {
+        let tweaks = product_tweaks(&[ProductCode::Retail, ProductCode::ClassicEra]);
+        let keys: Vec<String> = tweaks.iter().map(Tweak::key).collect();
+
+        assert!(keys.contains(&"Games.wow.AutoUpdate".to_owned()));
+        assert!(keys.contains(&"Games.wow.DownloadAllUpdates".to_owned()));
+        assert!(keys.contains(&"Games.wow_classic_era.AutoUpdate".to_owned()));
+        assert!(tweaks.iter().all(|t| t.value == json!("false")));
+
+        // Nothing is generated for a product nobody asked about — the caller
+        // decides what is managed, and a hand-off title never reaches here.
+        assert!(product_tweaks(&[]).is_empty());
+    }
+
+    #[test]
+    fn the_download_limit_round_trips_and_clears() {
+        let dir = scratch("download-limit");
+        let layout = Layout::with_root(&dir);
+        let path = layout.battle_net_config("steamuser");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        // A file the client wrote, with settings that must survive.
+        std::fs::write(
+            &path,
+            r#"{"Client":{"Install":{"LastUserDownloadLimitNextPatchInBps":"1000000"},
+               "AutoLogin":"true"}}"#,
+        )
+        .unwrap();
+        assert_eq!(download_limit(&layout, "steamuser"), Some(1_000_000));
+
+        set_download_limit(&layout, "steamuser", Some(5_000_000)).unwrap();
+        assert_eq!(download_limit(&layout, "steamuser"), Some(5_000_000));
+
+        // Cleared means the key is gone, not zero — and the neighbours stay.
+        set_download_limit(&layout, "steamuser", None).unwrap();
+        assert_eq!(download_limit(&layout, "steamuser"), None);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("LastUserDownloadLimitNextPatchInBps"), "{text}");
+        assert!(text.contains("AutoLogin"), "unrelated settings were lost: {text}");
+
+        // Clearing again is success, not an error.
+        set_download_limit(&layout, "steamuser", None).unwrap();
+    }
+
+    #[test]
+    fn a_limit_on_a_machine_with_no_config_is_simply_absent() {
+        let layout = Layout::with_root(scratch("no-config"));
+        assert_eq!(download_limit(&layout, "steamuser"), None);
+        // And clearing one that was never there does not fail.
+        set_download_limit(&layout, "steamuser", None).unwrap();
+    }
+
+    #[test]
     fn a_product_with_no_known_family_opens_the_client_instead_of_guessing() {
         let dir = Path::new("/prefix/Battle.net");
         let unknown = Launch::product(ProductCode::Custom("turtle_wow".into()));
@@ -1007,7 +1168,7 @@ mod tests {
         let runner = ProtonRunner::new(&release, &layout, dir.join("Steam"));
 
         assert!(matches!(
-            provision(&runner, &layout, "steamuser", &dir.join("setup.exe")),
+            provision(&runner, &layout, "steamuser", &dir.join("setup.exe"), &[]),
             Err(BattleNetError::PrefixNotReady(_))
         ));
     }

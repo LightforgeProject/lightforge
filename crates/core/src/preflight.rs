@@ -426,6 +426,10 @@ impl DownloadGuard for NoDownloads {
 pub struct Preflight {
     /// Windows user inside the prefix, for locating the config files.
     user: String,
+    /// Products Lightforge downloads itself, whose Battle.net auto-update is
+    /// re-disabled on every pass — the client rewrites its config on exit, so
+    /// setting this once at install time does not hold.
+    managed: Vec<ProductCode>,
     grace: Duration,
     clear_agent_cache: bool,
     clear_staging: bool,
@@ -436,11 +440,18 @@ impl Preflight {
     pub fn new(user: impl Into<String>) -> Self {
         Self {
             user: user.into(),
+            managed: Vec::new(),
             grace: DEFAULT_GRACE,
             clear_agent_cache: true,
             clear_staging: true,
             reapply_config: true,
         }
+    }
+
+    /// Products whose Battle.net auto-update should stay off.
+    pub fn with_managed(mut self, managed: Vec<ProductCode>) -> Self {
+        self.managed = managed;
+        self
     }
 
     /// How long a process gets between `SIGTERM` and `SIGKILL`.
@@ -509,7 +520,9 @@ impl Preflight {
         // on every launch.
         let mut configs = Vec::new();
         if self.reapply_config {
-            configs.push(battlenet::configure(layout, &self.user, &battlenet::default_tweaks())?);
+            let mut tweaks = battlenet::default_tweaks();
+            tweaks.extend(battlenet::product_tweaks(&self.managed));
+            configs.push(battlenet::configure(layout, &self.user, &tweaks)?);
             configs.extend(battlenet::configure_accounts(
                 layout,
                 &self.user,

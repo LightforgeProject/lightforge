@@ -244,7 +244,13 @@ async fn install_battle_net(
         })
         .await?;
     }
-    Ok(battlenet::provision(runner, layout, &config.prefix_user, &installer)?)
+    Ok(battlenet::provision(
+        runner,
+        layout,
+        &config.prefix_user,
+        &installer,
+        &config.managed_products(),
+    )?)
 }
 
 /// Where a path came from, for the settings UI.

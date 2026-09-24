@@ -404,7 +404,12 @@ pub async fn preflight(
         // you get an unasked-for prefix upgrade between the two.
         let runner = runner_for(&layout, &code, runs)?;
         let mut guard = downloads;
+        let config = AppDirs::discover()
+            .ok()
+            .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
+            .unwrap_or_default();
         Preflight::new(Config::default().prefix_user)
+            .with_managed(config.managed_products())
             .run(&runner, &layout, Some(&code), &mut guard)
             // The report is for the CLI, which prints it. Here the outcome is
             // binary: the prefix is ready, or the launch does not happen.
@@ -462,6 +467,36 @@ pub async fn launch_via_battle_net(
 ///
 /// Read when the browse panel opens, never on a timer and never to decide
 /// what the header shows — it labels a list the user asked to see.
+/// Battle.net's own download limit, in MB/s, or `None` when it has none.
+pub async fn battle_net_limit(layout: Layout, user: String) -> Option<u64> {
+    tokio::task::spawn_blocking(move || {
+        lightforge_core::battlenet::download_limit(&layout, &user)
+            .map(|bps| bps / 1_000_000)
+            .filter(|mbps| *mbps > 0)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Set or clear Battle.net's own download limit, in MB/s.
+pub async fn set_battle_net_limit(
+    layout: Layout,
+    user: String,
+    mbps: Option<u64>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        lightforge_core::battlenet::set_download_limit(
+            &layout,
+            &user,
+            mbps.map(|mbps| mbps * 1_000_000),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The product codes Battle.net's own config lists, so the catalog can use
 /// the codes the client uses rather than the ones our table happens to carry.
 pub async fn known_codes(layout: Layout, user: String) -> Vec<String> {

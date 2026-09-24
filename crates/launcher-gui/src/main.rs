@@ -164,6 +164,12 @@ enum Message {
     DownloadLimitChanged(String),
     /// The pause-while-playing switch was flipped.
     PauseWhilePlaying(bool),
+    /// Battle.net's own limit, as read from its config.
+    BattleNetLimitRead(Option<u64>),
+    /// The Battle.net limit field changed.
+    BattleNetLimitChanged(String),
+    /// Writing that limit finished.
+    BattleNetLimitWritten(Result<(), String>),
     SaveSettings,
     CheckProton,
     ProtonChecked(Result<provision::ProtonReleases, String>),
@@ -395,6 +401,8 @@ struct Lightforge {
     assets_input: String,
     /// Editable copy of the download cap, in MB/s. Empty means unlimited.
     limit_input: String,
+    /// Editable copy of Battle.net's *own* cap, in MB/s. Empty means none.
+    bnet_limit_input: String,
     proton_notice: Option<String>,
     /// Stable releases that could be installed, newest first.
     proton_available: Vec<String>,
@@ -483,6 +491,7 @@ impl Lightforge {
             setup_running: false,
             assets_input,
             limit_input,
+            bnet_limit_input: String::new(),
             proton_notice: None,
             proton_available: Vec::new(),
             proton_choice: None,
@@ -515,7 +524,12 @@ impl Lightforge {
             tasks::known_codes(app.layout.clone(), app.config.prefix_user.clone()),
             Message::KnownCodes,
         );
-        let task = Task::batch([app.reload(selected.code), probe, installed, codes]);
+        let bnet_limit = Task::perform(
+            tasks::battle_net_limit(app.layout.clone(), app.config.prefix_user.clone()),
+            Message::BattleNetLimitRead,
+        );
+        let task =
+            Task::batch([app.reload(selected.code), probe, installed, codes, bnet_limit]);
         (app, task)
     }
 
@@ -1318,6 +1332,31 @@ impl Lightforge {
                     Ok(mbps) => Some(mbps),
                 };
                 self.save_config();
+                Task::none()
+            }
+
+            Message::BattleNetLimitRead(mbps) => {
+                self.bnet_limit_input = mbps.map(|v| v.to_string()).unwrap_or_default();
+                Task::none()
+            }
+
+            Message::BattleNetLimitChanged(value) => {
+                self.bnet_limit_input = value.chars().filter(char::is_ascii_digit).collect();
+                let mbps = self.bnet_limit_input.trim().parse::<u64>().ok().filter(|v| *v > 0);
+                Task::perform(
+                    tasks::set_battle_net_limit(
+                        self.layout.clone(),
+                        self.config.prefix_user.clone(),
+                        mbps,
+                    ),
+                    Message::BattleNetLimitWritten,
+                )
+            }
+
+            Message::BattleNetLimitWritten(result) => {
+                if let Err(e) = result {
+                    self.error = Some(e);
+                }
                 Task::none()
             }
 
@@ -2934,6 +2973,26 @@ impl Lightforge {
                 .align_y(Alignment::Center),
                 muted(
                     "Applies to game downloads. Proton builds and addons are not capped."
+                        .to_owned(),
+                    theme::CAPTION,
+                ),
+                row![
+                    muted("Battle.net's limit".to_owned(), theme::LABEL)
+                        .width(Length::Fixed(150.0)),
+                    text_input("none", &self.bnet_limit_input)
+                        .on_input(Message::BattleNetLimitChanged)
+                        .style(theme::field)
+                        .size(theme::BODY)
+                        .padding(theme::SM)
+                        .width(Length::Fixed(110.0)),
+                    muted("MB/s".to_owned(), theme::LABEL),
+                ]
+                .spacing(theme::MD)
+                .align_y(Alignment::Center),
+                muted(
+                    "Battle.net's own cap, for what it downloads. Read from its config and \
+                     written back; clearing the field removes the setting and restores its \
+                     default."
                         .to_owned(),
                     theme::CAPTION,
                 ),

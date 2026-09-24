@@ -202,6 +202,19 @@ impl Config {
         self.download_limit_mbps.unwrap_or(0).saturating_mul(BYTES_PER_MB)
     }
 
+    /// Every configured product Lightforge downloads itself.
+    ///
+    /// The set whose Battle.net auto-update has to stay off: two programs
+    /// patching one CASC store is the corruption pre-flight exists to
+    /// prevent. A hand-off title is Battle.net's to update and is never here.
+    pub fn managed_products(&self) -> Vec<ProductCode> {
+        self.products
+            .iter()
+            .map(|product| product.code.clone())
+            .filter(|code| crate::product::Kind::of(code) == crate::product::Kind::Managed)
+            .collect()
+    }
+
     /// The Proton build Battle.net and Agent launch under.
     ///
     /// Its own pin rather than the selected product's: the client and Agent

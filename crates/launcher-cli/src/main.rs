@@ -712,7 +712,11 @@ async fn main() -> Result<()> {
                 println!("running setup — this takes a few minutes");
             }
 
-            let report = battlenet::provision(&runner, &layout, &user, &installer_path)
+            let managed = Config::load_or_default(&dirs.config_file())
+                .map(|c| c.managed_products())
+                .unwrap_or_default();
+            let report =
+                battlenet::provision(&runner, &layout, &user, &installer_path, &managed)
                 .context("setting Battle.net up")?;
             if report.install.skipped {
                 println!("battle.net      already installed");
@@ -777,7 +781,7 @@ async fn main() -> Result<()> {
             let mut downloads = NoDownloads;
             let mut download_paused = false;
             if !skip_preflight {
-                let report = Preflight::new(Config::default().prefix_user)
+                let report = Preflight::new(Config::default().prefix_user).with_managed(managed_products())
                     .run(&runner, &layout, code.as_ref(), &mut downloads)
                     .context("pre-flight cleanup")?;
                 print_preflight(&report);
@@ -843,7 +847,7 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let report = Preflight::new(Config::default().prefix_user)
+            let report = Preflight::new(Config::default().prefix_user).with_managed(managed_products())
                 .run(&runner, &layout, Some(&code), &mut NoDownloads)
                 .context("pre-flight cleanup")?;
             print_preflight(&report);
@@ -883,7 +887,7 @@ async fn main() -> Result<()> {
             let (runner, build) = proton_runner(&layout, proton.as_deref())?;
             println!("using {} ({})", build.version, build.path.display());
 
-            let report = Preflight::new(Config::default().prefix_user)
+            let report = Preflight::new(Config::default().prefix_user).with_managed(managed_products())
                 .with_grace(std::time::Duration::from_secs(grace))
                 .run(&runner, &layout, code.as_ref(), &mut NoDownloads)
                 .context("pre-flight cleanup")?;
@@ -2317,6 +2321,18 @@ fn battle_net_pin(explicit: Option<&str>) -> Option<&str> {
     let config = Config::load_or_default(&dirs.config_file()).ok()?;
     let version = config.battle_net_proton_version()?.to_owned();
     Some(Box::leak(version.into_boxed_str()))
+}
+
+/// Products Lightforge patches, read fresh from `config.toml`.
+///
+/// Read per call rather than threaded through: pre-flight runs once per
+/// launch, and a stale list here would leave a product's auto-update on.
+fn managed_products() -> Vec<lightforge_core::product::ProductCode> {
+    AppDirs::discover()
+        .ok()
+        .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
+        .map(|config| config.managed_products())
+        .unwrap_or_default()
 }
 
 /// Resolve the Proton build to run against the shared prefix, and a runner for
