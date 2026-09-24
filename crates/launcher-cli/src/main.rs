@@ -1164,6 +1164,9 @@ async fn main() -> Result<()> {
                 Event::ProductDb { path } => {
                     println!(".product.db     {}", path.display())
                 }
+                Event::Registered { code } => {
+                    println!("registered      {code} in Agent's product.db")
+                }
                 Event::Incomplete { reasons } => {
                     println!("\n.build.info     NOT written — this run is not a complete install");
                     for reason in reasons {

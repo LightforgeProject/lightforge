@@ -72,6 +72,13 @@ pub struct Options {
     /// `C:/Program Files (x86)/World of Warcraft`. `None` skips writing
     /// `.product.db`, which only matters for Battle.net adoption.
     pub windows_path: Option<String>,
+    /// Agent's own directory, whose `product.db` decides whether Battle.net
+    /// shows `Play` or `Install` for a product Lightforge downloaded.
+    ///
+    /// `None` skips the registration — there is nothing to merge into on a
+    /// machine with no Battle.net, and a CLI run against a bare directory has
+    /// no prefix to speak of.
+    pub agent_dir: Option<PathBuf>,
     /// Account and GeoIP country, as Agent would record them. Empty is fine.
     pub account_country: String,
     pub geo_country: String,
@@ -94,6 +101,7 @@ impl Default for Options {
             limit_runs: None,
             skip_loose: false,
             windows_path: Some(crate::paths::WINDOWS_WOW_PATH.to_owned()),
+            agent_dir: None,
             account_country: String::new(),
             geo_country: String::new(),
         }
@@ -175,6 +183,11 @@ pub enum Event {
     },
     ProductDb {
         path: PathBuf,
+    },
+    /// The product was merged into Agent's registry, so Battle.net lists it
+    /// as installed without being asked to look for it.
+    Registered {
+        code: String,
     },
     /// The run finished short of a complete install, and why.
     Incomplete {
@@ -474,8 +487,21 @@ pub async fn execute(
                 windows_path,
             )?
             .with_countries(&options.account_country, &options.geo_country);
-            let path = crate::tact::productdb::write(dest, &[record])?;
+            let path = crate::tact::productdb::write(dest, std::slice::from_ref(&record))?;
             on_event(Event::ProductDb { path });
+
+            // And into Agent's own registry, which is the list the client
+            // builds its library from. Without this the tile reads `Install`
+            // until the user asks Battle.net to locate the game — it adopts
+            // fine, but only after a scan nobody should have to trigger.
+            //
+            // Skipped silently when there is no registry to merge into, or
+            // when it cannot be read back: see `productdb::register`.
+            if let Some(agent_dir) = &options.agent_dir {
+                if crate::tact::productdb::register(agent_dir, std::slice::from_ref(&record))? {
+                    on_event(Event::Registered { code: code.as_str().to_owned() });
+                }
+            }
         }
         Some(remote.versions_name.clone())
     } else {

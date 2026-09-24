@@ -215,6 +215,147 @@ pub fn encode(installs: &[ProductInstall]) -> Vec<u8> {
     out
 }
 
+/// Merge `installs` into an existing `product.db`, leaving every other record
+/// exactly as it was found.
+///
+/// **Why splicing rather than decode-and-re-encode.** Agent's registry holds
+/// products Lightforge has nothing to do with — the client itself, Agent, a
+/// Hearthstone somebody installed through Battle.net — and [`decode`] reads
+/// four fields out of a record that has dozens. Rebuilding the file from what
+/// we understood would quietly drop the rest, and a Battle.net that has
+/// forgotten an install is a far worse outcome than a tile that says Install.
+///
+/// So each existing record is kept as the raw bytes it arrived as. Only a
+/// record whose product code matches one of `installs` is replaced, and codes
+/// not already present are appended.
+///
+/// Bytes that are not a readable record sequence are left alone entirely: the
+/// result is `None`, and the caller writes nothing rather than overwriting a
+/// file it did not understand.
+pub fn splice(existing: &[u8], installs: &[ProductInstall]) -> Option<Vec<u8>> {
+    /// One top-level field, kept exactly as it arrived.
+    struct Item {
+        /// Field number. `1` is a product record; a real registry also holds
+        /// others after them, which are none of our business but must survive.
+        field: u32,
+        raw: Vec<u8>,
+        /// Product code, when this is a record we could read one out of.
+        code: Option<String>,
+    }
+
+    let mut items: Vec<Item> = Vec::new();
+    let mut at = 0usize;
+    while at < existing.len() {
+        let start = at;
+        let (key, used) = read_varint(existing.get(at..)?)?;
+        at += used;
+        let field = u32::try_from(key >> 3).ok()?;
+
+        let mut payload = None;
+        match key & 7 {
+            0 => at += read_varint(existing.get(at..)?)?.1,
+            1 => at = at.checked_add(8).filter(|end| *end <= existing.len())?,
+            2 => {
+                let (len, used) = read_varint(existing.get(at..)?)?;
+                at += used;
+                let len = usize::try_from(len).ok()?;
+                let end = at.checked_add(len).filter(|end| *end <= existing.len())?;
+                payload = Some(existing.get(at..end)?);
+                at = end;
+            }
+            5 => at = at.checked_add(4).filter(|end| *end <= existing.len())?,
+            // Groups left the wire format decades ago; this is not the file.
+            _ => return None,
+        }
+
+        let code = match field == 1 {
+            true => payload.and_then(decode_install).map(|i| i.product),
+            false => None,
+        };
+        items.push(Item { field, raw: existing.get(start..at)?.to_vec(), code });
+    }
+
+    // Replace what we already own, and collect what has to be added.
+    let mut fresh: Vec<Vec<u8>> = Vec::new();
+    for install in installs {
+        let mut encoded = Vec::new();
+        message_field(&mut encoded, 1, &install.encode());
+        match items.iter_mut().find(|item| item.code.as_deref() == Some(&install.product)) {
+            Some(item) => item.raw = encoded,
+            None => fresh.push(encoded),
+        }
+    }
+
+    // New records go with the other records rather than at the end of the
+    // file: field order is free in protobuf, but a registry that still looks
+    // like one Agent wrote is easier to reason about when something breaks.
+    let after_records = items.iter().rposition(|item| item.field == 1).map_or(0, |at| at + 1);
+    let mut out = Vec::new();
+    for item in &items[..after_records] {
+        out.extend_from_slice(&item.raw);
+    }
+    for record in &fresh {
+        out.extend_from_slice(record);
+    }
+    for item in &items[after_records..] {
+        out.extend_from_slice(&item.raw);
+    }
+    Some(out)
+}
+
+/// Read one varint, returning its value and how many bytes it used.
+fn read_varint(bytes: &[u8]) -> Option<(u64, usize)> {
+    let mut value = 0u64;
+    for (i, byte) in bytes.iter().enumerate().take(10) {
+        value |= u64::from(byte & 0x7f) << (7 * i);
+        if byte & 0x80 == 0 {
+            return Some((value, i + 1));
+        }
+    }
+    None
+}
+
+/// Register `installs` in Agent's own registry, the list the client builds its
+/// library from.
+///
+/// This is what decides whether a freshly downloaded product shows `Play` or
+/// `Install`: the per-install `.product.db` is only read once the user asks
+/// Battle.net to locate a game, while this file is read at startup.
+///
+/// Must run with nothing alive in the prefix — Agent rewrites this file as it
+/// exits, so a write while it is up is simply lost.
+///
+/// A file that cannot be parsed is left untouched and reported as `false`,
+/// because the alternative is replacing somebody's library with ours.
+pub fn register(agent_dir: &Path, installs: &[ProductInstall]) -> Result<bool, ProductDbError> {
+    let path = agent_dir.join("product.db");
+    let existing = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        // No registry yet: seeding one with only our products would tell the
+        // client its own components are missing.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(source) => return Err(ProductDbError::Io { path, source }),
+    };
+
+    let Some(merged) = splice(&existing, installs) else {
+        return Ok(false);
+    };
+    if merged == existing {
+        return Ok(false);
+    }
+
+    let temp = agent_dir.join("product.db.lightforge-tmp");
+    std::fs::write(&temp, &merged).map_err(|source| ProductDbError::Io {
+        path: temp.clone(),
+        source,
+    })?;
+    std::fs::rename(&temp, &path).map_err(|source| ProductDbError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(true)
+}
+
 /// Write `.product.db` into an install root, atomically.
 ///
 /// Agent reads this file while it runs, so it is written to a temporary file in
@@ -737,6 +878,116 @@ mod read_tests {
         assert_eq!(read[0].install_path, install.install_path);
         assert_eq!(read[0].version.as_deref(), Some(install.version.as_str()));
         assert_eq!(read[0].family, install.family);
+    }
+
+    fn install(product: &str, version: &str) -> ProductInstall {
+        ProductInstall {
+            product: product.into(),
+            install_path: "C:/Program Files (x86)/World of Warcraft".into(),
+            region: "eu".into(),
+            locale: "enUS".into(),
+            account_country: "AUT".into(),
+            geo_country: "AT".into(),
+            flavor_dir: "_retail_".into(),
+            version: version.into(),
+            build_key: "a".repeat(32),
+            tags: "Windows x86_64".into(),
+            key_ring: None,
+            family: "wow".into(),
+            installed_at_ms: 0,
+        }
+    }
+
+    /// The whole reason this is a splice: Agent's registry holds records with
+    /// fields `decode` never looks at, and rebuilding the file from what we
+    /// understood would drop them. Losing a record means Battle.net forgets
+    /// an install.
+    #[test]
+    fn records_we_do_not_own_survive_byte_for_byte() {
+        // A record with a field the reader ignores entirely.
+        let mut theirs = Vec::new();
+        string_field(&mut theirs, 1, "hs_beta");
+        let mut settings = Vec::new();
+        string_field(&mut settings, 1, "C:/Program Files (x86)/Hearthstone");
+        message_field(&mut theirs, 3, &settings);
+        string_field(&mut theirs, 8, r#"{"something":"we never parse"}"#);
+        varint_field(&mut theirs, 7, 12345);
+
+        let mut existing = Vec::new();
+        message_field(&mut existing, 1, &theirs);
+        message_field(&mut existing, 1, &install("wow", "1.0.0").encode());
+
+        let merged = splice(&existing, &[install("wow", "2.0.0")]).expect("a readable registry");
+
+        // Their record is present unchanged, ours is updated, nothing added.
+        assert!(
+            merged.windows(theirs.len()).any(|w| w == theirs),
+            "a record we do not own was rewritten"
+        );
+        let read = decode(&merged);
+        assert_eq!(read.len(), 2);
+        assert_eq!(read[0].product, "hs_beta");
+        assert_eq!(read[1].product, "wow");
+        assert_eq!(read[1].version.as_deref(), Some("2.0.0"));
+    }
+
+    #[test]
+    fn a_product_the_registry_has_never_seen_is_appended() {
+        let mut existing = Vec::new();
+        message_field(&mut existing, 1, &install("wow", "1.0.0").encode());
+
+        let merged = splice(&existing, &[install("wow_classic_era", "1.15.0")]).unwrap();
+        let read = decode(&merged);
+        assert_eq!(read.len(), 2);
+        assert_eq!(read[1].product, "wow_classic_era");
+    }
+
+    /// Anything we cannot read back is left alone. Replacing a library we did
+    /// not understand is the failure this exists to avoid.
+    #[test]
+    fn an_unreadable_registry_is_never_rewritten() {
+        assert!(splice(b"not a protobuf at all", &[install("wow", "1.0.0")]).is_none());
+
+        // A trailing partial record is not a file we may rewrite either.
+        let mut truncated = Vec::new();
+        message_field(&mut truncated, 1, &install("wow", "1.0.0").encode());
+        truncated.push(0x0a);
+        truncated.push(0xff);
+        assert!(splice(&truncated, &[install("wow", "1.0.0")]).is_none());
+
+    }
+
+    /// A real registry carries top-level fields after the records — field 5
+    /// and field 6 in Gabriel's. Treating those as corruption refused to
+    /// register anything at all, which is how this was found.
+    #[test]
+    fn top_level_fields_that_are_not_records_are_carried_through() {
+        let mut existing = Vec::new();
+        message_field(&mut existing, 1, &install("wow", "1.0.0").encode());
+        message_field(&mut existing, 5, &[1, 2, 3, 4, 5, 6, 7, 8]);
+        varint_field(&mut existing, 6, 1);
+        let tail = existing[existing.len() - 13..].to_vec();
+
+        let merged = splice(&existing, &[install("wow_classic_era", "1.15.0")])
+            .expect("a registry with trailing fields is still readable");
+
+        // The trailing fields survive, and the new record went in with the
+        // records rather than after them.
+        assert!(merged.ends_with(&tail), "trailing top-level fields were lost");
+        let read = decode(&merged);
+        assert_eq!(read.len(), 2);
+        assert_eq!(read[1].product, "wow_classic_era");
+    }
+
+    #[test]
+    fn registering_into_a_missing_registry_does_nothing() {
+        let dir = std::env::temp_dir().join("lightforge-registry-absent");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Seeding a registry that holds only our products would tell the
+        // client its own components are gone.
+        assert!(!register(&dir, &[install("wow", "1.0.0")]).unwrap());
+        assert!(!dir.join("product.db").exists());
     }
 
     #[test]

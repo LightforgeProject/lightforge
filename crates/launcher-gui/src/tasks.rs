@@ -256,6 +256,9 @@ pub async fn download(
                     // is not.
                     checkpoint_bytes: 512 * 1024 * 1024,
                     limit_bytes_per_second,
+                    // So Battle.net lists the product as installed rather than
+                    // offering to install what is already there.
+                    agent_dir: Some(layout.agent_dir()),
                     ..InstallOptions::default()
                 };
 
@@ -329,7 +332,8 @@ fn describe(event: &Event) -> String {
         Event::InstallFile { path, .. } => format!("extracting {}", path.display()),
         Event::Extracted { files, .. } => format!("extracted {files} install files"),
         Event::BuildInfo { version, .. } => format!("finished — {version}"),
-        Event::ProductDb { .. } => "registered with Battle.net".to_owned(),
+        Event::ProductDb { .. } => "writing .product.db".to_owned(),
+        Event::Registered { .. } => "registered with Battle.net".to_owned(),
         Event::Incomplete { reasons } => format!("incomplete: {}", reasons.join(", ")),
     }
 }
