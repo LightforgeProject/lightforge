@@ -836,16 +836,34 @@ async fn main() -> Result<()> {
 
             let dirs = AppDirs::discover().context("resolving XDG directories")?;
             let (runner, build) = proton_runner(&layout, proton.as_deref())?;
-            let runner = runner
+            let mut runner = runner
                 .with_compat_mount(&target)
                 // Per-product shader cache: the prefix is shared, so pooling
                 // it would mean a Proton swap for one product discarding
                 // another's accumulated shaders.
                 .with_shader_cache(dirs.shader_cache_dir(&code));
 
+            // The same per-product settings the GUI's Game Optimizations panel
+            // writes. A launcher that honoured them from one entry point and
+            // not the other would make every measurement unreproducible.
+            let tweaks = Config::load_or_default(&dirs.config_file())
+                .ok()
+                .and_then(|config| config.product(&code).map(|p| p.profile.tweaks.clone()))
+                .unwrap_or_default();
+            let tools = lightforge_core::tweaks::HostTools::detect();
+            for (key, value) in tweaks.environment(&tools) {
+                runner = runner.with_env(key, value);
+            }
+
             println!("using {} ({})", build.version, build.path.display());
             println!("install {}", target.display());
             println!("running {}", exe.display());
+            let wrappers = tweaks.wrappers(&tools);
+            if !wrappers.is_empty() {
+                let names: Vec<String> =
+                    wrappers.iter().map(|w| w.display().to_string()).collect();
+                println!("through  {}", names.join(" "));
+            }
             if dry_run {
                 return Ok(());
             }
@@ -855,10 +873,25 @@ async fn main() -> Result<()> {
                 .context("pre-flight cleanup")?;
             print_preflight(&report);
 
-            let status = runner
-                .command("run", &exe, Vec::<String>::new())
-                .status()
-                .context("launching the game")?;
+            // After pre-flight, with the client closed: it rewrites Config.wtf
+            // from memory on exit, so anything set once is not still set.
+            let (set, unset) = tweaks.cvars();
+            match lightforge_core::cvars::apply(
+                &layout.wtf_dir(&code).join("Config.wtf"),
+                &set,
+                &unset,
+            ) {
+                Ok(0) => {}
+                Ok(n) => println!("applied {n} client setting(s)"),
+                Err(e) => eprintln!("could not apply client settings: {e}"),
+            }
+
+            let status = lightforge_core::tweaks::wrapped(
+                runner.command("run", &exe, Vec::<String>::new()),
+                &wrappers,
+            )
+            .status()
+            .context("launching the game")?;
             match status.code() {
                 Some(0) | None => println!("exited"),
                 Some(code) => println!("exited with code {code}"),

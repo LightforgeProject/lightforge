@@ -580,6 +580,9 @@ pub struct ProductProfile {
     pub realmlist_override: Option<String>,
     /// CDN/patch endpoint override used by the downloader, if set.
     pub cdn_override: Option<String>,
+    /// Performance settings for this product: launch wrappers, environment,
+    /// and the client CVars Lightforge re-asserts before each launch.
+    pub tweaks: crate::tweaks::Tweaks,
     pub prefix_state: PrefixState,
 }
 

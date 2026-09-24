@@ -20,6 +20,7 @@ use lightforge_core::state::Local;
 use lightforge_core::tact::download::{Cancel, Downloads, Progress};
 use lightforge_core::tact::install::{self, Event, Options as InstallOptions, Summary};
 use lightforge_core::tact::version::{self, Region, Version};
+use lightforge_core::tweaks::{HostTools, Tweaks};
 
 /// One product's situation, as of a refresh.
 #[derive(Debug, Clone)]
@@ -439,11 +440,27 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
             return Err(format!("no game at {}", exe.display()));
         }
 
+        let (tweaks, tools) = tweaks_for(&code);
+
+        // Re-asserted here, not when the toggle was flipped: the client
+        // rewrites Config.wtf from memory every time it exits, so a value
+        // written once is a value the next session may well have thrown away.
+        // This runs behind the pre-flight gate, with the client closed.
+        let cvars = layout.wtf_dir(&code).join("Config.wtf");
+        let (set, unset) = tweaks.cvars();
+        if let Err(e) = lightforge_core::cvars::apply(&cvars, &set, &unset) {
+            // Not fatal. A settings file Lightforge could not write is a
+            // worse game, not an unplayable one, and refusing to launch over
+            // it would be the wrong trade.
+            eprintln!("lightforge: could not apply client settings: {e}");
+        }
+
         let runner = runner_for(&layout, &code, Runs::Game)?;
-        let status = runner
-            .command("run", &exe, Vec::<String>::new())
-            .status()
-            .map_err(|e| e.to_string())?;
+        let mut launch = lightforge_core::tweaks::wrapped(
+            runner.command("run", &exe, Vec::<String>::new()),
+            &tweaks.wrappers(&tools),
+        );
+        let status = launch.status().map_err(|e| e.to_string())?;
         Ok(format!("game exited ({status})"))
     })
     .await
@@ -581,13 +598,34 @@ fn runner_for(
         .ok_or_else(|| "no supported Proton-GE build installed".to_owned())?;
 
     let target = std::fs::read_link(layout.wow_symlink()).unwrap_or_else(|_| layout.wow_install());
-    Ok(
+    let mut runner =
         ProtonRunner::new(build, layout, ProtonRunner::steam_client_path(steam.as_ref(), &dirs))
             .with_compat_mount(&target)
             // The prefix is shared, so pooling the shader cache would mean one
             // product's Proton swap discarding another's shaders.
-            .with_shader_cache(dirs.shader_cache_dir(code)),
-    )
+            .with_shader_cache(dirs.shader_cache_dir(code));
+
+    // Only the game: Battle.net and Agent are a different workload, and a
+    // frame overlay or a power profile held for the storefront is not what the
+    // toggle asked for.
+    if runs == Runs::Game {
+        let tweaks =
+            config.product(code).map(|p| p.profile.tweaks.clone()).unwrap_or_default();
+        for (key, value) in tweaks.environment(&HostTools::detect()) {
+            runner = runner.with_env(key, value);
+        }
+    }
+    Ok(runner)
+}
+
+/// One product's performance settings, and what this machine can honour.
+fn tweaks_for(code: &ProductCode) -> (Tweaks, HostTools) {
+    let tweaks = AppDirs::discover()
+        .ok()
+        .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
+        .and_then(|config| config.product(code).map(|p| p.profile.tweaks.clone()))
+        .unwrap_or_default();
+    (tweaks, HostTools::detect())
 }
 
 /// The Proton build that would be used, for the debug bundle.

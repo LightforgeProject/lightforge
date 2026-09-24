@@ -45,6 +45,7 @@ use lightforge_core::proton::ProtonPin;
 use lightforge_core::setup::Status as SetupStatus;
 use lightforge_core::tact::download::Cancel;
 use lightforge_core::tact::version::Region;
+use lightforge_core::tweaks::{GraphicsApi, HostTools, Tweaks};
 
 use tasks::{Refreshed, SharedDownloads, TransferState};
 
@@ -150,6 +151,19 @@ enum Message {
     ManageSubscription,
     OpenFiles,
     CopyDebug,
+    /// A switch on the Game Optimizations panel was flipped.
+    Tweak(Tweak, bool),
+    /// The graphics API the client should ask for.
+    TweakApi(ApiChoice),
+    TweakFpsCap(String),
+    TweakSpellQueue(String),
+    /// Key and value fields of the environment escape hatch.
+    TweakEnvKey(String),
+    TweakEnvValue(String),
+    TweakEnvAdd,
+    TweakEnvRemove(String),
+    /// Throw away this product's shader cache, e.g. after a Proton swap.
+    ClearShaderCache,
 
     Show(Screen),
     SetupStatus(Option<Box<SetupStatus>>),
@@ -217,6 +231,40 @@ enum Screen {
     Setup,
     Settings,
     Addons,
+    /// Per-product performance settings.
+    Tweaks,
+}
+
+/// One switch on the Game Optimizations panel.
+///
+/// A single message with a discriminant rather than a variant each: the panel
+/// is a list of independent booleans, and fifteen near-identical messages would
+/// only obscure that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tweak {
+    GamePerformance,
+    GameMode,
+    MangoHud,
+    SkipAddonProfiling,
+    ReduceRaidEffects,
+    FasterZoneLoads,
+    RawMouse,
+    NoScreenEffects,
+    MaxDrawDistance,
+}
+
+/// A graphics API in a picker, or the "leave the client's own choice alone"
+/// entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ApiChoice(Option<GraphicsApi>);
+
+impl std::fmt::Display for ApiChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Some(api) => f.write_str(api.label()),
+            None => f.write_str("Whatever the client picks"),
+        }
+    }
 }
 
 /// A Proton build in a picker, or the "follow the default" entry.
@@ -411,6 +459,17 @@ struct Lightforge {
     /// Measured size of each installed build, keyed by its directory.
     proton_sizes: HashMap<PathBuf, u64>,
 
+    /// Optional performance tools this machine has, detected once at startup.
+    /// A toggle for a binary that is not installed is a launch failure waiting
+    /// to happen, so the panel hides what is missing.
+    tools: HostTools,
+    /// Editable copies of the selected product's numeric tweaks, and the two
+    /// fields of the environment escape hatch.
+    fps_input: String,
+    spell_input: String,
+    env_key_input: String,
+    env_value_input: String,
+
     addons: addonwork::Listing,
     token_input: String,
     addon_rx: Option<tokio::sync::watch::Receiver<addonwork::Progress>>,
@@ -496,6 +555,11 @@ impl Lightforge {
             proton_available: Vec::new(),
             proton_choice: None,
             proton_sizes: HashMap::new(),
+            tools: HostTools::detect(),
+            fps_input: String::new(),
+            spell_input: String::new(),
+            env_key_input: String::new(),
+            env_value_input: String::new(),
             addons: addonwork::Listing::default(),
             token_input: String::new(),
             addon_rx: None,
@@ -508,6 +572,8 @@ impl Lightforge {
             searching: false,
             updates: Vec::new(),
         };
+        let mut app = app;
+        app.load_tweak_inputs();
 
         // What is provisioned decides which screen opens: a machine that has
         // never run the CLI cannot install or launch anything, and a dashboard
@@ -1668,7 +1734,121 @@ impl Lightforge {
                 self.status = "debug info copied".to_owned();
                 iced::clipboard::write(info.render())
             }
+
+            Message::Tweak(which, on) => {
+                self.edit_tweaks(|tweaks| match which {
+                    // Stored as an explicit refusal rather than a bare `false`:
+                    // the default is on wherever the tool exists, so "off" has
+                    // to be recorded to survive a restart.
+                    Tweak::GamePerformance => tweaks.game_performance = Some(on),
+                    Tweak::GameMode => tweaks.gamemode = on,
+                    Tweak::MangoHud => tweaks.mangohud = on,
+                    Tweak::SkipAddonProfiling => tweaks.skip_addon_profiling = on,
+                    Tweak::ReduceRaidEffects => tweaks.reduce_raid_effects = on,
+                    Tweak::FasterZoneLoads => tweaks.faster_zone_loads = on,
+                    Tweak::RawMouse => tweaks.raw_mouse = on,
+                    Tweak::NoScreenEffects => tweaks.no_screen_effects = on,
+                    Tweak::MaxDrawDistance => tweaks.max_draw_distance = on,
+                });
+                Task::none()
+            }
+
+            Message::TweakApi(ApiChoice(api)) => {
+                self.edit_tweaks(|tweaks| tweaks.graphics_api = api);
+                Task::none()
+            }
+
+            Message::TweakFpsCap(value) => {
+                // Digits only: a frame cap that is not a number is not a cap.
+                // Clearing it is how you say uncapped.
+                self.fps_input = value.chars().filter(char::is_ascii_digit).collect();
+                let cap = self.fps_input.parse::<u32>().ok().filter(|n| *n > 0);
+                self.edit_tweaks(|tweaks| tweaks.fps_cap = cap);
+                Task::none()
+            }
+
+            Message::TweakSpellQueue(value) => {
+                self.spell_input = value.chars().filter(char::is_ascii_digit).collect();
+                let ms = self.spell_input.parse::<u32>().ok().filter(|n| *n > 0);
+                self.edit_tweaks(|tweaks| tweaks.spell_queue_ms = ms);
+                Task::none()
+            }
+
+            Message::TweakEnvKey(value) => {
+                // No spaces or `=`: the two halves are separate fields here,
+                // and a key holding either would not survive the environment.
+                self.env_key_input =
+                    value.chars().filter(|c| !c.is_whitespace() && *c != '=').collect();
+                Task::none()
+            }
+
+            Message::TweakEnvValue(value) => {
+                self.env_value_input = value;
+                Task::none()
+            }
+
+            Message::TweakEnvAdd => {
+                let key = std::mem::take(&mut self.env_key_input);
+                let value = std::mem::take(&mut self.env_value_input);
+                if !key.is_empty() {
+                    self.edit_tweaks(|tweaks| {
+                        tweaks.env.insert(key, value);
+                    });
+                }
+                Task::none()
+            }
+
+            Message::TweakEnvRemove(key) => {
+                self.edit_tweaks(|tweaks| {
+                    tweaks.env.remove(&key);
+                });
+                Task::none()
+            }
+
+            Message::ClearShaderCache => {
+                let Some(dirs) = self.dirs.as_ref() else {
+                    self.error = Some("no cache directory available".to_owned());
+                    return Task::none();
+                };
+                // Per product, so this cannot take another product's shaders
+                // with it — the reason the cache is keyed that way at all.
+                let dir = dirs.shader_cache_dir(&self.selected.code);
+                match std::fs::remove_dir_all(&dir) {
+                    Ok(()) => self.status = "shader cache cleared".to_owned(),
+                    // Nothing there is the desired end state, not a failure.
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        self.status = "no shader cache to clear".to_owned()
+                    }
+                    Err(e) => self.error = Some(format!("{}: {e}", dir.display())),
+                }
+                Task::none()
+            }
         }
+    }
+
+    /// This product's performance settings.
+    fn tweaks(&self) -> Tweaks {
+        self.config
+            .product(&self.selected.code)
+            .map(|p| p.profile.tweaks.clone())
+            .unwrap_or_default()
+    }
+
+    /// Change them and persist, which is what every switch on the panel does.
+    fn edit_tweaks(&mut self, edit: impl FnOnce(&mut Tweaks)) {
+        if let Some(product) = self.config.product_mut(&self.selected.code) {
+            edit(&mut product.profile.tweaks);
+        }
+        self.save_config();
+    }
+
+    /// Refill the numeric fields from the selected product's settings.
+    fn load_tweak_inputs(&mut self) {
+        let tweaks = self.tweaks();
+        self.fps_input = tweaks.fps_cap.map(|v| v.to_string()).unwrap_or_default();
+        self.spell_input = tweaks.spell_queue_ms.map(|v| v.to_string()).unwrap_or_default();
+        self.env_key_input.clear();
+        self.env_value_input.clear();
     }
 
     /// Persist the config, surfacing a write failure rather than swallowing it.
@@ -1720,6 +1900,7 @@ impl Lightforge {
             Screen::Setup => self.setup_screen(),
             Screen::Settings => self.settings(),
             Screen::Addons => self.addons_screen(),
+            Screen::Tweaks => self.tweaks_screen(),
         };
 
         // The manager hangs under its button on every screen, not just the
@@ -2163,6 +2344,9 @@ impl Lightforge {
         self.remote = None;
         self.branding = None;
         self.status = "checking…".to_owned();
+        // These are per-product, so they follow the selection rather than
+        // carrying Retail's frame cap over to Classic's panel.
+        self.load_tweak_inputs();
         self.reload(choice.code)
     }
 
@@ -2337,6 +2521,20 @@ impl Lightforge {
 
         left = left.push(
             row![
+                // Addons are already per-product — the screen titles itself
+                // with the selection and every task takes its code — so this
+                // is navigation, not a second copy of it. Disabled until
+                // there is an install to put an addon into.
+                button(text("Manage Addons").size(theme::LABEL))
+                    .on_press_maybe(
+                        self.local.version.is_some().then_some(Message::Show(Screen::Addons))
+                    )
+                    .style(theme::ghost)
+                    .padding([theme::XS, theme::SM]),
+                button(text("Game Optimizations").size(theme::LABEL))
+                    .on_press(Message::Show(Screen::Tweaks))
+                    .style(theme::ghost)
+                    .padding([theme::XS, theme::SM]),
                 button(text("Manage Subscription").size(theme::LABEL))
                     .on_press(Message::ManageSubscription)
                     .style(theme::ghost)
@@ -2388,6 +2586,263 @@ impl Lightforge {
             .padding(theme::LG)
             .style(theme::floating)
             .into()
+    }
+
+    /// Per-product performance settings: what this machine can do for the
+    /// game, and what the client should be told to do for itself.
+    fn tweaks_screen(&self) -> Element<'_, Message> {
+        let tweaks = self.tweaks();
+
+        let check = |label: &'static str, which: Tweak, on: bool| {
+            iced::widget::checkbox(label, on)
+                .on_toggle(move |on| Message::Tweak(which, on))
+                .text_size(theme::BODY)
+        };
+        let heading = |title: &'static str| text(title).size(theme::HEADING);
+
+        // Host tools. Detected, never assumed: the toggles that are missing
+        // are missing because the binary is, and saying so beats a switch that
+        // silently does nothing.
+        let mut host = column![heading("This machine")].spacing(theme::SM);
+        match self.tools.game_performance.is_some() {
+            true => {
+                host = host.push(check(
+                    "Hold the CPU on its performance profile while playing",
+                    Tweak::GamePerformance,
+                    tweaks.wants_game_performance(),
+                ));
+                host = host.push(muted(
+                    "Launches through CachyOS' game-performance, which also keeps the session \
+                     from idling. On by default where it exists; it stands aside on hardware \
+                     with no performance profile."
+                        .to_owned(),
+                    theme::CAPTION,
+                ));
+            }
+            false => {
+                host = host.push(muted(
+                    "game-performance is not installed, so the CPU power profile is left \
+                     to the system."
+                        .to_owned(),
+                    theme::CAPTION,
+                ));
+            }
+        }
+        if self.tools.gamemode.is_some() {
+            host = host.push(check("Launch through GameMode", Tweak::GameMode, tweaks.gamemode));
+        }
+        if self.tools.mangohud.is_some() {
+            host = host.push(check("Show the MangoHud overlay", Tweak::MangoHud, tweaks.mangohud));
+        }
+        let host = container(host).padding(theme::MD).style(theme::card);
+
+        // Graphics. The API is a genuine fork rather than a best value, so it
+        // is a picker with the trade-off written next to it.
+        let apis = vec![
+            ApiChoice(None),
+            ApiChoice(Some(GraphicsApi::D3d11)),
+            ApiChoice(Some(GraphicsApi::D3d12)),
+        ];
+        let graphics = container(
+            column![
+                heading("Graphics"),
+                row![
+                    muted("Direct3D version".to_owned(), theme::LABEL)
+                        .width(Length::Fixed(150.0)),
+                    pick_list(apis, Some(ApiChoice(tweaks.graphics_api)), Message::TweakApi)
+                        .text_size(theme::BODY)
+                        .padding(theme::SM)
+                        .style(theme::picker)
+                        .menu_style(theme::picker_menu),
+                ]
+                .spacing(theme::MD)
+                .align_y(Alignment::Center),
+                muted(
+                    "Which translation layer the game runs on: D3D11 goes through DXVK, D3D12 \
+                     through VKD3D. Which is faster depends on the GPU — D3D12 is usually a \
+                     small win on AMD and often a loss on NVIDIA, so this is worth measuring \
+                     rather than assuming."
+                        .to_owned(),
+                    theme::CAPTION,
+                ),
+                row![
+                    muted("Frame cap".to_owned(), theme::LABEL).width(Length::Fixed(150.0)),
+                    text_input("uncapped", &self.fps_input)
+                        .on_input(Message::TweakFpsCap)
+                        .style(theme::field)
+                        .size(theme::BODY)
+                        .padding(theme::SM)
+                        .width(Length::Fixed(110.0)),
+                    muted("FPS".to_owned(), theme::LABEL),
+                ]
+                .spacing(theme::MD)
+                .align_y(Alignment::Center),
+                muted(
+                    "The client's own limit rather than the driver's, so it keeps working if \
+                     the Direct3D version above changes."
+                        .to_owned(),
+                    theme::CAPTION,
+                ),
+                row![
+                    secondary("Clear shader cache", Message::ClearShaderCache).enabled(true),
+                    muted(
+                        "Shaders this product compiled under an older Proton build. Clearing \
+                         them costs one session of stutter and affects no other product."
+                            .to_owned(),
+                        theme::CAPTION,
+                    ),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
+            ]
+            .spacing(theme::SM),
+        )
+        .padding(theme::MD)
+        .style(theme::card);
+
+        // Client settings. Everything here is a line in Config.wtf.
+        let client = container(
+            column![
+                heading("Client settings"),
+                check(
+                    "Stop profiling addon execution",
+                    Tweak::SkipAddonProfiling,
+                    tweaks.skip_addon_profiling,
+                ),
+                check(
+                    "Drop water and weather detail in raids and battlegrounds",
+                    Tweak::ReduceRaidEffects,
+                    tweaks.reduce_raid_effects,
+                ),
+                check(
+                    "Skip non-critical world preloading",
+                    Tweak::FasterZoneLoads,
+                    tweaks.faster_zone_loads,
+                ),
+                check("Raw mouse input", Tweak::RawMouse, tweaks.raw_mouse),
+                muted(
+                    "Also the fix for the cursor jumping back to the middle of the window \
+                     after a click, which is a Wine problem rather than a game one."
+                        .to_owned(),
+                    theme::CAPTION,
+                ),
+                check(
+                    "Turn off the full-screen glow and death filter",
+                    Tweak::NoScreenEffects,
+                    tweaks.no_screen_effects,
+                ),
+                row![
+                    muted("Spell queue".to_owned(), theme::LABEL).width(Length::Fixed(150.0)),
+                    text_input("client default", &self.spell_input)
+                        .on_input(Message::TweakSpellQueue)
+                        .style(theme::field)
+                        .size(theme::BODY)
+                        .padding(theme::SM)
+                        .width(Length::Fixed(110.0)),
+                    muted("ms".to_owned(), theme::LABEL),
+                ]
+                .spacing(theme::MD)
+                .align_y(Alignment::Center),
+                muted(
+                    "How early the next ability may be queued. Your latency plus about 50ms \
+                     is the usual advice."
+                        .to_owned(),
+                    theme::CAPTION,
+                ),
+                muted(
+                    "These are written to this product's Config.wtf and re-applied before \
+                     every launch, because the client rewrites that file from memory when it \
+                     exits. Change one of them in-game and the setting here wins next time."
+                        .to_owned(),
+                    theme::CAPTION,
+                ),
+            ]
+            .spacing(theme::SM),
+        )
+        .padding(theme::MD)
+        .style(theme::card);
+
+        // Deliberately its own card with its own warning: this one buys
+        // scenery with frames, which is the opposite of everything above.
+        let visuals = container(
+            column![
+                heading("Visuals"),
+                check(
+                    "Maximum view distance and ground clutter",
+                    Tweak::MaxDrawDistance,
+                    tweaks.max_draw_distance,
+                ),
+                muted(
+                    "This one costs frames rather than winning them. It is here because \
+                     people want it, not because it is an optimization."
+                        .to_owned(),
+                    theme::CAPTION,
+                ),
+            ]
+            .spacing(theme::SM),
+        )
+        .padding(theme::MD)
+        .style(theme::card);
+
+        // The escape hatch. Everything above is a curated toggle; this is for
+        // the variable nobody anticipated.
+        let mut env = column![heading("Environment")].spacing(theme::SM);
+        for (key, value) in &tweaks.env {
+            env = env.push(
+                container(
+                    row![
+                        mono(format!("{key}={value}")).width(Length::Fill),
+                        button(text("Remove").size(theme::LABEL))
+                            .on_press(Message::TweakEnvRemove(key.clone()))
+                            .style(theme::ghost)
+                            .padding([theme::XS, theme::SM]),
+                    ]
+                    .spacing(theme::SM)
+                    .align_y(Alignment::Center),
+                )
+                .padding([theme::XS, theme::SM])
+                .style(theme::row),
+            );
+        }
+        env = env.push(
+            row![
+                text_input("VARIABLE", &self.env_key_input)
+                    .on_input(Message::TweakEnvKey)
+                    .on_submit(Message::TweakEnvAdd)
+                    .style(theme::field)
+                    .size(theme::BODY)
+                    .padding(theme::SM)
+                    .width(Length::Fixed(220.0)),
+                text_input("value", &self.env_value_input)
+                    .on_input(Message::TweakEnvValue)
+                    .on_submit(Message::TweakEnvAdd)
+                    .style(theme::field)
+                    .size(theme::BODY)
+                    .padding(theme::SM)
+                    .width(Length::Fill),
+                secondary("Add", Message::TweakEnvAdd).enabled(!self.env_key_input.is_empty()),
+            ]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center),
+        );
+        env = env.push(muted(
+            "Set for this product's launch only, after everything Lightforge assembles — so \
+             a variable here overrides the launcher's own."
+                .to_owned(),
+            theme::CAPTION,
+        ));
+        let env = container(env).padding(theme::MD).style(theme::card);
+
+        let mut body = column![host, graphics, client, visuals, env].spacing(theme::MD);
+        if let Some(e) = &self.error {
+            body = body.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
+        }
+
+        self.page(
+            "Game Optimizations",
+            Some(format!("{} · applied when this product launches", self.selected.label)),
+            body.into(),
+        )
     }
 
     /// Addon management: what is installed, and what could be.
