@@ -202,6 +202,18 @@ impl Config {
         self.download_limit_mbps.unwrap_or(0).saturating_mul(BYTES_PER_MB)
     }
 
+    /// The Proton build Battle.net and Agent launch under.
+    ///
+    /// Its own pin rather than the selected product's: the client and Agent
+    /// are a different workload from the game — CEF, an updater, a storefront
+    /// — and `SPEC.md` notes that "latest" is not always best for them. Falls
+    /// back to the app default, so the pin only has to be set when it differs.
+    pub fn battle_net_proton_version(&self) -> Option<&str> {
+        self.battle_net_proton
+            .version()
+            .or_else(|| self.default_proton.version())
+    }
+
     /// Everything pinned to `version`, named the way the user named it.
     ///
     /// Only *explicit* pins count. A product following the app default is not
@@ -245,6 +257,21 @@ pub enum ConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn battle_net_has_its_own_pin_but_falls_back_to_the_default() {
+        let mut config = Config::with_default_products();
+        config.default_proton = ProtonPin::Pinned("GE-Proton11-7".into());
+
+        // Unset, so it follows the default like everything else.
+        assert_eq!(config.battle_net_proton_version(), Some("GE-Proton11-7"));
+
+        // Set, and it wins — that is the entire point of the field.
+        config.battle_net_proton = ProtonPin::Pinned("GE-Proton10-34".into());
+        assert_eq!(config.battle_net_proton_version(), Some("GE-Proton10-34"));
+        // And it does not disturb what the games launch under.
+        assert_eq!(config.effective_proton(&ProductCode::Retail), Some("GE-Proton11-7"));
+    }
 
     #[test]
     fn a_download_cap_is_read_in_megabytes_and_spent_in_bytes() {

@@ -156,6 +156,8 @@ enum Message {
     RunSetup,
     SetupFinished(Result<Box<SetupStatus>, String>),
     PinDefaultProton(ProtonChoice),
+    /// The build Battle.net and Agent launch under.
+    PinBattleNetProton(ProtonChoice),
     PinProductProton(ProtonChoice),
     AssetsSourceChanged(String),
     /// The download cap field changed.
@@ -595,6 +597,11 @@ impl Lightforge {
                 self.layout.clone(),
                 self.selected.code.clone(),
                 self.downloads.clone(),
+                // Cleared under whichever build is about to run in the prefix.
+                match what {
+                    Launch::Game => tasks::Runs::Game,
+                    Launch::BattleNet | Launch::Client => tasks::Runs::BattleNet,
+                },
             ),
             move |result| Message::PreflightDone(what, result),
         )
@@ -1274,6 +1281,12 @@ impl Lightforge {
                         Task::none()
                     }
                 }
+            }
+
+            Message::PinBattleNetProton(choice) => {
+                self.config.battle_net_proton = ProtonPin::from(choice.0);
+                self.save_config();
+                Task::none()
             }
 
             Message::PinDefaultProton(choice) => {
@@ -2860,13 +2873,32 @@ impl Lightforge {
                 ),
                 field_row(
                     self.selected.label.clone(),
-                    pick_list(installed, Some(ProtonChoice(product_pin)), Message::PinProductProton)
-                        .text_size(theme::BODY)
-                        .padding(theme::SM)
-                        .into(),
+                    pick_list(
+                        installed.clone(),
+                        Some(ProtonChoice(product_pin)),
+                        Message::PinProductProton,
+                    )
+                    .text_size(theme::BODY)
+                    .padding(theme::SM)
+                    .into(),
+                ),
+                field_row(
+                    "Battle.net".to_owned(),
+                    pick_list(
+                        installed,
+                        Some(ProtonChoice(
+                            self.config.battle_net_proton.version().map(str::to_owned),
+                        )),
+                        Message::PinBattleNetProton,
+                    )
+                    .text_size(theme::BODY)
+                    .padding(theme::SM)
+                    .into(),
                 ),
                 muted(
-                    "A product with no pin of its own follows the default.".to_owned(),
+                    "A product with no pin of its own follows the default. Battle.net and \
+                     Agent are a different workload from the game, so they pin separately."
+                        .to_owned(),
                     theme::CAPTION,
                 ),
                 row![

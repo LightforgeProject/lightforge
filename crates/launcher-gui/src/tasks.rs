@@ -396,9 +396,13 @@ pub async fn preflight(
     layout: Layout,
     code: ProductCode,
     downloads: SharedDownloads,
+    runs: Runs,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
-        let runner = runner_for(&layout, &code)?;
+        // The same build the launch will use. The prefix is shared, so
+        // clearing it with one Proton and then launching under another is how
+        // you get an unasked-for prefix upgrade between the two.
+        let runner = runner_for(&layout, &code, runs)?;
         let mut guard = downloads;
         Preflight::new(Config::default().prefix_user)
             .run(&runner, &layout, Some(&code), &mut guard)
@@ -426,7 +430,7 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
             return Err(format!("no game at {}", exe.display()));
         }
 
-        let runner = runner_for(&layout, &code)?;
+        let runner = runner_for(&layout, &code, Runs::Game)?;
         let status = runner
             .command("run", &exe, Vec::<String>::new())
             .status()
@@ -445,7 +449,7 @@ pub async fn launch_via_battle_net(
     tokio::task::spawn_blocking(move || {
         use lightforge_core::battlenet::{self, Launch};
 
-        let runner = runner_for(&layout, &code)?;
+        let runner = runner_for(&layout, &code, Runs::BattleNet)?;
         let launch = Launch::Product { code: code.clone(), exec: None };
         battlenet::launch(&runner, &layout, &launch).map_err(|e| e.to_string())?;
         Ok(format!("Battle.net launching {}", code.as_str()))
@@ -496,7 +500,7 @@ pub async fn open_battle_net(layout: Layout, code: ProductCode) -> Result<String
     tokio::task::spawn_blocking(move || {
         use lightforge_core::battlenet::{self, Launch};
 
-        let runner = runner_for(&layout, &code)?;
+        let runner = runner_for(&layout, &code, Runs::BattleNet)?;
         battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| e.to_string())?;
         Ok("Battle.net opening".to_owned())
     })
@@ -505,9 +509,23 @@ pub async fn open_battle_net(layout: Layout, code: ProductCode) -> Result<String
 }
 
 /// The Proton build a product launches under, with its per-product caches.
+/// Which workload a runner is being built for.
+///
+/// They pin separately: `SPEC.md` asks for a Proton build chosen for
+/// Battle.net and Agent specifically, because "latest" is not always best for
+/// the client even when it is right for the game.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Runs {
+    /// The game itself, under the product's own pin.
+    Game,
+    /// Battle.net or Agent, under the Battle.net pin.
+    BattleNet,
+}
+
 fn runner_for(
     layout: &Layout,
     code: &ProductCode,
+    runs: Runs,
 ) -> Result<lightforge_core::prefix::ProtonRunner, String> {
     use lightforge_core::prefix::ProtonRunner;
     use lightforge_core::proton;
@@ -516,7 +534,11 @@ fn runner_for(
     let config = Config::load_or_default(&dirs.config_file()).unwrap_or_default();
     let steam = lightforge_core::steam::SteamRoot::discover();
     let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());
-    let build = proton::select(&builds, config.effective_proton(code))
+    let pin = match runs {
+        Runs::Game => config.effective_proton(code),
+        Runs::BattleNet => config.battle_net_proton_version(),
+    };
+    let build = proton::select(&builds, pin)
         .ok_or_else(|| "no supported Proton-GE build installed".to_owned())?;
 
     let target = std::fs::read_link(layout.wow_symlink()).unwrap_or_else(|_| layout.wow_install());

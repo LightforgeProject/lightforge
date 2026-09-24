@@ -701,7 +701,7 @@ async fn main() -> Result<()> {
                 installer.unwrap_or_else(|| dirs.cache_dir().join(battlenet::INSTALLER_FILE));
             let user = Config::default().prefix_user;
 
-            let (runner, build) = proton_runner(&layout, proton.as_deref())?;
+            let (runner, build) = proton_runner(&layout, battle_net_pin(proton.as_deref()))?;
             println!("using {} ({})", build.version, build.path.display());
             println!("installer {}", installer_path.display());
 
@@ -765,7 +765,7 @@ async fn main() -> Result<()> {
                 None => Launch::Client,
             };
 
-            let (runner, build) = proton_runner(&layout, proton.as_deref())?;
+            let (runner, build) = proton_runner(&layout, battle_net_pin(proton.as_deref()))?;
             let (exe, args) = launch.command(&layout.battle_net_dir());
             println!("using {} ({})", build.version, build.path.display());
 
@@ -2301,6 +2301,22 @@ fn print_tweaks(tweaks: &[lightforge_core::battlenet::Tweak]) {
     for tweak in tweaks {
         println!("  {:<40} {}\n    {}", tweak.key(), tweak.value, tweak.reason);
     }
+}
+
+/// The build a Battle.net verb should use: `--proton` if given, else the pin
+/// from `config.toml`, else the newest installed.
+///
+/// Leaks a `String` so the borrowed `&str` outlives the call. That is fine for
+/// a CLI process that is about to exec a game and exit, and beats threading a
+/// lifetime through every call site for one value read once.
+fn battle_net_pin(explicit: Option<&str>) -> Option<&str> {
+    if explicit.is_some() {
+        return explicit;
+    }
+    let dirs = AppDirs::discover().ok()?;
+    let config = Config::load_or_default(&dirs.config_file()).ok()?;
+    let version = config.battle_net_proton_version()?.to_owned();
+    Some(Box::leak(version.into_boxed_str()))
 }
 
 /// Resolve the Proton build to run against the shared prefix, and a runner for
