@@ -76,6 +76,28 @@ pub async fn refresh(
     Refreshed { local, remote, offline }
 }
 
+/// What a build is and what it offers, for the Check for Updates action.
+///
+/// Much lighter than planning: the download manifest only, so pressing the
+/// button costs one manifest rather than the whole prelude a download needs.
+pub async fn offerings(
+    http: Option<Http>,
+    code: ProductCode,
+    region: Region,
+    optional_tags: Vec<String>,
+) -> Result<lightforge_core::tact::install::Offerings, String> {
+    let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
+    let options = InstallOptions {
+        region,
+        flavor: code.install_dir().into_owned(),
+        optional_tags,
+        ..InstallOptions::default()
+    };
+    lightforge_core::tact::install::offerings(&http, &code, &options)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Branding straight off disk, for the frame before [`theme`] answers.
 ///
 /// Network-free and typically a few tens of milliseconds, so on every run

@@ -166,6 +166,14 @@ enum Message {
     ClearShaderCache,
     /// Opt in or out of one optional download, by manifest tag name.
     OptionalContent(String, bool),
+    /// The cog beside the primary button.
+    ToggleGear,
+    /// Ask the version service what is current, and read what the build
+    /// offers.
+    CheckForUpdates,
+    CheckedForUpdates(Box<Result<lightforge_core::tact::install::Offerings, String>>),
+    /// Plan against the build and fetch whatever the store is short.
+    ScanAndRepair,
 
     Show(Screen),
     SetupStatus(Option<Box<SetupStatus>>),
@@ -419,6 +427,8 @@ struct Lightforge {
     manager_open: bool,
     /// Whether the catalog panel is open.
     browse_open: bool,
+    /// Whether the cog menu beside the primary button is open.
+    gear_open: bool,
     /// Versions Battle.net reports installed, read when the catalog opens.
     installed_versions: HashMap<String, String>,
     /// Product codes Battle.net itself uses, folded into the catalog.
@@ -536,6 +546,7 @@ impl Lightforge {
             queue: Vec::new(),
             manager_open: false,
             browse_open: false,
+            gear_open: false,
             installed_versions: HashMap::new(),
             known_codes: Vec::new(),
             resume_after_play: Vec::new(),
@@ -1834,6 +1845,64 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::ToggleGear => {
+                self.gear_open = !self.gear_open;
+                Task::none()
+            }
+
+            Message::CheckForUpdates => {
+                self.gear_open = false;
+                self.busy = true;
+                self.error = None;
+                self.status = "checking for updates…".to_owned();
+                Task::perform(
+                    tasks::offerings(
+                        self.http.clone(),
+                        self.selected.code.clone(),
+                        self.region,
+                        self.config
+                            .product(&self.selected.code)
+                            .map(|p| p.profile.optional_content.clone())
+                            .unwrap_or_default(),
+                    ),
+                    |result| Message::CheckedForUpdates(Box::new(result)),
+                )
+            }
+
+            Message::CheckedForUpdates(result) => {
+                self.busy = false;
+                match *result {
+                    Ok(offerings) => {
+                        let code = self.selected.code.clone();
+                        // The point of the round trip: the optional list is
+                        // only knowable from the manifest, and this is the
+                        // cheap way to learn it.
+                        self.remember_optional(&code, offerings.optional.clone());
+                        let current = self.local.version.as_deref() == Some(
+                            offerings.remote.versions_name.as_str(),
+                        );
+                        self.remote = Some(offerings.remote.clone());
+                        self.status = match current {
+                            true => format!("up to date on {}", offerings.remote.versions_name),
+                            false => {
+                                format!("{} is available", offerings.remote.versions_name)
+                            }
+                        };
+                    }
+                    Err(e) => self.error = Some(e),
+                }
+                Task::none()
+            }
+
+            Message::ScanAndRepair => {
+                self.gear_open = false;
+                // A scan is a plan, and a repair is fetching what the plan
+                // lists — so this is the ordinary download path, entered
+                // deliberately rather than because a new build shipped.
+                self.status = "scanning — anything missing will be fetched".to_owned();
+                self.enqueue()
+            }
+
             Message::ClearShaderCache => {
                 let Some(dirs) = self.dirs.as_ref() else {
                     self.error = Some("no cache directory available".to_owned());
@@ -1975,6 +2044,23 @@ impl Lightforge {
             ]
             .into(),
             None => screen,
+        };
+
+        // The cog menu hangs off the bottom right, where the cog is, and only
+        // over the dashboard — the actions in it are all about the selected
+        // product's install.
+        let screen = match self.gear_open && self.screen == Screen::Dashboard {
+            true => stack![
+                screen,
+                container(self.gear_menu())
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Alignment::End)
+                    .align_y(Alignment::End)
+                    .padding([0, theme::XL + theme::LG]),
+            ]
+            .into(),
+            false => screen,
         };
 
         trace::view_built(started.elapsed());
@@ -2604,14 +2690,6 @@ impl Lightforge {
                     .on_press(Message::ManageSubscription)
                     .style(theme::ghost)
                     .padding([theme::XS, theme::SM]),
-                button(text("Open Files").size(theme::LABEL))
-                    .on_press(Message::OpenFiles)
-                    .style(theme::ghost)
-                    .padding([theme::XS, theme::SM]),
-                button(text("Copy Debug Info").size(theme::LABEL))
-                    .on_press(Message::CopyDebug)
-                    .style(theme::ghost)
-                    .padding([theme::XS, theme::SM]),
             ]
             .spacing(theme::XS),
         );
@@ -2629,11 +2707,27 @@ impl Lightforge {
         .padding([theme::SM, theme::MD])
         .width(Length::Fixed(240.0));
 
+        // The cog sits beside the primary button rather than under it: these
+        // are the actions you reach for *about* the game, and putting them in
+        // the ghost strip made that strip a list of five unrelated things.
+        let gear = button(text("\u{2699}").size(theme::HEADING))
+            .style(match self.gear_open {
+                true => theme::selected,
+                false => theme::outlined,
+            })
+            .padding([theme::MD, theme::MD])
+            .on_press(Message::ToggleGear);
+
         let right = column![
-            match self.busy || matches!(action, ActionState::Unknown) {
-                true => primary,
-                false => primary.on_press(Message::Primary),
-            },
+            row![
+                match self.busy || matches!(action, ActionState::Unknown) {
+                    true => primary,
+                    false => primary.on_press(Message::Primary),
+                },
+                gear,
+            ]
+            .spacing(theme::XS)
+            .align_y(Alignment::Center),
             match self.busy {
                 true => battle_net,
                 false => battle_net.on_press(Message::BattleNet),
@@ -2909,8 +3003,8 @@ impl Lightforge {
         match available.is_empty() {
             true => {
                 content = content.push(muted(
-                    "What a build offers is only known once its manifest has been read, so \
-                     this fills in after the next update check or download."
+                    "What a build offers is only known once its manifest has been read. \
+                     Use Check for Updates, under the cog beside PLAY, to fill this in."
                         .to_owned(),
                     theme::CAPTION,
                 ));
@@ -2945,6 +3039,36 @@ impl Lightforge {
             Some(format!("{} · applied when this product launches", self.selected.label)),
             body.into(),
         )
+    }
+
+    /// The cog menu: what you do *about* a game rather than to play it.
+    ///
+    /// A stacked layer rather than a popover, because iced 0.13 has none —
+    /// the same technique the download manager uses, anchored to the bottom
+    /// right so it reads as hanging off the cog it came from.
+    fn gear_menu(&self) -> Element<'_, Message> {
+        let item = |label: &'static str, message: Message, enabled: bool| {
+            button(text(label).size(theme::LABEL))
+                .style(theme::ghost)
+                .padding([theme::SM, theme::MD])
+                .width(Length::Fill)
+                .on_press_maybe(enabled.then_some(message))
+        };
+
+        let installed = self.local.version.is_some();
+        container(
+            column![
+                item("Check for Updates", Message::CheckForUpdates, !self.busy),
+                item("Scan and Repair", Message::ScanAndRepair, installed && !self.busy),
+                item("Open Files in Explorer", Message::OpenFiles, installed),
+                item("Copy Debug Info", Message::CopyDebug, true),
+            ]
+            .spacing(theme::XS),
+        )
+        .padding(theme::XS)
+        .width(Length::Fixed(240.0))
+        .style(theme::floating)
+        .into()
     }
 
     /// Addon management: what is installed, and what could be.

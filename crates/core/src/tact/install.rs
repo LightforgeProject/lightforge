@@ -305,6 +305,60 @@ impl StoreProbe {
     }
 }
 
+/// What a build is, and what it offers, without planning anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Offerings {
+    pub remote: version::Version,
+    /// Optional content this build offers, by tag name.
+    pub optional: Vec<String>,
+    /// Files and encoded bytes the current tag selection wants, so a caller
+    /// can say how big this product is without fetching a plan.
+    pub wanted_files: usize,
+    pub wanted_bytes: u64,
+}
+
+/// Resolve a build and read its download manifest — nothing else.
+///
+/// Deliberately much cheaper than [`prepare`]: no encoding manifest, no
+/// install manifest, and none of the ~1400 archive indices. That is the
+/// difference between a button someone presses to see what is new and one
+/// that downloads a hundred megabytes to answer.
+///
+/// Optional content is the reason this exists at all. Which extras a build
+/// offers is knowable only from its download manifest, so without a call like
+/// this the settings panel has nothing to list until a download has run.
+pub async fn offerings(
+    http: &Http,
+    code: &ProductCode,
+    options: &Options,
+) -> Result<Offerings, InstallError> {
+    let tags = TagSet::parse(&options.tag_column()).with_optional(options.optional_tags.clone());
+
+    let versions = version::versions(http, options.region, code.as_str()).await?;
+    let remote = version::for_region(&versions, options.region, |v| &v.region)
+        .cloned()
+        .ok_or(InstallError::EmptyTable("versions"))?;
+    let cdns = version::cdns(http, options.region, code.as_str()).await?;
+    let cdn = version::for_region(&cdns, options.region, |c| &c.name)
+        .cloned()
+        .ok_or(InstallError::EmptyTable("cdns"))?;
+    let client = Client::from_cdn(&cdn)?;
+
+    let build = BuildConfig::parse(&client.fetch_config(http, &remote.build_config).await?)?;
+    let pair = build.download.ok_or(InstallError::MissingManifest("download"))?;
+    let ekey = pair.ekey.ok_or(InstallError::MissingManifest("download"))?;
+    let manifest =
+        DownloadManifest::parse(&client.fetch_loose(http, &ekey, &pair.ckey, None).await?)?;
+
+    let wanted = manifest.select(&tags);
+    Ok(Offerings {
+        remote,
+        optional: manifest.optional_names(&tags),
+        wanted_files: wanted.len(),
+        wanted_bytes: wanted.iter().map(|e| e.size).sum(),
+    })
+}
+
 /// Resolve the build and build the fetch plan, fetching nothing else.
 pub async fn prepare(
     http: &Http,
