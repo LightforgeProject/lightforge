@@ -16,7 +16,7 @@
 //! accent rather than effects.
 
 use iced::widget::{button, container, overlay, pick_list, text_input};
-use iced::{Background, Border, Color, Font, Theme};
+use iced::{border, Background, Border, Color, Font, Theme};
 
 // ---------------------------------------------------------------- palette --
 
@@ -54,6 +54,13 @@ pub const PANEL: Color = Color::from_rgba(0.043, 0.055, 0.070, 0.88);
 
 /// Spacing scale. Four values cover every gap on every screen; a fifth would
 /// only invite eyeballing.
+/// Height of a primary control, so the halves of a split button match exactly.
+///
+/// Pinned rather than left to content: the action half is sized by a line of
+/// HEADING text and the menu half by an 18px icon, and letting each shrink to
+/// its own content leaves the tab visibly short of the button it belongs to.
+pub const CONTROL_HEIGHT: f32 = 56.0;
+
 pub const XS: u16 = 4;
 pub const SM: u16 = 8;
 pub const MD: u16 = 16;
@@ -218,19 +225,55 @@ pub fn badge(color: Color) -> impl Fn(&Theme) -> container::Style {
 /// Solid button in one of the state colours. The primary action, at most once
 /// per screen.
 pub fn filled(color: Color) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_theme, status| button::Style {
+        border: Border { radius: RADIUS_SM.into(), ..Border::default() },
+        ..filled_base(color, status)
+    }
+}
+
+/// The two halves of a split button: a wide primary action and a narrow menu
+/// tab welded to its right, the way Battle.net's Play control is built.
+///
+/// Rounded on their outer edges only, so the pair reads as one control rather
+/// than as two buttons that happen to touch. The tab is shaded a little darker
+/// than the action so the divide is visible without a border between them —
+/// a border would read as a seam, which is exactly what a split button is
+/// trying not to be.
+pub fn filled_left(color: Color) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_theme, status| button::Style {
+        border: Border {
+            radius: border::radius(RADIUS_SM).top_right(0).bottom_right(0),
+            ..Border::default()
+        },
+        ..filled_base(color, status)
+    }
+}
+
+pub fn filled_right(color: Color) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_theme, status| {
-        let base = match status {
-            button::Status::Hovered => lighten(color, 0.08),
-            button::Status::Pressed => lighten(color, -0.06),
-            button::Status::Disabled => Color { a: 0.35, ..color },
-            button::Status::Active => color,
-        };
+        let tab = lighten(color, -0.10);
         button::Style {
-            background: Some(Background::Color(base)),
-            text_color: on(color),
-            border: Border { radius: RADIUS_SM.into(), ..Border::default() },
-            ..button::Style::default()
+            border: Border {
+                radius: border::radius(RADIUS_SM).top_left(0).bottom_left(0),
+                ..Border::default()
+            },
+            ..filled_base(tab, status)
         }
+    }
+}
+
+/// Fill and text for a solid button, without committing to a corner radius.
+fn filled_base(color: Color, status: button::Status) -> button::Style {
+    let base = match status {
+        button::Status::Hovered => lighten(color, 0.08),
+        button::Status::Pressed => lighten(color, -0.06),
+        button::Status::Disabled => Color { a: 0.35, ..color },
+        button::Status::Active => color,
+    };
+    button::Style {
+        background: Some(Background::Color(base)),
+        text_color: on(color),
+        ..button::Style::default()
     }
 }
 

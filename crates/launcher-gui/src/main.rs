@@ -29,7 +29,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use iced::widget::{
-    button, column, container, image, pick_list, progress_bar, row, scrollable,
+    button, column, container, image, mouse_area, pick_list, progress_bar, row, scrollable,
     stack, text, text_input, tooltip, Space,
 };
 use iced::{Alignment, ContentFit, Element, Length, Subscription, Task};
@@ -53,6 +53,13 @@ use tasks::{Refreshed, SharedDownloads, TransferState};
 const ACCOUNT_URL: &str = "https://account.battle.net/games";
 
 /// Opening size.
+/// The cog on the split Play button.
+///
+/// Bundled rather than themed: it is Lightforge's own chrome, not a product's
+/// branding, so it must render before any asset pipeline has answered — and
+/// the UI font has no gear glyph to fall back on.
+const GEAR_ICON: &[u8] = include_bytes!("../assets/gear.png");
+
 const WINDOW: iced::Size = iced::Size::new(980.0, 660.0);
 
 /// Floor for resizing.
@@ -168,6 +175,12 @@ enum Message {
     OptionalContent(String, bool),
     /// The cog beside the primary button.
     ToggleGear,
+    /// A click that no widget consumed — close whatever is open, the way
+    /// every other context menu on the desktop behaves.
+    Dismiss,
+    /// A click *inside* an open panel. Does nothing, and that is the point:
+    /// it stops the click reaching [`Message::Dismiss`] underneath.
+    MenuClick,
     /// Ask the version service what is current, and read what the build
     /// offers.
     CheckForUpdates,
@@ -1850,6 +1863,15 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::Dismiss => {
+                self.gear_open = false;
+                self.manager_open = false;
+                self.browse_open = false;
+                Task::none()
+            }
+
+            Message::MenuClick => Task::none(),
+
             Message::CheckForUpdates => {
                 self.gear_open = false;
                 self.busy = true;
@@ -2031,6 +2053,12 @@ impl Lightforge {
                 (_, true) => Some(self.browse()),
                 _ => None,
             };
+        // Clicks inside a panel are absorbed so they never reach the dismissal
+        // beneath it; without this, clicking the gap between two rows of the
+        // download manager would close it.
+        let overlay = overlay.map(|panel| {
+            Element::from(mouse_area(panel).on_press(Message::MenuClick))
+        });
 
         let screen = match overlay {
             Some(panel) => stack![
@@ -2046,20 +2074,13 @@ impl Lightforge {
             None => screen,
         };
 
-        // The cog menu hangs off the bottom right, where the cog is, and only
-        // over the dashboard — the actions in it are all about the selected
-        // product's install.
-        let screen = match self.gear_open && self.screen == Screen::Dashboard {
-            true => stack![
-                screen,
-                container(self.gear_menu())
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .align_x(Alignment::End)
-                    .align_y(Alignment::End)
-                    .padding([0, theme::XL + theme::LG]),
-            ]
-            .into(),
+
+        // Anything open closes on a click that no widget wanted. `mouse_area`
+        // hands the event to its child first and only fires when the child
+        // ignored it, so a button still does its own job rather than being
+        // swallowed by the dismissal.
+        let screen = match self.gear_open || self.manager_open || self.browse_open {
+            true => Element::from(mouse_area(screen).on_press(Message::Dismiss)),
             false => screen,
         };
 
@@ -2697,9 +2718,12 @@ impl Lightforge {
         let primary = button(
             container(text(action.label()).size(theme::HEADING)).center_x(Length::Fill),
         )
-        .style(theme::filled(color))
+        .style(theme::filled_left(color))
         .padding([theme::MD, theme::LG])
-        .width(Length::Fixed(240.0));
+        // 190 + the tab's 50 is 240: the width of the Battle.net button
+        // underneath, so the two stack flush rather than nearly flush.
+        .width(Length::Fixed(190.0))
+        .height(Length::Fixed(theme::CONTROL_HEIGHT));
         let battle_net = button(
             container(text("Launch via Battle.net").size(theme::LABEL)).center_x(Length::Fill),
         )
@@ -2707,18 +2731,35 @@ impl Lightforge {
         .padding([theme::SM, theme::MD])
         .width(Length::Fixed(240.0));
 
-        // The cog sits beside the primary button rather than under it: these
-        // are the actions you reach for *about* the game, and putting them in
-        // the ghost strip made that strip a list of five unrelated things.
-        let gear = button(text("\u{2699}").size(theme::HEADING))
-            .style(match self.gear_open {
-                true => theme::selected,
-                false => theme::outlined,
-            })
-            .padding([theme::MD, theme::MD])
-            .on_press(Message::ToggleGear);
+        // A split button, welded to the primary action rather than floating
+        // beside it: the cog is a second way into the same thing, which is how
+        // Battle.net builds it. Zero spacing and complementary corner radii
+        // are what make the pair read as one control.
+        //
+        // The icon is an image, not a glyph — the UI font has no U+2699 and
+        // renders it as a tofu box.
+        let gear = button(
+            image(image::Handle::from_bytes(GEAR_ICON))
+                .width(Length::Fixed(18.0))
+                .height(Length::Fixed(18.0)),
+        )
+        .style(theme::filled_right(color))
+        .padding([theme::MD, theme::MD])
+        // The same fixed height as the action half, never `Fill`: inside a
+        // column, `Fill` resolves against the *column*, and the tab grows into
+        // a green stripe the height of the whole stack.
+        .height(Length::Fixed(theme::CONTROL_HEIGHT))
+        .on_press(Message::ToggleGear);
 
         let right = column![
+            // Directly above the split button it belongs to. Laid out in this
+            // column rather than floated over the page: the panel sits at the
+            // bottom of a spacer that yields, so the menu pushes the control
+            // down by nothing and needs no magic offset to clear anything.
+            match self.gear_open {
+                true => Element::from(self.gear_menu()),
+                false => Element::from(Space::with_height(Length::Fixed(0.0))),
+            },
             row![
                 match self.busy || matches!(action, ActionState::Unknown) {
                     true => primary,
@@ -2726,7 +2767,6 @@ impl Lightforge {
                 },
                 gear,
             ]
-            .spacing(theme::XS)
             .align_y(Alignment::Center),
             match self.busy {
                 true => battle_net,
@@ -3043,9 +3083,11 @@ impl Lightforge {
 
     /// The cog menu: what you do *about* a game rather than to play it.
     ///
-    /// A stacked layer rather than a popover, because iced 0.13 has none —
-    /// the same technique the download manager uses, anchored to the bottom
-    /// right so it reads as hanging off the cog it came from.
+    /// Laid out above the action panel rather than stacked over the page,
+    /// because iced 0.13 has no popover and a floating layer would need the
+    /// panel's height as a magic number to sit clear of it. Taking its room
+    /// from the spacer above the panel puts it in the right place by
+    /// construction, at any window size.
     fn gear_menu(&self) -> Element<'_, Message> {
         let item = |label: &'static str, message: Message, enabled: bool| {
             button(text(label).size(theme::LABEL))
@@ -3056,7 +3098,7 @@ impl Lightforge {
         };
 
         let installed = self.local.version.is_some();
-        container(
+        let menu = container(
             column![
                 item("Check for Updates", Message::CheckForUpdates, !self.busy),
                 item("Scan and Repair", Message::ScanAndRepair, installed && !self.busy),
@@ -3066,9 +3108,12 @@ impl Lightforge {
             .spacing(theme::XS),
         )
         .padding(theme::XS)
+        // The width of the split button beneath it, so the menu reads as
+        // belonging to that control rather than floating near it.
         .width(Length::Fixed(240.0))
-        .style(theme::floating)
-        .into()
+        .style(theme::floating);
+
+        mouse_area(menu).on_press(Message::MenuClick).into()
     }
 
     /// Addon management: what is installed, and what could be.
