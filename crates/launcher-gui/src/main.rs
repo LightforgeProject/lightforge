@@ -2565,7 +2565,27 @@ impl Lightforge {
                     .align_x(Alignment::Start)
                     .width(Length::Fill)
                     .padding([theme::MD, 0]),
-                Space::with_height(Length::Fill),
+                // The menu floats over the art rather than living in the
+                // panel: putting it in that column grew the card upward and
+                // squeezed the Battle.net button out of it. Stacked on the
+                // spacer that already separates logo from panel, it lands
+                // directly above the control at any window size, with no
+                // offset to keep in step with the panel's height.
+                stack![
+                    Space::with_height(Length::Fill),
+                    container(match self.gear_open && matches!(kind, Kind::Managed) {
+                        true => Element::from(self.gear_menu()),
+                        false => Element::from(Space::with_height(Length::Fixed(0.0))),
+                    })
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Alignment::End)
+                    .align_y(Alignment::End)
+                    // The panel insets its contents by the same amount, so
+                    // this is what puts the menu's right edge over the cog's
+                    // rather than over the card's.
+                    .padding([0, theme::LG]),
+                ],
                 // A product Battle.net owns gets a panel that offers only what
                 // Lightforge can actually do for it. Running the normal one
                 // would put an INSTALL button on a game this launcher has no
@@ -2752,14 +2772,6 @@ impl Lightforge {
         .on_press(Message::ToggleGear);
 
         let right = column![
-            // Directly above the split button it belongs to. Laid out in this
-            // column rather than floated over the page: the panel sits at the
-            // bottom of a spacer that yields, so the menu pushes the control
-            // down by nothing and needs no magic offset to clear anything.
-            match self.gear_open {
-                true => Element::from(self.gear_menu()),
-                false => Element::from(Space::with_height(Length::Fixed(0.0))),
-            },
             row![
                 match self.busy || matches!(action, ActionState::Unknown) {
                     true => primary,
