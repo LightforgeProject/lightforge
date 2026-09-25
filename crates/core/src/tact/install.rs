@@ -33,7 +33,7 @@ use crate::tact::download::{
 };
 use crate::tact::encoding::Encoding;
 use crate::tact::indices::{IndexCache, Locations, Step};
-use crate::tact::manifest::{DownloadManifest, InstallManifest, TagSet};
+use crate::tact::manifest::{DownloadEntry, DownloadManifest, InstallManifest, TagSet};
 use crate::tact::plan::{reverse_encoding, Options as PlanOptions, Plan};
 use crate::tact::storage::{EKey, Storage};
 use crate::tact::version::{self, Region};
@@ -216,6 +216,11 @@ pub struct Summary {
 /// download, and so the GUI can present sizes before asking the user.
 pub struct Prepared {
     pub plan: Plan,
+    /// Every file this build wants for the selected tags, before the store is
+    /// consulted — the input the plan is a subtraction from.
+    pub wanted: Vec<DownloadEntry>,
+    /// The probe that decided what the store already holds.
+    pub probe: StoreProbe,
     pub remote: version::Version,
     pub cdn: version::Cdn,
     pub client: Client,
@@ -225,6 +230,63 @@ pub struct Prepared {
     pub loose: FileIndex,
     pub tags: TagSet,
     pub tag_column: String,
+}
+
+/// The planner's "does the store already hold this?" test.
+///
+/// Named rather than a closure because it is the one piece of the plan that
+/// can be wrong without anything looking wrong: every key it wrongly answers
+/// `false` for becomes a file the plan re-fetches. [`crate::tact::explain`]
+/// exists to cross-examine it, which means it has to be something a caller can
+/// hold on to.
+///
+/// The set is built once from the store's indices and matched on the 9-byte
+/// truncated key the indices store, so a lookup costs no I/O.
+pub struct StoreProbe {
+    present: HashSet<EKey>,
+    /// False when the store could not be opened at all, which is a fresh
+    /// install — every key is absent, and legitimately so.
+    opened: bool,
+}
+
+impl StoreProbe {
+    pub fn open(dest: &Path) -> Self {
+        match Storage::open(dest) {
+            Ok(store) => Self {
+                present: store
+                    .files()
+                    .map(|e| {
+                        let mut k = [0u8; 16];
+                        k[..9].copy_from_slice(&e.key);
+                        k
+                    })
+                    .collect(),
+                opened: true,
+            },
+            Err(_) => Self { present: HashSet::new(), opened: false },
+        }
+    }
+
+    pub fn has(&self, ekey: &EKey) -> bool {
+        let mut probe = [0u8; 16];
+        probe[..9].copy_from_slice(&ekey[..9]);
+        self.present.contains(&probe)
+    }
+
+    /// Whether the store opened. A plan that fetches everything because the
+    /// store would not open is a very different fact from one that fetches
+    /// everything because the store is empty.
+    pub fn opened(&self) -> bool {
+        self.opened
+    }
+
+    pub fn len(&self) -> usize {
+        self.present.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.present.is_empty()
+    }
 }
 
 /// Resolve the build and build the fetch plan, fetching nothing else.
@@ -335,22 +397,8 @@ pub async fn prepare(
 
     // Skip whatever the store already holds — this is what makes an
     // interrupted download resume instead of starting over.
-    let present: HashSet<EKey> = match Storage::open(dest) {
-        Ok(store) => store
-            .files()
-            .map(|e| {
-                let mut k = [0u8; 16];
-                k[..9].copy_from_slice(&e.key);
-                k
-            })
-            .collect(),
-        Err(_) => HashSet::new(),
-    };
-    let have = |ekey: &EKey| {
-        let mut probe = [0u8; 16];
-        probe[..9].copy_from_slice(&ekey[..9]);
-        present.contains(&probe)
-    };
+    let probe = StoreProbe::open(dest);
+    let have = |ekey: &EKey| probe.has(ekey);
 
     let mut plan = Plan::build(
         &wanted,
@@ -375,7 +423,20 @@ pub async fn prepare(
         missing: plan.missing.len(),
     });
 
-    Ok(Prepared { plan, remote, cdn, client, encoding, install, locations, loose, tags, tag_column })
+    Ok(Prepared {
+        plan,
+        wanted,
+        probe,
+        remote,
+        cdn,
+        client,
+        encoding,
+        install,
+        locations,
+        loose,
+        tags,
+        tag_column,
+    })
 }
 
 /// Run a prepared plan: fetch, extract the install files, and finish the store.
@@ -388,8 +449,9 @@ pub async fn execute(
     cancel: &Cancel,
     on_event: &mut impl FnMut(Event),
 ) -> Result<Summary, InstallError> {
-    let Prepared { plan, remote, cdn, client, encoding, install, locations, loose, tags, tag_column } =
-        prepared;
+    let Prepared {
+        plan, remote, cdn, client, encoding, install, locations, loose, tags, tag_column, ..
+    } = prepared;
 
     let mut writer = StoreWriter::create(dest.join("Data").join("data"))?;
     // The reader always carries a key service; the downloader must too, or

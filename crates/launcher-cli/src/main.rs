@@ -227,6 +227,29 @@ enum Command {
         #[arg(long)]
         cancel_after: Option<u64>,
     },
+    /// Explain a plan: what a build wants, what the store already has, and
+    /// why the difference is the size it is. Fetches nothing.
+    Plan {
+        /// Install root to explain against.
+        dest: PathBuf,
+        #[arg(long, default_value = "wow")]
+        product: String,
+        #[arg(long, default_value = "eu")]
+        region: String,
+        #[arg(long, default_value = "enUS")]
+        locale: String,
+        #[arg(long, default_value = "_retail_")]
+        flavor: String,
+        /// Break the difference down by priority, bucket and source, and
+        /// cross-examine the store probe that produced it.
+        #[arg(long)]
+        explain: bool,
+        /// Only cache this many archive indices. Bounds a test run.
+        #[arg(long)]
+        limit_archives: Option<usize>,
+        #[arg(long, default_value_t = 32)]
+        concurrency: usize,
+    },
     /// List the addons installed for a product.
     Addons {
         #[arg(long, default_value = "wow")]
@@ -1404,6 +1427,130 @@ async fn main() -> Result<()> {
                     local.display(),
                     if want == bytes { "identical" } else { "DIFFERS" }
                 );
+            }
+        }
+        Command::Plan {
+            dest,
+            product,
+            region,
+            locale,
+            flavor,
+            explain,
+            limit_archives,
+            concurrency,
+        } => {
+            use lightforge_core::net::Http;
+            use lightforge_core::tact::explain as tact_explain;
+            use lightforge_core::tact::storage::Storage;
+            use lightforge_core::tact::install::{self, Event, Options as InstallOptions};
+            use lightforge_core::tact::version::Region;
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let region: Region = region.parse().context("parsing --region")?;
+            let gib = |b: u64| b as f64 / 1024f64.powi(3);
+
+            let options = InstallOptions {
+                region,
+                locale,
+                flavor,
+                concurrency,
+                limit_archives,
+                ..InstallOptions::default()
+            };
+
+            // Quiet by design: the report is the output, and the index
+            // prelude would bury it.
+            let mut last_index = 0usize;
+            let mut on_event = move |event: Event| match event {
+                Event::Build { versions_name, build_config, .. } => {
+                    println!("build           {versions_name} ({build_config})");
+                }
+                Event::Indices(step)
+                    if step.done - last_index >= 400 || step.done == step.total =>
+                {
+                    last_index = step.done;
+                    eprintln!("  indices {}/{}", step.done, step.total);
+                }
+                _ => {}
+            };
+
+            let http = Http::new().context("building the HTTP client")?;
+            let prepared =
+                install::prepare(&http, &dest, &code, &options, &mut on_event).await?;
+
+            let wanted_bytes: u64 = prepared.wanted.iter().map(|e| e.size).sum();
+            println!("wanted          {} files, {:.2} GiB", prepared.wanted.len(), gib(wanted_bytes));
+            println!(
+                "already present {} files",
+                prepared.plan.already_present
+            );
+            println!(
+                "plan            {} requests, {} files, {:.2} GiB",
+                prepared.plan.requests(),
+                prepared.plan.files(),
+                gib(prepared.plan.bytes())
+            );
+
+            if !explain {
+                println!("\nPass --explain for the breakdown.");
+                return Ok(());
+            }
+
+            let store = Storage::open(&dest).ok();
+            if !prepared.probe.opened() {
+                println!(
+                    "\nstore           WOULD NOT OPEN at {} — every key counts as absent",
+                    dest.display()
+                );
+            }
+            let report = tact_explain::explain(
+                &prepared.wanted,
+                store.as_ref(),
+                &prepared.locations,
+                &prepared.loose,
+                |k| prepared.probe.has(k),
+            );
+
+            println!("\nby priority (lower is fetched sooner)");
+            println!("{:>8}  {:>12} {:>9}  {:>12} {:>9}", "priority", "present", "GiB", "missing", "GiB");
+            for (priority, split) in &report.by_priority {
+                println!(
+                    "{priority:>8}  {:>12} {:>9.2}  {:>12} {:>9.2}",
+                    split.present.files,
+                    gib(split.present.bytes),
+                    split.missing.files,
+                    gib(split.missing.bytes),
+                );
+            }
+
+            println!("\nby bucket (missing keys against what the store lists)");
+            println!("{:>6}  {:>12}  {:>12}", "bucket", "in store", "missing");
+            for bucket in 0u8..16 {
+                let held = report.store_by_bucket.get(&bucket).copied().unwrap_or(0);
+                let missing = report.missing_by_bucket.get(&bucket).copied().unwrap_or(0);
+                let flag = match held {
+                    0 => "   <- no index loaded",
+                    _ => "",
+                };
+                println!("{bucket:>6}  {held:>12}  {missing:>12}{flag}");
+            }
+
+            println!("\nmissing keys by source");
+            println!("  in an archive   {}", report.sources.archived);
+            println!("  loose           {}", report.sources.loose);
+            println!("  nowhere         {}  (nothing can fetch these)", report.sources.nowhere);
+
+            println!("\nprobe cross-check");
+            match report.false_missing {
+                0 => println!("  the store agrees: every planned file really is absent"),
+                n => {
+                    println!("  {n} planned files ARE in the store — the probe is wrong");
+                    for ekey in &report.examples {
+                        let hex: String =
+                            ekey.iter().map(|b| format!("{b:02x}")).collect();
+                        println!("    {hex}");
+                    }
+                }
             }
         }
         Command::Addons { product, path, token } => {

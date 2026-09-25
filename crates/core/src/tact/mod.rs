@@ -20,6 +20,7 @@ pub mod config;
 pub mod content;
 pub mod download;
 pub mod encoding;
+pub mod explain;
 pub mod entry;
 pub mod idx;
 pub mod indices;
