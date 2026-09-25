@@ -52,7 +52,6 @@ use tasks::{Refreshed, SharedDownloads, TransferState};
 /// Where a player manages their subscription, per the spec.
 const ACCOUNT_URL: &str = "https://account.battle.net/games";
 
-/// Opening size.
 /// The cog on the split Play button.
 ///
 /// Bundled rather than themed: it is Lightforge's own chrome, not a product's
@@ -60,16 +59,31 @@ const ACCOUNT_URL: &str = "https://account.battle.net/games";
 /// the UI font has no gear glyph to fall back on.
 const GEAR_ICON: &[u8] = include_bytes!("../assets/gear.png");
 
-const WINDOW: iced::Size = iced::Size::new(980.0, 660.0);
-
-/// Floor for resizing.
+/// Opening size, and the floor for resizing — deliberately the same number.
 ///
-/// Set by the header, which is the widest thing that cannot wrap: the title,
-/// the product picker (whose longest entry is a user-supplied display name),
-/// and four navigation buttons. Below roughly this width they start colliding,
-/// and every screen under them is unusable well before the window stops
-/// shrinking — so the window refuses rather than letting it happen.
-const WINDOW_MIN: iced::Size = iced::Size::new(840.0, 560.0);
+/// The header sets the width: the title, the product picker (whose longest
+/// entry is a user-supplied display name) and four navigation buttons, none of
+/// which wrap. The dashboard sets the rest. Its action panel is a fixed 240pt
+/// column of controls beside a column that fills, and a `Row` does not wrap
+/// either — so once the window is narrower than both together, the fixed
+/// column is simply not drawn. That is not a squeeze, it is PLAY disappearing
+/// entirely, which is why the floor is the opening size rather than something
+/// smaller that still technically renders.
+///
+/// The number itself is a display decision rather than a layout one: the
+/// dashboard stops clipping somewhere around 1000pt, and the rest is giving
+/// the key art enough room to be art. On a 2560x1440 screen this is half the
+/// width and a little over half the height.
+///
+/// Because the floor is the same value, this is also the smallest screen
+/// Lightforge is usable on — a 1366x768 laptop cannot fit 820pt of client
+/// plus a title bar, and would get a window taller than its display.
+///
+/// A Wayland compositor is free to ignore all of it — a tiling one will hand
+/// the window whatever its slot is, and below this width the dashboard will
+/// lose its right-hand column. Nothing here can prevent that.
+const WINDOW: iced::Size = iced::Size::new(1280.0, 820.0);
+const WINDOW_MIN: iced::Size = WINDOW;
 
 /// iced's renderer, chosen for us unless the user overrides it.
 ///
@@ -2585,7 +2599,13 @@ impl Lightforge {
                     // this is what puts the menu's right edge over the cog's
                     // rather than over the card's.
                     .padding([0, theme::LG]),
-                ],
+                ]
+                // Explicit, because `Stack` is Shrink by default and a Fill
+                // child of a Shrink parent resolves to nothing: the spacer
+                // collapses, taking the menu's height with it, and the cog
+                // appears to do nothing at all.
+                .width(Length::Fill)
+                .height(Length::Fill),
                 // A product Battle.net owns gets a panel that offers only what
                 // Lightforge can actually do for it. Running the normal one
                 // would put an INSTALL button on a game this launcher has no
