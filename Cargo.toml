@@ -17,7 +17,7 @@ clap = { version = "4", features = ["derive"] }
 directories = "5"
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
-iced = { version = "0.13", features = ["tokio", "image"] }
+iced = { version = "0.13", features = ["tokio", "image", "advanced"] }
 libc = "0.2"
 md5 = "0.8"
 open = "5"

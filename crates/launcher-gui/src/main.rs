@@ -18,6 +18,7 @@
 //!   serves both.
 
 mod addonwork;
+mod popover;
 mod provision;
 mod tasks;
 mod theme;
@@ -2647,33 +2648,7 @@ impl Lightforge {
                     .align_x(Alignment::Start)
                     .width(Length::Fill)
                     .padding([theme::MD, 0]),
-                // The menu floats over the art rather than living in the
-                // panel: putting it in that column grew the card upward and
-                // squeezed the Battle.net button out of it. Stacked on the
-                // spacer that already separates logo from panel, it lands
-                // directly above the control at any window size, with no
-                // offset to keep in step with the panel's height.
-                stack![
-                    Space::with_height(Length::Fill),
-                    container(match self.gear_open && matches!(kind, Kind::Managed) {
-                        true => Element::from(self.gear_menu()),
-                        false => Element::from(Space::with_height(Length::Fixed(0.0))),
-                    })
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .align_x(Alignment::End)
-                    .align_y(Alignment::End)
-                    // The panel insets its contents by the same amount, so
-                    // this is what puts the menu's right edge over the cog's
-                    // rather than over the card's.
-                    .padding([0, theme::LG]),
-                ]
-                // Explicit, because `Stack` is Shrink by default and a Fill
-                // child of a Shrink parent resolves to nothing: the spacer
-                // collapses, taking the menu's height with it, and the cog
-                // appears to do nothing at all.
-                .width(Length::Fill)
-                .height(Length::Fill),
+                Space::with_height(Length::Fill),
                 // A product Battle.net owns gets a panel that offers only what
                 // Lightforge can actually do for it. Running the normal one
                 // would put an INSTALL button on a game this launcher has no
@@ -2879,7 +2854,11 @@ impl Lightforge {
         .height(Length::Fixed(theme::CONTROL_HEIGHT))
         .on_press(Message::ToggleGear);
 
-        let right = column![
+        // Pinned to the control rather than placed near it. Everything else
+        // was layout, and layout cannot put a child over its sibling: in the
+        // panel's column the menu sized the card, and above the card its top
+        // edge fell between the menu and the button.
+        let control = popover::popover(
             row![
                 match self.busy || matches!(action, ActionState::Unknown) {
                     true => primary,
@@ -2888,14 +2867,25 @@ impl Lightforge {
                 gear,
             ]
             .align_y(Alignment::Center),
+            self.gear_open.then(|| self.gear_menu()),
+        );
+
+        let right = column![
+            control,
             match self.busy {
                 true => battle_net,
                 false => battle_net.on_press(Message::BattleNet),
             },
+            // Held to the buttons' width so it wraps instead of setting the
+            // column's. Left to itself this line is the widest thing here, so
+            // the buttons end up centred inside a column wider than they are
+            // — and the cog menu, aligned to the card, no longer sits over
+            // the cog.
             muted(
                 "Signs in through Battle.net so the in-game shop works.".to_owned(),
                 theme::CAPTION,
-            ),
+            )
+            .width(Length::Fixed(240.0)),
         ]
         .spacing(theme::SM)
         .align_x(Alignment::Center)
