@@ -199,8 +199,10 @@ enum Message {
     /// offers.
     CheckForUpdates,
     CheckedForUpdates(Box<Result<lightforge_core::tact::install::Offerings, String>>),
-    /// Plan against the build and fetch whatever the store is short.
+    /// Plan against the build and fetch whatever the store is short, after
+    /// checking what is there is not damaged.
     ScanAndRepair,
+    Scanned(Box<Result<tasks::Scanned, String>>),
 
     Show(Screen),
     SetupStatus(Option<Box<SetupStatus>>),
@@ -456,6 +458,10 @@ struct Lightforge {
     browse_open: bool,
     /// Whether the cog menu beside the primary button is open.
     gear_open: bool,
+    /// Live progress of a store scan, and whether one is running.
+    scan_rx: Option<tokio::sync::watch::Receiver<lightforge_core::tact::verify::Progress>>,
+    scan_sample: lightforge_core::tact::verify::Progress,
+    scanning: bool,
     /// Versions Battle.net reports installed, read when the catalog opens.
     installed_versions: HashMap<String, String>,
     /// Product codes Battle.net itself uses, folded into the catalog.
@@ -574,6 +580,9 @@ impl Lightforge {
             manager_open: false,
             browse_open: false,
             gear_open: false,
+            scan_rx: None,
+            scan_sample: lightforge_core::tact::verify::Progress::default(),
+            scanning: false,
             installed_versions: HashMap::new(),
             known_codes: Vec::new(),
             resume_after_play: Vec::new(),
@@ -746,6 +755,26 @@ impl Lightforge {
             Some(e) => text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR),
             None => text(self.status.clone()).size(theme::LABEL).color(theme::MUTED),
         });
+
+        // A scan reads a million headers and says nothing for a minute or so
+        // otherwise, which reads as a hung launcher.
+        if self.scanning && self.scan_sample.total > 0 {
+            let done = self.scan_sample.checked as f32 / self.scan_sample.total as f32;
+            left = left.push(progress_bar(0.0..=1.0, done).height(6));
+            left = left.push(muted(
+                match self.scan_sample.damaged {
+                    0 => format!(
+                        "{} of {} files checked",
+                        self.scan_sample.checked, self.scan_sample.total
+                    ),
+                    n => format!(
+                        "{} of {} files checked — {n} damaged so far",
+                        self.scan_sample.checked, self.scan_sample.total
+                    ),
+                },
+                theme::CAPTION,
+            ));
+        }
         if let Some(version) = self.installed_versions.get(self.selected.code.as_str()) {
             left = left.push(
                 row![muted("installed".to_owned(), theme::LABEL), mono(version.clone())]
@@ -1046,6 +1075,9 @@ impl Lightforge {
                 }
                 if let Some(rx) = &self.addon_rx {
                     self.addon_sample = rx.borrow().clone();
+                }
+                if let Some(rx) = &self.scan_rx {
+                    self.scan_sample = *rx.borrow();
                 }
                 if let Some(entry) = self
                     .queue
@@ -1932,11 +1964,47 @@ impl Lightforge {
 
             Message::ScanAndRepair => {
                 self.gear_open = false;
-                // A scan is a plan, and a repair is fetching what the plan
-                // lists — so this is the ordinary download path, entered
-                // deliberately rather than because a new build shipped.
-                self.status = "scanning — anything missing will be fetched".to_owned();
-                self.enqueue()
+                self.error = None;
+                self.scanning = true;
+                self.busy = true;
+                self.scan_sample = Default::default();
+                self.status = "checking stored files against their headers…".to_owned();
+
+                let (tx, rx) = tokio::sync::watch::channel(Default::default());
+                self.scan_rx = Some(rx);
+                Task::perform(
+                    tasks::scan_and_repair(self.layout.clone(), tx),
+                    |result| Message::Scanned(Box::new(result)),
+                )
+            }
+
+            Message::Scanned(result) => {
+                self.scanning = false;
+                self.busy = false;
+                self.scan_rx = None;
+                match *result {
+                    Err(e) => {
+                        self.error = Some(e);
+                        Task::none()
+                    }
+                    Ok(scan) => {
+                        // Either way the download path runs: repair works by
+                        // removing damaged entries so the planner counts them
+                        // missing, and the same plan also covers whatever was
+                        // never fetched in the first place.
+                        self.status = match scan.damaged {
+                            0 => format!(
+                                "{} files verified — none damaged; checking for anything missing",
+                                scan.checked
+                            ),
+                            n => format!(
+                                "{n} damaged of {} — {} dropped, fetching them again",
+                                scan.checked, scan.removed
+                            ),
+                        };
+                        self.enqueue()
+                    }
+                }
             }
 
             Message::ClearShaderCache => {
@@ -2028,7 +2096,7 @@ impl Lightforge {
             false => Subscription::none(),
         };
 
-        match self.running().is_some() || self.setup_running || self.addons_busy {
+        match self.running().is_some() || self.setup_running || self.addons_busy || self.scanning {
             true => Subscription::batch([
                 closing,
                 resizes,
@@ -2685,6 +2753,26 @@ impl Lightforge {
             Some(e) => text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR),
             None => text(self.status.clone()).size(theme::LABEL).color(theme::MUTED),
         });
+
+        // A scan reads a million headers and says nothing for a minute or so
+        // otherwise, which reads as a hung launcher.
+        if self.scanning && self.scan_sample.total > 0 {
+            let done = self.scan_sample.checked as f32 / self.scan_sample.total as f32;
+            left = left.push(progress_bar(0.0..=1.0, done).height(6));
+            left = left.push(muted(
+                match self.scan_sample.damaged {
+                    0 => format!(
+                        "{} of {} files checked",
+                        self.scan_sample.checked, self.scan_sample.total
+                    ),
+                    n => format!(
+                        "{} of {} files checked — {n} damaged so far",
+                        self.scan_sample.checked, self.scan_sample.total
+                    ),
+                },
+                theme::CAPTION,
+            ));
+        }
 
         if let Some(progress) = progress_of(action) {
             left = left.push(progress_bar(0.0..=1.0, progress.fraction()).height(6));

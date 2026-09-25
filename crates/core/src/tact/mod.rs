@@ -30,5 +30,6 @@ pub mod plan;
 pub mod productdb;
 pub mod storage;
 pub mod uninstall;
+pub mod verify;
 pub mod version;
 pub mod writer;

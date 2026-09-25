@@ -98,6 +98,57 @@ pub async fn offerings(
         .map_err(|e| e.to_string())
 }
 
+/// What a scan did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Scanned {
+    pub checked: u64,
+    pub damaged: u64,
+    /// Entries dropped from the indices, which the next download refetches.
+    pub removed: usize,
+}
+
+/// Verify the store's entries against their own headers, and drop the bad ones.
+///
+/// Repair rewrites the indices a running client memory-maps, so this refuses
+/// to run while anything is alive in the prefix — the same gate a launch and a
+/// download go through.
+pub async fn scan_and_repair(
+    layout: Layout,
+    tx: tokio::sync::watch::Sender<lightforge_core::tact::verify::Progress>,
+) -> Result<Scanned, String> {
+    tokio::task::spawn_blocking(move || {
+        use lightforge_core::tact::storage::Storage;
+        use lightforge_core::tact::verify;
+
+        let alive = lightforge_core::preflight::scan(&layout);
+        if let Some(process) = alive.first() {
+            return Err(format!(
+                "close {} first — the store is in use",
+                process.name
+            ));
+        }
+
+        let install = layout.wow_install();
+        let store = Storage::open(install.join("Data")).map_err(|e| e.to_string())?;
+        let report = verify::scan(&store, |progress| {
+            let _ = tx.send(progress);
+        });
+
+        let removed = match report.is_healthy() {
+            true => 0,
+            false => verify::repair(&install.join("Data").join("data"), &report.damaged)
+                .map_err(|e| e.to_string())?,
+        };
+        Ok(Scanned {
+            checked: report.checked,
+            damaged: report.damaged.len() as u64,
+            removed,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Branding straight off disk, for the frame before [`theme`] answers.
 ///
 /// Network-free and typically a few tens of milliseconds, so on every run

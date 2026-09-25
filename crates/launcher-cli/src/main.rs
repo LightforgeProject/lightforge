@@ -326,6 +326,18 @@ enum Command {
         /// The token, or `@path` to read it from a file.
         token: String,
     },
+    /// Verify every file in a store against its own entry headers, and
+    /// optionally drop the damaged ones so a download refetches them.
+    Verify {
+        /// Install to check. Defaults to the configured one.
+        path: Option<PathBuf>,
+        /// Remove damaged entries from the indices. Requires a closed client.
+        #[arg(long)]
+        repair: bool,
+        /// List every damaged entry rather than the first few.
+        #[arg(long)]
+        all: bool,
+    },
     /// Rewrite a store's `.idx` files without touching its archives.
     ///
     /// Repairs an install whose indices were written with too little free
@@ -1863,6 +1875,97 @@ async fn main() -> Result<()> {
                         entry.id,
                         entry.version_id.as_deref().unwrap_or("-")
                     );
+                }
+            }
+        }
+        Command::Verify { path, repair, all } => {
+            use lightforge_core::tact::storage::Storage;
+            use lightforge_core::tact::verify;
+            use std::time::{Duration, Instant};
+
+            let install = path.unwrap_or_else(|| layout.wow_install());
+            let data_dir = install.join("Data").join("data");
+
+            // Repair rewrites the indices a running client memory-maps. The
+            // scan itself only reads, so it is allowed either way.
+            if repair {
+                let alive = lightforge_core::preflight::scan(&layout);
+                if !alive.is_empty() {
+                    for process in &alive {
+                        println!("running         {} (pid {})", process.name, process.pid);
+                    }
+                    anyhow::bail!("close the game and Battle.net first — the store is in use");
+                }
+            }
+
+            let store = Storage::open(install.join("Data")).context("opening the store")?;
+            let stats = store.stats();
+            println!("store           {}", data_dir.display());
+            println!("indexed         {} files across {} buckets", stats.files, stats.buckets);
+
+            let started = Instant::now();
+            let mut last = Instant::now();
+            let report = verify::scan(&store, |p| {
+                if last.elapsed() >= Duration::from_millis(500) {
+                    last = Instant::now();
+                    eprintln!("  {}/{} checked, {} damaged", p.checked, p.total, p.damaged);
+                }
+            });
+
+            println!(
+                "checked         {} entries in {:.1}s",
+                report.checked,
+                started.elapsed().as_secs_f64()
+            );
+            println!(
+                "read            {} headers, {:.1} MiB",
+                report.headers_read,
+                report.bytes_read as f64 / (1024.0 * 1024.0)
+            );
+            if !report.missing_archives.is_empty() {
+                println!("missing         {} archive files", report.missing_archives.len());
+            }
+
+            if report.is_healthy() {
+                println!("\nhealthy — every entry is where its index says, and is what it claims");
+                return Ok(());
+            }
+
+            println!("\ndamaged         {} entries", report.damaged.len());
+            let mut by_fault: std::collections::BTreeMap<&str, usize> = Default::default();
+            for damage in &report.damaged {
+                *by_fault.entry(damage.fault.describe()).or_default() += 1;
+            }
+            for (fault, count) in &by_fault {
+                println!("  {count:>8}  {fault}");
+            }
+
+            let show = match all {
+                true => report.damaged.len(),
+                false => 10.min(report.damaged.len()),
+            };
+            println!();
+            for damage in &report.damaged[..show] {
+                let key: String =
+                    damage.entry.key.iter().map(|b| format!("{b:02x}")).collect();
+                println!(
+                    "  {key}  data.{:03} +{}  {}",
+                    damage.entry.archive_id, damage.entry.offset, damage.fault.describe()
+                );
+            }
+            if show < report.damaged.len() {
+                println!("  … and {} more (--all to list them)", report.damaged.len() - show);
+            }
+
+            match repair {
+                false => println!(
+                    "\nRun again with --repair to drop these from the indices; the next \
+                     download refetches them."
+                ),
+                true => {
+                    let removed = verify::repair(&data_dir, &report.damaged)?;
+                    println!("\nremoved         {removed} entries from the indices");
+                    println!("Run a download for this product to fetch them again.");
                 }
             }
         }
