@@ -193,6 +193,9 @@ enum Command {
         /// Plan and report, then stop without fetching any content.
         #[arg(long)]
         dry_run: bool,
+        /// Opt in to optional content by tag name, e.g. `HighRes`. Repeatable.
+        #[arg(long)]
+        optional: Vec<String>,
         /// Only cache this many archive indices. Bounds a test run; a real
         /// install needs all of them, and the plan is incomplete without.
         #[arg(long)]
@@ -244,6 +247,9 @@ enum Command {
         /// cross-examine the store probe that produced it.
         #[arg(long)]
         explain: bool,
+        /// Opt in to optional content by tag name, e.g. `HighRes`. Repeatable.
+        #[arg(long)]
+        optional: Vec<String>,
         /// Only cache this many archive indices. Bounds a test run.
         #[arg(long)]
         limit_archives: Option<usize>,
@@ -1113,6 +1119,7 @@ async fn main() -> Result<()> {
             locale,
             flavor,
             dry_run,
+            optional,
             limit_archives,
             limit_runs,
             skip_loose,
@@ -1138,6 +1145,7 @@ async fn main() -> Result<()> {
                 locale,
                 flavor,
                 concurrency,
+                optional_tags: optional,
                 gap_bytes: gap_kib * 1024,
                 checkpoint_bytes: checkpoint_mib * 1024 * 1024,
                 install_files,
@@ -1176,6 +1184,13 @@ async fn main() -> Result<()> {
                 Event::IndicesDone { cached, downloaded, bytes } => println!(
                     "indices         {cached} cached, {downloaded} downloaded ({:.1} MiB)",
                     bytes as f64 / 1048576.0
+                ),
+                Event::Optional { names } => println!(
+                    "optional        {}",
+                    match names.is_empty() {
+                        true => "none offered".to_owned(),
+                        false => names.join(", "),
+                    }
                 ),
                 Event::Loose { files } => println!("loose files     {files}"),
                 Event::Located { located, wanted } => {
@@ -1436,6 +1451,7 @@ async fn main() -> Result<()> {
             locale,
             flavor,
             explain,
+            optional,
             limit_archives,
             concurrency,
         } => {
@@ -1455,6 +1471,7 @@ async fn main() -> Result<()> {
                 flavor,
                 concurrency,
                 limit_archives,
+                optional_tags: optional,
                 ..InstallOptions::default()
             };
 
@@ -1478,6 +1495,13 @@ async fn main() -> Result<()> {
             let prepared =
                 install::prepare(&http, &dest, &code, &options, &mut on_event).await?;
 
+            println!(
+                "optional        {}",
+                match prepared.optional.is_empty() {
+                    true => "none offered".to_owned(),
+                    false => prepared.optional.join(", "),
+                }
+            );
             let wanted_bytes: u64 = prepared.wanted.iter().map(|e| e.size).sum();
             println!("wanted          {} files, {:.2} GiB", prepared.wanted.len(), gib(wanted_bytes));
             println!(
@@ -1539,6 +1563,38 @@ async fn main() -> Result<()> {
             println!("  in an archive   {}", report.sources.archived);
             println!("  loose           {}", report.sources.loose);
             println!("  nowhere         {}  (nothing can fetch these)", report.sources.nowhere);
+
+            let by_tag = tact_explain::by_tag(
+                &prepared.download,
+                &prepared.tags,
+                |k| prepared.probe.has(k),
+            );
+            println!("\nby tag (what the selection is made of)");
+            println!(
+                "{:<16} {:>4} {:>6}  {:>12} {:>9}  {:>12} {:>9}",
+                "tag", "kind", "named", "selected", "GiB", "missing", "GiB"
+            );
+            for row in by_tag.rows.iter().filter(|r| r.selected.files > 0) {
+                println!(
+                    "{:<16} {:>4} {:>6}  {:>12} {:>9.2}  {:>12} {:>9.2}",
+                    row.name,
+                    row.kind,
+                    match row.constrained {
+                        true => "yes",
+                        false => "NO",
+                    },
+                    row.selected.files,
+                    gib(row.selected.bytes),
+                    row.missing.files,
+                    gib(row.missing.bytes),
+                );
+            }
+            match by_tag.unconstrained_kinds.as_slice() {
+                [] => println!("  every tag category the manifest defines is constrained"),
+                kinds => println!(
+                    "  UNCONSTRAINED categories: {kinds:?} — every value of these is selected"
+                ),
+            }
 
             println!("\nprobe cross-check");
             match report.false_missing {

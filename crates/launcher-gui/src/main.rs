@@ -164,6 +164,8 @@ enum Message {
     TweakEnvRemove(String),
     /// Throw away this product's shader cache, e.g. after a Proton swap.
     ClearShaderCache,
+    /// Opt in or out of one optional download, by manifest tag name.
+    OptionalContent(String, bool),
 
     Show(Screen),
     SetupStatus(Option<Box<SetupStatus>>),
@@ -847,6 +849,10 @@ impl Lightforge {
                 code.clone(),
                 self.region,
                 self.config.download_limit_bytes(),
+                self.config
+                    .product(&code)
+                    .map(|p| p.profile.optional_content.clone())
+                    .unwrap_or_default(),
                 cancel,
                 tx,
             ),
@@ -1015,6 +1021,16 @@ impl Lightforge {
                     // baseline is a constant offset and would only mute the
                     // first sample.
                     entry.rate.sample(entry.sample.progress.bytes_stored);
+
+                    // What this build offers is only knowable once its
+                    // manifest has been read, so a run is the one chance to
+                    // learn it. Cached per product so the settings panel has
+                    // something real to list.
+                    let (code, offered) =
+                        (entry.code.clone(), entry.sample.optional.clone());
+                    if !offered.is_empty() {
+                        self.remember_optional(&code, offered);
+                    }
                 }
                 Task::none()
             }
@@ -1805,6 +1821,19 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::OptionalContent(name, on) => {
+                if let Some(product) = self.config.product_mut(&self.selected.code) {
+                    let list = &mut product.profile.optional_content;
+                    list.retain(|n| n != &name);
+                    if on {
+                        list.push(name);
+                        list.sort();
+                    }
+                }
+                self.save_config();
+                Task::none()
+            }
+
             Message::ClearShaderCache => {
                 let Some(dirs) = self.dirs.as_ref() else {
                     self.error = Some("no cache directory available".to_owned());
@@ -1824,6 +1853,25 @@ impl Lightforge {
                 Task::none()
             }
         }
+    }
+
+    /// Record what a build offers, if it has changed.
+    ///
+    /// Saved rather than held in memory: the list is the only thing standing
+    /// between the settings panel and a hardcoded guess, and a guess is what
+    /// put a 37 GiB texture pack in a plan nobody asked for.
+    fn remember_optional(&mut self, code: &ProductCode, offered: Vec<String>) {
+        let changed = self
+            .config
+            .product(code)
+            .is_some_and(|p| p.profile.optional_available != offered);
+        if !changed {
+            return;
+        }
+        if let Some(product) = self.config.product_mut(code) {
+            product.profile.optional_available = offered;
+        }
+        self.save_config();
     }
 
     /// This product's performance settings.
@@ -2519,6 +2567,23 @@ impl Lightforge {
             );
         }
 
+        // What an Install or Update would actually fetch beyond the base game.
+        // The size surprise this prevents is the whole reason the gate exists:
+        // on the Forever beta the texture pack alone is 37 GiB.
+        let opted = self
+            .config
+            .product(&self.selected.code)
+            .map(|p| p.profile.optional_content.clone())
+            .unwrap_or_default();
+        if !opted.is_empty() && matches!(action, ActionState::Install | ActionState::Update { .. })
+        {
+            let names: Vec<String> = opted.iter().map(|t| optional_label(t)).collect();
+            left = left.push(muted(
+                format!("includes optional content: {}", names.join(", ")),
+                theme::CAPTION,
+            ));
+        }
+
         left = left.push(
             row![
                 // Addons are already per-product — the screen titles itself
@@ -2833,7 +2898,44 @@ impl Lightforge {
         ));
         let env = container(env).padding(theme::MD).style(theme::card);
 
-        let mut body = column![host, graphics, client, visuals, env].spacing(theme::MD);
+        // Optional downloads. Off by default, which is what Battle.net does:
+        // these are opt-in extras, and treating them as wanted is what put a
+        // 37 GiB texture pack in a plan nobody asked for.
+        let profile = self.config.product(&self.selected.code).map(|p| &p.profile);
+        let available = profile.map(|p| p.optional_available.as_slice()).unwrap_or(&[]);
+        let opted = profile.map(|p| p.optional_content.as_slice()).unwrap_or(&[]);
+
+        let mut content = column![heading("Optional downloads")].spacing(theme::SM);
+        match available.is_empty() {
+            true => {
+                content = content.push(muted(
+                    "What a build offers is only known once its manifest has been read, so \
+                     this fills in after the next update check or download."
+                        .to_owned(),
+                    theme::CAPTION,
+                ));
+            }
+            false => {
+                for name in available {
+                    let on = opted.iter().any(|n| n == name);
+                    let tag = name.clone();
+                    content = content.push(
+                        iced::widget::checkbox(optional_label(name), on)
+                            .on_toggle(move |on| Message::OptionalContent(tag.clone(), on))
+                            .text_size(theme::BODY),
+                    );
+                }
+                content = content.push(muted(
+                    "Extra content this build offers, off unless asked for — the same \
+                     default Battle.net uses. Turning one on adds it to the next download."
+                        .to_owned(),
+                    theme::CAPTION,
+                ));
+            }
+        }
+        let content = container(content).padding(theme::MD).style(theme::card);
+
+        let mut body = column![host, graphics, client, content, visuals, env].spacing(theme::MD);
         if let Some(e) = &self.error {
             body = body.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
         }
@@ -3503,6 +3605,19 @@ impl Lightforge {
         }
 
         self.page("Settings", None, body.into())
+    }
+}
+
+/// A human label for an optional-download tag.
+///
+/// The manifest's own name is the fallback rather than a lookup failure: these
+/// are Blizzard's tags, new ones appear without notice (`Talebound` did), and a
+/// build that offers something we have no phrase for should still offer it.
+fn optional_label(tag: &str) -> String {
+    match tag {
+        "HighRes" => "High-resolution textures".to_owned(),
+        "Alternate" => "Alternate assets".to_owned(),
+        other => other.to_owned(),
     }
 }
 

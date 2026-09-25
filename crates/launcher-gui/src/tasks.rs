@@ -205,6 +205,10 @@ pub struct TransferState {
     pub baseline: u64,
     /// Bytes the whole product needs, present ones included.
     pub product_bytes: u64,
+    /// Optional content this build offers, as the manifest named it. Carried
+    /// back so the settings panel has something real to offer rather than a
+    /// hardcoded guess.
+    pub optional: Vec<String>,
 }
 
 /// Download `code` into its install directory, publishing progress to `tx`.
@@ -217,6 +221,7 @@ pub async fn download(
     code: ProductCode,
     region: Region,
     limit_bytes_per_second: u64,
+    optional_tags: Vec<String>,
     cancel: Cancel,
     tx: tokio::sync::watch::Sender<TransferState>,
 ) -> Result<Summary, String> {
@@ -250,6 +255,7 @@ pub async fn download(
                 let options = InstallOptions {
                     region,
                     flavor: code.install_dir().into_owned(),
+                    optional_tags: optional_tags.clone(),
                     // Tighter than the CLI's 4 GiB. A checkpoint is a few
                     // milliseconds of index writing, and it bounds what is
                     // lost if the app is killed rather than closed — the CLI
@@ -271,6 +277,7 @@ pub async fn download(
                 // has to fetch — the difference is what the store already had.
                 let mut product_bytes = 0u64;
                 let mut baseline = 0u64;
+                let mut optional: Vec<String> = Vec::new();
 
                 let on_event = move |event: Event| {
                     let progress = match &event {
@@ -288,6 +295,9 @@ pub async fn download(
                             if let Event::Planned { bytes, .. } = other {
                                 baseline = product_bytes.saturating_sub(*bytes);
                             }
+                            if let Event::Optional { names } = other {
+                                optional = names.clone();
+                            }
                             stage = describe(other);
                             Progress::default()
                         }
@@ -297,6 +307,7 @@ pub async fn download(
                         progress,
                         baseline,
                         product_bytes,
+                        optional: optional.clone(),
                     });
                 };
 
@@ -320,6 +331,10 @@ fn describe(event: &Event) -> String {
         Event::Wanted { files, bytes } => {
             format!("{files} files, {:.1} GiB wanted", gib(*bytes))
         }
+        Event::Optional { names } => match names.is_empty() {
+            true => "no optional content offered".to_owned(),
+            false => format!("optional content available: {}", names.join(", ")),
+        },
         Event::Indices(step) => format!("archive indices {}/{}", step.done, step.total),
         Event::IndicesDone { cached, downloaded, .. } => {
             format!("indices ready — {cached} cached, {downloaded} fetched")

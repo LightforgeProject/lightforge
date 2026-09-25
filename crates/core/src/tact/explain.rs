@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 use super::archive::FileIndex;
 use super::idx::Entry;
 use super::indices::Locations;
-use super::manifest::DownloadEntry;
+use super::manifest::{DownloadEntry, DownloadManifest, Tag, TagSet};
 use super::storage::{EKey, Storage};
 
 /// Files and bytes, the pair every row of the breakdown carries.
@@ -138,6 +138,89 @@ pub fn explain(
     }
 
     out
+}
+
+
+/// One tag, and how much of the selection it accounts for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagRow {
+    pub name: String,
+    /// 1 platform, 2 architecture, 3 locale, 4 region, 5 speech/text.
+    pub kind: u16,
+    /// Whether the tag expression names this tag, and so constrains on it.
+    pub constrained: bool,
+    /// Whether this tag now excludes the entries it covers: optional content
+    /// the expression is silent about and nobody opted in to.
+    pub gated: bool,
+    pub selected: Tally,
+    pub missing: Tally,
+}
+
+/// Which tag categories the selection actually constrains.
+///
+/// The blind spot this exists to close: [`TagSet`] drops names the manifest
+/// does not define, and the selection rule only requires the tags that are
+/// left. A category the expression says *nothing* about is therefore not
+/// narrowed at all — every value of it passes — and nothing in the plan's
+/// numbers shows that happening. A build that introduces a new category is
+/// exactly the case where a launcher quietly starts wanting several times
+/// what it should.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TagReport {
+    pub rows: Vec<TagRow>,
+    /// Categories present in the manifest that the expression never names.
+    pub unconstrained_kinds: Vec<u16>,
+}
+
+/// Attribute the selection, and the shortfall, to the tags that produced them.
+pub fn by_tag(
+    manifest: &DownloadManifest,
+    tags: &TagSet,
+    already_have: impl Fn(&EKey) -> bool,
+) -> TagReport {
+    let named: Vec<&str> = tags.groups().flatten().map(String::as_str).collect();
+    let defined: Vec<&Tag> = manifest.tags().iter().collect();
+    let selection = tags.against(manifest.tags());
+    let gated = selection.gated();
+
+    let mut rows: Vec<TagRow> = defined
+        .iter()
+        .map(|tag| TagRow {
+            name: tag.name.clone(),
+            kind: tag.kind,
+            constrained: named.contains(&tag.name.as_str()),
+            gated: gated.contains(&tag.name.as_str()),
+            selected: Tally::default(),
+            missing: Tally::default(),
+        })
+        .collect();
+
+    // Walked by index, because a tag's mask addresses manifest positions —
+    // the selected list has been sorted by then and cannot be indexed back.
+    let selected = manifest.selected_indices(tags);
+    for index in selected {
+        let entry = &manifest.entries()[index];
+        let absent = !already_have(&entry.ekey);
+        for (row, tag) in rows.iter_mut().zip(&defined) {
+            if tag.covers(index) {
+                row.selected.add(entry.size);
+                if absent {
+                    row.missing.add(entry.size);
+                }
+            }
+        }
+    }
+
+    let mut unconstrained_kinds: Vec<u16> = defined
+        .iter()
+        .filter(|tag| gated.contains(&tag.name.as_str()))
+        .map(|tag| tag.kind)
+        .collect();
+    unconstrained_kinds.sort_unstable();
+    unconstrained_kinds.dedup();
+
+    rows.sort_by_key(|row| std::cmp::Reverse(row.missing.bytes));
+    TagReport { rows, unconstrained_kinds }
 }
 
 /// Which store bucket a key would live in.

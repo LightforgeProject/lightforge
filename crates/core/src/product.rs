@@ -583,6 +583,14 @@ pub struct ProductProfile {
     /// Performance settings for this product: launch wrappers, environment,
     /// and the client CVars Lightforge re-asserts before each launch.
     pub tweaks: crate::tweaks::Tweaks,
+    /// Optional content opted in to, by download-manifest tag name — e.g.
+    /// `HighRes`. Empty matches Battle.net, which installs none of it unless
+    /// asked.
+    pub optional_content: Vec<String>,
+    /// What the last plan said this product offers. A cache, not a setting:
+    /// the list is only knowable after reading the build's download manifest,
+    /// so the panel would have nothing to show before the first refresh.
+    pub optional_available: Vec<String>,
     pub prefix_state: PrefixState,
 }
 

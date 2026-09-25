@@ -78,6 +78,9 @@ impl Tag {
 pub struct TagSet {
     /// Alternatives. An entry is selected if it satisfies any one of them.
     groups: Vec<Vec<String>>,
+    /// Optional content the user has asked for by name — see
+    /// [`TagSet::with_optional`].
+    allow: Vec<String>,
 }
 
 impl TagSet {
@@ -98,7 +101,7 @@ impl TagSet {
             })
             .filter(|group: &Vec<String>| !group.is_empty())
             .collect();
-        Self { groups }
+        Self { groups, allow: Vec::new() }
     }
 
     /// Build a set from one explicit group, for callers that know exactly
@@ -107,7 +110,24 @@ impl TagSet {
         let group: Vec<String> = names.into_iter().map(Into::into).collect();
         Self {
             groups: if group.is_empty() { Vec::new() } else { vec![group] },
+            allow: Vec::new(),
         }
+    }
+
+    /// Opt in to optional content by tag name, e.g. `HighRes`.
+    ///
+    /// A permission, not a requirement. Requiring the name would select *only*
+    /// the texture pack; allowing it lets those entries through a gate that
+    /// otherwise excludes them, while everything else is selected exactly as
+    /// before.
+    pub fn with_optional(mut self, names: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.allow = names.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// The optional content this set opts in to.
+    pub fn optional(&self) -> &[String] {
+        &self.allow
     }
 
     pub fn is_empty(&self) -> bool {
@@ -134,10 +154,10 @@ impl TagSet {
         unknown
     }
 
-    /// Resolve to the tags that actually constrain the selection: one list of
-    /// tag positions per group, with undefined names dropped.
-    fn resolve(&self, tags: &[Tag]) -> Vec<Vec<usize>> {
-        self.groups
+    /// Bind this expression to one manifest's tag table.
+    pub fn against<'a>(&self, tags: &'a [Tag]) -> Selection<'a> {
+        let groups = self
+            .groups
             .iter()
             .map(|group| {
                 group
@@ -145,17 +165,79 @@ impl TagSet {
                     .filter_map(|name| tags.iter().position(|t| t.name == *name))
                     .collect()
             })
-            .collect()
+            .collect();
+
+        // A category is constrained when the expression names any one of its
+        // values: naming `enUS` narrows locale even though every other locale
+        // tag goes unnamed. A category it names nothing in constrains nothing,
+        // so every value of it would otherwise pass — which is how a 37 GiB
+        // texture pack ends up in a plan nobody asked for. Those become gates:
+        // tags that must *not* cover an entry, unless opted in by name.
+        let named = |name: &str| self.groups.iter().flatten().any(|n| n == name);
+        let gates = tags
+            .iter()
+            .enumerate()
+            .filter(|(_, tag)| {
+                !named(&tag.name)
+                    && !self.allow.iter().any(|a| a == &tag.name)
+                    && !tags.iter().any(|t| t.kind == tag.kind && named(&t.name))
+            })
+            .map(|(i, _)| i)
+            .collect();
+
+        Selection { groups, gates, tags, unconstrained: self.groups.is_empty() }
     }
 
-    /// Whether entry `index` satisfies any group.
-    fn selects(&self, resolved: &[Vec<usize>], tags: &[Tag], index: usize) -> bool {
-        if self.groups.is_empty() {
+    /// The optional content a manifest offers that this expression is silent
+    /// about — the names a user could opt in to.
+    pub fn optional_names(&self, tags: &[Tag]) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .against(tags)
+            .gates
+            .iter()
+            .map(|&i| tags[i].name.clone())
+            .collect();
+        // Opted-in names stop being gates, but are still what is on offer.
+        names.extend(self.allow.iter().filter(|a| tags.iter().any(|t| t.name == **a)).cloned());
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+}
+
+/// A tag expression bound to one manifest's tag table.
+///
+/// Two rules, and an entry must pass both: it satisfies one of the
+/// alternatives, and it carries nothing from a category the expression never
+/// mentions.
+pub struct Selection<'a> {
+    /// Tag positions per alternative group.
+    groups: Vec<Vec<usize>>,
+    /// Tag positions that exclude an entry outright.
+    gates: Vec<usize>,
+    tags: &'a [Tag],
+    /// An empty expression states no constraints, and the honest reading of
+    /// that is "everything" — gates included.
+    unconstrained: bool,
+}
+
+impl Selection<'_> {
+    pub fn selects(&self, index: usize) -> bool {
+        if self.unconstrained {
             return true;
         }
-        resolved
+        if self.gates.iter().any(|&t| self.tags[t].covers(index)) {
+            return false;
+        }
+        self.groups
             .iter()
-            .any(|group| group.iter().all(|&t| tags[t].covers(index)))
+            .any(|group| group.iter().all(|&t| self.tags[t].covers(index)))
+    }
+
+    /// The tags acting as gates, by name — the optional content being held
+    /// back.
+    pub fn gated(&self) -> Vec<&str> {
+        self.gates.iter().map(|&i| self.tags[i].name.as_str()).collect()
     }
 }
 
@@ -237,11 +319,11 @@ impl InstallManifest {
 
     /// The entries `tags` selects, in manifest order.
     pub fn select(&self, tags: &TagSet) -> Vec<&InstallEntry> {
-        let resolved = tags.resolve(&self.tags);
+        let selection = tags.against(&self.tags);
         self.entries
             .iter()
             .enumerate()
-            .filter(|(i, _)| tags.selects(&resolved, &self.tags, *i))
+            .filter(|(i, _)| selection.selects(*i))
             .map(|(_, e)| e)
             .collect()
     }
@@ -330,18 +412,27 @@ impl DownloadManifest {
         self.entries.is_empty()
     }
 
+    /// The manifest positions `tags` selects, in manifest order.
+    ///
+    /// [`Self::select`] sorts its result, which loses the index a tag's mask
+    /// is addressed by; attribution needs the positions themselves.
+    pub fn selected_indices(&self, tags: &TagSet) -> Vec<usize> {
+        let selection = tags.against(&self.tags);
+        (0..self.entries.len()).filter(|i| selection.selects(*i)).collect()
+    }
+
     /// The entries `tags` selects, sorted by priority then by key.
     ///
     /// Priority order is the point of this manifest: it is what lets a client
     /// be playable before the download finishes. Ties break on the key so the
     /// result is deterministic across runs, which matters for resume.
     pub fn select(&self, tags: &TagSet) -> Vec<DownloadEntry> {
-        let resolved = tags.resolve(&self.tags);
+        let selection = tags.against(&self.tags);
         let mut selected: Vec<DownloadEntry> = self
             .entries
             .iter()
             .enumerate()
-            .filter(|(i, _)| tags.selects(&resolved, &self.tags, *i))
+            .filter(|(i, _)| selection.selects(*i))
             .map(|(_, e)| *e)
             .collect();
         selected.sort_unstable_by_key(|e| (e.priority, e.ekey));
@@ -350,13 +441,18 @@ impl DownloadManifest {
 
     /// Total encoded bytes `tags` selects, without materialising the list.
     pub fn selected_size(&self, tags: &TagSet) -> u64 {
-        let resolved = tags.resolve(&self.tags);
+        let selection = tags.against(&self.tags);
         self.entries
             .iter()
             .enumerate()
-            .filter(|(i, _)| tags.selects(&resolved, &self.tags, *i))
+            .filter(|(i, _)| selection.selects(*i))
             .map(|(_, e)| e.size)
             .sum()
+    }
+
+    /// Optional content this build offers that `tags` does not ask for.
+    pub fn optional_names(&self, tags: &TagSet) -> Vec<String> {
+        tags.optional_names(&self.tags)
     }
 }
 
@@ -636,6 +732,85 @@ mod tests {
             selected.iter().map(|e| e.size).sum::<u64>()
         );
         assert_eq!(m.selected_size(&tags), 4000);
+    }
+
+    #[test]
+    fn optional_content_is_excluded_unless_it_is_asked_for_by_name() {
+        // The 2026-09 defect: `HighRes` is a category of its own, and a
+        // `.build.info` Tags column never mentions it — Battle.net only lists
+        // the tags you opted into. Constraining nothing on that category let
+        // every entry in it through, which on the Forever beta was a 37 GiB
+        // texture pack the client neither had nor wanted.
+        let bytes = download(
+            &[
+                ("Windows", 1, &[0, 1, 2]),
+                ("enUS", 3, &[0, 1, 2]),
+                ("HighRes", 16384, &[2]),
+            ],
+            &[(1, 100, 0), (2, 200, 0), (3, 9000, 0)],
+        );
+        let manifest = DownloadManifest::parse(&bytes).unwrap();
+
+        let tags = TagSet::parse("Windows enUS");
+        assert_eq!(manifest.select(&tags).len(), 2);
+        assert_eq!(manifest.selected_size(&tags), 300);
+
+        // And it is on offer rather than hidden: the user can find it.
+        assert_eq!(manifest.optional_names(&tags), ["HighRes"]);
+    }
+
+    #[test]
+    fn opting_in_admits_the_optional_content_without_requiring_it() {
+        // A permission, not a requirement. Requiring `HighRes` would select
+        // only the texture pack and drop the game.
+        let bytes = download(
+            &[
+                ("Windows", 1, &[0, 1, 2]),
+                ("enUS", 3, &[0, 1, 2]),
+                ("HighRes", 16384, &[2]),
+            ],
+            &[(1, 100, 0), (2, 200, 0), (3, 9000, 0)],
+        );
+        let manifest = DownloadManifest::parse(&bytes).unwrap();
+
+        let tags = TagSet::parse("Windows enUS").with_optional(["HighRes"]);
+        assert_eq!(manifest.select(&tags).len(), 3);
+        assert_eq!(manifest.selected_size(&tags), 9300);
+    }
+
+    #[test]
+    fn opting_in_to_one_option_does_not_admit_another() {
+        let bytes = download(
+            &[
+                ("Windows", 1, &[0, 1, 2]),
+                ("HighRes", 16384, &[1]),
+                ("Alternate", 16384, &[2]),
+            ],
+            &[(1, 100, 0), (2, 200, 0), (3, 400, 0)],
+        );
+        let manifest = DownloadManifest::parse(&bytes).unwrap();
+
+        let tags = TagSet::parse("Windows").with_optional(["HighRes"]);
+        assert_eq!(manifest.selected_size(&tags), 300);
+    }
+
+    #[test]
+    fn a_category_the_column_names_any_value_of_is_still_narrowed_not_gated() {
+        // Naming `enUS` constrains locale; the other locales must be excluded
+        // by the group rule as before, not treated as optional extras.
+        let bytes = download(
+            &[
+                ("Windows", 1, &[0, 1]),
+                ("enUS", 3, &[0]),
+                ("deDE", 3, &[1]),
+            ],
+            &[(1, 100, 0), (2, 200, 0)],
+        );
+        let manifest = DownloadManifest::parse(&bytes).unwrap();
+
+        let tags = TagSet::parse("Windows enUS");
+        assert_eq!(manifest.selected_size(&tags), 100);
+        assert!(manifest.optional_names(&tags).is_empty());
     }
 
     #[test]

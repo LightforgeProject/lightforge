@@ -48,6 +48,11 @@ pub struct Options {
     pub region: Region,
     /// Client locale, e.g. `enUS`. Selects which of a build's files are wanted.
     pub locale: String,
+    /// Optional content to opt in to, by tag name — e.g. `HighRes`.
+    ///
+    /// Empty matches Battle.net, which installs optional content only when
+    /// asked. See [`crate::tact::manifest::TagSet::with_optional`].
+    pub optional_tags: Vec<String>,
     /// Flavor directory the install files are extracted into, e.g. `_retail_`.
     pub flavor: String,
     pub concurrency: usize,
@@ -89,6 +94,7 @@ impl Default for Options {
         Self {
             region: Region::default(),
             locale: "enUS".to_owned(),
+            optional_tags: Vec::new(),
             flavor: String::new(),
             // 32 measured 2.4x the throughput of 8 on a real product: these
             // transfers are request-latency-bound, not bandwidth-bound.
@@ -150,6 +156,10 @@ pub enum Event {
         cached: usize,
         downloaded: usize,
         bytes: u64,
+    },
+    /// Optional content this build offers, by tag name.
+    Optional {
+        names: Vec<String>,
     },
     Loose {
         files: usize,
@@ -216,6 +226,12 @@ pub struct Summary {
 /// download, and so the GUI can present sizes before asking the user.
 pub struct Prepared {
     pub plan: Plan,
+    /// Optional content this build offers, opted in or not — what a UI can
+    /// offer the user. Only knowable once the manifest has been read.
+    pub optional: Vec<String>,
+    /// The build's download manifest, kept so a report can attribute the
+    /// selection back to the tags that produced it.
+    pub download: DownloadManifest,
     /// Every file this build wants for the selected tags, before the store is
     /// consulted — the input the plan is a subtraction from.
     pub wanted: Vec<DownloadEntry>,
@@ -298,7 +314,7 @@ pub async fn prepare(
     on_event: &mut impl FnMut(Event),
 ) -> Result<Prepared, InstallError> {
     let tag_column = options.tag_column();
-    let tags = TagSet::parse(&tag_column);
+    let tags = TagSet::parse(&tag_column).with_optional(options.optional_tags.clone());
 
     let versions = version::versions(http, options.region, code.as_str()).await?;
     let remote = version::for_region(&versions, options.region, |v| &v.region)
@@ -344,6 +360,9 @@ pub async fn prepare(
             .map(str::to_owned)
             .collect(),
     });
+
+    let optional = download_manifest.optional_names(&tags);
+    on_event(Event::Optional { names: optional.clone() });
 
     let wanted = download_manifest.select(&tags);
     on_event(Event::Wanted {
@@ -425,6 +444,8 @@ pub async fn prepare(
 
     Ok(Prepared {
         plan,
+        optional,
+        download: download_manifest,
         wanted,
         probe,
         remote,
