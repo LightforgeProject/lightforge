@@ -204,6 +204,13 @@ enum Message {
     /// checking what is there is not damaged.
     ScanAndRepair,
     Scanned(Box<Result<tasks::Scanned, String>>),
+    /// Hash every stored byte against its checksums — or, while that runs,
+    /// stop it.
+    DeepScan,
+    DeepScanned(Box<Result<lightforge_core::tact::verify::Report, String>>),
+    /// Drop what the last deep scan found damaged, once nothing is running.
+    RepairDamaged,
+    Repaired(Result<usize, tasks::Unrepaired>),
 
     Show(Screen),
     SetupStatus(Option<Box<SetupStatus>>),
@@ -463,6 +470,12 @@ struct Lightforge {
     scan_rx: Option<tokio::sync::watch::Receiver<lightforge_core::tact::verify::Progress>>,
     scan_sample: lightforge_core::tact::verify::Progress,
     scanning: bool,
+    /// Set while a deep scan runs; tripping it stops the scan. The download
+    /// queue is held for as long as it is set.
+    deep_cancel: Option<Cancel>,
+    /// Damage a deep scan found and could not drop yet, because something
+    /// was running in the prefix. Repaired from the cog menu.
+    owed_repair: Option<Box<lightforge_core::tact::verify::Report>>,
     /// Versions Battle.net reports installed, read when the catalog opens.
     installed_versions: HashMap<String, String>,
     /// Product codes Battle.net itself uses, folded into the catalog.
@@ -584,6 +597,8 @@ impl Lightforge {
             scan_rx: None,
             scan_sample: lightforge_core::tact::verify::Progress::default(),
             scanning: false,
+            deep_cancel: None,
+            owed_repair: None,
             installed_versions: HashMap::new(),
             known_codes: Vec::new(),
             resume_after_play: Vec::new(),
@@ -694,6 +709,36 @@ impl Lightforge {
         ])
     }
 
+    /// A running scan's bar and caption, for under the status line.
+    ///
+    /// A scan otherwise says nothing for a minute or more, which reads as a
+    /// hung launcher. A deep scan is measured in bytes: its files range from
+    /// a few bytes to hundreds of megabytes, so a file count stalls and leaps.
+    fn scan_progress<'a>(
+        &self,
+        left: iced::widget::Column<'a, Message>,
+    ) -> iced::widget::Column<'a, Message> {
+        let p = &self.scan_sample;
+        if !self.scanning || p.total == 0 {
+            return left;
+        }
+        let (done, what) = match p.bytes_total {
+            0 => (
+                p.checked as f32 / p.total as f32,
+                format!("{} of {} files checked", p.checked, p.total),
+            ),
+            total => (
+                p.bytes as f32 / total as f32,
+                format!("{} checked", bytes_of(p.bytes, total)),
+            ),
+        };
+        let caption = match p.damaged {
+            0 => what,
+            n => format!("{what} — {n} damaged so far"),
+        };
+        left.push(progress_bar(0.0..=1.0, done).height(6)).push(muted(caption, theme::CAPTION))
+    }
+
     /// Every configured product, in the order the bar draws them.
     fn product_codes(&self) -> Vec<ProductCode> {
         self.choices.iter().map(|c| c.code.clone()).collect()
@@ -757,25 +802,7 @@ impl Lightforge {
             None => text(self.status.clone()).size(theme::LABEL).color(theme::MUTED),
         });
 
-        // A scan reads a million headers and says nothing for a minute or so
-        // otherwise, which reads as a hung launcher.
-        if self.scanning && self.scan_sample.total > 0 {
-            let done = self.scan_sample.checked as f32 / self.scan_sample.total as f32;
-            left = left.push(progress_bar(0.0..=1.0, done).height(6));
-            left = left.push(muted(
-                match self.scan_sample.damaged {
-                    0 => format!(
-                        "{} of {} files checked",
-                        self.scan_sample.checked, self.scan_sample.total
-                    ),
-                    n => format!(
-                        "{} of {} files checked — {n} damaged so far",
-                        self.scan_sample.checked, self.scan_sample.total
-                    ),
-                },
-                theme::CAPTION,
-            ));
-        }
+        left = self.scan_progress(left);
         if let Some(version) = self.installed_versions.get(self.selected.code.as_str()) {
             left = left.push(
                 row![muted("installed".to_owned(), theme::LABEL), mono(version.clone())]
@@ -894,7 +921,10 @@ impl Lightforge {
     /// write into the same CASC store, making both slower and both ETAs
     /// fiction.
     fn pump(&mut self) -> Task<Message> {
-        if self.running().is_some() || self.winding_down.is_some() {
+        // A deep scan reads the store a transfer would write. It does not
+        // refuse the download, it holds it: the queue picks up once the scan
+        // is done.
+        if self.running().is_some() || self.winding_down.is_some() || self.deep_cancel.is_some() {
             return Task::none();
         }
         let Some(next) = self.queue.iter().position(|d| matches!(d.stage, Stage::Queued)) else {
@@ -1107,6 +1137,10 @@ impl Lightforge {
             }
 
             Message::CloseRequested(id) => {
+                // A deep scan only reads; there is nothing to wind down.
+                if let Some(cancel) = &self.deep_cancel {
+                    cancel.cancel();
+                }
                 // Closing mid-transfer must not orphan what was fetched: trip
                 // the token, let the run checkpoint its store, then close.
                 match self.running().map(|d| d.code.clone()) {
@@ -1979,6 +2013,113 @@ impl Lightforge {
                 )
             }
 
+            Message::DeepScan => {
+                self.gear_open = false;
+                if let Some(cancel) = &self.deep_cancel {
+                    cancel.cancel();
+                    self.status = "stopping the deep scan…".to_owned();
+                    return Task::none();
+                }
+                // Every WoW flavour shares one store, so any transfer at all
+                // is writing to what this would read.
+                let transferring = self.winding_down.is_some()
+                    || self
+                        .queue
+                        .iter()
+                        .any(|d| matches!(d.stage, Stage::Running { .. } | Stage::Queued));
+                if transferring {
+                    self.error = Some(
+                        "pause downloads first — they write to the files being checked".to_owned(),
+                    );
+                    return Task::none();
+                }
+
+                self.error = None;
+                self.scanning = true;
+                self.owed_repair = None;
+                self.scan_sample = Default::default();
+                self.status = "checking every stored byte — the game can stay open".to_owned();
+
+                let cancel = Cancel::new();
+                self.deep_cancel = Some(cancel.clone());
+                let (tx, rx) = tokio::sync::watch::channel(Default::default());
+                self.scan_rx = Some(rx);
+                Task::perform(tasks::deep_scan(self.layout.clone(), cancel, tx), |result| {
+                    Message::DeepScanned(Box::new(result))
+                })
+            }
+
+            Message::DeepScanned(result) => {
+                self.scanning = false;
+                self.scan_rx = None;
+                let stopped = self.deep_cancel.take().is_some_and(|c| c.is_cancelled());
+                match *result {
+                    Err(_) if stopped => {
+                        self.status = "deep scan stopped".to_owned();
+                        self.pump()
+                    }
+                    Err(e) => {
+                        self.error = Some(e);
+                        self.pump()
+                    }
+                    Ok(report) if report.is_healthy() => {
+                        self.status = format!(
+                            "{} files checked down to the byte — none damaged",
+                            report.checked
+                        );
+                        self.pump()
+                    }
+                    // Repaired before the queue is released: a transfer
+                    // landing first would move the store and void the
+                    // findings.
+                    Ok(report) => {
+                        self.status = format!(
+                            "{} damaged of {} — repairing…",
+                            report.damaged.len(),
+                            report.checked
+                        );
+                        self.owed_repair = Some(Box::new(report));
+                        self.update(Message::RepairDamaged)
+                    }
+                }
+            }
+
+            Message::RepairDamaged => {
+                self.gear_open = false;
+                let Some(report) = self.owed_repair.clone() else {
+                    return Task::none();
+                };
+                // Held only for the index rewrite — milliseconds — since that
+                // is the one step a launching client must not overlap.
+                self.busy = true;
+                Task::perform(tasks::repair(self.layout.clone(), *report), Message::Repaired)
+            }
+
+            Message::Repaired(result) => {
+                self.busy = false;
+                match result {
+                    Ok(removed) => {
+                        self.owed_repair = None;
+                        self.status =
+                            format!("{removed} damaged files dropped — fetching them again");
+                        self.enqueue()
+                    }
+                    Err(tasks::Unrepaired::InUse) => {
+                        let damaged = self.owed_repair.as_ref().map_or(0, |r| r.damaged.len());
+                        self.status = format!(
+                            "{damaged} damaged files found — close the game and Battle.net, \
+                             then choose Repair Damaged Files"
+                        );
+                        self.pump()
+                    }
+                    Err(tasks::Unrepaired::Failed(e)) => {
+                        self.owed_repair = None;
+                        self.error = Some(e);
+                        self.pump()
+                    }
+                }
+            }
+
             Message::Scanned(result) => {
                 self.scanning = false;
                 self.busy = false;
@@ -2729,25 +2870,7 @@ impl Lightforge {
             None => text(self.status.clone()).size(theme::LABEL).color(theme::MUTED),
         });
 
-        // A scan reads a million headers and says nothing for a minute or so
-        // otherwise, which reads as a hung launcher.
-        if self.scanning && self.scan_sample.total > 0 {
-            let done = self.scan_sample.checked as f32 / self.scan_sample.total as f32;
-            left = left.push(progress_bar(0.0..=1.0, done).height(6));
-            left = left.push(muted(
-                match self.scan_sample.damaged {
-                    0 => format!(
-                        "{} of {} files checked",
-                        self.scan_sample.checked, self.scan_sample.total
-                    ),
-                    n => format!(
-                        "{} of {} files checked — {n} damaged so far",
-                        self.scan_sample.checked, self.scan_sample.total
-                    ),
-                },
-                theme::CAPTION,
-            ));
-        }
+        left = self.scan_progress(left);
 
         if let Some(progress) = progress_of(action) {
             left = left.push(progress_bar(0.0..=1.0, progress.fraction()).height(6));
@@ -3208,13 +3331,23 @@ impl Lightforge {
         };
 
         let installed = self.local.version.is_some();
+        let can_scan = installed && !self.busy && !self.scanning;
         let menu = container(
             column![
                 item("Check for Updates", Message::CheckForUpdates, !self.busy),
-                item("Scan and Repair", Message::ScanAndRepair, installed && !self.busy),
+                item("Scan and Repair", Message::ScanAndRepair, can_scan),
+                match self.deep_cancel.is_some() {
+                    true => item("Stop Deep Scan", Message::DeepScan, true),
+                    false => item("Deep Scan", Message::DeepScan, can_scan),
+                },
                 item("Open Files in Explorer", Message::OpenFiles, installed),
                 item("Copy Debug Info", Message::CopyDebug, true),
             ]
+            .push_maybe(
+                self.owed_repair
+                    .is_some()
+                    .then(|| item("Repair Damaged Files", Message::RepairDamaged, !self.busy)),
+            )
             .spacing(theme::XS),
         )
         .padding(theme::XS)

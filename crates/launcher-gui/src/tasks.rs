@@ -149,6 +149,54 @@ pub async fn scan_and_repair(
     .map_err(|e| e.to_string())?
 }
 
+/// Hash every stored byte against its chunk table and key.
+///
+/// Only reads, so unlike [`scan_and_repair`] it does not wait for the game to
+/// close; the caller holds the download queue for as long as it runs, and
+/// the core refuses a result from a store that changed underneath it anyway.
+pub async fn deep_scan(
+    layout: Layout,
+    cancel: Cancel,
+    tx: tokio::sync::watch::Sender<lightforge_core::tact::verify::Progress>,
+) -> Result<lightforge_core::tact::verify::Report, String> {
+    tokio::task::spawn_blocking(move || {
+        lightforge_core::tact::verify::deep_scan(layout.wow_install(), &cancel, |progress| {
+            let _ = tx.send(progress);
+        })
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Why a repair did not happen.
+#[derive(Debug, Clone)]
+pub enum Unrepaired {
+    /// Something is alive in the prefix; the repair is still owed.
+    InUse,
+    /// Anything else — including a store that moved since the scan, whose
+    /// findings are no longer worth acting on.
+    Failed(String),
+}
+
+/// Drop what a deep scan found damaged, if nothing is using the store and it
+/// is still the store that was scanned.
+pub async fn repair(
+    layout: Layout,
+    report: lightforge_core::tact::verify::Report,
+) -> Result<usize, Unrepaired> {
+    tokio::task::spawn_blocking(move || {
+        if !lightforge_core::preflight::scan(&layout).is_empty() {
+            return Err(Unrepaired::InUse);
+        }
+        let data_dir = layout.wow_install().join("Data").join("data");
+        lightforge_core::tact::verify::repair_unchanged(&data_dir, &report)
+            .map_err(|e| Unrepaired::Failed(e.to_string()))
+    })
+    .await
+    .map_err(|e| Unrepaired::Failed(e.to_string()))?
+}
+
 /// Branding straight off disk, for the frame before [`theme`] answers.
 ///
 /// Network-free and typically a few tens of milliseconds, so on every run

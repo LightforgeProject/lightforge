@@ -331,6 +331,11 @@ enum Command {
     Verify {
         /// Install to check. Defaults to the configured one.
         path: Option<PathBuf>,
+        /// Also hash every stored byte against its chunk table and key. Reads
+        /// the whole store — minutes rather than seconds — and is safe while
+        /// the game runs.
+        #[arg(long)]
+        deep: bool,
         /// Remove damaged entries from the indices. Requires a closed client.
         #[arg(long)]
         repair: bool,
@@ -1878,10 +1883,11 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Command::Verify { path, repair, all } => {
+        Command::Verify { path, deep, repair, all } => {
             use lightforge_core::tact::storage::Storage;
             use lightforge_core::tact::verify;
             use std::time::{Duration, Instant};
+            const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
             let install = path.unwrap_or_else(|| layout.wow_install());
             let data_dir = install.join("Data").join("data");
@@ -1905,12 +1911,31 @@ async fn main() -> Result<()> {
 
             let started = Instant::now();
             let mut last = Instant::now();
-            let report = verify::scan(&store, |p| {
-                if last.elapsed() >= Duration::from_millis(500) {
-                    last = Instant::now();
-                    eprintln!("  {}/{} checked, {} damaged", p.checked, p.total, p.damaged);
+            let report = match deep {
+                false => verify::scan(&store, |p| {
+                    if last.elapsed() >= Duration::from_millis(500) {
+                        last = Instant::now();
+                        eprintln!("  {}/{} checked, {} damaged", p.checked, p.total, p.damaged);
+                    }
+                }),
+                true => {
+                    // The deep scan opens the store itself, after snapshotting
+                    // it, so a write between the two is caught.
+                    drop(store);
+                    let cancel = lightforge_core::tact::download::Cancel::new();
+                    verify::deep_scan(&install, &cancel, |p| {
+                        if last.elapsed() >= Duration::from_secs(2) {
+                            last = Instant::now();
+                            eprintln!(
+                                "  {:.1}/{:.1} GiB hashed, {} damaged",
+                                p.bytes as f64 / GIB,
+                                p.bytes_total as f64 / GIB,
+                                p.damaged
+                            );
+                        }
+                    })?
                 }
-            });
+            };
 
             println!(
                 "checked         {} entries in {:.1}s",
@@ -1922,12 +1947,21 @@ async fn main() -> Result<()> {
                 report.headers_read,
                 report.bytes_read as f64 / (1024.0 * 1024.0)
             );
+            if report.unverifiable > 0 {
+                println!(
+                    "unverifiable    {} raw patch manifests — kept, nothing to check them against",
+                    report.unverifiable
+                );
+            }
             if !report.missing_archives.is_empty() {
                 println!("missing         {} archive files", report.missing_archives.len());
             }
 
             if report.is_healthy() {
                 println!("\nhealthy — every entry is where its index says, and is what it claims");
+                if deep {
+                    println!("          and every stored byte matches its checksum");
+                }
                 return Ok(());
             }
 
@@ -1963,7 +1997,16 @@ async fn main() -> Result<()> {
                      download refetches them."
                 ),
                 true => {
-                    let removed = verify::repair(&data_dir, &report.damaged)?;
+                    // Again, not only at the start: a deep scan runs for
+                    // minutes, and the game may have been started meanwhile.
+                    let alive = lightforge_core::preflight::scan(&layout);
+                    if !alive.is_empty() {
+                        for process in &alive {
+                            println!("running         {} (pid {})", process.name, process.pid);
+                        }
+                        anyhow::bail!("close the game and Battle.net first — the store is in use");
+                    }
+                    let removed = verify::repair_unchanged(&data_dir, &report)?;
                     println!("\nremoved         {removed} entries from the indices");
                     println!("Run a download for this product to fetch them again.");
                 }

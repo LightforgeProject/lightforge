@@ -203,7 +203,7 @@ pub struct Stats {
 /// advanced by 30 and its size reduced by 30 — the same file, described
 /// without its header. Assuming the header is always present makes those
 /// aliases look like a corrupt archive.
-fn blte_payload(raw: &[u8]) -> Option<&[u8]> {
+pub(crate) fn blte_payload(raw: &[u8]) -> Option<&[u8]> {
     const MAGIC: &[u8; 4] = b"BLTE";
     if raw.len() >= CASC_ENTRY_HEADER + 4 && &raw[CASC_ENTRY_HEADER..CASC_ENTRY_HEADER + 4] == MAGIC {
         return Some(&raw[CASC_ENTRY_HEADER..]);
@@ -220,7 +220,7 @@ pub fn archive_name(archive_id: u16) -> String {
 }
 
 /// Accept an install root, a `Data` directory, or `Data/data` itself.
-fn resolve_data_dir(path: &Path) -> PathBuf {
+pub(crate) fn resolve_data_dir(path: &Path) -> PathBuf {
     for suffix in [["Data", "data"].as_slice(), ["data"].as_slice(), [].as_slice()] {
         let candidate = suffix.iter().fold(path.to_path_buf(), |p, s| p.join(s));
         if candidate.is_dir() && has_index(&candidate) {

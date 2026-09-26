@@ -44,7 +44,7 @@ pub const BUCKETS: u8 = 16;
 pub const VERSION: u16 = 7;
 
 /// Field widths of a V7 entry. Every real WoW index uses exactly these.
-const KEY_SIZE: usize = 9;
+pub const KEY_SIZE: usize = 9;
 const LOCATION_SIZE: usize = 5;
 const LENGTH_SIZE: usize = 4;
 const ENTRY_SIZE: usize = KEY_SIZE + LOCATION_SIZE + LENGTH_SIZE;
