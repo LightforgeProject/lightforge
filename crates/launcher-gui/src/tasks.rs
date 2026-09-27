@@ -327,14 +327,12 @@ pub async fn theme(
 pub struct TransferState {
     pub stage: String,
     pub progress: Progress,
-    /// Bytes of this product already in the store when the run started.
+    /// Bytes this run's plan has to fetch; `None` until the plan is made.
     ///
-    /// Without it the bar restarts at zero on every resume: `progress` counts
-    /// only what *this* run stored, and a resumed plan excludes everything
-    /// already on disk. The download was never starting over; the readout was.
-    pub baseline: u64,
-    /// Bytes the whole product needs, present ones included.
-    pub product_bytes: u64,
+    /// The plan excludes everything already in the store, so this is the
+    /// size of the job, not of the product: an update to a 90 GB install
+    /// that changes 10 GB plans 10 GB.
+    pub remaining: Option<u64>,
     /// Optional content this build offers, as the manifest named it. Carried
     /// back so the settings panel has something real to offer rather than a
     /// hardcoded guess.
@@ -403,10 +401,7 @@ pub async fn download(
                 // worth publishing, progress is not.
                 let mut last = Instant::now() - Duration::from_secs(1);
                 let mut stage = String::from("preparing");
-                // The product's full size, and how much of it the plan still
-                // has to fetch — the difference is what the store already had.
-                let mut product_bytes = 0u64;
-                let mut baseline = 0u64;
+                let mut remaining = None;
                 let mut optional: Vec<String> = Vec::new();
 
                 let on_event = move |event: Event| {
@@ -419,11 +414,8 @@ pub async fn download(
                             *p
                         }
                         other => {
-                            if let Event::Wanted { bytes, .. } = other {
-                                product_bytes = *bytes;
-                            }
                             if let Event::Planned { bytes, .. } = other {
-                                baseline = product_bytes.saturating_sub(*bytes);
+                                remaining = Some(*bytes);
                             }
                             if let Event::Optional { names } = other {
                                 optional = names.clone();
@@ -435,8 +427,7 @@ pub async fn download(
                     let _ = tx.send(TransferState {
                         stage: stage.clone(),
                         progress,
-                        baseline,
-                        product_bytes,
+                        remaining,
                         optional: optional.clone(),
                     });
                 };
@@ -458,9 +449,9 @@ fn describe(event: &Event) -> String {
         Event::Build { versions_name, .. } => format!("build {versions_name}"),
         Event::Encoding { entries } => format!("encoding — {entries} entries"),
         Event::Manifests { download, .. } => format!("manifests — {download} entries"),
-        Event::Wanted { files, bytes } => {
-            format!("{files} files, {:.1} GiB wanted", gib(*bytes))
-        }
+        // The whole product's size, not the job's — an update would flash
+        // "90 GiB" before planning says 10. `Planned` states what is fetched.
+        Event::Wanted { files, .. } => format!("checking {files} files against the store"),
         Event::Optional { names } => match names.is_empty() {
             true => "no optional content offered".to_owned(),
             false => format!("optional content available: {}", names.join(", ")),

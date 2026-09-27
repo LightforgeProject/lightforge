@@ -412,11 +412,37 @@ struct Download {
     /// still say how far it got.
     sample: TransferState,
     rate: Rate,
+    job: Job,
+}
+
+/// What one transfer set out to fetch, carried across its pauses.
+///
+/// The bar measures the job, not the product: an update that changes 10 GB of
+/// a 90 GB install reads "0 of 10 GB", not "80 of 90 GB". A resumed run plans
+/// only what is still missing, so the job's size is fixed by the *first* plan
+/// and each later run is placed within it.
+#[derive(Debug, Clone, Copy, Default)]
+struct Job {
+    /// Bytes the first run planned. `None` until one has planned.
+    total: Option<u64>,
+    /// Bytes done when the current run started — shown while a resumed run
+    /// is still planning, so the bar holds rather than dropping to zero.
+    reached: u64,
 }
 
 impl Download {
     fn progress(&self) -> state::Progress {
-        product_progress(&self.sample, self.rate.per_second)
+        job_progress(self.job, &self.sample, self.rate.per_second)
+    }
+
+    /// This entry as a resumed job: the size its first run planned, and how
+    /// far it got before the pause.
+    fn resumed(self) -> Job {
+        let reached = match self.stage {
+            Stage::Paused(p) => p.downloaded_bytes,
+            _ => 0,
+        };
+        Job { reached, ..self.job }
     }
 
     fn transfer(&self) -> state::Transfer {
@@ -906,12 +932,13 @@ impl Lightforge {
         self.error = None;
 
         // Already in the queue: a queued entry stays put, a paused one is
-        // being resumed.
+        // being resumed — as the same job, so its bar continues.
+        let mut job = Job::default();
         if let Some(existing) = self.queue.iter().position(|d| d.code == code) {
             if matches!(self.queue[existing].stage, Stage::Queued) {
                 return Task::none();
             }
-            self.queue.remove(existing);
+            job = self.queue.remove(existing).resumed();
         }
 
         self.queue.push(Download {
@@ -920,6 +947,7 @@ impl Lightforge {
             stage: Stage::Queued,
             sample: TransferState { stage: "queued".to_owned(), ..TransferState::default() },
             rate: Rate::default(),
+            job,
         });
         self.pump()
     }
@@ -985,7 +1013,7 @@ impl Lightforge {
                 cancel.cancel();
                 // Shown as paused immediately — the click is answered now,
                 // not when the run finishes winding down.
-                entry.stage = Stage::Paused(product_progress(&entry.sample, 0));
+                entry.stage = Stage::Paused(job_progress(entry.job, &entry.sample, 0));
                 self.winding_down = Some(code.clone());
                 self.status = "pausing…".to_owned();
             }
@@ -1127,6 +1155,9 @@ impl Lightforge {
                     if let Stage::Running { rx, .. } = &entry.stage {
                         entry.sample = rx.borrow().clone();
                     }
+                    if entry.job.total.is_none() {
+                        entry.job.total = entry.sample.remaining;
+                    }
                     // Rate is measured on what this run has stored; the
                     // baseline is a constant offset and would only mute the
                     // first sample.
@@ -1200,7 +1231,8 @@ impl Lightforge {
                     Ok(done) if done.cancelled => {
                         // Paused, so it keeps its place with what it reached.
                         if let Some(at) = entry {
-                            let reached = product_progress(&self.queue[at].sample, 0);
+                            let d = &self.queue[at];
+                            let reached = job_progress(d.job, &d.sample, 0);
                             self.queue[at].stage = Stage::Paused(reached);
                         }
                         note(self, "paused".to_owned());
@@ -1208,7 +1240,8 @@ impl Lightforge {
                     }
                     Ok(_) => {
                         if let Some(at) = entry {
-                            let reached = product_progress(&self.queue[at].sample, 0);
+                            let d = &self.queue[at];
+                            let reached = job_progress(d.job, &d.sample, 0);
                             self.queue[at].stage = Stage::Paused(reached);
                         }
                         note(self, "stopped — run again to continue".to_owned());
@@ -4124,15 +4157,19 @@ fn dot<'a>() -> Element<'a, Message> {
     text("·").size(theme::CAPTION).color(theme::MUTED).into()
 }
 
-/// Map a transfer sample onto the whole product.
-fn product_progress(sample: &TransferState, bytes_per_second: u64) -> state::Progress {
-    let (downloaded, total) = match sample.product_bytes {
-        // Before the plan is known, run-relative is all there is.
-        0 => (sample.progress.bytes_stored, sample.progress.bytes_total),
-        product => (
-            (sample.baseline + sample.progress.bytes_stored).min(product),
-            product,
-        ),
+/// Place a transfer sample within its job — see [`Job`].
+fn job_progress(job: Job, sample: &TransferState, bytes_per_second: u64) -> state::Progress {
+    let stored = sample.progress.bytes_stored;
+    let (downloaded, total) = match (job.total, sample.remaining) {
+        // Whatever the job planned that this run no longer has to fetch is
+        // already done.
+        (Some(total), Some(remaining)) => {
+            ((total.saturating_sub(remaining) + stored).min(total), total)
+        }
+        // Resumed and still planning.
+        (Some(total), None) => (job.reached.min(total), total),
+        // A first run before its plan: nothing to measure against yet.
+        (None, _) => (stored, sample.progress.bytes_total),
     };
     state::Progress { downloaded_bytes: downloaded, total_bytes: total, bytes_per_second }
 }
@@ -4217,26 +4254,57 @@ fn eta_of(progress: state::Progress) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_resumed_run_shows_product_progress_not_run_progress() {
-        // The symptom this guards: pause at 3 GiB, resume, and the bar reads
-        // 0.00 GiB because the new plan excludes what is already on disk.
-        let gib = 1024u64 * 1024 * 1024;
-        let mut sample = TransferState {
-            product_bytes: 75 * gib,
-            baseline: 3 * gib,
+    fn planned(remaining: u64, stored: u64) -> TransferState {
+        TransferState {
+            remaining: Some(remaining),
+            progress: lightforge_core::tact::download::Progress {
+                bytes_stored: stored,
+                ..Default::default()
+            },
             ..TransferState::default()
+        }
+    }
+
+    #[test]
+    fn an_update_measures_what_it_fetches_not_the_install() {
+        // The symptom this guards: a 10 GiB update to a 90 GiB install opened
+        // at "80 of 90 GiB", counting the untouched install as progress.
+        let gib = 1024u64 * 1024 * 1024;
+        let job = Job { total: Some(10 * gib), reached: 0 };
+
+        let start = job_progress(job, &planned(10 * gib, 0), 0);
+        assert_eq!((start.downloaded_bytes, start.total_bytes), (0, 10 * gib));
+
+        let later = job_progress(job, &planned(10 * gib, 4 * gib), 0);
+        assert_eq!(later.downloaded_bytes, 4 * gib);
+    }
+
+    #[test]
+    fn a_resumed_run_continues_its_job_rather_than_restarting() {
+        // Pause 3 GiB into a 10 GiB job: the next run plans only the 7 GiB
+        // still missing, and the bar must carry on from 3, not from 0.
+        let gib = 1024u64 * 1024 * 1024;
+        let paused = Download {
+            code: ProductCode::Retail,
+            label: String::new(),
+            stage: Stage::Paused(state::Progress {
+                downloaded_bytes: 3 * gib,
+                total_bytes: 10 * gib,
+                bytes_per_second: 0,
+            }),
+            sample: TransferState::default(),
+            rate: Rate::default(),
+            job: Job { total: Some(10 * gib), reached: 0 },
         };
+        let job = paused.resumed();
 
-        // Nothing stored yet this run, but 3 GiB are already there.
-        let resumed = product_progress(&sample, 0);
-        assert_eq!(resumed.downloaded_bytes, 3 * gib);
-        assert_eq!(resumed.total_bytes, 75 * gib);
-        assert!(resumed.fraction() > 0.0);
+        // Still planning: hold where the pause left it.
+        let planning = job_progress(job, &TransferState::default(), 0);
+        assert_eq!((planning.downloaded_bytes, planning.total_bytes), (3 * gib, 10 * gib));
 
-        // A run byte moves the product readout by one byte.
-        sample.progress.bytes_stored = gib;
-        assert_eq!(product_progress(&sample, 0).downloaded_bytes, 4 * gib);
+        // Planned: a run byte moves the job readout by one byte.
+        let running = job_progress(job, &planned(7 * gib, gib), 0);
+        assert_eq!((running.downloaded_bytes, running.total_bytes), (4 * gib, 10 * gib));
     }
 
     #[test]
@@ -4249,7 +4317,7 @@ mod tests {
             },
             ..TransferState::default()
         };
-        let p = product_progress(&sample, 0);
+        let p = job_progress(Job::default(), &sample, 0);
         assert_eq!((p.downloaded_bytes, p.total_bytes), (500, 1000));
     }
 
