@@ -18,6 +18,8 @@ directories = "5"
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 iced = { version = "0.13", features = ["tokio", "image", "advanced"] }
+# The same 0.24 iced decodes with; the GUI decodes artwork itself, once.
+image = { version = "0.24", default-features = false, features = ["jpeg", "png"] }
 libc = "0.2"
 md5 = "0.8"
 open = "5"

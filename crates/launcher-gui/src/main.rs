@@ -18,6 +18,7 @@
 //!   serves both.
 
 mod addonwork;
+mod art;
 mod popover;
 mod provision;
 mod tasks;
@@ -26,7 +27,7 @@ mod trace;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use iced::widget::{
@@ -35,7 +36,7 @@ use iced::widget::{
 };
 use iced::{Alignment, ContentFit, Element, Length, Subscription, Task};
 
-use lightforge_core::assets::{Branding, Manifest, Pipeline, Store};
+use lightforge_core::assets::{Manifest, Pipeline, Store};
 use lightforge_core::config::Config;
 use lightforge_core::debug::DebugInfo;
 use lightforge_core::net::Http;
@@ -48,6 +49,7 @@ use lightforge_core::tact::download::Cancel;
 use lightforge_core::tact::version::Region;
 use lightforge_core::tweaks::{GraphicsApi, HostTools, Tweaks};
 
+use art::Art;
 use tasks::{Refreshed, SharedDownloads, TransferState};
 
 /// Where a player manages their subscription, per the spec.
@@ -59,6 +61,13 @@ const ACCOUNT_URL: &str = "https://account.battle.net/games";
 /// branding, so it must render before any asset pipeline has answered — and
 /// the UI font has no gear glyph to fall back on.
 const GEAR_ICON: &[u8] = include_bytes!("../assets/gear.png");
+
+/// The cog's one handle. `Handle::from_bytes` mints a fresh id per call, so
+/// building it in `view` made every rebuild a cache miss and a PNG decode.
+fn gear_icon() -> image::Handle {
+    static GEAR: OnceLock<image::Handle> = OnceLock::new();
+    GEAR.get_or_init(|| image::Handle::from_bytes(GEAR_ICON)).clone()
+}
 
 /// Opening size, and the floor for resizing — deliberately the same number.
 ///
@@ -455,7 +464,7 @@ struct Lightforge {
 
     local: Local,
     remote: Option<lightforge_core::tact::version::Version>,
-    branding: Option<Branding>,
+    branding: Option<Art>,
 
     /// Every transfer this session knows about, in queue order. At most one
     /// is [`Stage::Running`].
@@ -2767,9 +2776,9 @@ impl Lightforge {
         // and a product logo reads as branding when it sits with Lightforge's
         // own rather than competing with the background for the middle.
         let logo: Element<Message> = match branding {
-            Some(b) => image(image::Handle::from_path(&b.logo.path))
+            Some(b) => image(b.logo.clone())
                 .content_fit(ContentFit::Contain)
-                .height(Length::Fixed(theme::logo_height(b.logo.height)))
+                .height(Length::Fixed(theme::logo_height(b.branding.logo.height)))
                 .into(),
             None => column![
                 text(self.selected.label.clone()).size(theme::DISPLAY),
@@ -2806,7 +2815,7 @@ impl Lightforge {
 
         match branding {
             Some(b) => stack![
-                image(image::Handle::from_path(&b.background.path))
+                image(b.background.clone())
                     .content_fit(ContentFit::Cover)
                     .width(Length::Fill)
                     .height(Length::Fill),
@@ -2965,7 +2974,7 @@ impl Lightforge {
         // The icon is an image, not a glyph — the UI font has no U+2699 and
         // renders it as a tofu box.
         let gear = button(
-            image(image::Handle::from_bytes(GEAR_ICON))
+            image(gear_icon())
                 .width(Length::Fixed(18.0))
                 .height(Length::Fixed(18.0)),
         )

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use lightforge_core::assets::{Branding, Manifest, Pipeline};
+use lightforge_core::assets::{Manifest, Pipeline};
 use lightforge_core::config::Config;
 use lightforge_core::net::Http;
 use lightforge_core::paths::{AppDirs, Layout};
@@ -21,6 +21,8 @@ use lightforge_core::tact::download::{Cancel, Downloads, Progress};
 use lightforge_core::tact::install::{self, Event, Options as InstallOptions, Summary};
 use lightforge_core::tact::version::{self, Region, Version};
 use lightforge_core::tweaks::{HostTools, Tweaks};
+
+use crate::art::Art;
 
 /// One product's situation, as of a refresh.
 #[derive(Debug, Clone)]
@@ -213,7 +215,7 @@ pub async fn cached_theme(
 
     // Reads and hashes every image it returns; off the UI thread.
     tokio::task::spawn_blocking(move || {
-        let branding = pipeline.cached(&code);
+        let branding = pipeline.cached(&code).map(Art::decode);
         let manifest = pipeline.cached_manifest();
         let icons = match &manifest {
             Some(manifest) => cached_icons(&pipeline, manifest, &codes),
@@ -250,7 +252,7 @@ fn cached_icons(
 #[derive(Debug, Default, Clone)]
 pub struct Themed {
     pub manifest: Option<Arc<Manifest>>,
-    pub branding: Option<Branding>,
+    pub branding: Option<Art>,
     pub icons: HashMap<ProductCode, PathBuf>,
 }
 
@@ -304,6 +306,13 @@ pub async fn theme(
             icons.insert(product.clone(), icon.path);
         }
     }
+
+    // Decoded here, off the UI thread, so the dashboard never decodes on
+    // draw — see [`crate::art`].
+    let branding = match branding {
+        Some(branding) => tokio::task::spawn_blocking(move || Art::decode(branding)).await.ok(),
+        None => None,
+    };
 
     Themed { manifest: Some(manifest), branding, icons }
 }
