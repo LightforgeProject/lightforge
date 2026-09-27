@@ -284,7 +284,7 @@ enum AddonTab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Screen {
     Dashboard,
-    Setup,
+    /// Setup lives here too, as the first card.
     Settings,
     Addons,
     /// Per-product performance settings.
@@ -1475,12 +1475,13 @@ impl Lightforge {
                     ),
                     None => Task::none(),
                 };
-                // Open on setup when the machine cannot launch anything yet,
-                // but never yank the user out of a screen they chose.
+                // Open on settings, whose first card is setup, when the machine
+                // cannot launch anything yet — but never yank the user out of
+                // a screen they chose.
                 if let Some(status) = &status {
                     if !status.is_ready() && self.screen == Screen::Dashboard && !self.setup_running
                     {
-                        self.screen = Screen::Setup;
+                        self.screen = Screen::Settings;
                     }
                 }
                 self.setup = status;
@@ -1664,7 +1665,7 @@ impl Lightforge {
                 self.setup_sample = provision::Progress::default();
                 self.setup_running = true;
                 self.error = None;
-                self.screen = Screen::Setup;
+                self.screen = Screen::Settings;
 
                 Task::perform(
                     provision::run(
@@ -2302,7 +2303,6 @@ impl Lightforge {
         let started = Instant::now();
         let screen = match self.screen {
             Screen::Dashboard => self.dashboard(),
-            Screen::Setup => self.setup_screen(),
             Screen::Settings => self.settings(),
             Screen::Addons => self.addons_screen(),
             Screen::Tweaks => self.tweaks_screen(),
@@ -2443,7 +2443,6 @@ impl Lightforge {
         bar = bar.push(Space::with_width(Length::Fixed(theme::SM as f32)));
 
         bar = bar.push(nav("Play", Screen::Dashboard));
-        bar = bar.push(nav("Setup", Screen::Setup));
         bar = bar.push(nav("Settings", Screen::Settings));
 
         column![
@@ -3702,23 +3701,39 @@ impl Lightforge {
     }
 
     /// First-run provisioning: what is missing, and one button to fix it.
-    fn setup_screen(&self) -> Element<'_, Message> {
-        let mut body = column![].spacing(theme::SM);
+    /// Proton, the prefix and Battle.net: what is there, and the button that
+    /// provisions whatever isn't.
+    fn setup_card(&self) -> Element<'_, Message> {
+        let mut body = column![
+            text("Setup").size(theme::HEADING),
+            muted(
+                "Proton, the Wine prefix and Battle.net. Each step is skipped if it is \
+                 already done."
+                    .to_owned(),
+                theme::CAPTION,
+            ),
+        ]
+        .spacing(theme::SM);
 
         let step = |done: bool, label: &'static str, detail: String| {
+            let color = match done {
+                true => theme::PLAY,
+                false => theme::MUTED,
+            };
             container(
                 row![
-                    container(text(if done { "✓" } else { "•" }).size(theme::BODY))
-                        .padding([theme::XS, theme::SM])
-                        .style(theme::badge(match done {
-                            true => theme::PLAY,
-                            false => theme::MUTED,
-                        })),
+                    container(
+                        container(Space::new(Length::Fixed(8.0), Length::Fixed(8.0)))
+                            .style(theme::dot(color)),
+                    )
+                    .padding(theme::SM)
+                    .style(theme::badge(color)),
                     column![text(label).size(theme::BODY), mono(detail)].spacing(theme::XS),
                 ]
                 .spacing(theme::MD)
                 .align_y(Alignment::Center),
             )
+            .width(Length::Fill)
             .padding(theme::MD)
             .style(theme::row)
         };
@@ -3773,10 +3788,6 @@ impl Lightforge {
             body = body.push(container(log).padding(theme::MD).style(theme::card));
         }
 
-        if let Some(e) = &self.error {
-            body = body.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
-        }
-
         let ready = self.setup.as_ref().is_some_and(|s| s.is_ready());
         let label = match (self.setup_running, ready) {
             (true, _) => "Working…",
@@ -3796,14 +3807,7 @@ impl Lightforge {
             .enabled(!self.setup_running),
         );
 
-        self.page(
-            "Set up Lightforge",
-            Some(
-                "Proton, the Wine prefix and Battle.net. Each step is skipped if it is already done."
-                    .to_owned(),
-            ),
-            body.into(),
-        )
+        container(body).padding(theme::MD).style(theme::card).into()
     }
 
     /// Every Proton build on the machine, and how to add or remove one.
@@ -4057,12 +4061,16 @@ impl Lightforge {
         .padding(theme::MD)
         .style(theme::card);
 
-        let mut body = column![proton, builds, downloads, theming].spacing(theme::MD);
-        if let Some(dirs) = &self.dirs {
-            body = body.push(mono(format!("config: {}", dirs.config_file().display())));
-        }
+        // The error leads rather than trails: a failed setup run is reported
+        // here, and at the foot of a scrolled page it would go unseen.
+        let mut body = column![].spacing(theme::MD);
         if let Some(e) = &self.error {
             body = body.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
+        }
+        body = body.push(self.setup_card());
+        body = body.push(column![proton, builds, downloads, theming].spacing(theme::MD));
+        if let Some(dirs) = &self.dirs {
+            body = body.push(mono(format!("config: {}", dirs.config_file().display())));
         }
 
         self.page("Settings", None, body.into())

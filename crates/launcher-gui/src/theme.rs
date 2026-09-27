@@ -220,6 +220,16 @@ pub fn badge(color: Color) -> impl Fn(&Theme) -> container::Style {
     }
 }
 
+/// A solid round mark, for a status a glyph can't carry: the UI font has no
+/// check mark, and renders U+2713 as a tofu box.
+pub fn dot(color: Color) -> impl Fn(&Theme) -> container::Style {
+    move |_theme| container::Style {
+        background: Some(Background::Color(color)),
+        border: Border { radius: 999.0.into(), ..Border::default() },
+        ..container::Style::default()
+    }
+}
+
 // ----------------------------------------------------------------- buttons --
 
 /// Solid button in one of the state colours. The primary action, at most once
