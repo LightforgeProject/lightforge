@@ -47,6 +47,7 @@ use lightforge_core::proton::ProtonPin;
 use lightforge_core::setup::Status as SetupStatus;
 use lightforge_core::storage;
 use lightforge_core::tact::install::Offerings;
+use lightforge_core::tact::uninstall::Plan as UninstallPlan;
 use lightforge_core::transfers::{self, Saved, Standing};
 use lightforge_core::tact::download::Cancel;
 use lightforge_core::tact::version::Region;
@@ -259,6 +260,11 @@ enum Message {
     GamesFolderChanged(String),
     InstallCancel,
     InstallStart,
+    AskUninstall,
+    UninstallPlanned(ProductCode, Box<Result<UninstallPlan, String>>),
+    UninstallCancel,
+    UninstallConfirm,
+    Uninstalled(ProductCode, Result<u64, String>),
     ClearCache,
     CacheCleared(Result<u64, String>),
     OpenLibrary,
@@ -304,6 +310,17 @@ enum DialogStage {
     Calculating,
     Ready(Box<Offerings>),
     Failed(String),
+}
+
+/// The confirmation before a game is deleted.
+#[derive(Debug, Clone)]
+struct UninstallDialog {
+    code: ProductCode,
+    label: String,
+    /// `None` while the plan is being worked out.
+    plan: Option<Result<UninstallPlan, String>>,
+    /// Deleting: the buttons are held until it answers.
+    working: bool,
 }
 
 /// Which section of Settings is showing.
@@ -624,6 +641,7 @@ struct Lightforge {
     /// Editable library root, applied by "Use this location".
     location_input: String,
     install_dialog: Option<InstallDialog>,
+    uninstall_dialog: Option<UninstallDialog>,
     /// Editable game folder, applied when the install dialog starts.
     games_input: String,
 
@@ -732,6 +750,7 @@ impl Lightforge {
             cache_notice: None,
             location_input: String::new(),
             install_dialog: None,
+            uninstall_dialog: None,
             games_input: String::new(),
             tools: HostTools::detect(),
             fps_input: String::new(),
@@ -1977,6 +1996,69 @@ impl Lightforge {
 
             Message::InstallStart => self.start_install(),
 
+            Message::AskUninstall => {
+                self.gear_open = false;
+                let code = self.selected.code.clone();
+                self.uninstall_dialog = Some(UninstallDialog {
+                    code: code.clone(),
+                    label: self.selected.label.clone(),
+                    plan: None,
+                    working: false,
+                });
+                Task::perform(
+                    tasks::uninstall_plan(self.layout.clone(), code.clone()),
+                    move |plan| Message::UninstallPlanned(code.clone(), Box::new(plan)),
+                )
+            }
+
+            Message::UninstallPlanned(code, plan) => {
+                if let Some(dialog) = self.uninstall_dialog.as_mut().filter(|d| d.code == code) {
+                    dialog.plan = Some(*plan);
+                }
+                Task::none()
+            }
+
+            Message::UninstallCancel => {
+                self.uninstall_dialog = None;
+                Task::none()
+            }
+
+            Message::UninstallConfirm => {
+                let Some(dialog) = self.uninstall_dialog.as_mut() else {
+                    return Task::none();
+                };
+                dialog.working = true;
+                let code = dialog.code.clone();
+                Task::perform(tasks::uninstall(self.layout.clone(), code.clone()), move |result| {
+                    Message::Uninstalled(code.clone(), result)
+                })
+            }
+
+            Message::Uninstalled(code, result) => {
+                let label = self.uninstall_dialog.take().map(|d| d.label).unwrap_or_default();
+                match result {
+                    Ok(freed) => {
+                        // A paused or queued download of it would only put
+                        // the files straight back.
+                        self.queue.retain(|d| d.code != code);
+                        if code == self.selected.code {
+                            self.status = format!("uninstalled {label} — freed {}", size_of(freed));
+                        }
+                        Task::batch([
+                            Task::perform(
+                                tasks::installed_versions(self.layout.clone()),
+                                Message::InstalledVersions,
+                            ),
+                            self.reload_if_showing(&code),
+                        ])
+                    }
+                    Err(e) => {
+                        self.error = Some(e);
+                        Task::none()
+                    }
+                }
+            }
+
             Message::ClearCache => {
                 let Some(dirs) = self.dirs.clone() else {
                     return Task::none();
@@ -2777,15 +2859,16 @@ impl Lightforge {
         // every press that the card itself does not, and a `Stack` stops
         // delivering an event once a layer captures it, so nothing beneath
         // can be clicked while the dialog is up.
-        let screen = match &self.install_dialog {
-            Some(dialog) => stack![
+        let card = match (&self.install_dialog, &self.uninstall_dialog) {
+            (Some(dialog), _) => Some(self.install_card(dialog)),
+            (_, Some(dialog)) => Some(self.uninstall_card(dialog)),
+            _ => None,
+        };
+        let screen = match card {
+            Some(card) => stack![
                 screen,
-                mouse_area(
-                    container(self.install_card(dialog))
-                        .center(Length::Fill)
-                        .style(theme::scrim),
-                )
-                .on_press(Message::MenuClick),
+                mouse_area(container(card).center(Length::Fill).style(theme::scrim))
+                    .on_press(Message::MenuClick),
             ]
             .into(),
             None => screen,
@@ -3834,6 +3917,16 @@ impl Lightforge {
 
         let installed = self.local.version.is_some();
         let can_scan = installed && !self.busy && !self.scanning;
+        // Not while its own download is writing, nor while a scan reads.
+        let downloading = self
+            .queue
+            .iter()
+            .any(|d| d.code == self.selected.code && matches!(d.stage, Stage::Running { .. }));
+        let can_uninstall = installed
+            && !self.busy
+            && !self.scanning
+            && self.deep_cancel.is_none()
+            && !downloading;
         let menu = container(
             column![
                 item("Check for Updates", Message::CheckForUpdates, !self.busy),
@@ -3844,6 +3937,8 @@ impl Lightforge {
                 },
                 item("Open Files in Explorer", Message::OpenFiles, installed),
                 item("Copy Debug Info", Message::CopyDebug, true),
+                // Last and apart from the rest: the one entry that destroys.
+                item("Uninstall…", Message::AskUninstall, can_uninstall),
             ]
             .push_maybe(
                 self.owed_repair
@@ -4652,6 +4747,100 @@ impl Lightforge {
         .padding(theme::LG)
         .style(theme::dialog)
         .into()
+    }
+
+    /// The uninstall confirmation's card.
+    fn uninstall_card<'a>(&'a self, dialog: &'a UninstallDialog) -> Element<'a, Message> {
+        let mut body = column![].spacing(theme::MD);
+        let mut ready = false;
+        match &dialog.plan {
+            None => {
+                body = body.push(muted("Working out what to remove…".to_owned(), theme::LABEL));
+            }
+            Some(Err(e)) => {
+                body = body.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
+            }
+            Some(Ok(plan)) if plan.is_empty() => {
+                body = body.push(muted(
+                    "Nothing to remove — it is not installed here.".to_owned(),
+                    theme::LABEL,
+                ));
+            }
+            Some(Ok(plan)) => {
+                ready = true;
+                let deletes = column(
+                    plan.flavor_dir
+                        .iter()
+                        .chain(plan.store.iter())
+                        .map(|path| mono(path.display().to_string()).into()),
+                )
+                .spacing(theme::XS);
+                body = body
+                    .push(field_row("Deletes".to_owned(), deletes.into()))
+                    .push(field_row("Frees".to_owned(), mono(size_of(plan.bytes)).into()));
+
+                let (note, color) = match plan.is_whole_install() {
+                    true => (
+                        "This is the last WoW version here, so the shared game data goes with \
+                         it."
+                            .to_owned(),
+                        theme::ERROR,
+                    ),
+                    false => (
+                        format!(
+                            "The shared game data stays: {} still use it.",
+                            plan.remaining
+                                .iter()
+                                .map(|c| self.label_of(c))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        theme::MUTED,
+                    ),
+                };
+                body = body.push(text(note).size(theme::LABEL).color(color)).push(muted(
+                    "Its addons and settings (Interface, WTF) are deleted with it. Battle.net \
+                     stops listing it too."
+                        .to_owned(),
+                    theme::LABEL,
+                ));
+            }
+        }
+
+        let choice = |label: &'static str| {
+            button(text(label).size(theme::LABEL).width(Length::Fill).center())
+                .width(Length::Fixed(150.0))
+                .padding([theme::SM, theme::MD])
+        };
+        let actions = row![
+            Space::with_width(Length::Fill),
+            choice("Cancel")
+                .style(theme::outlined)
+                .on_press_maybe((!dialog.working).then_some(Message::UninstallCancel)),
+            choice(if dialog.working { "Uninstalling…" } else { "Uninstall" })
+                .style(theme::filled(theme::ERROR))
+                .on_press_maybe((ready && !dialog.working).then_some(Message::UninstallConfirm)),
+        ]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center);
+
+        container(
+            column![section(format!("Uninstall {}", dialog.label), body.into()), actions]
+                .spacing(theme::LG),
+        )
+        .width(Length::Fixed(560.0))
+        .padding(theme::LG)
+        .style(theme::dialog)
+        .into()
+    }
+
+    /// A product's name as the picker shows it, or its code.
+    fn label_of(&self, code: &ProductCode) -> String {
+        self.choices
+            .iter()
+            .find(|c| &c.code == code)
+            .map(|c| c.label.clone())
+            .unwrap_or_else(|| code.as_str().to_owned())
     }
 
     /// Where the library lives, how full its disk is, and what is using it.

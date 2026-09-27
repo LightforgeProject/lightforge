@@ -789,6 +789,44 @@ pub fn open_path(path: PathBuf) -> Result<(), String> {
     open::that_detached(&path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// What uninstalling `code` would delete — nothing is touched.
+pub async fn uninstall_plan(
+    layout: Layout,
+    code: ProductCode,
+) -> Result<lightforge_core::tact::uninstall::Plan, String> {
+    tokio::task::spawn_blocking(move || {
+        lightforge_core::tact::uninstall::plan(&layout.wow_install(), &code)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Uninstall `code`: its files, its `.build.info` row and `.product.db`
+/// record, the shared store if it was the last product, and its entry in
+/// Battle.net's registry. Returns the bytes freed.
+///
+/// Refuses while anything is alive in the prefix — the same gate repair uses:
+/// deleting files a running client has open, or a registry Agent rewrites on
+/// exit, is not something to race.
+pub async fn uninstall(layout: Layout, code: ProductCode) -> Result<u64, String> {
+    tokio::task::spawn_blocking(move || {
+        use lightforge_core::tact::{productdb, uninstall};
+
+        if let Some(process) = lightforge_core::preflight::scan(&layout).first() {
+            return Err(format!("close {} first — the game files are in use", process.name));
+        }
+        let install = layout.wow_install();
+        // Planned again rather than trusted from when the dialog opened.
+        let plan = uninstall::plan(&install, &code).map_err(|e| e.to_string())?;
+        let removed = uninstall::execute(&install, &code, &plan).map_err(|e| e.to_string())?;
+        productdb::unregister(&layout.agent_dir(), code.as_str()).map_err(|e| e.to_string())?;
+        Ok(removed.bytes)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Measure Settings > Storage. Walks the whole game install.
 pub async fn storage(layout: Layout, dirs: AppDirs) -> lightforge_core::storage::Report {
     let fallback = lightforge_core::storage::Report {
@@ -812,4 +850,55 @@ pub async fn clear_cache(dirs: AppDirs) -> Result<u64, String> {
 /// Open a URL in the default browser.
 pub fn open_url(url: &str) -> Result<(), String> {
     open::that_detached(url).map_err(|e| format!("{url}: {e}"))
+}
+
+#[cfg(test)]
+mod uninstall_tests {
+    use super::*;
+    use lightforge_core::tact::productdb;
+
+    /// Uninstalling one version from a throwaway library built from copies of
+    /// the real `.build.info` and Agent registry: only that version goes, and
+    /// every other row and record stays. Skipped where there is no real
+    /// install to copy from.
+    #[test]
+    fn uninstalling_one_version_leaves_the_rest() {
+        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
+        let real = Layout::with_root(home.join("Games/Blizzard"));
+        let (Ok(info), Ok(registry)) = (
+            std::fs::read(real.build_info()),
+            std::fs::read(real.agent_dir().join("product.db")),
+        ) else {
+            return;
+        };
+
+        let root = std::env::temp_dir()
+            .join(format!("lightforge-uninstall-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let layout = Layout::with_root(&root);
+        let era = layout.product_dir(&ProductCode::ClassicEra);
+        std::fs::create_dir_all(era.join("WTF")).unwrap();
+        std::fs::write(era.join("WowClassic.exe"), [0u8; 64]).unwrap();
+        std::fs::create_dir_all(layout.wow_install().join("Data/data")).unwrap();
+        std::fs::write(layout.build_info(), &info).unwrap();
+        std::fs::create_dir_all(layout.agent_dir()).unwrap();
+        std::fs::write(layout.agent_dir().join("product.db"), &registry).unwrap();
+
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        runtime.block_on(uninstall(layout.clone(), ProductCode::ClassicEra)).unwrap();
+
+        assert!(!era.exists());
+        assert!(layout.wow_install().join("Data").exists(), "the shared store stays");
+        let left = lightforge_core::buildinfo::BuildInfo::load(layout.build_info()).unwrap();
+        let before = lightforge_core::buildinfo::BuildInfo::load(real.build_info()).unwrap();
+        assert_eq!(left.products().count(), before.products().count() - 1);
+        assert!(left.products().all(|p| p != ProductCode::ClassicEra));
+
+        let after = std::fs::read(layout.agent_dir().join("product.db")).unwrap();
+        let after = productdb::decode(&after);
+        let had = productdb::decode(&registry);
+        assert_eq!(after.len(), had.len() - 1);
+        assert!(after.iter().all(|r| r.product != "wow_classic_era"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

@@ -233,6 +233,18 @@ pub fn encode(installs: &[ProductInstall]) -> Vec<u8> {
 /// result is `None`, and the caller writes nothing rather than overwriting a
 /// file it did not understand.
 pub fn splice(existing: &[u8], installs: &[ProductInstall]) -> Option<Vec<u8>> {
+    rewrite(existing, installs, None)
+}
+
+/// Drop `product`'s record from an existing `product.db`, leaving every other
+/// record exactly as it was found — the same byte-preserving rules as
+/// [`splice`], for the same reason.
+pub fn without(existing: &[u8], product: &str) -> Option<Vec<u8>> {
+    rewrite(existing, &[], Some(product))
+}
+
+/// [`splice`] and [`without`]: replace or add `installs`, drop `remove`.
+fn rewrite(existing: &[u8], installs: &[ProductInstall], remove: Option<&str>) -> Option<Vec<u8>> {
     /// One top-level field, kept exactly as it arrived.
     struct Item {
         /// Field number. `1` is a product record; a real registry also holds
@@ -273,6 +285,10 @@ pub fn splice(existing: &[u8], installs: &[ProductInstall]) -> Option<Vec<u8>> {
             false => None,
         };
         items.push(Item { field, raw: existing.get(start..at)?.to_vec(), code });
+    }
+
+    if let Some(remove) = remove {
+        items.retain(|item| item.code.as_deref() != Some(remove));
     }
 
     // Replace what we already own, and collect what has to be added.
@@ -346,6 +362,35 @@ pub fn register(agent_dir: &Path, installs: &[ProductInstall]) -> Result<bool, P
 
     let temp = agent_dir.join("product.db.lightforge-tmp");
     std::fs::write(&temp, &merged).map_err(|source| ProductDbError::Io {
+        path: temp.clone(),
+        source,
+    })?;
+    std::fs::rename(&temp, &path).map_err(|source| ProductDbError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(true)
+}
+
+/// Remove `product` from Agent's registry, so Battle.net stops listing a game
+/// that is no longer on disk. The counterpart of [`register`], under the same
+/// rules: nothing alive in the prefix, and a file it cannot read is left alone
+/// and reported as `false`.
+pub fn unregister(agent_dir: &Path, product: &str) -> Result<bool, ProductDbError> {
+    let path = agent_dir.join("product.db");
+    let existing = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(source) => return Err(ProductDbError::Io { path, source }),
+    };
+    let Some(trimmed) = without(&existing, product) else {
+        return Ok(false);
+    };
+    if trimmed == existing {
+        return Ok(false);
+    }
+    let temp = agent_dir.join("product.db.lightforge-tmp");
+    std::fs::write(&temp, &trimmed).map_err(|source| ProductDbError::Io {
         path: temp.clone(),
         source,
     })?;
@@ -895,6 +940,43 @@ mod read_tests {
             key_ring: None,
             family: "wow".into(),
             installed_at_ms: 0,
+        }
+    }
+
+    #[test]
+    fn removing_a_product_keeps_every_other_record_byte_for_byte() {
+        let mut theirs = Vec::new();
+        string_field(&mut theirs, 1, "hs_beta");
+        string_field(&mut theirs, 8, r#"{"something":"we never parse"}"#);
+        let mut registry = Vec::new();
+        message_field(&mut registry, 1, &theirs);
+        let era = install("wow_classic_era", "1.15.9.69722");
+        let registry = splice(&registry, &[install("wow", "12.1.0.69933"), era.clone()]).unwrap();
+
+        let trimmed = without(&registry, "wow").unwrap();
+        // What remains is exactly the registry spliced without it.
+        let mut expected = Vec::new();
+        message_field(&mut expected, 1, &theirs);
+        assert_eq!(trimmed, splice(&expected, &[era]).unwrap());
+        // Not there: nothing changes.
+        assert_eq!(without(&trimmed, "wow").unwrap(), trimmed);
+    }
+
+    /// Against Gabriel's actual registry, when there is one: removing a
+    /// product and adding it back must reproduce the file, and every other
+    /// record must be untouched.
+    #[test]
+    fn removal_round_trips_on_a_real_registry() {
+        let Some(home) = std::env::var_os("HOME") else { return };
+        let path = Path::new(&home)
+            .join("Games/Blizzard/prefix/pfx/drive_c/ProgramData/Battle.net/Agent/product.db");
+        let Ok(real) = std::fs::read(&path) else { return };
+        let records = decode(&real);
+        for record in records.iter().filter(|r| r.product.starts_with("wow")) {
+            let trimmed = without(&real, &record.product).expect("a real registry parses");
+            let left: Vec<_> = decode(&trimmed).into_iter().map(|r| r.product).collect();
+            assert!(!left.contains(&record.product));
+            assert_eq!(left.len(), records.len() - 1, "only {} went", record.product);
         }
     }
 
