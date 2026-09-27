@@ -115,6 +115,12 @@ pub fn library_is_empty(layout: &Layout) -> bool {
     [layout.games_root(), layout.compat_data()].iter().all(|dir| is_empty_dir(dir))
 }
 
+/// Whether no WoW version is installed yet — the only state in which the
+/// game folder can move by re-pointing a link rather than migrating data.
+pub fn game_folder_is_empty(layout: &Layout) -> bool {
+    is_empty_dir(&layout.wow_install())
+}
+
 fn is_empty_dir(dir: &Path) -> bool {
     match std::fs::read_dir(dir) {
         Ok(mut entries) => entries.next().is_none(),
@@ -230,6 +236,20 @@ mod tests {
         // A prefix is an install.
         std::fs::create_dir_all(layout.prefix()).unwrap();
         assert!(!library_is_empty(&layout));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_game_folder_is_movable_until_a_game_is_in_it() {
+        let root = scratch("games");
+        let layout = Layout::with_root(root.join("Blizzard"))
+            .with_games(Some(root.join("ssd")));
+        assert!(game_folder_is_empty(&layout));
+        // The link target `ensure_link` pre-creates is still empty.
+        std::fs::create_dir_all(layout.wow_install()).unwrap();
+        assert!(game_folder_is_empty(&layout));
+        std::fs::create_dir_all(layout.product_dir(&crate::product::ProductCode::Retail)).unwrap();
+        assert!(!game_folder_is_empty(&layout));
         let _ = std::fs::remove_dir_all(&root);
     }
 

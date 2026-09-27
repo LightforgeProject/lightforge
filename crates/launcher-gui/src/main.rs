@@ -46,6 +46,7 @@ use lightforge_core::state::{self, ActionState, Local};
 use lightforge_core::proton::ProtonPin;
 use lightforge_core::setup::Status as SetupStatus;
 use lightforge_core::storage;
+use lightforge_core::tact::install::Offerings;
 use lightforge_core::tact::download::Cancel;
 use lightforge_core::tact::version::Region;
 use lightforge_core::tweaks::{GraphicsApi, HostTools, Tweaks};
@@ -252,6 +253,11 @@ enum Message {
     /// Measured sizes for the installed builds.
     ProtonSizes(Vec<(PathBuf, u64)>),
     StorageMeasured(Box<storage::Report>),
+    InstallOffered(ProductCode, Box<Result<Offerings, String>>),
+    InstallHighRes(bool),
+    GamesFolderChanged(String),
+    InstallCancel,
+    InstallStart,
     ClearCache,
     CacheCleared(Result<u64, String>),
     OpenLibrary,
@@ -275,6 +281,28 @@ enum Message {
     InstallAddon(String, String),
     CheckAddonUpdates,
     AddonUpdatesChecked(Result<Vec<lightforge_core::addons::manage::UpdateStatus>, String>),
+}
+
+/// What INSTALL opens before anything downloads: where it goes, what it
+/// costs, and whether to include high-resolution textures.
+#[derive(Debug, Clone)]
+struct InstallDialog {
+    code: ProductCode,
+    label: String,
+    stage: DialogStage,
+    high_res: bool,
+    /// Whether the game folder can still be chosen: no WoW version is in it.
+    movable: bool,
+    /// Space on the disk the typed game folder would land on.
+    disk: Option<storage::Disk>,
+}
+
+#[derive(Debug, Clone)]
+enum DialogStage {
+    /// Reading the build's download manifest.
+    Calculating,
+    Ready(Box<Offerings>),
+    Failed(String),
 }
 
 /// Which section of Settings is showing.
@@ -588,6 +616,9 @@ struct Lightforge {
     cache_notice: Option<String>,
     /// Editable library root, applied by "Use this location".
     location_input: String,
+    install_dialog: Option<InstallDialog>,
+    /// Editable game folder, applied when the install dialog starts.
+    games_input: String,
 
     /// Optional performance tools this machine has, detected once at startup.
     /// A toggle for a binary that is not installed is a launch failure waiting
@@ -691,6 +722,8 @@ impl Lightforge {
             storage_measuring: false,
             cache_notice: None,
             location_input: String::new(),
+            install_dialog: None,
+            games_input: String::new(),
             tools: HostTools::detect(),
             fps_input: String::new(),
             spell_input: String::new(),
@@ -1151,9 +1184,10 @@ impl Lightforge {
             }
 
             Message::Primary => match self.action() {
-                ActionState::Install | ActionState::Update { .. } | ActionState::Error { .. } => {
-                    self.enqueue()
-                }
+                // A first install asks first; an update or a retry already
+                // has its answers.
+                ActionState::Install => self.open_install(),
+                ActionState::Update { .. } | ActionState::Error { .. } => self.enqueue(),
                 ActionState::Downloading(_) => {
                     // Pause: trip the token. The loop stops between chunks and
                     // the store keeps everything already written.
@@ -1847,6 +1881,42 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::InstallOffered(code, result) => {
+                if let Ok(offerings) = result.as_ref() {
+                    self.remember_optional(&code, offerings.optional.clone());
+                }
+                if let Some(dialog) = self.install_dialog.as_mut().filter(|d| d.code == code) {
+                    dialog.stage = match *result {
+                        Ok(offerings) => DialogStage::Ready(Box::new(offerings)),
+                        Err(e) => DialogStage::Failed(e),
+                    };
+                }
+                Task::none()
+            }
+
+            Message::InstallHighRes(on) => {
+                if let Some(dialog) = self.install_dialog.as_mut() {
+                    dialog.high_res = on;
+                }
+                Task::none()
+            }
+
+            Message::GamesFolderChanged(value) => {
+                let disk = parse_path(&value).ok().and_then(|p| storage::disk(&p).ok());
+                if let Some(dialog) = self.install_dialog.as_mut() {
+                    dialog.disk = disk;
+                }
+                self.games_input = value;
+                Task::none()
+            }
+
+            Message::InstallCancel => {
+                self.install_dialog = None;
+                Task::none()
+            }
+
+            Message::InstallStart => self.start_install(),
+
             Message::ClearCache => {
                 let Some(dirs) = self.dirs.clone() else {
                     return Task::none();
@@ -2053,15 +2123,7 @@ impl Lightforge {
             }
 
             Message::OptionalContent(name, on) => {
-                if let Some(product) = self.config.product_mut(&self.selected.code) {
-                    let list = &mut product.profile.optional_content;
-                    list.retain(|n| n != &name);
-                    if on {
-                        list.push(name);
-                        list.sort();
-                    }
-                }
-                self.save_config();
+                self.set_optional(&self.selected.code.clone(), &name, on);
                 Task::none()
             }
 
@@ -2348,6 +2410,92 @@ impl Lightforge {
     }
 
     /// Persist the config, surfacing a write failure rather than swallowing it.
+    /// Open the install dialog and start pricing the build.
+    fn open_install(&mut self) -> Task<Message> {
+        let code = self.selected.code.clone();
+        self.games_input = self.layout.games_root().display().to_string();
+        self.install_dialog = Some(InstallDialog {
+            code: code.clone(),
+            label: self.selected.label.clone(),
+            stage: DialogStage::Calculating,
+            high_res: self.opted_optional(&code).iter().any(|t| t == HIGH_RES),
+            movable: storage::game_folder_is_empty(&self.layout),
+            disk: storage::disk(&self.layout.games_root()).ok(),
+        });
+        // Priced with no opt-ins: the dialog adds each extra's own size.
+        Task::perform(
+            tasks::offerings(self.http.clone(), code.clone(), self.region, Vec::new()),
+            move |result| Message::InstallOffered(code.clone(), Box::new(result)),
+        )
+    }
+
+    /// Apply the dialog's answers and queue the install.
+    fn start_install(&mut self) -> Task<Message> {
+        let Some(dialog) = self.install_dialog.clone() else {
+            return Task::none();
+        };
+        if dialog.code != self.selected.code {
+            self.install_dialog = None;
+            return Task::none();
+        }
+        // Re-checked rather than trusted from when the dialog opened.
+        if dialog.movable && storage::game_folder_is_empty(&self.layout) {
+            if let Err(e) = self.move_game_folder() {
+                self.error = Some(e);
+                return Task::none();
+            }
+        }
+        if let DialogStage::Ready(offerings) = &dialog.stage {
+            let offered = offerings.optional_bytes.iter().any(|(t, b)| t == HIGH_RES && *b > 0);
+            if offered {
+                self.set_optional(&dialog.code, HIGH_RES, dialog.high_res);
+            }
+        }
+        self.install_dialog = None;
+        self.enqueue()
+    }
+
+    /// Point the game folder at what the dialog holds.
+    ///
+    /// Only while no WoW version is installed: then moving it is a config
+    /// change plus re-pointing the prefix's link, which is how Wine — and
+    /// Battle.net and Agent through it — find the game at its usual Windows
+    /// path wherever it really is.
+    fn move_game_folder(&mut self) -> Result<(), String> {
+        let path = parse_path(&self.games_input)?;
+        if path == self.layout.games_root() {
+            return Ok(());
+        }
+        let default = self.layout.clone().with_games(None).games_root();
+        self.config.games_dir = (path != default).then(|| path.clone());
+        self.save_config();
+        self.layout = self.layout.clone().with_games(self.config.games_dir.clone());
+
+        // Before setup there is no prefix to link from, and setup makes the
+        // link itself; creating `drive_c` early would get in wineboot's way.
+        if lightforge_core::prefix::PrefixStatus::inspect(&self.layout).initialized {
+            lightforge_core::prefix::ensure_link(
+                &self.layout.wow_symlink(),
+                &self.layout.wow_install(),
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Opt one product in or out of one optional download.
+    fn set_optional(&mut self, code: &ProductCode, name: &str, on: bool) {
+        if let Some(product) = self.config.product_mut(code) {
+            let list = &mut product.profile.optional_content;
+            list.retain(|n| n != name);
+            if on {
+                list.push(name.to_owned());
+                list.sort();
+            }
+        }
+        self.save_config();
+    }
+
     /// Re-measure what Settings > Storage shows, off the UI thread.
     fn measure_storage(&mut self) -> Task<Message> {
         let Some(dirs) = self.dirs.clone() else {
@@ -2366,17 +2514,7 @@ impl Lightforge {
     /// migration — re-pointing the prefix's game symlink, moving 100+ GB —
     /// and leaving the old library behind unannounced is not an answer.
     fn relocate(&mut self) -> Result<(), String> {
-        let typed = self.location_input.trim();
-        let path = match typed.strip_prefix("~/") {
-            Some(rest) => PathBuf::from(
-                std::env::var_os("HOME").ok_or("cannot find your home directory")?,
-            )
-            .join(rest),
-            None => PathBuf::from(typed),
-        };
-        if !path.is_absolute() {
-            return Err(format!("{typed} is not a full path — start it with / or ~/"));
-        }
+        let path = parse_path(&self.location_input)?;
         if path == self.layout.root() {
             return Ok(());
         }
@@ -2396,7 +2534,7 @@ impl Lightforge {
             _ => Some(path.clone()),
         };
         self.save_config();
-        self.layout = Layout::with_root(&path);
+        self.layout = Layout::with_root(&path).with_games(self.config.games_dir.clone());
         self.location_input = path.display().to_string();
         self.error = None;
         Ok(())
@@ -2484,6 +2622,24 @@ impl Lightforge {
             None => screen,
         };
 
+
+        // Modal: over everything, including the panels above. The scrim takes
+        // every press that the card itself does not, and a `Stack` stops
+        // delivering an event once a layer captures it, so nothing beneath
+        // can be clicked while the dialog is up.
+        let screen = match &self.install_dialog {
+            Some(dialog) => stack![
+                screen,
+                mouse_area(
+                    container(self.install_card(dialog))
+                        .center(Length::Fill)
+                        .style(theme::scrim),
+                )
+                .on_press(Message::MenuClick),
+            ]
+            .into(),
+            None => screen,
+        };
 
         // Anything open closes on a click that no widget wanted. `mouse_area`
         // hands the event to its child first and only fires when the child
@@ -4200,6 +4356,127 @@ impl Lightforge {
         .into()
     }
 
+    /// The install dialog's card.
+    fn install_card<'a>(&'a self, dialog: &'a InstallDialog) -> Element<'a, Message> {
+        let location: Element<Message> = match dialog.movable {
+            true => column![
+                text_input("~/Games/Blizzard/games", &self.games_input)
+                    .on_input(Message::GamesFolderChanged)
+                    .style(theme::field)
+                    .size(theme::BODY)
+                    .padding(theme::SM),
+                muted(
+                    "World of Warcraft is installed in a folder of its own inside this one. \
+                     Every WoW version you add later shares it."
+                        .to_owned(),
+                    theme::CAPTION,
+                ),
+            ]
+            .spacing(theme::XS)
+            .into(),
+            false => column![
+                mono(self.layout.wow_install().display().to_string()),
+                muted(
+                    "Shared with the WoW versions already installed — they use one game \
+                     data store."
+                        .to_owned(),
+                    theme::CAPTION,
+                ),
+            ]
+            .spacing(theme::XS)
+            .into(),
+        };
+
+        let mut body = column![field_row("Location".to_owned(), location)].spacing(theme::MD);
+
+        let mut ready = false;
+        match &dialog.stage {
+            DialogStage::Calculating => {
+                body = body.push(muted("Calculating size…".to_owned(), theme::LABEL));
+            }
+            DialogStage::Failed(e) => {
+                body = body.push(
+                    text(format!("⚠ Could not read this build: {e}"))
+                        .size(theme::LABEL)
+                        .color(theme::ERROR),
+                );
+            }
+            DialogStage::Ready(offerings) => {
+                let extra = offerings
+                    .optional_bytes
+                    .iter()
+                    .find(|(tag, _)| tag == HIGH_RES)
+                    .map(|(_, bytes)| *bytes)
+                    // Every build names the tag; only some have textures
+                    // behind it. Retail's adds nothing, and a "+0 MiB"
+                    // switch is not a choice.
+                    .filter(|bytes| *bytes > 0);
+                if let Some(extra) = extra {
+                    body = body.push(field_row(
+                        "Optional".to_owned(),
+                        row![
+                            iced::widget::checkbox(optional_label(HIGH_RES), dialog.high_res)
+                                .on_toggle(Message::InstallHighRes)
+                                .text_size(theme::BODY),
+                            muted(format!("+{}", size_of(extra)), theme::LABEL),
+                        ]
+                        .spacing(theme::SM)
+                        .align_y(Alignment::Center)
+                        .into(),
+                    ));
+                }
+
+                let need = offerings.base_bytes
+                    + if dialog.high_res { extra.unwrap_or(0) } else { 0 };
+                // "Up to": files another WoW version already stored are
+                // not fetched again.
+                body = body.push(field_row(
+                    "Download".to_owned(),
+                    mono(format!("up to {}", size_of(need))).into(),
+                ));
+                match dialog.disk {
+                    Some(disk) => {
+                        body = body.push(field_row(
+                            "Free space".to_owned(),
+                            mono(size_of(disk.free)).into(),
+                        ));
+                        ready = disk.free > need;
+                        if !ready {
+                            body = body.push(
+                                text("⚠ Not enough free space on that disk.")
+                                    .size(theme::LABEL)
+                                    .color(theme::ERROR),
+                            );
+                        }
+                    }
+                    None => ready = true,
+                }
+            }
+        }
+
+        let actions = row![
+            Space::with_width(Length::Fill),
+            secondary("Cancel", Message::InstallCancel).enabled(true),
+            action_button("Start install", theme::INSTALL, Message::InstallStart)
+                .width(180.0)
+                .enabled(ready),
+        ]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center);
+
+        container(
+            column![
+                section(format!("Install {}", dialog.label), body.into()),
+                actions,
+            ]
+            .spacing(theme::LG),
+        )
+        .width(Length::Fixed(560.0))
+        .padding(theme::LG)
+        .style(theme::dialog)
+        .into()
+    }
+
     /// Where the library lives, how full its disk is, and what is using it.
     fn storage_section(&self) -> Element<'_, Message> {
         let report = self.storage.as_ref();
@@ -4335,7 +4612,10 @@ impl Lightforge {
 /// adds tomorrow is still excluded — hardcoding the gate is what once put a
 /// 37 GiB texture pack in every plan. `Alternate` and `Talebound` exist in
 /// the manifests but are not something to offer a player a switch for.
-const OFFERED_OPTIONAL: &[&str] = &["HighRes"];
+const OFFERED_OPTIONAL: &[&str] = &[HIGH_RES];
+
+/// The high-resolution texture pack's manifest tag.
+const HIGH_RES: &str = "HighRes";
 
 /// The tags in `tags` that [`OFFERED_OPTIONAL`] names.
 fn offered_only(tags: &[String]) -> Vec<String> {
@@ -4435,9 +4715,9 @@ fn secondary(label: &str, message: Message) -> Action<'static> {
 const SETTINGS_WIDTH: f32 = 720.0;
 
 /// A heading over a hairline, then its body — Settings' unit of grouping.
-fn section<'a>(title: &'a str, body: Element<'a, Message>) -> Element<'a, Message> {
+fn section<'a>(title: impl Into<String>, body: Element<'a, Message>) -> Element<'a, Message> {
     column![
-        text(title).size(theme::HEADING),
+        text(title.into()).size(theme::HEADING),
         container(Space::with_height(Length::Fixed(1.0)))
             .width(Length::Fill)
             .style(theme::divider),
@@ -4530,6 +4810,22 @@ fn bytes_of(done: u64, total: u64) -> String {
     match total {
         0 => format!("{:.2} GiB", gib(done)),
         _ => format!("{:.2} of {:.2} GiB", gib(done), gib(total)),
+    }
+}
+
+/// A typed folder as a full path, `~/` expanded.
+fn parse_path(typed: &str) -> Result<PathBuf, String> {
+    let typed = typed.trim();
+    let path = match typed.strip_prefix("~/") {
+        Some(rest) => {
+            PathBuf::from(std::env::var_os("HOME").ok_or("cannot find your home directory")?)
+                .join(rest)
+        }
+        None => PathBuf::from(typed),
+    };
+    match path.is_absolute() {
+        true => Ok(path),
+        false => Err(format!("{typed} is not a full path — start it with / or ~/")),
     }
 }
 

@@ -177,6 +177,25 @@ pub fn floating(_theme: &Theme) -> container::Style {
     }
 }
 
+/// The dimmed window behind a dialog: the page stays visible, but plainly
+/// not the thing to interact with.
+pub fn scrim(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(Color { a: 0.72, ..BG })),
+        ..container::Style::default()
+    }
+}
+
+/// A dialog's own card: opaque, unlike [`floating`], since nothing behind it
+/// should show through the text.
+pub fn dialog(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(SURFACE)),
+        border: Border { color: BORDER_OVER_ART, width: 1.0, radius: RADIUS.into() },
+        ..container::Style::default()
+    }
+}
+
 /// The header band, running edge to edge across the top of every screen.
 ///
 /// The band is the point. On the dashboard the header sits directly on

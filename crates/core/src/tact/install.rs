@@ -315,6 +315,12 @@ pub struct Offerings {
     /// can say how big this product is without fetching a plan.
     pub wanted_files: usize,
     pub wanted_bytes: u64,
+    /// Encoded bytes of the game with no optional content at all.
+    pub base_bytes: u64,
+    /// What each optional download adds on top of [`Offerings::base_bytes`],
+    /// in the order of [`Offerings::optional`] — so an install dialog can
+    /// price a switch before it is flipped.
+    pub optional_bytes: Vec<(String, u64)>,
 }
 
 /// Resolve a build and read its download manifest — nothing else.
@@ -332,7 +338,8 @@ pub async fn offerings(
     code: &ProductCode,
     options: &Options,
 ) -> Result<Offerings, InstallError> {
-    let tags = TagSet::parse(&options.tag_column()).with_optional(options.optional_tags.clone());
+    let base_tags = TagSet::parse(&options.tag_column());
+    let tags = base_tags.clone().with_optional(options.optional_tags.clone());
 
     let versions = version::versions(http, options.region, code.as_str()).await?;
     let remote = version::for_region(&versions, options.region, |v| &v.region)
@@ -350,12 +357,24 @@ pub async fn offerings(
     let manifest =
         DownloadManifest::parse(&client.fetch_loose(http, &ekey, &pair.ckey, None).await?)?;
 
+    let bytes = |tags: &TagSet| manifest.select(tags).iter().map(|e| e.size).sum::<u64>();
     let wanted = manifest.select(&tags);
+    let optional = manifest.optional_names(&tags);
+    let base_bytes = bytes(&base_tags);
+    let optional_bytes = optional
+        .iter()
+        .map(|name| {
+            let with = bytes(&base_tags.clone().with_optional([name.clone()]));
+            (name.clone(), with.saturating_sub(base_bytes))
+        })
+        .collect();
     Ok(Offerings {
         remote,
-        optional: manifest.optional_names(&tags),
+        optional,
         wanted_files: wanted.len(),
         wanted_bytes: wanted.iter().map(|e| e.size).sum(),
+        base_bytes,
+        optional_bytes,
     })
 }
 

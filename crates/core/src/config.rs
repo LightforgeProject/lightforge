@@ -20,6 +20,10 @@ const DEFAULT_PREFIX_USER: &str = "steamuser";
 pub struct Config {
     /// Root of the dual-directory layout. Defaults to `~/Games/Blizzard`.
     pub blizzard_root: Option<PathBuf>,
+    /// Where games are installed, when not under `blizzard_root`. Changeable
+    /// only while no WoW version is installed — every version shares one
+    /// data store in the one folder.
+    pub games_dir: Option<PathBuf>,
     /// Windows user name within the prefix.
     pub prefix_user: String,
     /// Proton build used for the Battle.net/Agent prefix specifically.
@@ -63,6 +67,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             blizzard_root: None,
+            games_dir: None,
             prefix_user: DEFAULT_PREFIX_USER.to_owned(),
             battle_net_proton: ProtonPin::default(),
             default_proton: ProtonPin::default(),
@@ -168,10 +173,11 @@ impl Config {
     /// CLI honoured would mean the GUI quietly managing a different install
     /// than the one the user configured.
     pub fn layout(&self) -> Result<crate::paths::Layout, crate::paths::PathError> {
-        match &self.blizzard_root {
-            Some(root) => Ok(crate::paths::Layout::with_root(root)),
-            None => crate::paths::Layout::default_for_user(),
-        }
+        let layout = match &self.blizzard_root {
+            Some(root) => crate::paths::Layout::with_root(root),
+            None => crate::paths::Layout::default_for_user()?,
+        };
+        Ok(layout.with_games(self.games_dir.clone()))
     }
 
     /// Where the asset pipeline should read from, if configured.
@@ -347,6 +353,16 @@ mod tests {
 
         config.blizzard_root = Some(PathBuf::from("/mnt/games/blizzard"));
         assert_eq!(config.layout().unwrap().root(), PathBuf::from("/mnt/games/blizzard"));
+        assert_eq!(
+            config.layout().unwrap().games_root(),
+            PathBuf::from("/mnt/games/blizzard/games")
+        );
+
+        // Games elsewhere; the prefix stays put and links across.
+        config.games_dir = Some(PathBuf::from("/mnt/ssd/games"));
+        let layout = config.layout().unwrap();
+        assert_eq!(layout.wow_install(), PathBuf::from("/mnt/ssd/games/World of Warcraft"));
+        assert!(layout.wow_symlink().starts_with("/mnt/games/blizzard/prefix"));
     }
 
     #[test]

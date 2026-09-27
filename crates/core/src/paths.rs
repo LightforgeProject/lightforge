@@ -38,12 +38,22 @@ const WINDOWS_PROGRAM_FILES: &str = "Program Files (x86)";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layout {
     root: PathBuf,
+    /// Where games live when not under `root` — another drive, say. The
+    /// prefix stays at `root` either way and reaches them through its link.
+    games: Option<PathBuf>,
 }
 
 impl Layout {
     /// Layout rooted at an explicit directory.
     pub fn with_root(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self { root: root.into(), games: None }
+    }
+
+    /// The same layout with its games somewhere else; `None` keeps them at
+    /// `root/games`.
+    pub fn with_games(mut self, games: Option<PathBuf>) -> Self {
+        self.games = games;
+        self
     }
 
     /// The default layout at `~/Games/Blizzard`.
@@ -134,9 +144,10 @@ impl Layout {
             .join("Agent")
     }
 
-    /// Real game assets root: `~/Games/Blizzard/games`.
+    /// Real game assets root: `~/Games/Blizzard/games`, unless the games
+    /// were put somewhere else.
     pub fn games_root(&self) -> PathBuf {
-        self.root.join("games")
+        self.games.clone().unwrap_or_else(|| self.root.join("games"))
     }
 
     /// Symlink *target*: where WoW actually lives on the native filesystem.
