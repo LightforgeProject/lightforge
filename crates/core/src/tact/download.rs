@@ -28,9 +28,11 @@
 //! reads. Resume is then nothing more than re-planning against it — there is
 //! no progress file to get out of step with the bytes on disk.
 
+use std::pin::pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use futures_util::future::{self, Either};
 use futures_util::stream::{self, StreamExt};
 use ngdp_crypto::KeyService;
 
@@ -60,6 +62,15 @@ impl Cancel {
 
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// Resolves once `cancel` trips. Polled rather than notified: `Cancel` is a
+/// plain flag shared with synchronous code, and a tenth of a second is far
+/// inside what a pause click needs.
+async fn cancelled(cancel: &Cancel) {
+    while !cancel.is_cancelled() {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 }
 
@@ -343,7 +354,14 @@ impl Downloader {
             })
             .buffer_unordered(self.options.concurrency.max(1));
 
-        while let Some(fetched) = fetches.next().await {
+        // Raced against the pause, rather than checked between fetches: up to
+        // `concurrency` range requests are in flight at once, each up to
+        // hundreds of megabytes, and a pause that waited for them all read as
+        // a hang. What is dropped here was never stored, so the next run's
+        // plan simply asks for it again.
+        while let Either::Left((Some(fetched), _)) =
+            future::select(fetches.next(), pin!(cancelled(cancel))).await
+        {
             match fetched {
                 Fetched::Skipped => continue,
                 Fetched::Failed { ekeys, reason } => {
@@ -1233,5 +1251,76 @@ mod limit_tests {
         let started = tokio::time::Instant::now();
         limit.acquire(1).await;
         assert!(started.elapsed().as_secs_f64() >= 7.0, "overdraft was not repaid");
+    }
+}
+
+#[cfg(test)]
+mod pause_tests {
+    use std::io::{Read, Write};
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::tact::cdn::Endpoint;
+    use crate::tact::plan::Loose;
+
+    /// A CDN that starts a response and then goes quiet with the connection
+    /// held open — the stall a pause used to wait on forever.
+    fn stalling_server() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for mut stream in listener.incoming().flatten() {
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request);
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\r\n");
+                let _ = stream.write_all(&[0u8; 16]);
+                held.push(stream);
+            }
+        });
+        origin
+    }
+
+    #[tokio::test]
+    async fn a_pause_does_not_wait_on_a_stalled_fetch() {
+        let http = Http::new().unwrap();
+        let client = Client::new(vec![Endpoint {
+            origin: stalling_server(),
+            path: "tpr/wow".into(),
+        }])
+        .unwrap();
+        let dir = std::env::temp_dir()
+            .join(format!("lightforge-pause-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut writer = StoreWriter::create(&dir).unwrap();
+        let plan = Plan {
+            loose: vec![Loose { ekey: [7; 16], ckey: None, size: 1 << 20 }],
+            ..Plan::default()
+        };
+
+        let cancel = Cancel::new();
+        let tripper = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            tripper.cancel();
+        });
+
+        let started = Instant::now();
+        let outcome = Downloader::new(Options::default())
+            .run(
+                Source { http: &http, client: &client, keys: None },
+                &plan,
+                &mut writer,
+                &cancel,
+                |_| {},
+            )
+            .await
+            .unwrap();
+
+        // Well inside the 30 s read timeout: the pause itself ended the run.
+        assert!(started.elapsed() < Duration::from_secs(5), "took {:?}", started.elapsed());
+        assert!(outcome.cancelled);
+        assert_eq!(outcome.files_stored, 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -19,6 +19,9 @@ use tokio::io::AsyncWriteExt;
 /// Sent on every request. GitHub rejects API calls without a User-Agent.
 const USER_AGENT: &str = concat!("Lightforge/", env!("CARGO_PKG_VERSION"));
 
+/// How long a response may go without sending a byte before it fails.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Shared HTTP client.
 ///
 /// `reqwest::Client` owns a connection pool and is designed to be created once
@@ -44,7 +47,11 @@ impl Http {
             .user_agent(USER_AGENT)
             .connect_timeout(Duration::from_secs(15))
             // Deliberately no overall request timeout: a Proton tarball is
-            // ~400 MB and a slow link is not an error.
+            // ~400 MB and a slow link is not an error. A *silent* one is: this
+            // resets on every chunk, so it only fires on a server that keeps
+            // the connection open and stops sending — which, without it,
+            // stalled a download (and any pause waiting on it) forever.
+            .read_timeout(READ_TIMEOUT)
             .build()
             .map_err(NetError::Client)?;
         Ok(Self { client })
