@@ -571,9 +571,21 @@ pub fn repair_unchanged(data_dir: &Path, report: &Report) -> Result<usize, Verif
 /// it rewrites the files the client memory-maps, which is what pre-flight
 /// exists to prevent.
 pub fn repair(data_dir: &Path, damaged: &[Damage]) -> Result<usize, VerifyError> {
+    remove_entries(data_dir, damaged.iter().map(|d| d.entry))
+}
+
+/// Drop `entries` from the latest generation of each bucket's index, writing
+/// a new generation per bucket touched. Returns how many were removed.
+///
+/// The archives are not touched. Same rule as [`repair`]: never against a
+/// live client.
+pub fn remove_entries(
+    data_dir: &Path,
+    entries: impl IntoIterator<Item = Entry>,
+) -> Result<usize, VerifyError> {
     let mut by_bucket: BTreeMap<u8, Vec<Entry>> = BTreeMap::new();
-    for damage in damaged {
-        by_bucket.entry(damage.entry.bucket()).or_default().push(damage.entry);
+    for entry in entries {
+        by_bucket.entry(entry.bucket()).or_default().push(entry);
     }
 
     let mut removed = 0;

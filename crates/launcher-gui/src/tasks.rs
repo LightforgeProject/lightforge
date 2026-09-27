@@ -789,39 +789,102 @@ pub fn open_path(path: PathBuf) -> Result<(), String> {
     open::that_detached(&path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// What uninstalling `code` would delete — nothing is touched.
+/// What uninstalling a product would do, before anything is touched.
+#[derive(Debug, Clone)]
+pub struct UninstallPreview {
+    pub plan: lightforge_core::tact::uninstall::Plan,
+    /// The shared store's space it would give back. `None` when the whole
+    /// store goes anyway; an error when what it shares could not be checked,
+    /// in which case the store is left as it is.
+    pub reclaim: Option<Result<lightforge_core::tact::reclaim::Reclaim, String>>,
+}
+
+/// Plan the store reclaim for `code`, unless the whole store is going.
+async fn reclaim_plan(
+    http: &Http,
+    install: &std::path::Path,
+    code: &ProductCode,
+    plan: &lightforge_core::tact::uninstall::Plan,
+) -> Option<Result<lightforge_core::tact::reclaim::Reclaim, String>> {
+    use lightforge_core::tact::reclaim;
+    if plan.is_whole_install() || !plan.has_row {
+        return None;
+    }
+    let departing = lightforge_core::buildinfo::BuildInfo::load(install.join(".build.info"))
+        .map_err(|e| e.to_string())
+        .and_then(|info| reclaim::Build::installed(&info, code).map_err(|e| e.to_string()));
+    Some(match departing {
+        Ok(build) => reclaim::plan(http, install, &build).await.map_err(|e| e.to_string()),
+        Err(e) => Err(e),
+    })
+}
+
+/// What uninstalling `code` would delete and free — nothing is touched.
 pub async fn uninstall_plan(
+    http: Option<Http>,
     layout: Layout,
     code: ProductCode,
-) -> Result<lightforge_core::tact::uninstall::Plan, String> {
-    tokio::task::spawn_blocking(move || {
-        lightforge_core::tact::uninstall::plan(&layout.wow_install(), &code)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+) -> Result<UninstallPreview, String> {
+    let install = layout.wow_install();
+    let plan = {
+        let (install, code) = (install.clone(), code.clone());
+        tokio::task::spawn_blocking(move || {
+            lightforge_core::tact::uninstall::plan(&install, &code).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())??
+    };
+    let reclaim = match &http {
+        Some(http) => reclaim_plan(http, &install, &code, &plan).await,
+        None => Some(Err(NO_HTTP.to_owned())),
+    };
+    Ok(UninstallPreview { plan, reclaim })
 }
 
 /// Uninstall `code`: its files, its `.build.info` row and `.product.db`
-/// record, the shared store if it was the last product, and its entry in
-/// Battle.net's registry. Returns the bytes freed.
+/// record, the shared store's data only it used (or the whole store if it
+/// was the last product), and its entry in Battle.net's registry. Returns
+/// the bytes freed.
 ///
 /// Refuses while anything is alive in the prefix — the same gate repair uses:
 /// deleting files a running client has open, or a registry Agent rewrites on
 /// exit, is not something to race.
-pub async fn uninstall(layout: Layout, code: ProductCode) -> Result<u64, String> {
-    tokio::task::spawn_blocking(move || {
-        use lightforge_core::tact::{productdb, uninstall};
+///
+/// Everything is planned again here rather than trusted from when the dialog
+/// opened. The reclaim is planned *before* the product's row goes, since the
+/// row is what names the build whose files it was.
+pub async fn uninstall(
+    http: Option<Http>,
+    layout: Layout,
+    code: ProductCode,
+) -> Result<u64, String> {
+    use lightforge_core::tact::{productdb, reclaim, uninstall};
 
-        if let Some(process) = lightforge_core::preflight::scan(&layout).first() {
-            return Err(format!("close {} first — the game files are in use", process.name));
-        }
-        let install = layout.wow_install();
-        // Planned again rather than trusted from when the dialog opened.
-        let plan = uninstall::plan(&install, &code).map_err(|e| e.to_string())?;
+    let alive = layout.clone();
+    let busy = tokio::task::spawn_blocking(move || lightforge_core::preflight::scan(&alive))
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some(process) = busy.first() {
+        return Err(format!("close {} first — the game files are in use", process.name));
+    }
+
+    let install = layout.wow_install();
+    let plan = uninstall::plan(&install, &code).map_err(|e| e.to_string())?;
+    // A reclaim that cannot be planned is skipped, not fatal: the uninstall
+    // itself is still exactly what was asked for.
+    let reclaim = match &http {
+        Some(http) => reclaim_plan(http, &install, &code, &plan).await.and_then(Result::ok),
+        None => None,
+    };
+
+    tokio::task::spawn_blocking(move || {
         let removed = uninstall::execute(&install, &code, &plan).map_err(|e| e.to_string())?;
+        let reclaimed = match &reclaim {
+            Some(reclaim) => reclaim::execute(&install, reclaim).map_err(|e| e.to_string())?,
+            None => 0,
+        };
         productdb::unregister(&layout.agent_dir(), code.as_str()).map_err(|e| e.to_string())?;
-        Ok(removed.bytes)
+        Ok(removed.bytes + reclaimed)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -885,7 +948,8 @@ mod uninstall_tests {
         std::fs::write(layout.agent_dir().join("product.db"), &registry).unwrap();
 
         let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
-        runtime.block_on(uninstall(layout.clone(), ProductCode::ClassicEra)).unwrap();
+        // No client: the reclaim is skipped, which is what this test isolates.
+        runtime.block_on(uninstall(None, layout.clone(), ProductCode::ClassicEra)).unwrap();
 
         assert!(!era.exists());
         assert!(layout.wow_install().join("Data").exists(), "the shared store stays");

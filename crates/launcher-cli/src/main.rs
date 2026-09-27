@@ -363,6 +363,27 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Give back the shared store's space held by one product's data: the
+    /// files no other installed product uses. Prints the plan unless `--yes`.
+    ///
+    /// Uninstalling from the GUI does this itself. This is for a product
+    /// removed before it could — pass the `--build-key` it had installed.
+    Reclaim {
+        #[arg(long)]
+        product: String,
+        /// Build config hash of the departing build. Defaults to the one
+        /// `.build.info` lists for `--product`.
+        #[arg(long)]
+        build_key: Option<String>,
+        #[arg(long, default_value = "eu")]
+        region: String,
+        /// Install root. Defaults to the managed WoW install.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Actually delete. Without this, nothing is touched.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Write `.product.db` so Battle.net will adopt an existing install.
     ///
     /// Agent refuses to locate an install without this file (error 2800). The
@@ -2097,6 +2118,55 @@ async fn main() -> Result<()> {
 
             let removed = uninstall::execute(&install, &code, &plan)?;
             println!("\ndeleted         {} paths, {:.2} GiB", removed.paths.len(), gib(removed.bytes));
+        }
+        Command::Reclaim { product, build_key, region, path, yes } => {
+            use lightforge_core::buildinfo::BuildInfo;
+            use lightforge_core::net::Http;
+            use lightforge_core::tact::version::{self, Region};
+            use lightforge_core::tact::reclaim;
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let install = path.unwrap_or_else(|| layout.wow_install());
+            let http = Http::new()?;
+            let departing = match build_key {
+                Some(build_key) => {
+                    let region: Region = region.parse().context("parsing --region")?;
+                    let cdns = version::cdns(&http, region, code.as_str()).await?;
+                    let cdn = version::for_region(&cdns, region, |c| &c.name)
+                        .context("the CDN table is empty")?
+                        .clone();
+                    reclaim::Build { product: code.clone(), build_key, cdn }
+                }
+                None => {
+                    let info = BuildInfo::load(install.join(".build.info"))
+                        .with_context(|| format!("reading {}/.build.info", install.display()))?;
+                    reclaim::Build::installed(&info, &code)?
+                }
+            };
+
+            let gib = |b: u64| b as f64 / 1024f64.powi(3);
+            let plan = reclaim::plan(&http, &install, &departing).await?;
+            println!("install         {}", install.display());
+            println!("departing       {} ({})", code.as_str(), departing.build_key);
+            println!("entries         {} used by nothing else installed", plan.entries.len());
+            println!("archives        {} emptied, deleted whole", plan.archives.len());
+            println!("frees           {:.2} GiB", gib(plan.freed));
+            println!(
+                "stranded        {:.2} GiB left as dead space in shared archives",
+                gib(plan.stranded)
+            );
+
+            if !yes || plan.entries.is_empty() {
+                if !plan.entries.is_empty() {
+                    println!("\nnothing changed. Re-run with --yes to go ahead.");
+                }
+                return Ok(());
+            }
+            if let Some(process) = lightforge_core::preflight::scan(&layout).first() {
+                anyhow::bail!("close {} first — the store is in use", process.name);
+            }
+            let freed = reclaim::execute(&install, &plan)?;
+            println!("\nfreed           {:.2} GiB", gib(freed));
         }
         Command::ProductDb { path, products, account_country, geo_country, agent_tags, dry_run } => {
             use lightforge_core::paths::WINDOWS_WOW_PATH;

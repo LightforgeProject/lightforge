@@ -47,7 +47,6 @@ use lightforge_core::proton::ProtonPin;
 use lightforge_core::setup::Status as SetupStatus;
 use lightforge_core::storage;
 use lightforge_core::tact::install::Offerings;
-use lightforge_core::tact::uninstall::Plan as UninstallPlan;
 use lightforge_core::transfers::{self, Saved, Standing};
 use lightforge_core::tact::download::Cancel;
 use lightforge_core::tact::version::Region;
@@ -261,7 +260,7 @@ enum Message {
     InstallCancel,
     InstallStart,
     AskUninstall,
-    UninstallPlanned(ProductCode, Box<Result<UninstallPlan, String>>),
+    UninstallPlanned(ProductCode, Box<Result<tasks::UninstallPreview, String>>),
     UninstallCancel,
     UninstallConfirm,
     Uninstalled(ProductCode, Result<u64, String>),
@@ -318,7 +317,7 @@ struct UninstallDialog {
     code: ProductCode,
     label: String,
     /// `None` while the plan is being worked out.
-    plan: Option<Result<UninstallPlan, String>>,
+    plan: Option<Result<tasks::UninstallPreview, String>>,
     /// Deleting: the buttons are held until it answers.
     working: bool,
 }
@@ -2006,7 +2005,7 @@ impl Lightforge {
                     working: false,
                 });
                 Task::perform(
-                    tasks::uninstall_plan(self.layout.clone(), code.clone()),
+                    tasks::uninstall_plan(self.http.clone(), self.layout.clone(), code.clone()),
                     move |plan| Message::UninstallPlanned(code.clone(), Box::new(plan)),
                 )
             }
@@ -2029,9 +2028,11 @@ impl Lightforge {
                 };
                 dialog.working = true;
                 let code = dialog.code.clone();
-                Task::perform(tasks::uninstall(self.layout.clone(), code.clone()), move |result| {
-                    Message::Uninstalled(code.clone(), result)
-                })
+                let http = self.http.clone();
+                Task::perform(
+                    tasks::uninstall(http, self.layout.clone(), code.clone()),
+                    move |result| Message::Uninstalled(code.clone(), result),
+                )
             }
 
             Message::Uninstalled(code, result) => {
@@ -3938,7 +3939,7 @@ impl Lightforge {
                 item("Open Files in Explorer", Message::OpenFiles, installed),
                 item("Copy Debug Info", Message::CopyDebug, true),
                 // Last and apart from the rest: the one entry that destroys.
-                item("Uninstall…", Message::AskUninstall, can_uninstall),
+                item("Uninstall", Message::AskUninstall, can_uninstall),
             ]
             .push_maybe(
                 self.owed_repair
@@ -4760,14 +4761,16 @@ impl Lightforge {
             Some(Err(e)) => {
                 body = body.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
             }
-            Some(Ok(plan)) if plan.is_empty() => {
+            Some(Ok(preview)) if preview.plan.is_empty() => {
                 body = body.push(muted(
                     "Nothing to remove — it is not installed here.".to_owned(),
                     theme::LABEL,
                 ));
             }
-            Some(Ok(plan)) => {
+            Some(Ok(preview)) => {
                 ready = true;
+                let plan = &preview.plan;
+                let reclaim = preview.reclaim.as_ref().and_then(|r| r.as_ref().ok());
                 let deletes = column(
                     plan.flavor_dir
                         .iter()
@@ -4777,7 +4780,10 @@ impl Lightforge {
                 .spacing(theme::XS);
                 body = body
                     .push(field_row("Deletes".to_owned(), deletes.into()))
-                    .push(field_row("Frees".to_owned(), mono(size_of(plan.bytes)).into()));
+                    .push(field_row(
+                        "Frees".to_owned(),
+                        mono(size_of(plan.bytes + reclaim.map_or(0, |r| r.freed))).into(),
+                    ));
 
                 let (note, color) = match plan.is_whole_install() {
                     true => (
@@ -4786,17 +4792,30 @@ impl Lightforge {
                             .to_owned(),
                         theme::ERROR,
                     ),
-                    false => (
-                        format!(
-                            "The shared game data stays: {} still use it.",
-                            plan.remaining
-                                .iter()
-                                .map(|c| self.label_of(c))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ),
-                        theme::MUTED,
-                    ),
+                    false => {
+                        let others = plan
+                            .remaining
+                            .iter()
+                            .map(|c| self.label_of(c))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let note = match &preview.reclaim {
+                            // Only what nobody else uses goes; an archive
+                            // it shares with them keeps its bytes as dead
+                            // space until something rewrites it.
+                            Some(Ok(r)) if r.stranded > 0 => format!(
+                                "Game data it shares with {others} stays. About {} of its own \
+                                 sits in archives shared with them and stays as unused space.",
+                                size_of(r.stranded)
+                            ),
+                            Some(Ok(_)) => format!("Game data it shares with {others} stays."),
+                            _ => format!(
+                                "Could not check which game data only it uses, so the shared \
+                                 store is left as it is for {others}."
+                            ),
+                        };
+                        (note, theme::MUTED)
+                    }
                 };
                 body = body.push(text(note).size(theme::LABEL).color(color)).push(muted(
                     "Its addons and settings (Interface, WTF) are deleted with it. Battle.net \

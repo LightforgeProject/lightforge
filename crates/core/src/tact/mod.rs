@@ -28,6 +28,7 @@ pub mod install;
 pub mod manifest;
 pub mod plan;
 pub mod productdb;
+pub mod reclaim;
 pub mod storage;
 pub mod uninstall;
 pub mod verify;
