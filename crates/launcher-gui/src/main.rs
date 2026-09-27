@@ -261,12 +261,35 @@ enum Message {
     OpenUrl(String),
 
     AddonTab(AddonTab),
+    SettingsTab(SettingsTab),
     SearchChanged(String),
     RunSearch,
     SearchDone(Box<addonwork::SearchOutcome>),
     InstallAddon(String, String),
     CheckAddonUpdates,
     AddonUpdatesChecked(Result<Vec<lightforge_core::addons::manage::UpdateStatus>, String>),
+}
+
+/// Which section of Settings is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsTab {
+    Setup,
+    Proton,
+    Downloads,
+    About,
+}
+
+impl SettingsTab {
+    const ALL: [Self; 4] = [Self::Setup, Self::Proton, Self::Downloads, Self::About];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Setup => "Setup",
+            Self::Proton => "Proton",
+            Self::Downloads => "Downloads",
+            Self::About => "About",
+        }
+    }
 }
 
 /// Which half of the addon screen is showing.
@@ -567,6 +590,7 @@ struct Lightforge {
     addons_busy: bool,
     addon_report: Option<lightforge_core::addons::Report>,
     addon_tab: AddonTab,
+    settings_tab: SettingsTab,
     search_input: String,
     search: addonwork::SearchOutcome,
     searching: bool,
@@ -658,6 +682,7 @@ impl Lightforge {
             addons_busy: false,
             addon_report: None,
             addon_tab: AddonTab::Mine,
+            settings_tab: SettingsTab::Setup,
             search_input: String::new(),
             search: addonwork::SearchOutcome::default(),
             searching: false,
@@ -1473,6 +1498,7 @@ impl Lightforge {
                     if !status.is_ready() && self.screen == Screen::Dashboard && !self.setup_running
                     {
                         self.screen = Screen::Settings;
+                        self.settings_tab = SettingsTab::Setup;
                     }
                 }
                 self.setup = status;
@@ -1631,6 +1657,7 @@ impl Lightforge {
                 self.setup_running = true;
                 self.error = None;
                 self.screen = Screen::Settings;
+                self.settings_tab = SettingsTab::Setup;
 
                 Task::perform(
                     provision::run(
@@ -1780,6 +1807,12 @@ impl Lightforge {
 
             Message::AddonTab(tab) => {
                 self.addon_tab = tab;
+                self.error = None;
+                Task::none()
+            }
+
+            Message::SettingsTab(tab) => {
+                self.settings_tab = tab;
                 self.error = None;
                 Task::none()
             }
@@ -3668,16 +3701,13 @@ impl Lightforge {
     /// First-run provisioning: what is missing, and one button to fix it.
     /// Proton, the prefix and Battle.net: what is there, and the button that
     /// provisions whatever isn't.
-    fn setup_card(&self) -> Element<'_, Message> {
-        let mut body = column![
-            text("Setup").size(theme::HEADING),
-            muted(
-                "Proton, the Wine prefix and Battle.net. Each step is skipped if it is \
-                 already done."
-                    .to_owned(),
-                theme::CAPTION,
-            ),
-        ]
+    fn setup_section(&self) -> Element<'_, Message> {
+        let mut body = column![muted(
+            "Proton, the Wine prefix and Battle.net. Each step is skipped if it is already \
+             done."
+                .to_owned(),
+            theme::CAPTION,
+        )]
         .spacing(theme::SM);
 
         let step = |done: bool, label: &'static str, detail: String| {
@@ -3772,12 +3802,12 @@ impl Lightforge {
             .enabled(!self.setup_running),
         );
 
-        container(body).padding(theme::MD).style(theme::card).into()
+        body.into()
     }
 
     /// Every Proton build on the machine, and how to add or remove one.
     fn proton_builds(&self) -> Element<'_, Message> {
-        let mut rows = column![text("Proton builds").size(theme::HEADING)].spacing(theme::SM);
+        let mut rows = column![].spacing(theme::SM);
 
         let installed = self.setup.as_ref().map(|s| s.installed.as_slice()).unwrap_or_default();
         if installed.is_empty() {
@@ -3856,8 +3886,57 @@ impl Lightforge {
         rows.into()
     }
 
-    /// Proton pinning, asset source, and the notify-only update check.
+    /// Settings, laid out the way Battle.net lays out its own: a list of
+    /// sections on the left and one section at a time on the right, as flat
+    /// rows at one shared width rather than a stack of boxes that each size
+    /// themselves.
     fn settings(&self) -> Element<'_, Message> {
+        let mut nav = column![].spacing(theme::XS).width(Length::Fixed(180.0));
+        for tab in SettingsTab::ALL {
+            let entry = button(text(tab.label()).size(theme::BODY))
+                .width(Length::Fill)
+                .padding([theme::SM, theme::MD]);
+            nav = nav.push(match self.settings_tab == tab {
+                true => entry.style(theme::selected),
+                false => entry.style(theme::ghost).on_press(Message::SettingsTab(tab)),
+            });
+        }
+
+        let (title, body) = match self.settings_tab {
+            SettingsTab::Setup => ("Setup", self.setup_section()),
+            SettingsTab::Proton => ("Proton", self.proton_section()),
+            SettingsTab::Downloads => ("Downloads", self.downloads_section()),
+            SettingsTab::About => ("About", self.about_section()),
+        };
+
+        // The error leads rather than trails: a failed setup run is reported
+        // here, and at the foot of a scrolled section it would go unseen.
+        let mut content = column![].spacing(theme::MD).max_width(SETTINGS_WIDTH);
+        if let Some(e) = &self.error {
+            content =
+                content.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
+        }
+        content = content.push(section(title, body));
+
+        column![
+            self.header(),
+            row![
+                nav,
+                container(Space::with_width(Length::Fixed(1.0)))
+                    .height(Length::Fill)
+                    .style(theme::divider),
+                scrollable(container(content).padding([0, theme::LG]))
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            ]
+            .spacing(theme::LG)
+            .padding(theme::LG),
+        ]
+        .into()
+    }
+
+    /// Which Proton each product runs under, and the update check.
+    fn proton_section(&self) -> Element<'_, Message> {
         let installed: Vec<ProtonChoice> = std::iter::once(ProtonChoice(None))
             .chain(
                 self.setup
@@ -3872,149 +3951,118 @@ impl Lightforge {
             .product(&self.selected.code)
             .and_then(|p| p.profile.proton_ge_version.clone());
 
-        fn field_row<'a>(
-            label: String,
-            control: Element<'a, Message>,
-        ) -> iced::widget::Row<'a, Message> {
-            row![muted(label, theme::LABEL).width(Length::Fixed(150.0)), control]
-                .spacing(theme::MD)
-                .align_y(Alignment::Center)
-        }
+        let picker = |current: Option<String>, on_pick: fn(ProtonChoice) -> Message| {
+            pick_list(installed.clone(), Some(ProtonChoice(current)), on_pick)
+                .text_size(theme::BODY)
+                .padding(theme::SM)
+                .width(Length::Fixed(260.0))
+                .style(theme::picker)
+                .menu_style(theme::picker_menu)
+                .into()
+        };
 
-        let proton = container(
-            column![
-                text("Proton").size(theme::HEADING),
-                field_row(
-                    "Default".to_owned(),
-                    pick_list(
-                        installed.clone(),
-                        Some(ProtonChoice(
-                            self.config.default_proton.version().map(str::to_owned)
-                        )),
-                        Message::PinDefaultProton,
-                    )
-                    .text_size(theme::BODY)
-                    .padding(theme::SM)
-                    .into(),
+        column![
+            field_row(
+                "Default".to_owned(),
+                picker(
+                    self.config.default_proton.version().map(str::to_owned),
+                    Message::PinDefaultProton,
                 ),
-                field_row(
-                    self.selected.label.clone(),
-                    pick_list(
-                        installed.clone(),
-                        Some(ProtonChoice(product_pin)),
-                        Message::PinProductProton,
-                    )
-                    .text_size(theme::BODY)
-                    .padding(theme::SM)
-                    .into(),
+            ),
+            field_row(self.selected.label.clone(), picker(product_pin, Message::PinProductProton)),
+            field_row(
+                "Battle.net".to_owned(),
+                picker(
+                    self.config.battle_net_proton.version().map(str::to_owned),
+                    Message::PinBattleNetProton,
                 ),
-                field_row(
-                    "Battle.net".to_owned(),
-                    pick_list(
-                        installed,
-                        Some(ProtonChoice(
-                            self.config.battle_net_proton.version().map(str::to_owned),
-                        )),
-                        Message::PinBattleNetProton,
-                    )
-                    .text_size(theme::BODY)
-                    .padding(theme::SM)
-                    .into(),
-                ),
-                muted(
-                    "A product with no pin of its own follows the default. Battle.net and \
-                     Agent are a different workload from the game, so they pin separately."
-                        .to_owned(),
-                    theme::CAPTION,
-                ),
-                row![
-                    secondary("Check for updates", Message::CheckProton).enabled(true),
-                    muted(self.proton_notice.clone().unwrap_or_default(), theme::LABEL),
-                ]
-                .spacing(theme::SM)
-                .align_y(Alignment::Center),
+            ),
+            muted(
+                "A product with no pin of its own follows the default. Battle.net and Agent \
+                 are a different workload from the game, so they pin separately."
+                    .to_owned(),
+                theme::CAPTION,
+            ),
+            row![
+                secondary("Check for updates", Message::CheckProton).enabled(true),
+                muted(self.proton_notice.clone().unwrap_or_default(), theme::LABEL),
             ]
-            .spacing(theme::SM),
-        )
-        .padding(theme::MD)
-        .style(theme::card);
+            .spacing(theme::SM)
+            .align_y(Alignment::Center),
+            Space::with_height(Length::Fixed(theme::MD as f32)),
+            section("Installed builds", self.proton_builds()),
+        ]
+        .spacing(theme::SM)
+        .into()
+    }
 
-        let builds = container(self.proton_builds())
-            .padding(theme::MD)
-            .style(theme::card);
-
-        let downloads = container(
-            column![
-                text("Downloads").size(theme::HEADING),
-                row![
-                    muted("Speed limit".to_owned(), theme::LABEL).width(Length::Fixed(150.0)),
-                    text_input("unlimited", &self.limit_input)
-                        .on_input(Message::DownloadLimitChanged)
-                        .style(theme::field)
-                        .size(theme::BODY)
-                        .padding(theme::SM)
-                        .width(Length::Fixed(110.0)),
-                    muted("MB/s".to_owned(), theme::LABEL),
-                ]
-                .spacing(theme::MD)
-                .align_y(Alignment::Center),
-                muted(
-                    "Applies to game downloads. Proton builds and addons are not capped."
-                        .to_owned(),
-                    theme::CAPTION,
-                ),
-                row![
-                    muted("Battle.net's limit".to_owned(), theme::LABEL)
-                        .width(Length::Fixed(150.0)),
-                    text_input("none", &self.bnet_limit_input)
-                        .on_input(Message::BattleNetLimitChanged)
-                        .style(theme::field)
-                        .size(theme::BODY)
-                        .padding(theme::SM)
-                        .width(Length::Fixed(110.0)),
-                    muted("MB/s".to_owned(), theme::LABEL),
-                ]
-                .spacing(theme::MD)
-                .align_y(Alignment::Center),
-                muted(
-                    "Battle.net's own cap, for what it downloads. Read from its config and \
-                     written back; clearing the field removes the setting and restores its \
-                     default."
-                        .to_owned(),
-                    theme::CAPTION,
-                ),
-                iced::widget::checkbox(
-                    "Pause downloads while a game is running",
-                    self.config.pause_downloads_while_playing,
-                )
-                .on_toggle(Message::PauseWhilePlaying)
-                .text_size(theme::BODY),
-                muted(
-                    "The game you launch always pauses its own download — it and the \
-                     launcher would be sharing one storage file. This covers the rest \
-                     of the queue."
-                        .to_owned(),
-                    theme::CAPTION,
-                ),
+    /// Speed caps, ours and Battle.net's, and pausing while playing.
+    fn downloads_section(&self) -> Element<'_, Message> {
+        let speed = |input: &str, placeholder: &str, on_input: fn(String) -> Message| {
+            row![
+                text_input(placeholder, input)
+                    .on_input(on_input)
+                    .style(theme::field)
+                    .size(theme::BODY)
+                    .padding(theme::SM)
+                    .width(Length::Fixed(110.0)),
+                muted("MB/s".to_owned(), theme::LABEL),
             ]
-            .spacing(theme::SM),
-        )
-        .padding(theme::MD)
-        .style(theme::card);
+            .spacing(theme::SM)
+            .align_y(Alignment::Center)
+            .into()
+        };
 
-        // The error leads rather than trails: a failed setup run is reported
-        // here, and at the foot of a scrolled page it would go unseen.
-        let mut body = column![].spacing(theme::MD);
-        if let Some(e) = &self.error {
-            body = body.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
-        }
-        body = body.push(self.setup_card());
-        body = body.push(column![proton, builds, downloads].spacing(theme::MD));
+        column![
+            field_row(
+                "Speed limit".to_owned(),
+                speed(&self.limit_input, "unlimited", Message::DownloadLimitChanged),
+            ),
+            muted(
+                "Applies to game downloads. Proton builds and addons are not capped.".to_owned(),
+                theme::CAPTION,
+            ),
+            field_row(
+                "Battle.net's limit".to_owned(),
+                speed(&self.bnet_limit_input, "none", Message::BattleNetLimitChanged),
+            ),
+            muted(
+                "Battle.net's own cap, for what it downloads. Read from its config and written \
+                 back; clearing the field removes the setting and restores its default."
+                    .to_owned(),
+                theme::CAPTION,
+            ),
+            iced::widget::checkbox(
+                "Pause downloads while a game is running",
+                self.config.pause_downloads_while_playing,
+            )
+            .on_toggle(Message::PauseWhilePlaying)
+            .text_size(theme::BODY),
+            muted(
+                "The game you launch always pauses its own download — it and the launcher \
+                 would be sharing one storage file. This covers the rest of the queue."
+                    .to_owned(),
+                theme::CAPTION,
+            ),
+        ]
+        .spacing(theme::SM)
+        .into()
+    }
+
+    /// The version, and where its configuration lives.
+    fn about_section(&self) -> Element<'_, Message> {
+        let mut body = column![field_row(
+            "Version".to_owned(),
+            mono(env!("CARGO_PKG_VERSION").to_owned()).into(),
+        )]
+        .spacing(theme::SM);
         if let Some(dirs) = &self.dirs {
-            body = body.push(mono(format!("config: {}", dirs.config_file().display())));
+            body = body.push(field_row(
+                "Config file".to_owned(),
+                mono(dirs.config_file().display().to_string()).into(),
+            ));
         }
-
-        self.page("Settings", None, body.into())
+        body.into()
     }
 }
 
@@ -4106,6 +4154,32 @@ fn secondary(label: &str, message: Message) -> Action<'static> {
             .padding([theme::XS, theme::MD]),
         message,
     }
+}
+
+/// Settings content stops growing here: rows read as one column at any
+/// window width, and a label and its control never drift apart.
+const SETTINGS_WIDTH: f32 = 720.0;
+
+/// A heading over a hairline, then its body — Settings' unit of grouping.
+fn section<'a>(title: &'a str, body: Element<'a, Message>) -> Element<'a, Message> {
+    column![
+        text(title).size(theme::HEADING),
+        container(Space::with_height(Length::Fixed(1.0)))
+            .width(Length::Fill)
+            .style(theme::divider),
+        body,
+    ]
+    .spacing(theme::MD)
+    .into()
+}
+
+/// A fixed-width label beside its control, so every control in a section
+/// starts on the same line.
+fn field_row<'a>(label: String, control: Element<'a, Message>) -> Element<'a, Message> {
+    row![muted(label, theme::LABEL).width(Length::Fixed(160.0)), control]
+        .spacing(theme::MD)
+        .align_y(Alignment::Center)
+        .into()
 }
 
 /// A separator between inline facts.

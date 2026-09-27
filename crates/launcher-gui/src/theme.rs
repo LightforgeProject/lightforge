@@ -201,6 +201,14 @@ pub fn ribbon_edge(_theme: &Theme) -> container::Style {
     }
 }
 
+/// A hairline between sections, and between Settings' list and its page.
+pub fn divider(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(BORDER)),
+        ..container::Style::default()
+    }
+}
+
 /// One row in a list. Quiet enough to repeat forty times.
 pub fn row(_theme: &Theme) -> container::Style {
     container::Style {
