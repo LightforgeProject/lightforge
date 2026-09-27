@@ -2152,6 +2152,7 @@ impl Lightforge {
                         self.selected.code.clone(),
                         self.region,
                         self.opted_optional(&self.selected.code),
+                        None,
                     ),
                     |result| Message::CheckedForUpdates(Box::new(result)),
                 )
@@ -2422,9 +2423,17 @@ impl Lightforge {
             movable: storage::game_folder_is_empty(&self.layout),
             disk: storage::disk(&self.layout.games_root()).ok(),
         });
-        // Priced with no opt-ins: the dialog adds each extra's own size.
+        // Priced with no opt-ins, since the dialog adds each extra's own size,
+        // and against the store already there, so files another WoW version
+        // shares are not counted.
         Task::perform(
-            tasks::offerings(self.http.clone(), code.clone(), self.region, Vec::new()),
+            tasks::offerings(
+                self.http.clone(),
+                code.clone(),
+                self.region,
+                Vec::new(),
+                Some(self.layout.wow_install()),
+            ),
             move |result| Message::InstallOffered(code.clone(), Box::new(result)),
         )
     }
@@ -4374,13 +4383,30 @@ impl Lightforge {
             ]
             .spacing(theme::XS)
             .into(),
+            // Battle.net's own wording and colour for the same fact. A drawn
+            // dot rather than a check mark: the UI font has no U+2713.
             false => column![
                 mono(self.layout.wow_install().display().to_string()),
-                muted(
-                    "Shared with the WoW versions already installed — they use one game \
-                     data store."
-                        .to_owned(),
-                    theme::CAPTION,
+                tooltip(
+                    row![
+                        container(Space::new(Length::Fixed(8.0), Length::Fixed(8.0)))
+                            .style(theme::dot(theme::PLAY)),
+                        text("Sharing data").size(theme::LABEL).color(theme::PLAY),
+                    ]
+                    .spacing(theme::SM)
+                    .align_y(Alignment::Center),
+                    container(
+                        text(
+                            "Every WoW version in this folder shares one game data store, \
+                             so files already downloaded for another version are not \
+                             fetched again."
+                        )
+                        .size(theme::LABEL),
+                    )
+                    .max_width(320)
+                    .padding([theme::XS, theme::SM])
+                    .style(theme::floating),
+                    tooltip::Position::Bottom,
                 ),
             ]
             .spacing(theme::XS)
@@ -4428,11 +4454,14 @@ impl Lightforge {
 
                 let need = offerings.base_bytes
                     + if dialog.high_res { extra.unwrap_or(0) } else { 0 };
-                // "Up to": files another WoW version already stored are
-                // not fetched again.
+                // Exact: priced against the store, the same test the plan
+                // applies, so shared files are already left out. Download
+                // size, not disk size — the extracted install files (the
+                // executables and the like) come on top, which is most of
+                // why Battle.net's "required" reads a little higher.
                 body = body.push(field_row(
                     "Download".to_owned(),
-                    mono(format!("up to {}", size_of(need))).into(),
+                    mono(format!("{} to download", size_of(need))).into(),
                 ));
                 match dialog.disk {
                     Some(disk) => {
@@ -4454,12 +4483,19 @@ impl Lightforge {
             }
         }
 
+        // A pair, so one size: the same height and width, labels centred,
+        // with only the fill telling the default from the way out.
+        let choice = |label: &'static str| {
+            button(text(label).size(theme::LABEL).width(Length::Fill).center())
+                .width(Length::Fixed(150.0))
+                .padding([theme::SM, theme::MD])
+        };
         let actions = row![
             Space::with_width(Length::Fill),
-            secondary("Cancel", Message::InstallCancel).enabled(true),
-            action_button("Start install", theme::INSTALL, Message::InstallStart)
-                .width(180.0)
-                .enabled(ready),
+            choice("Cancel").style(theme::outlined).on_press(Message::InstallCancel),
+            choice("Start install")
+                .style(theme::filled(theme::INSTALL))
+                .on_press_maybe(ready.then_some(Message::InstallStart)),
         ]
         .spacing(theme::SM)
         .align_y(Alignment::Center);

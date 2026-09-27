@@ -315,11 +315,12 @@ pub struct Offerings {
     /// can say how big this product is without fetching a plan.
     pub wanted_files: usize,
     pub wanted_bytes: u64,
-    /// Encoded bytes of the game with no optional content at all.
+    /// Encoded bytes to fetch for the game with no optional content at all:
+    /// all of it without a store, only what the store lacks with one.
     pub base_bytes: u64,
     /// What each optional download adds on top of [`Offerings::base_bytes`],
-    /// in the order of [`Offerings::optional`] — so an install dialog can
-    /// price a switch before it is flipped.
+    /// counted the same way, in the order of [`Offerings::optional`] — so an
+    /// install dialog can price a switch before it is flipped.
     pub optional_bytes: Vec<(String, u64)>,
 }
 
@@ -333,10 +334,15 @@ pub struct Offerings {
 /// Optional content is the reason this exists at all. Which extras a build
 /// offers is knowable only from its download manifest, so without a call like
 /// this the settings panel has nothing to list until a download has run.
+///
+/// With a `store`, the base and optional sizes leave out what it already
+/// holds — the files another WoW version sharing the folder stored — by the
+/// same test a real plan applies. The local indices are all it reads.
 pub async fn offerings(
     http: &Http,
     code: &ProductCode,
     options: &Options,
+    store: Option<&StoreProbe>,
 ) -> Result<Offerings, InstallError> {
     let base_tags = TagSet::parse(&options.tag_column());
     let tags = base_tags.clone().with_optional(options.optional_tags.clone());
@@ -357,7 +363,10 @@ pub async fn offerings(
     let manifest =
         DownloadManifest::parse(&client.fetch_loose(http, &ekey, &pair.ckey, None).await?)?;
 
-    let bytes = |tags: &TagSet| manifest.select(tags).iter().map(|e| e.size).sum::<u64>();
+    let missing = |ekey: &EKey| store.is_none_or(|probe| !probe.has(ekey));
+    let bytes = |tags: &TagSet| {
+        manifest.select(tags).iter().filter(|e| missing(&e.ekey)).map(|e| e.size).sum::<u64>()
+    };
     let wanted = manifest.select(&tags);
     let optional = manifest.optional_names(&tags);
     let base_bytes = bytes(&base_tags);

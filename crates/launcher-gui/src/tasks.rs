@@ -87,6 +87,7 @@ pub async fn offerings(
     code: ProductCode,
     region: Region,
     optional_tags: Vec<String>,
+    store: Option<PathBuf>,
 ) -> Result<lightforge_core::tact::install::Offerings, String> {
     let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
     let options = InstallOptions {
@@ -95,7 +96,15 @@ pub async fn offerings(
         optional_tags,
         ..InstallOptions::default()
     };
-    lightforge_core::tact::install::offerings(&http, &code, &options)
+    // Reading the indices is disk work, so it stays off the runtime's
+    // threads; a store that will not open is priced as empty.
+    let probe = match store {
+        Some(dir) => tokio::task::spawn_blocking(move || install::StoreProbe::open(&dir))
+            .await
+            .ok(),
+        None => None,
+    };
+    install::offerings(&http, &code, &options, probe.as_ref())
         .await
         .map_err(|e| e.to_string())
 }
