@@ -366,26 +366,10 @@ fn remove_dir(dir: &Path) -> Result<Option<u64>, PreflightError> {
     if !dir.is_dir() {
         return Ok(None);
     }
-    let bytes = dir_size(dir);
+    let bytes = crate::storage::dir_size(dir);
     std::fs::remove_dir_all(dir)
         .map_err(|source| PreflightError::Io { path: dir.to_path_buf(), source })?;
     Ok(Some(bytes))
-}
-
-/// Recursive size, best-effort. Used only to report what cleanup reclaimed, so
-/// an unreadable entry is skipped rather than escalated.
-fn dir_size(dir: &Path) -> u64 {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return 0;
-    };
-    entries
-        .flatten()
-        .map(|entry| match entry.file_type() {
-            Ok(t) if t.is_dir() => dir_size(&entry.path()),
-            Ok(t) if t.is_file() => entry.metadata().map(|m| m.len()).unwrap_or(0),
-            _ => 0,
-        })
-        .sum()
 }
 
 /// A downloader that pre-flight can pause before Battle.net starts.

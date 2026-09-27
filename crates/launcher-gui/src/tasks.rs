@@ -780,6 +780,26 @@ pub fn open_path(path: PathBuf) -> Result<(), String> {
     open::that_detached(&path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Measure Settings > Storage. Walks the whole game install.
+pub async fn storage(layout: Layout, dirs: AppDirs) -> lightforge_core::storage::Report {
+    let fallback = lightforge_core::storage::Report {
+        root: layout.root().to_path_buf(),
+        disk: None,
+        usage: Vec::new(),
+    };
+    tokio::task::spawn_blocking(move || lightforge_core::storage::report(&layout, &dirs))
+        .await
+        .unwrap_or(fallback)
+}
+
+/// Clear Lightforge's own cache, shader caches aside; returns bytes freed.
+pub async fn clear_cache(dirs: AppDirs) -> Result<u64, String> {
+    tokio::task::spawn_blocking(move || lightforge_core::storage::clear_cache(&dirs))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
 /// Open a URL in the default browser.
 pub fn open_url(url: &str) -> Result<(), String> {
     open::that_detached(url).map_err(|e| format!("{url}: {e}"))

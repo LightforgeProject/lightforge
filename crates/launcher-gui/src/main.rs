@@ -26,7 +26,7 @@ mod theme;
 mod trace;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -45,6 +45,7 @@ use lightforge_core::product::{Branch, Catalog, Kind, Product, ProductCode, Prod
 use lightforge_core::state::{self, ActionState, Local};
 use lightforge_core::proton::ProtonPin;
 use lightforge_core::setup::Status as SetupStatus;
+use lightforge_core::storage;
 use lightforge_core::tact::download::Cancel;
 use lightforge_core::tact::version::Region;
 use lightforge_core::tweaks::{GraphicsApi, HostTools, Tweaks};
@@ -250,6 +251,12 @@ enum Message {
     ProtonRemoved(Result<String, String>),
     /// Measured sizes for the installed builds.
     ProtonSizes(Vec<(PathBuf, u64)>),
+    StorageMeasured(Box<storage::Report>),
+    ClearCache,
+    CacheCleared(Result<u64, String>),
+    OpenLibrary,
+    LocationChanged(String),
+    UseLocation,
 
     AddonsListed(Box<addonwork::Listing>),
     TokenChanged(String),
@@ -276,17 +283,20 @@ enum SettingsTab {
     Setup,
     Proton,
     Downloads,
+    Storage,
     About,
 }
 
 impl SettingsTab {
-    const ALL: [Self; 4] = [Self::Setup, Self::Proton, Self::Downloads, Self::About];
+    const ALL: [Self; 5] =
+        [Self::Setup, Self::Proton, Self::Downloads, Self::Storage, Self::About];
 
     fn label(self) -> &'static str {
         match self {
             Self::Setup => "Setup",
             Self::Proton => "Proton",
             Self::Downloads => "Downloads",
+            Self::Storage => "Storage",
             Self::About => "About",
         }
     }
@@ -571,6 +581,13 @@ struct Lightforge {
     proton_choice: Option<String>,
     /// Measured size of each installed build, keyed by its directory.
     proton_sizes: HashMap<PathBuf, u64>,
+    /// The last Storage measurement; `None` until the section first asks.
+    storage: Option<storage::Report>,
+    storage_measuring: bool,
+    /// What clearing the cache last freed, for the line under its row.
+    cache_notice: Option<String>,
+    /// Editable library root, applied by "Use this location".
+    location_input: String,
 
     /// Optional performance tools this machine has, detected once at startup.
     /// A toggle for a binary that is not installed is a launch failure waiting
@@ -670,6 +687,10 @@ impl Lightforge {
             proton_available: Vec::new(),
             proton_choice: None,
             proton_sizes: HashMap::new(),
+            storage: None,
+            storage_measuring: false,
+            cache_notice: None,
+            location_input: String::new(),
             tools: HostTools::detect(),
             fps_input: String::new(),
             spell_input: String::new(),
@@ -1814,7 +1835,74 @@ impl Lightforge {
             Message::SettingsTab(tab) => {
                 self.settings_tab = tab;
                 self.error = None;
+                match tab {
+                    SettingsTab::Storage => self.measure_storage(),
+                    _ => Task::none(),
+                }
+            }
+
+            Message::StorageMeasured(report) => {
+                self.storage_measuring = false;
+                if self.location_input.is_empty() {
+                    self.location_input = report.root.display().to_string();
+                }
+                self.storage = Some(*report);
                 Task::none()
+            }
+
+            Message::ClearCache => {
+                let Some(dirs) = self.dirs.clone() else {
+                    return Task::none();
+                };
+                self.cache_notice = Some("clearing…".to_owned());
+                Task::perform(tasks::clear_cache(dirs), Message::CacheCleared)
+            }
+
+            Message::CacheCleared(result) => {
+                self.cache_notice = Some(match result {
+                    Ok(freed) => format!("freed {}", size_of(freed)),
+                    Err(e) => e,
+                });
+                self.measure_storage()
+            }
+
+            Message::OpenLibrary => {
+                let root = self.layout.root().to_path_buf();
+                let dir = match root.is_dir() {
+                    true => root,
+                    // Not created yet: show where it would go.
+                    false => root
+                        .ancestors()
+                        .find(|p| p.is_dir())
+                        .map(Path::to_path_buf)
+                        .unwrap_or(root),
+                };
+                if let Err(e) = tasks::open_path(dir) {
+                    self.error = Some(e);
+                }
+                Task::none()
+            }
+
+            Message::LocationChanged(value) => {
+                self.location_input = value;
+                Task::none()
+            }
+
+            Message::UseLocation => {
+                match self.relocate() {
+                    Ok(()) => Task::batch([
+                        Task::perform(
+                            provision::status(self.layout.clone(), self.config.clone()),
+                            |status| Message::SetupStatus(status.map(Box::new)),
+                        ),
+                        self.measure_storage(),
+                        self.reload(self.selected.code.clone()),
+                    ]),
+                    Err(e) => {
+                        self.error = Some(e);
+                        Task::none()
+                    }
+                }
             }
 
             Message::SearchChanged(value) => {
@@ -2256,6 +2344,60 @@ impl Lightforge {
     }
 
     /// Persist the config, surfacing a write failure rather than swallowing it.
+    /// Re-measure what Settings > Storage shows, off the UI thread.
+    fn measure_storage(&mut self) -> Task<Message> {
+        let Some(dirs) = self.dirs.clone() else {
+            return Task::none();
+        };
+        self.storage_measuring = true;
+        Task::perform(tasks::storage(self.layout.clone(), dirs), |report| {
+            Message::StorageMeasured(Box::new(report))
+        })
+    }
+
+    /// Point the library at the typed location.
+    ///
+    /// Only while nothing is installed in the current one: then it is a
+    /// config change. With games or a prefix in it, it would be a data
+    /// migration — re-pointing the prefix's game symlink, moving 100+ GB —
+    /// and leaving the old library behind unannounced is not an answer.
+    fn relocate(&mut self) -> Result<(), String> {
+        let typed = self.location_input.trim();
+        let path = match typed.strip_prefix("~/") {
+            Some(rest) => PathBuf::from(
+                std::env::var_os("HOME").ok_or("cannot find your home directory")?,
+            )
+            .join(rest),
+            None => PathBuf::from(typed),
+        };
+        if !path.is_absolute() {
+            return Err(format!("{typed} is not a full path — start it with / or ~/"));
+        }
+        if path == self.layout.root() {
+            return Ok(());
+        }
+        let downloading = self.queue.iter().any(|d| matches!(d.stage, Stage::Running { .. }));
+        if self.setup_running || downloading {
+            return Err("wait for setup and downloads to finish first".to_owned());
+        }
+        if !storage::library_is_empty(&self.layout) {
+            return Err("the current library has games or a prefix in it; moving an \
+                        installed library is not supported yet"
+                .to_owned());
+        }
+
+        let default = Layout::default_for_user().ok();
+        self.config.blizzard_root = match default.as_ref().map(Layout::root) {
+            Some(root) if root == path => None,
+            _ => Some(path.clone()),
+        };
+        self.save_config();
+        self.layout = Layout::with_root(&path);
+        self.location_input = path.display().to_string();
+        self.error = None;
+        Ok(())
+    }
+
     fn save_config(&mut self) {
         let Some(dirs) = self.dirs.as_ref() else {
             self.error = Some("no config directory available".to_owned());
@@ -3906,6 +4048,7 @@ impl Lightforge {
             SettingsTab::Setup => ("Setup", self.setup_section()),
             SettingsTab::Proton => ("Proton", self.proton_section()),
             SettingsTab::Downloads => ("Downloads", self.downloads_section()),
+            SettingsTab::Storage => ("Storage", self.storage_section()),
             SettingsTab::About => ("About", self.about_section()),
         };
 
@@ -4044,6 +4187,117 @@ impl Lightforge {
                     .to_owned(),
                 theme::CAPTION,
             ),
+        ]
+        .spacing(theme::SM)
+        .into()
+    }
+
+    /// Where the library lives, how full its disk is, and what is using it.
+    fn storage_section(&self) -> Element<'_, Message> {
+        let report = self.storage.as_ref();
+
+        let mut location = column![row![
+            mono(self.layout.root().display().to_string()),
+            Space::with_width(Length::Fill),
+            secondary("Open folder", Message::OpenLibrary).enabled(true),
+        ]
+        .spacing(theme::MD)
+        .align_y(Alignment::Center)]
+        .spacing(theme::SM);
+
+        if let Some(disk) = report.and_then(|r| r.disk) {
+            let used = disk.total.saturating_sub(disk.free);
+            let fraction = match disk.total {
+                0 => 0.0,
+                total => used as f32 / total as f32,
+            };
+            location = location
+                .push(progress_bar(0.0..=1.0, fraction).height(6))
+                .push(muted(
+                    format!("{} free of {}", size_of(disk.free), size_of(disk.total)),
+                    theme::CAPTION,
+                ));
+        }
+
+        // Editable only while it is a config change — see `relocate`.
+        let movable = report.is_some() && storage::library_is_empty(&self.layout);
+        location = location.push(Space::with_height(Length::Fixed(theme::XS as f32)));
+        location = match movable {
+            true => location
+                .push(
+                    row![
+                        text_input("~/Games/Blizzard", &self.location_input)
+                            .on_input(Message::LocationChanged)
+                            .on_submit(Message::UseLocation)
+                            .style(theme::field)
+                            .size(theme::BODY)
+                            .padding(theme::SM),
+                        secondary("Use this location", Message::UseLocation).enabled(true),
+                    ]
+                    .spacing(theme::SM)
+                    .align_y(Alignment::Center),
+                )
+                .push(muted(
+                    "Games and the Wine prefix are installed here. It can be changed while \
+                     nothing is installed yet."
+                        .to_owned(),
+                    theme::CAPTION,
+                )),
+            false => location.push(muted(
+                "Games and the Wine prefix are installed here. Moving an installed library \
+                 is not supported yet."
+                    .to_owned(),
+                theme::CAPTION,
+            )),
+        };
+
+        let mut usage = column![].spacing(theme::SM);
+        match report {
+            None => usage = usage.push(muted("measuring…".to_owned(), theme::LABEL)),
+            Some(report) => {
+                for item in &report.usage {
+                    let clearing = self.cache_notice.as_deref() == Some("clearing…");
+                    let action: Element<Message> = match item.clearable {
+                        true => secondary("Clear", Message::ClearCache)
+                            .enabled(item.bytes > 0 && !clearing)
+                            .into(),
+                        false => Space::with_width(Length::Shrink).into(),
+                    };
+                    usage = usage.push(
+                        row![
+                            column![
+                                text(item.label).size(theme::BODY),
+                                muted(item.path.display().to_string(), theme::CAPTION),
+                            ]
+                            .spacing(2),
+                            Space::with_width(Length::Fill),
+                            mono(size_of(item.bytes)),
+                            action,
+                        ]
+                        .spacing(theme::MD)
+                        .align_y(Alignment::Center),
+                    );
+                }
+                usage = usage.push(muted(
+                    "Clearing the cache removes downloaded art, installers and lists; each is \
+                     fetched again when needed. Shader caches are kept — rebuilding them is \
+                     what makes a game stutter."
+                        .to_owned(),
+                    theme::CAPTION,
+                ));
+                if let Some(notice) = &self.cache_notice {
+                    usage = usage.push(muted(notice.clone(), theme::LABEL));
+                }
+                if self.storage_measuring {
+                    usage = usage.push(muted("updating…".to_owned(), theme::CAPTION));
+                }
+            }
+        }
+
+        column![
+            location,
+            Space::with_height(Length::Fixed(theme::MD as f32)),
+            section("What's using space", usage.into()),
         ]
         .spacing(theme::SM)
         .into()
@@ -4256,6 +4510,17 @@ fn bytes_of(done: u64, total: u64) -> String {
     match total {
         0 => format!("{:.2} GiB", gib(done)),
         _ => format!("{:.2} of {:.2} GiB", gib(done), gib(total)),
+    }
+}
+
+/// A size in the unit it reads best in: a 16 MB cache is not "0.02 GiB".
+fn size_of(bytes: u64) -> String {
+    const MIB: f64 = 1024.0 * 1024.0;
+    let b = bytes as f64;
+    match b {
+        b if b >= MIB * 1024.0 * 1024.0 => format!("{:.2} TiB", b / (MIB * 1024.0 * 1024.0)),
+        b if b >= MIB * 1024.0 => format!("{:.1} GiB", b / (MIB * 1024.0)),
+        b => format!("{:.0} MiB", b / MIB),
     }
 }
 

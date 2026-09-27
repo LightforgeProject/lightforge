@@ -23,6 +23,7 @@ pub mod proton;
 pub mod setup;
 pub mod state;
 pub mod steam;
+pub mod storage;
 pub mod tweaks;
 
 // Milestone placeholders — see the module docs for what lands where.

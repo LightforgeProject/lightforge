@@ -12,6 +12,8 @@ blte.workspace = true
 directories.workspace = true
 flate2.workspace = true
 futures-util.workspace = true
+# statvfs, for free space in Settings > Storage.
+libc.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
