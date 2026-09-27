@@ -267,6 +267,7 @@ enum Message {
     ClearCache,
     CacheCleared(Result<u64, String>),
     OpenLibrary,
+    OpenConfigFolder,
     LocationChanged(String),
     UseLocation,
 
@@ -593,6 +594,9 @@ struct Lightforge {
     known_codes: Vec<String>,
     /// Transfers paused for a play session, to be put back afterwards.
     resume_after_play: Vec<ProductCode>,
+    /// Why `config.toml` could not be loaded. While set, the app shows only
+    /// that and writes nothing — see [`Lightforge::new`].
+    config_error: Option<String>,
     /// The queue as last written to disk, so an unchanged one is not
     /// rewritten on every message.
     saved_queue: transfers::Queue,
@@ -672,10 +676,19 @@ struct Lightforge {
 impl Lightforge {
     fn new() -> (Self, Task<Message>) {
         let dirs = AppDirs::discover().ok();
-        let config = dirs
-            .as_ref()
-            .and_then(|d| Config::load_or_default(&d.config_file()).ok())
-            .unwrap_or_else(Config::with_default_products);
+        // A missing file is a first run and gets defaults. A file that exists
+        // but will not load is someone's settings with a problem in them: the
+        // app stops on it rather than quietly running on defaults — which
+        // point at the default library — and then saving those over it.
+        let loaded = dirs.as_ref().map(|d| Config::load_or_default(&d.config_file()));
+        let config_error = match (&loaded, dirs.as_ref()) {
+            (Some(Err(e)), Some(dirs)) => Some(broken_config(e, &dirs.config_file())),
+            _ => None,
+        };
+        let config = match loaded {
+            Some(Ok(config)) => config,
+            _ => Config::with_default_products(),
+        };
         // Honours `blizzard_root`, the same way the CLI does.
         let layout = config.layout().unwrap_or_else(|_| Layout::with_root("."));
 
@@ -726,6 +739,7 @@ impl Lightforge {
             known_codes: Vec::new(),
             resume_after_play: Vec::new(),
             saved_queue: transfers::Queue::default(),
+            config_error,
             queue_frozen: false,
             winding_down: None,
             downloads: SharedDownloads::default(),
@@ -770,6 +784,11 @@ impl Lightforge {
             updates: Vec::new(),
         };
         let mut app = app;
+        // Nothing starts on a config that did not load: no probes against a
+        // library it may not describe, and above all no restored download.
+        if app.config_error.is_some() {
+            return (app, Task::none());
+        }
         app.load_tweak_inputs();
         app.restore_queue();
 
@@ -2076,6 +2095,15 @@ impl Lightforge {
                 self.measure_storage()
             }
 
+            Message::OpenConfigFolder => {
+                if let Some(dirs) = &self.dirs {
+                    if let Err(e) = tasks::open_path(dirs.config_dir().to_path_buf()) {
+                        self.status = e;
+                    }
+                }
+                Task::none()
+            }
+
             Message::OpenLibrary => {
                 let root = self.layout.root().to_path_buf();
                 let dir = match root.is_dir() {
@@ -2582,7 +2610,7 @@ impl Lightforge {
     /// Write the queue if it changed. Called after every message, which is
     /// what makes a crash or a kill keep it too, not only a clean close.
     fn persist_queue(&mut self) {
-        if self.queue_frozen {
+        if self.queue_frozen || self.config_error.is_some() {
             return;
         }
         let snapshot = self.queue_snapshot();
@@ -2774,6 +2802,10 @@ impl Lightforge {
     }
 
     fn save_config(&mut self) {
+        // Never over a file that did not load: it is the user's to fix.
+        if self.config_error.is_some() {
+            return;
+        }
         let Some(dirs) = self.dirs.as_ref() else {
             self.error = Some("no config directory available".to_owned());
             return;
@@ -2816,6 +2848,9 @@ impl Lightforge {
         }
 
         let started = Instant::now();
+        if let Some(error) = &self.config_error {
+            return self.broken_config_screen(error);
+        }
         let screen = match self.screen {
             Screen::Dashboard => self.dashboard(),
             Screen::Settings => self.settings(),
@@ -4602,6 +4637,31 @@ impl Lightforge {
         .into()
     }
 
+    /// All the app shows when `config.toml` did not load.
+    fn broken_config_screen<'a>(&'a self, error: &'a str) -> Element<'a, Message> {
+        let body = column![
+            text("Lightforge can't read its settings").size(theme::TITLE),
+            muted(
+                "Nothing has been changed. Fix the file, or move it aside to start over \
+                 with defaults, then restart Lightforge. A copy was saved next to it as \
+                 config.toml.broken."
+                    .to_owned(),
+                theme::BODY,
+            ),
+            container(mono(error.to_owned()))
+                .padding(theme::MD)
+                .width(Length::Fill)
+                .style(theme::row),
+            row![
+                secondary("Open config folder", Message::OpenConfigFolder).enabled(true),
+            ],
+        ]
+        .spacing(theme::MD)
+        .max_width(SETTINGS_WIDTH);
+
+        container(body).center(Length::Fill).padding(theme::XL).style(theme::scrim).into()
+    }
+
     /// The install dialog's card.
     fn install_card<'a>(&'a self, dialog: &'a InstallDialog) -> Element<'a, Message> {
         let location: Element<Message> = match dialog.movable {
@@ -5198,6 +5258,24 @@ fn bytes_of(done: u64, total: u64) -> String {
     }
 }
 
+/// Describe a config that would not load, keeping a copy of it aside.
+///
+/// The whole error chain, not just the top: "could not parse config.toml" is
+/// useless without the line and column underneath it.
+fn broken_config(error: &lightforge_core::config::ConfigError, path: &Path) -> String {
+    let mut message = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        message.push_str(&format!("\n{cause}"));
+        source = cause.source();
+    }
+    let backup = path.with_extension("toml.broken");
+    if std::fs::copy(path, &backup).is_err() {
+        message.push_str("\n(could not save a copy to config.toml.broken)");
+    }
+    format!("{}\n\n{message}", path.display())
+}
+
 /// A typed folder as a full path, `~/` expanded.
 fn parse_path(typed: &str) -> Result<PathBuf, String> {
     let typed = typed.trim();
@@ -5369,6 +5447,33 @@ mod tests {
         let _ = app.update(Message::CloseRequested(id));
         assert!(matches!(app.queue[0].stage, Stage::Paused(_)));
         assert_eq!(app.saved_queue, running);
+    }
+
+    #[test]
+    fn a_config_that_will_not_load_is_described_kept_and_never_overwritten() {
+        let dir = std::env::temp_dir().join(format!("lightforge-badcfg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let dirs = AppDirs::with_dirs(dir.join("config"), dir.join("cache"), dir.join("data"));
+        std::fs::create_dir_all(dirs.config_dir()).unwrap();
+        let broken = "default_proton = \"GE-Proton10-34\"\nprefix_user = [oops\n";
+        std::fs::write(dirs.config_file(), broken).unwrap();
+
+        let error = Config::load_or_default(&dirs.config_file()).unwrap_err();
+        let message = broken_config(&error, &dirs.config_file());
+        assert!(message.contains("line 2"), "names where: {message}");
+        let backup = dirs.config_file().with_extension("toml.broken");
+        assert_eq!(std::fs::read_to_string(backup).unwrap(), broken);
+
+        let (mut app, _) = Lightforge::new();
+        app.dirs = Some(dirs.clone());
+        app.queue.clear();
+        app.config_error = Some(message);
+        app.config.download_limit_mbps = Some(5);
+        app.save_config();
+        app.persist_queue();
+        assert_eq!(std::fs::read_to_string(dirs.config_file()).unwrap(), broken);
+        assert!(!dirs.queue_file().exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
