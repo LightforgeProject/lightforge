@@ -289,6 +289,11 @@ impl AppDirs {
         self.cache.join("assets")
     }
 
+    /// The download queue as it stood, restored on the next start.
+    pub fn queue_file(&self) -> PathBuf {
+        self.data.join("queue.toml")
+    }
+
     /// Where Lightforge-managed Proton-GE builds are unpacked.
     pub fn proton_dir(&self) -> PathBuf {
         self.data.join("proton")

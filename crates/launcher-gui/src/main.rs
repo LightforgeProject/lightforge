@@ -47,6 +47,7 @@ use lightforge_core::proton::ProtonPin;
 use lightforge_core::setup::Status as SetupStatus;
 use lightforge_core::storage;
 use lightforge_core::tact::install::Offerings;
+use lightforge_core::transfers::{self, Saved, Standing};
 use lightforge_core::tact::download::Cancel;
 use lightforge_core::tact::version::Region;
 use lightforge_core::tweaks::{GraphicsApi, HostTools, Tweaks};
@@ -576,6 +577,12 @@ struct Lightforge {
     known_codes: Vec<String>,
     /// Transfers paused for a play session, to be put back afterwards.
     resume_after_play: Vec<ProductCode>,
+    /// The queue as last written to disk, so an unchanged one is not
+    /// rewritten on every message.
+    saved_queue: transfers::Queue,
+    /// Set once the window is closing: the pause that closing performs must
+    /// not be what the next start restores.
+    queue_frozen: bool,
     /// A cancelled transfer whose task has not reported back yet.
     ///
     /// Pausing flips the UI at once, but the run keeps going for a moment —
@@ -701,6 +708,8 @@ impl Lightforge {
             installed_versions: HashMap::new(),
             known_codes: Vec::new(),
             resume_after_play: Vec::new(),
+            saved_queue: transfers::Queue::default(),
+            queue_frozen: false,
             winding_down: None,
             downloads: SharedDownloads::default(),
             busy: false,
@@ -744,6 +753,7 @@ impl Lightforge {
         };
         let mut app = app;
         app.load_tweak_inputs();
+        app.restore_queue();
 
         // What is provisioned decides which screen opens: a machine that has
         // never run the CLI cannot install or launch anything, and a dashboard
@@ -764,8 +774,17 @@ impl Lightforge {
             tasks::battle_net_limit(app.layout.clone(), app.config.prefix_user.clone()),
             Message::BattleNetLimitRead,
         );
-        let task =
-            Task::batch([app.reload(selected.code), probe, installed, codes, bnet_limit]);
+        // What was downloading when the app closed carries on, as it does in
+        // Battle.net.
+        let resume = app.pump();
+        let task = Task::batch([
+            app.reload(selected.code),
+            probe,
+            installed,
+            codes,
+            bnet_limit,
+            resume,
+        ]);
         (app, task)
     }
 
@@ -1104,6 +1123,12 @@ impl Lightforge {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.handle(message);
+        self.persist_queue();
+        task
+    }
+
+    fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::LineSelected(line) => self.select_line(&line),
 
@@ -1236,8 +1261,15 @@ impl Lightforge {
                     if let Stage::Running { rx, .. } = &entry.stage {
                         entry.sample = rx.borrow().clone();
                     }
-                    if entry.job.total.is_none() {
-                        entry.job.total = entry.sample.remaining;
+                    match (entry.job.total, entry.sample.remaining) {
+                        (None, remaining) => entry.job.total = remaining,
+                        // Restored from before a restart, and a new build has
+                        // come out since: the saved size no longer describes
+                        // this job, so it starts over from what is left.
+                        (Some(total), Some(remaining)) if remaining > total => {
+                            entry.job = Job { total: Some(remaining), reached: 0 };
+                        }
+                        _ => {}
                     }
                     // Rate is measured on what this run has stored; the
                     // baseline is a constant offset and would only mute the
@@ -1266,6 +1298,8 @@ impl Lightforge {
                 // the token, let the run checkpoint its store, then close.
                 match self.running().map(|d| d.code.clone()) {
                     Some(code) => {
+                        // Saved as running a message ago; keep it that way.
+                        self.queue_frozen = true;
                         self.pause(&code);
                         self.closing = Some(id);
                         self.status = "finishing the download safely…".to_owned();
@@ -2437,6 +2471,87 @@ impl Lightforge {
     }
 
     /// Persist the config, surfacing a write failure rather than swallowing it.
+    /// The queue as the next start should find it.
+    fn queue_snapshot(&self) -> transfers::Queue {
+        // Paused only because a game is running: owed a restart, and one the
+        // next start should give it rather than leave it waiting.
+        let owed = {
+            let mut owed = self.downloads.pending();
+            owed.extend(self.resume_after_play.iter().cloned());
+            owed
+        };
+        let entries = self
+            .queue
+            .iter()
+            .map(|d| {
+                let (standing, reached) = match &d.stage {
+                    _ if owed.contains(&d.code) => (Standing::Running, 0),
+                    Stage::Running { .. } => (Standing::Running, 0),
+                    Stage::Queued => (Standing::Queued, d.job.reached),
+                    Stage::Paused(p) => (Standing::Paused, p.downloaded_bytes),
+                };
+                Saved { code: d.code.clone(), standing, job_bytes: d.job.total, reached }
+            })
+            .collect();
+        transfers::Queue { entries }
+    }
+
+    /// Write the queue if it changed. Called after every message, which is
+    /// what makes a crash or a kill keep it too, not only a clean close.
+    fn persist_queue(&mut self) {
+        if self.queue_frozen {
+            return;
+        }
+        let snapshot = self.queue_snapshot();
+        if snapshot == self.saved_queue {
+            return;
+        }
+        if let Some(dirs) = &self.dirs {
+            if let Err(e) = snapshot.save(&dirs.queue_file()) {
+                trace::mark(format_args!("saving the queue failed: {e}"));
+                return;
+            }
+        }
+        self.saved_queue = snapshot;
+    }
+
+    /// Put back the queue the last run left, for products still configured.
+    fn restore_queue(&mut self) {
+        let Some(dirs) = &self.dirs else {
+            return;
+        };
+        let saved = match transfers::Queue::load(&dirs.queue_file()) {
+            Ok(saved) => saved,
+            Err(e) => {
+                trace::mark(format_args!("ignoring the saved queue: {e}"));
+                return;
+            }
+        };
+        for entry in &saved.entries {
+            let Some(choice) = self.choices.iter().find(|c| c.code == entry.code) else {
+                continue;
+            };
+            let job = Job { total: entry.job_bytes, reached: entry.reached };
+            let stage = match entry.standing {
+                Standing::Running | Standing::Queued => Stage::Queued,
+                Standing::Paused => Stage::Paused(state::Progress {
+                    downloaded_bytes: entry.reached,
+                    total_bytes: entry.job_bytes.unwrap_or(0),
+                    bytes_per_second: 0,
+                }),
+            };
+            self.queue.push(Download {
+                code: entry.code.clone(),
+                label: choice.label.clone(),
+                stage,
+                sample: TransferState { stage: "queued".to_owned(), ..TransferState::default() },
+                rate: Rate::default(),
+                job,
+            });
+        }
+        self.saved_queue = self.queue_snapshot();
+    }
+
     /// Open the install dialog and start pricing the build.
     fn open_install(&mut self) -> Task<Message> {
         let code = self.selected.code.clone();
@@ -4997,6 +5112,9 @@ mod tests {
     #[test]
     fn a_resume_during_the_wind_down_is_not_swallowed() {
         let (mut app, _) = Lightforge::new();
+        // Nothing read from or written to the real queue file.
+        app.dirs = None;
+        app.queue.clear();
         let code = app.selected.code.clone();
         // Paused, then resumed before the paused run reported back: the entry
         // is already a fresh, queued one and the line is still winding down.
@@ -5016,6 +5134,33 @@ mod tests {
         assert!(app.winding_down.is_none());
         assert!(matches!(app.queue[0].stage, Stage::Running { .. }), "the resume must start");
         assert_eq!(app.status, "downloading…");
+    }
+
+    #[test]
+    fn a_download_running_at_close_is_saved_as_running() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+        let code = app.selected.code.clone();
+        app.queue.push(Download {
+            code: code.clone(),
+            label: String::new(),
+            stage: Stage::Queued,
+            sample: TransferState::default(),
+            rate: Rate::default(),
+            job: Job { total: Some(12 << 30), reached: 0 },
+        });
+        let _ = app.pump();
+        let running = app.queue_snapshot();
+        assert_eq!(running.entries[0].standing, Standing::Running);
+        app.saved_queue = running.clone();
+
+        // Closing pauses the transfer to checkpoint it; that pause must not
+        // be what the next start restores.
+        let id = iced::window::Id::unique();
+        let _ = app.update(Message::CloseRequested(id));
+        assert!(matches!(app.queue[0].stage, Stage::Paused(_)));
+        assert_eq!(app.saved_queue, running);
     }
 
     #[test]
