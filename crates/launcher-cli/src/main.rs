@@ -419,7 +419,7 @@ enum Command {
         #[arg(long, default_value = "wow")]
         product: String,
         /// Base URL or fixture directory. Defaults to `assets_source` in
-        /// config.toml.
+        /// config.toml, else the built-in source.
         #[arg(long)]
         source: Option<String>,
     },
@@ -2266,9 +2266,7 @@ async fn main() -> Result<()> {
             let origin = match source.as_deref().map(str::trim) {
                 Some(s) if s.contains("://") => Origin::Http(s.to_owned()),
                 Some(s) => Origin::Dir(PathBuf::from(s)),
-                None => config.asset_origin().context(
-                    "no asset source: pass --source, or set assets_source in config.toml",
-                )?,
+                None => config.asset_origin(),
             };
 
             let store = Store::new(dirs.asset_cache_dir());

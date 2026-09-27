@@ -229,7 +229,6 @@ enum Message {
     /// The build Battle.net and Agent launch under.
     PinBattleNetProton(ProtonChoice),
     PinProductProton(ProtonChoice),
-    AssetsSourceChanged(String),
     /// The download cap field changed.
     DownloadLimitChanged(String),
     /// The pause-while-playing switch was flipped.
@@ -240,7 +239,6 @@ enum Message {
     BattleNetLimitChanged(String),
     /// Writing that limit finished.
     BattleNetLimitWritten(Result<(), String>),
-    SaveSettings,
     CheckProton,
     ProtonChecked(Result<provision::ProtonReleases, String>),
     /// A version was chosen in the "install another build" picker.
@@ -539,8 +537,6 @@ struct Lightforge {
     setup_rx: Option<tokio::sync::watch::Receiver<provision::Progress>>,
     setup_sample: provision::Progress,
     setup_running: bool,
-    /// Editable copy of `assets_source`, committed on save.
-    assets_input: String,
     /// Editable copy of the download cap, in MB/s. Empty means unlimited.
     limit_input: String,
     /// Editable copy of Battle.net's *own* cap, in MB/s. Empty means none.
@@ -597,17 +593,13 @@ impl Lightforge {
             label: "World of Warcraft".to_owned(),
         });
 
-        // Theming is optional: with no `assets_source` configured the dashboard
-        // renders its own plain look rather than failing to start.
-        let pipeline = match (config.asset_origin(), dirs.as_ref()) {
-            (Some(origin), Some(dirs)) => {
-                Some(Pipeline::new(origin, Store::new(dirs.asset_cache_dir())))
-            }
-            _ => None,
-        };
+        // Without XDG directories there is no cache to theme into, and the
+        // dashboard renders its own plain look rather than failing to start.
+        let pipeline = dirs
+            .as_ref()
+            .map(|dirs| Pipeline::new(config.asset_origin(), Store::new(dirs.asset_cache_dir())));
 
 
-        let assets_input = config.assets_source.clone().unwrap_or_default();
         let limit_input = config.download_limit_mbps.map(|v| v.to_string()).unwrap_or_default();
         let app = Self {
             layout,
@@ -648,7 +640,6 @@ impl Lightforge {
             setup_rx: None,
             setup_sample: provision::Progress::default(),
             setup_running: false,
-            assets_input,
             limit_input,
             bnet_limit_input: String::new(),
             proton_notice: None,
@@ -1547,11 +1538,6 @@ impl Lightforge {
                 Task::none()
             }
 
-            Message::AssetsSourceChanged(value) => {
-                self.assets_input = value;
-                Task::none()
-            }
-
             Message::DownloadLimitChanged(value) => {
                 // Digits only, so the field cannot hold something that is not
                 // a speed. Clearing it is how you say "unlimited".
@@ -1594,27 +1580,6 @@ impl Lightforge {
                 self.config.pause_downloads_while_playing = on;
                 self.save_config();
                 Task::none()
-            }
-
-            Message::SaveSettings => {
-                let trimmed = self.assets_input.trim();
-                self.config.assets_source = (!trimmed.is_empty()).then(|| trimmed.to_owned());
-                self.save_config();
-
-                // Theming comes from the source that was just saved, so rebuild
-                // the pipeline and re-resolve rather than waiting for a restart.
-                self.pipeline = match (self.config.asset_origin(), self.dirs.as_ref()) {
-                    (Some(origin), Some(dirs)) => {
-                        Some(Pipeline::new(origin, Store::new(dirs.asset_cache_dir())))
-                    }
-                    _ => None,
-                };
-                self.branding = None;
-                // The cached manifest and its marks belong to the old source.
-                self.manifest = None;
-                self.icons.clear();
-                self.catalog = Catalog::builtin();
-                self.reload(self.selected.code.clone())
             }
 
             Message::CheckProton => {
@@ -4037,30 +4002,6 @@ impl Lightforge {
         .padding(theme::MD)
         .style(theme::card);
 
-        let theming = container(
-            column![
-                text("Theming").size(theme::HEADING),
-                text_input(
-                    "https://lightforge.tuxcore.pro/assets/manifest.json",
-                    &self.assets_input
-                )
-                .on_input(Message::AssetsSourceChanged)
-                .on_submit(Message::SaveSettings)
-                .style(theme::field)
-                .size(theme::BODY)
-                .padding(theme::SM),
-                muted(
-                    "A URL, or a local directory to theme from. Empty means no theming."
-                        .to_owned(),
-                    theme::CAPTION,
-                ),
-                action_button("Save", theme::ACCENT, Message::SaveSettings).enabled(true),
-            ]
-            .spacing(theme::SM),
-        )
-        .padding(theme::MD)
-        .style(theme::card);
-
         // The error leads rather than trails: a failed setup run is reported
         // here, and at the foot of a scrolled page it would go unseen.
         let mut body = column![].spacing(theme::MD);
@@ -4068,7 +4009,7 @@ impl Lightforge {
             body = body.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
         }
         body = body.push(self.setup_card());
-        body = body.push(column![proton, builds, downloads, theming].spacing(theme::MD));
+        body = body.push(column![proton, builds, downloads].spacing(theme::MD));
         if let Some(dirs) = &self.dirs {
             body = body.push(mono(format!("config: {}", dirs.config_file().display())));
         }

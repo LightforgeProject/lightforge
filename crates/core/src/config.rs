@@ -26,9 +26,10 @@ pub struct Config {
     pub battle_net_proton: ProtonPin,
     /// Fallback Proton build for products that don't pin their own.
     pub default_proton: ProtonPin,
-    /// Where themed branding is read from: a base URL, or a local fixture
-    /// directory while the Tuxcore endpoint is not live yet. `None` means the
-    /// UI uses its built-in art and never touches the network for theming.
+    /// An override for where themed branding is read from: a base URL, or a
+    /// local directory for trying out new art. Deliberately absent from the
+    /// UI — `None` means [`DEFAULT_ASSETS_SOURCE`], which is what everyone
+    /// but whoever is making the art should be on.
     pub assets_source: Option<String>,
     /// Base URL of the addon catalog proxy, or a local fixture directory.
     /// `None` disables addon management rather than failing at use.
@@ -51,6 +52,9 @@ pub struct Config {
     /// Every product Lightforge manages, official and custom alike.
     pub products: Vec<Product>,
 }
+
+/// Where themed branding comes from unless `assets_source` says otherwise.
+pub const DEFAULT_ASSETS_SOURCE: &str = "https://lightforge.tuxcore.pro/assets/";
 
 /// Bytes in the megabyte this config counts in.
 const BYTES_PER_MB: u64 = 1_000_000;
@@ -173,17 +177,16 @@ impl Config {
     /// Where the asset pipeline should read from, if configured.
     ///
     /// Anything carrying a scheme is a base URL; anything else is a path to a
-    /// fixture directory, so switching to the live endpoint is a one-line
-    /// config edit and no code change.
-    pub fn asset_origin(&self) -> Option<crate::assets::Origin> {
-        let source = self.assets_source.as_deref()?.trim();
-        if source.is_empty() {
-            return None;
-        }
-        Some(match source.contains("://") {
+    /// fixture directory. Unset or blank is the built-in source.
+    pub fn asset_origin(&self) -> crate::assets::Origin {
+        let source = match self.assets_source.as_deref().map(str::trim) {
+            Some(source) if !source.is_empty() => source,
+            _ => DEFAULT_ASSETS_SOURCE,
+        };
+        match source.contains("://") {
             true => crate::assets::Origin::Http(source.to_owned()),
             false => crate::assets::Origin::Dir(PathBuf::from(source)),
-        })
+        }
     }
 
     /// The Proton build a product should launch under: its own pin, else the
@@ -378,18 +381,19 @@ mod tests {
     fn an_asset_source_is_a_url_or_a_fixture_directory() {
         use crate::assets::Origin;
 
+        let default = Origin::Http(DEFAULT_ASSETS_SOURCE.to_owned());
         let mut config = Config::default();
-        assert!(config.asset_origin().is_none());
+        assert_eq!(config.asset_origin(), default);
 
         config.assets_source = Some("https://assets.tuxcore.pro/wow/".into());
-        assert!(matches!(config.asset_origin(), Some(Origin::Http(_))));
+        assert!(matches!(config.asset_origin(), Origin::Http(_)));
 
         config.assets_source = Some("/home/gabriel/lightforge-assets".into());
-        assert!(matches!(config.asset_origin(), Some(Origin::Dir(_))));
+        assert!(matches!(config.asset_origin(), Origin::Dir(_)));
 
         // An empty string is a blank field, not a fixture at the current dir.
         config.assets_source = Some("  ".into());
-        assert!(config.asset_origin().is_none());
+        assert_eq!(config.asset_origin(), default);
     }
 
     #[test]

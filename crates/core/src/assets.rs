@@ -183,7 +183,7 @@ impl Manifest {
 }
 
 /// Where the manifest and its art are read from.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Origin {
     /// Base URL holding `manifest.json`, e.g. `https://assets.tuxcore.pro/wow/`.
     Http(String),
