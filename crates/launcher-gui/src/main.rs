@@ -1019,7 +1019,16 @@ impl Lightforge {
             rate: Rate::default(),
             job,
         });
-        self.pump()
+        let started = self.pump();
+        // Not started: waiting on another download, or on this one's own
+        // paused run to finish winding down.
+        let waiting = self.queue.iter().any(|d| {
+            d.code == self.selected.code && matches!(d.stage, Stage::Queued)
+        });
+        if waiting {
+            self.status = "queued…".to_owned();
+        }
+        started
     }
 
     /// Start the first queued transfer, if the line is free.
@@ -1044,6 +1053,10 @@ impl Lightforge {
 
         self.downloads.register(code.clone(), cancel.clone());
         self.queue[next].stage = Stage::Running { rx, cancel: cancel.clone() };
+        // Whatever the line said before — "paused", most often — is over.
+        if code == self.selected.code {
+            self.status = "downloading…".to_owned();
+        }
         self.queue[next].rate = Rate::default();
         self.queue[next].sample =
             TransferState { stage: "preparing".to_owned(), ..TransferState::default() };
@@ -1281,6 +1294,19 @@ impl Lightforge {
                         app.status = text;
                     }
                 };
+
+                // Resumed while this run was still winding down: the entry is
+                // already a fresh, queued one. Marking it paused here — as
+                // this handler once did — swallowed the resume, and whether it
+                // happened came down to how fast the old run stopped.
+                let resumed = entry.is_some_and(|at| matches!(self.queue[at].stage, Stage::Queued));
+                let complete = matches!(&result, Ok(done) if done.complete);
+                if resumed && !complete {
+                    if let (Err(e), true) = (&result, showing) {
+                        self.error = Some(e.clone());
+                    }
+                    return self.pump();
+                }
 
                 match result {
                     Ok(done) if done.complete => {
@@ -4966,6 +4992,30 @@ mod tests {
         };
         let p = job_progress(Job::default(), &sample, 0);
         assert_eq!((p.downloaded_bytes, p.total_bytes), (500, 1000));
+    }
+
+    #[test]
+    fn a_resume_during_the_wind_down_is_not_swallowed() {
+        let (mut app, _) = Lightforge::new();
+        let code = app.selected.code.clone();
+        // Paused, then resumed before the paused run reported back: the entry
+        // is already a fresh, queued one and the line is still winding down.
+        app.queue.push(Download {
+            code: code.clone(),
+            label: String::new(),
+            stage: Stage::Queued,
+            sample: TransferState::default(),
+            rate: Rate::default(),
+            job: Job::default(),
+        });
+        app.winding_down = Some(code.clone());
+
+        let stopped = Complete { complete: false, cancelled: true, files: 0, version: None };
+        let _ = app.update(Message::Downloaded(code, Ok(stopped)));
+
+        assert!(app.winding_down.is_none());
+        assert!(matches!(app.queue[0].stage, Stage::Running { .. }), "the resume must start");
+        assert_eq!(app.status, "downloading…");
     }
 
     #[test]
