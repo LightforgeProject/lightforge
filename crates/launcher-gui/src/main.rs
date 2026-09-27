@@ -1021,10 +1021,7 @@ impl Lightforge {
                 code.clone(),
                 self.region,
                 self.config.download_limit_bytes(),
-                self.config
-                    .product(&code)
-                    .map(|p| p.profile.optional_content.clone())
-                    .unwrap_or_default(),
+                self.opted_optional(&code),
                 cancel,
                 tx,
             ),
@@ -2092,10 +2089,7 @@ impl Lightforge {
                         self.http.clone(),
                         self.selected.code.clone(),
                         self.region,
-                        self.config
-                            .product(&self.selected.code)
-                            .map(|p| p.profile.optional_content.clone())
-                            .unwrap_or_default(),
+                        self.opted_optional(&self.selected.code),
                     ),
                     |result| Message::CheckedForUpdates(Box::new(result)),
                 )
@@ -2304,6 +2298,16 @@ impl Lightforge {
     /// Saved rather than held in memory: the list is the only thing standing
     /// between the settings panel and a hardcoded guess, and a guess is what
     /// put a 37 GiB texture pack in a plan nobody asked for.
+    /// The optional downloads a product is opted into, limited to the ones
+    /// Lightforge offers — see [`OFFERED_OPTIONAL`]. An opt-in to anything
+    /// else, from before that list existed, is ignored rather than fetched
+    /// behind a switch the user can no longer see.
+    fn opted_optional(&self, code: &ProductCode) -> Vec<String> {
+        offered_only(
+            self.config.product(code).map(|p| p.profile.optional_content.as_slice()).unwrap_or(&[]),
+        )
+    }
+
     fn remember_optional(&mut self, code: &ProductCode, offered: Vec<String>) {
         let changed = self
             .config
@@ -3091,11 +3095,7 @@ impl Lightforge {
         // What an Install or Update would actually fetch beyond the base game.
         // The size surprise this prevents is the whole reason the gate exists:
         // on the Forever beta the texture pack alone is 37 GiB.
-        let opted = self
-            .config
-            .product(&self.selected.code)
-            .map(|p| p.profile.optional_content.clone())
-            .unwrap_or_default();
+        let opted = self.opted_optional(&self.selected.code);
         if !opted.is_empty() && matches!(action, ActionState::Install | ActionState::Update { .. })
         {
             let names: Vec<String> = opted.iter().map(|t| optional_label(t)).collect();
@@ -3457,12 +3457,14 @@ impl Lightforge {
         // these are opt-in extras, and treating them as wanted is what put a
         // 37 GiB texture pack in a plan nobody asked for.
         let profile = self.config.product(&self.selected.code).map(|p| &p.profile);
-        let available = profile.map(|p| p.optional_available.as_slice()).unwrap_or(&[]);
-        let opted = profile.map(|p| p.optional_content.as_slice()).unwrap_or(&[]);
+        let known = profile.is_some_and(|p| !p.optional_available.is_empty());
+        let available =
+            offered_only(profile.map(|p| p.optional_available.as_slice()).unwrap_or(&[]));
+        let opted = self.opted_optional(&self.selected.code);
 
         let mut content = column![heading("Optional downloads")].spacing(theme::SM);
-        match available.is_empty() {
-            true => {
+        match (known, available.is_empty()) {
+            (false, _) => {
                 content = content.push(muted(
                     "What a build offers is only known once its manifest has been read. \
                      Use Check for Updates, under the cog beside PLAY, to fill this in."
@@ -3470,8 +3472,14 @@ impl Lightforge {
                     theme::CAPTION,
                 ));
             }
-            false => {
-                for name in available {
+            (true, true) => {
+                content = content.push(muted(
+                    "This build offers no optional downloads.".to_owned(),
+                    theme::CAPTION,
+                ));
+            }
+            (true, false) => {
+                for name in &available {
                     let on = opted.iter().any(|n| n == name);
                     let tag = name.clone();
                     content = content.push(
@@ -4320,15 +4328,27 @@ impl Lightforge {
     }
 }
 
+/// The optional downloads Lightforge offers to switch on.
+///
+/// This lists what is *shown*, not what is gated: every optional tag a build
+/// carries stays off unless opted in, named here or not, so a tag Blizzard
+/// adds tomorrow is still excluded — hardcoding the gate is what once put a
+/// 37 GiB texture pack in every plan. `Alternate` and `Talebound` exist in
+/// the manifests but are not something to offer a player a switch for.
+const OFFERED_OPTIONAL: &[&str] = &["HighRes"];
+
+/// The tags in `tags` that [`OFFERED_OPTIONAL`] names.
+fn offered_only(tags: &[String]) -> Vec<String> {
+    tags.iter().filter(|tag| OFFERED_OPTIONAL.contains(&tag.as_str())).cloned().collect()
+}
+
 /// A human label for an optional-download tag.
 ///
-/// The manifest's own name is the fallback rather than a lookup failure: these
-/// are Blizzard's tags, new ones appear without notice (`Talebound` did), and a
-/// build that offers something we have no phrase for should still offer it.
+/// The manifest's own name is the fallback, for anything added to
+/// [`OFFERED_OPTIONAL`] before it gets a phrase.
 fn optional_label(tag: &str) -> String {
     match tag {
         "HighRes" => "High-resolution textures".to_owned(),
-        "Alternate" => "Alternate assets".to_owned(),
         other => other.to_owned(),
     }
 }
@@ -4614,6 +4634,15 @@ mod tests {
         };
         let p = job_progress(Job::default(), &sample, 0);
         assert_eq!((p.downloaded_bytes, p.total_bytes), (500, 1000));
+    }
+
+    #[test]
+    fn only_offered_optional_content_is_shown_or_fetched() {
+        let tags = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        // What the Forever beta's manifest carries.
+        assert_eq!(offered_only(&tags(&["Alternate", "HighRes", "Talebound"])), tags(&["HighRes"]));
+        // A stale opt-in from before the list existed is dropped, not fetched.
+        assert!(offered_only(&tags(&["Talebound"])).is_empty());
     }
 
     #[test]
