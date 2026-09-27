@@ -2358,9 +2358,17 @@ impl Lightforge {
     fn header(&self) -> Element<'_, Message> {
         let nav = |label: &'static str, screen: Screen| {
             let entry = button(text(label).size(theme::LABEL)).padding([theme::SM, theme::MD]);
-            match self.screen == screen {
-                true => entry.style(theme::selected),
-                false => entry.style(theme::ghost).on_press(Message::Show(screen)),
+            // Addons and Game Optimizations are a game's own pages, opened
+            // from its panel, so Play stays lit on them — and stays clickable,
+            // since it is the way back.
+            let within = match screen {
+                Screen::Dashboard => matches!(self.screen, Screen::Addons | Screen::Tweaks),
+                _ => false,
+            };
+            match (self.screen == screen, within) {
+                (true, _) => entry.style(theme::selected),
+                (false, true) => entry.style(theme::selected).on_press(Message::Show(screen)),
+                (false, false) => entry.style(theme::ghost).on_press(Message::Show(screen)),
             }
         };
 
@@ -2435,7 +2443,6 @@ impl Lightforge {
         bar = bar.push(Space::with_width(Length::Fixed(theme::SM as f32)));
 
         bar = bar.push(nav("Play", Screen::Dashboard));
-        bar = bar.push(nav("Addons", Screen::Addons));
         bar = bar.push(nav("Setup", Screen::Setup));
         bar = bar.push(nav("Settings", Screen::Settings));
 

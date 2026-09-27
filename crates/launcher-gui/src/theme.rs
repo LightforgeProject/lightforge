@@ -316,9 +316,15 @@ pub fn ghost(_theme: &Theme, status: button::Status) -> button::Style {
 
 /// The selected tab or nav entry: filled quietly, never with the accent, so it
 /// does not compete with the primary action.
-pub fn selected(_theme: &Theme, _status: button::Status) -> button::Style {
+pub fn selected(_theme: &Theme, status: button::Status) -> button::Style {
+    // Only a lit tab that is also a way back (Play, from a game's own pages)
+    // can be hovered; the current tab has no action and reports `Disabled`.
+    let a = match status {
+        button::Status::Hovered | button::Status::Pressed => 0.22,
+        _ => 0.14,
+    };
     button::Style {
-        background: Some(Background::Color(Color { a: 0.14, ..ACCENT })),
+        background: Some(Background::Color(Color { a, ..ACCENT })),
         text_color: ACCENT,
         border: Border { radius: RADIUS_SM.into(), ..Border::default() },
         ..button::Style::default()
