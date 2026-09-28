@@ -602,6 +602,10 @@ struct Lightforge {
     browse_open: bool,
     /// The band's overflow menu — only ever reachable when something is in it.
     strip_open: bool,
+    /// Battle.net's own mark, if the prefix has one — see
+    /// [`Layout::battle_net_icon`]. Held as a path, not a handle: iced keys an
+    /// image by its path, so rebuilding the header does not decode it again.
+    bnet_icon: Option<PathBuf>,
     /// Whether the cog menu beside the primary button is open.
     gear_open: bool,
     /// Live progress of a store scan, and whether one is running.
@@ -717,6 +721,7 @@ impl Lightforge {
         };
         // Honours `blizzard_root`, the same way the CLI does.
         let layout = config.layout().unwrap_or_else(|_| Layout::with_root("."));
+        let bnet_icon = layout.battle_net_icon();
 
         let choices: Vec<Choice> = config
             .products
@@ -756,6 +761,7 @@ impl Lightforge {
             manager_open: false,
             browse_open: false,
             strip_open: false,
+            bnet_icon,
             gear_open: false,
             scan_rx: None,
             scan_sample: lightforge_core::tact::verify::Progress::default(),
@@ -1693,6 +1699,10 @@ impl Lightforge {
                         self.settings_tab = SettingsTab::Setup;
                     }
                 }
+                // Installing Battle.net is what puts its mark in the prefix,
+                // and setup is the only thing that installs it, so this is the
+                // one moment the answer can have changed.
+                self.bnet_icon = self.layout.battle_net_icon();
                 self.setup = status;
                 measure
             }
@@ -3032,9 +3042,23 @@ impl Lightforge {
         // App-level, not per-product: everything outside the WoW family is a
         // hand-off into Battle.net, so it sits with the navigation rather
         // than on a panel that describes one product.
+        // The mark comes out of the prefix rather than the binary: see
+        // [`Layout::battle_net_icon`]. Before Battle.net is installed there is
+        // none, and the button is the word alone.
+        let mut face = row![].spacing(theme::SM).align_y(Alignment::Center);
+        if let Some(path) = &self.bnet_icon {
+            face = face.push(
+                image(image::Handle::from_path(path))
+                    .content_fit(ContentFit::Contain)
+                    .width(Length::Fixed(BAND_GLYPH))
+                    .height(Length::Fixed(BAND_GLYPH)),
+            );
+        }
+        let face = face.push(text("Battle.net").size(theme::LABEL));
+
         bar = bar.push(
             tooltip(
-                button(text("Battle.net").size(theme::LABEL))
+                button(face)
                     .padding([theme::SM, theme::MD])
                     .style(theme::ghost)
                     .on_press_maybe((!self.busy).then_some(Message::OpenBattleNet)),

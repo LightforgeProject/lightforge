@@ -116,6 +116,41 @@ impl Layout {
             .join("Battle.net.config")
     }
 
+    /// The Battle.net mark, as Wine left it in the prefix.
+    ///
+    /// When `winemenubuilder` writes a program's `.desktop` file it also
+    /// rasterises that program's icon into `drive_c/proton_shortcuts/icons/`,
+    /// one directory per size. The client's own mark is therefore already on
+    /// disk in a format we can draw, which is the only reason Lightforge shows
+    /// it at all: nothing of Blizzard's is bundled or redistributed, and the
+    /// mark always matches the client that is actually installed.
+    ///
+    /// Wine names the file after a hash of its own, so the directory is
+    /// searched rather than the name built. `None` before Battle.net is
+    /// installed, which is also the answer on a prefix Wine has not yet built
+    /// a menu for.
+    pub fn battle_net_icon(&self) -> Option<PathBuf> {
+        let icons = self.drive_c().join("proton_shortcuts").join("icons");
+        // Largest first: the button draws small, and downscaling a 256 is
+        // kinder than upscaling a 32.
+        ["256x256", "128x128", "64x64", "48x48"].into_iter().find_map(|size| {
+            let apps = icons.join(size).join("apps");
+            let mut found: Vec<PathBuf> = std::fs::read_dir(apps)
+                .ok()?
+                .filter_map(|entry| Some(entry.ok()?.path()))
+                .filter(|path| {
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    name.contains("Battle.net") && name.ends_with(".png")
+                })
+                .collect();
+            // A prefix that has seen more than one Battle.net build keeps a
+            // file per build; any of them is the same mark, so the answer is
+            // pinned rather than left to the order the directory came back in.
+            found.sort();
+            found.into_iter().next()
+        })
+    }
+
     /// The bootstrapper's staging directory inside the Battle.net install.
     ///
     /// `Battle.net-Setup.exe` unpacks the client here and then promotes it to
@@ -329,6 +364,47 @@ mod tests {
         let l = layout();
         assert!(!l.wow_install().starts_with(l.prefix()));
         assert!(l.wow_symlink().starts_with(l.prefix()));
+    }
+
+    #[test]
+    fn the_battle_net_mark_is_found_by_searching_wines_icon_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::with_root(dir.path());
+        assert_eq!(layout.battle_net_icon(), None, "nothing is installed yet");
+
+        let apps = layout
+            .drive_c()
+            .join("proton_shortcuts")
+            .join("icons")
+            .join("256x256")
+            .join("apps");
+        std::fs::create_dir_all(&apps).unwrap();
+        std::fs::write(apps.join("other.png"), b"").unwrap();
+        std::fs::write(apps.join("1AC2_Battle.net Launcher.0.png"), b"").unwrap();
+
+        assert_eq!(
+            layout.battle_net_icon(),
+            Some(apps.join("1AC2_Battle.net Launcher.0.png")),
+            "the mark is found under a name Wine chose, not one we built"
+        );
+    }
+
+    #[test]
+    fn the_largest_battle_net_mark_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::with_root(dir.path());
+        let icons = layout.drive_c().join("proton_shortcuts").join("icons");
+        for size in ["48x48", "256x256"] {
+            let apps = icons.join(size).join("apps");
+            std::fs::create_dir_all(&apps).unwrap();
+            std::fs::write(apps.join("1AC2_Battle.net Launcher.0.png"), b"").unwrap();
+        }
+
+        assert_eq!(
+            layout.battle_net_icon(),
+            Some(icons.join("256x256").join("apps").join("1AC2_Battle.net Launcher.0.png")),
+            "downscaling a big mark beats upscaling a small one"
+        );
     }
 
     #[test]
