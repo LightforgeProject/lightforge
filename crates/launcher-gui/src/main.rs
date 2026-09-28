@@ -83,6 +83,18 @@ fn chevron_icon() -> image::Handle {
     CHEVRON.get_or_init(|| image::Handle::from_bytes(CHEVRON_ICON)).clone()
 }
 
+/// Add a game. A typed `+` does exist in every font, but it is a *character*:
+/// it sits on the text baseline at the weight of the UI font, which reads as
+/// a letter next to the drawn chevron beside it. Both marks are strokes of the
+/// same width so the pair looks like one control.
+const PLUS_ICON: &[u8] = include_bytes!("../assets/plus.png");
+
+/// The plus's one handle — see [`gear_icon`] for why it is cached.
+fn plus_icon() -> image::Handle {
+    static PLUS: OnceLock<image::Handle> = OnceLock::new();
+    PLUS.get_or_init(|| image::Handle::from_bytes(PLUS_ICON)).clone()
+}
+
 /// Opening size, and the floor for resizing — deliberately the same number.
 ///
 /// The header sets the width: the title, the product picker (whose longest
@@ -3365,7 +3377,7 @@ impl Lightforge {
 
         band = band.push(Space::with_width(Length::Fixed(theme::SM as f32)));
         band = band.push(band_button(
-            text("+").size(theme::BODY),
+            image(plus_icon()).width(Length::Fixed(BAND_GLYPH)).height(Length::Fixed(BAND_GLYPH)),
             Message::ToggleBrowse,
             self.browse_open,
             "Add a game".to_owned(),

@@ -8,6 +8,13 @@ comes from the manifest at runtime.
 | --- | --- | --- |
 | `gear.png` | — | — |
 | `chevron-down.png` | [Lucide](https://lucide.dev) `chevron-down`, stroked white and rendered to 64x64 | ISC, which GPL-3.0 may redistribute |
+| `plus.png` | [Lucide](https://lucide.dev) `plus`, same treatment | ISC |
 
-Both are white with an alpha channel, 64x64, and drawn small (18pt for the cog,
-16pt for the chevron): one source at a size no display asks to upscale.
+All are white with an alpha channel, 64x64, and drawn small (18pt for the cog,
+16pt for the band's two marks): one source at a size no display asks to
+upscale.
+
+The two Lucide marks were trimmed to their own ink and then scaled so their
+strokes land on the same width — Lucide draws a chevron narrower than a plus
+inside the same 24pt box, and side by side in the band that reads as two
+different weights rather than two members of a set.
