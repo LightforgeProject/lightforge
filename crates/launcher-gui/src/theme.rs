@@ -61,19 +61,19 @@ pub const PANEL: Color = Color::from_rgba(0.043, 0.055, 0.070, 0.88);
 /// its own content leaves the tab visibly short of the button it belongs to.
 pub const CONTROL_HEIGHT: f32 = 56.0;
 
-pub const XS: u16 = 4;
-pub const SM: u16 = 8;
-pub const MD: u16 = 16;
-pub const LG: u16 = 24;
-pub const XL: u16 = 32;
+pub const XS: f32 = 4.0;
+pub const SM: f32 = 8.0;
+pub const MD: f32 = 16.0;
+pub const LG: f32 = 24.0;
+pub const XL: f32 = 32.0;
 
 /// Type scale.
-pub const DISPLAY: u16 = 34;
-pub const TITLE: u16 = 22;
-pub const HEADING: u16 = 16;
-pub const BODY: u16 = 14;
-pub const LABEL: u16 = 12;
-pub const CAPTION: u16 = 11;
+pub const DISPLAY: f32 = 34.0;
+pub const TITLE: f32 = 22.0;
+pub const HEADING: f32 = 16.0;
+pub const BODY: f32 = 14.0;
+pub const LABEL: f32 = 12.0;
+pub const CAPTION: f32 = 11.0;
 
 /// Product wordmark on the dashboard, sitting under the app title.
 ///
@@ -138,6 +138,9 @@ pub fn base() -> Theme {
             text: TEXT,
             primary: ACCENT,
             success: PLAY,
+            // 0.14 added a warning slot. Ours is the update colour: an update
+            // waiting is the only thing in Lightforge that warns.
+            warning: UPDATE,
             danger: ERROR,
         },
     )
@@ -375,7 +378,8 @@ pub fn selected(_theme: &Theme, status: button::Status) -> button::Style {
 /// styled: the closed control and its overlay menu are separate types, and
 /// styling only one leaves a pale list hanging off a dark button.
 pub fn picker(_theme: &Theme, status: pick_list::Status) -> pick_list::Style {
-    let hovered = matches!(status, pick_list::Status::Hovered | pick_list::Status::Opened);
+    let hovered =
+        matches!(status, pick_list::Status::Hovered | pick_list::Status::Opened { .. });
     pick_list::Style {
         background: Background::Color(match hovered {
             true => RAISED,
@@ -403,6 +407,10 @@ pub fn picker_menu(_theme: &Theme) -> overlay::menu::Style {
         border: Border { color: BORDER, width: 1.0, radius: RADIUS_SM.into() },
         selected_background: Background::Color(Color { a: 0.18, ..ACCENT }),
         selected_text_color: TEXT,
+        // 0.14 fixed the software renderer's shadow damage (iced-rs/iced#2715),
+        // so a shadow here is safe again — but the menu never had one, and
+        // adding one is a design decision rather than part of this port.
+        shadow: iced::Shadow::default(),
     }
 }
 
@@ -410,7 +418,7 @@ pub fn picker_menu(_theme: &Theme) -> overlay::menu::Style {
 
 pub fn field(_theme: &Theme, status: text_input::Status) -> text_input::Style {
     let border = match status {
-        text_input::Status::Focused => ACCENT,
+        text_input::Status::Focused { .. } => ACCENT,
         text_input::Status::Hovered => Color { a: 0.18, ..TEXT },
         _ => BORDER,
     };

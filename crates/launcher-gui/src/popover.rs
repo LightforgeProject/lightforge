@@ -19,7 +19,7 @@
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{Operation, Tree};
 use iced::advanced::{mouse, overlay, renderer, Clipboard, Shell, Widget};
-use iced::event::{self, Event};
+use iced::Event;
 use iced::{Element, Length, Point, Rectangle, Size, Vector};
 
 /// Gap between the panel and the widget it is pinned to.
@@ -68,10 +68,15 @@ where
         self.anchor.as_widget().size()
     }
 
-    fn layout(&self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
         // Only the anchor is laid out here. That is the whole point: the panel
         // takes no room, so opening it moves nothing.
-        self.anchor.as_widget().layout(&mut tree.children[0], renderer, limits)
+        self.anchor.as_widget_mut().layout(&mut tree.children[0], renderer, limits)
     }
 
     fn draw(
@@ -95,18 +100,18 @@ where
         );
     }
 
-    fn on_event(
+    fn update(
         &mut self,
         tree: &mut Tree,
-        event: Event,
+        event: &Event,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
-    ) -> event::Status {
-        self.anchor.as_widget_mut().on_event(
+    ) {
+        self.anchor.as_widget_mut().update(
             &mut tree.children[0],
             event,
             layout,
@@ -115,7 +120,7 @@ where
             clipboard,
             shell,
             viewport,
-        )
+        );
     }
 
     fn mouse_interaction(
@@ -132,20 +137,21 @@ where
     }
 
     fn operate(
-        &self,
+        &mut self,
         tree: &mut Tree,
         layout: Layout<'_>,
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
-        self.anchor.as_widget().operate(&mut tree.children[0], layout, renderer, operation);
+        self.anchor.as_widget_mut().operate(&mut tree.children[0], layout, renderer, operation);
     }
 
     fn overlay<'b>(
         &'b mut self,
         tree: &'b mut Tree,
-        layout: Layout<'_>,
+        layout: Layout<'b>,
         renderer: &Renderer,
+        viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
         let panel = self.panel.as_mut()?;
@@ -158,6 +164,7 @@ where
             &mut anchor_tree[0],
             layout,
             renderer,
+            viewport,
             translation,
         );
 
@@ -187,7 +194,7 @@ where
     Renderer: iced::advanced::Renderer,
 {
     fn layout(&mut self, renderer: &Renderer, bounds: Size) -> layout::Node {
-        let node = self.panel.as_widget().layout(
+        let node = self.panel.as_widget_mut().layout(
             self.tree,
             renderer,
             &layout::Limits::new(Size::ZERO, bounds),
@@ -228,17 +235,17 @@ where
         );
     }
 
-    fn on_event(
+    fn update(
         &mut self,
-        event: Event,
+        event: &Event,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
-    ) -> event::Status {
+    ) {
         let bounds = layout.bounds();
-        self.panel.as_widget_mut().on_event(
+        self.panel.as_widget_mut().update(
             self.tree,
             event,
             layout,
@@ -247,19 +254,19 @@ where
             clipboard,
             shell,
             &bounds,
-        )
+        );
     }
 
     fn mouse_interaction(
         &self,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
-        viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
-        self.panel
-            .as_widget()
-            .mouse_interaction(self.tree, layout, cursor, viewport, renderer)
+        // 0.14 dropped the viewport argument here. The panel is laid out
+        // against the whole window, so its own bounds are its viewport.
+        let bounds = layout.bounds();
+        self.panel.as_widget().mouse_interaction(self.tree, layout, cursor, &bounds, renderer)
     }
 
     fn operate(
@@ -268,11 +275,7 @@ where
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
-        self.panel.as_widget().operate(self.tree, layout, renderer, operation);
-    }
-
-    fn is_over(&self, layout: Layout<'_>, _renderer: &Renderer, cursor: Point) -> bool {
-        layout.bounds().contains(cursor)
+        self.panel.as_widget_mut().operate(self.tree, layout, renderer, operation);
     }
 }
 

@@ -146,22 +146,31 @@ fn choose_renderer() {
 fn main() -> iced::Result {
     trace::begin();
     choose_renderer();
-    iced::application("Lightforge", Lightforge::update, Lightforge::view)
-        .subscription(Lightforge::subscription)
-        .theme(|_| theme::base())
-        .window(iced::window::Settings {
-            size: WINDOW,
-            min_size: Some(WINDOW_MIN),
-            ..iced::window::Settings::default()
-        })
-        // Closing is handled by the app, so a transfer can checkpoint first.
-        // Set after `window`, which replaces the settings wholesale.
-        .exit_on_close_request(false)
-        .run_with(|| {
+    // 0.14 takes the boot function where 0.13 took the title, and runs it
+    // from `run` rather than `run_with`.
+    iced::application(
+        || {
             let (app, task) = Lightforge::new();
             trace::mark("app constructed, startup tasks queued");
             (app, task)
-        })
+        },
+        Lightforge::update,
+        Lightforge::view,
+    )
+    .title("Lightforge")
+    .subscription(Lightforge::subscription)
+    // Annotated: without the type the closure is inferred for one
+    // lifetime, and 0.14's `theme` wants it for any.
+    .theme(|_state: &Lightforge| theme::base())
+    .window(iced::window::Settings {
+        size: WINDOW,
+        min_size: Some(WINDOW_MIN),
+        ..iced::window::Settings::default()
+    })
+    // Closing is handled by the app, so a transfer can checkpoint first.
+    // Set after `window`, which replaces the settings wholesale.
+    .exit_on_close_request(false)
+    .run()
 }
 
 #[derive(Debug, Clone)]
@@ -939,7 +948,7 @@ impl Lightforge {
             0 => what,
             n => format!("{what} — {n} damaged so far"),
         };
-        left.push(progress_bar(0.0..=1.0, done).height(6)).push(muted(caption, theme::CAPTION))
+        left.push(progress_bar(0.0..=1.0, done).girth(6)).push(muted(caption, theme::CAPTION))
     }
 
     /// Every configured product, in the order the bar draws them.
@@ -1013,7 +1022,7 @@ impl Lightforge {
                     .align_y(Alignment::Center),
             );
         }
-        left = left.push_maybe(self.hint("Installed and updated through Battle.net. Lightforge opens it, nothing more."));
+        left = left.extend(self.hint("Installed and updated through Battle.net. Lightforge opens it, nothing more.").map(Element::from));
 
         // Labelled for what it will actually do. Without a known game family
         // the client cannot be told which tile to open, so the button says so
@@ -2886,8 +2895,13 @@ impl Lightforge {
 
         // The hint chord. `on_key_press` only produces a message when the
         // closure returns one, so an idle window is not woken by typing.
-        let hints = iced::keyboard::on_key_press(|key, modifiers| {
-            hints_chord(&key, modifiers).then_some(Message::ToggleHints)
+        let hints = iced::keyboard::listen().filter_map(|event| match event {
+            iced::keyboard::Event::KeyPressed { ref key, modifiers, .. }
+                if hints_chord(key, modifiers) =>
+            {
+                Some(Message::ToggleHints)
+            }
+            _ => None,
         });
 
         // Resize events are only interesting to a human reading a trace, and
@@ -3017,7 +3031,7 @@ impl Lightforge {
             .spacing(theme::SM);
 
         if self.screen == Screen::Dashboard {
-            bar = bar.push(Space::with_width(Length::Fixed(theme::MD as f32)));
+            bar = bar.push(Space::new().width(Length::Fixed(theme::MD)));
 
             // The band takes the row's slack, which is also what pushes the
             // navigation right — the spacer below is for the screens that
@@ -3030,7 +3044,7 @@ impl Lightforge {
                     .height(Length::Fixed(STRIP_HEIGHT)),
             );
         } else {
-            bar = bar.push(Space::with_width(Length::Fill));
+            bar = bar.push(Space::new().width(Length::Fill));
         }
 
         // Only while something is in flight. An idle launcher has no
@@ -3053,7 +3067,7 @@ impl Lightforge {
                 })
                 .on_press(Message::ToggleManager),
             );
-            bar = bar.push(Space::with_width(Length::Fixed(theme::SM as f32)));
+            bar = bar.push(Space::new().width(Length::Fixed(theme::SM)));
         }
 
         // App-level, not per-product: everything outside the WoW family is a
@@ -3088,14 +3102,14 @@ impl Lightforge {
                 tooltip::Position::Bottom,
             ),
         );
-        bar = bar.push(Space::with_width(Length::Fixed(theme::SM as f32)));
+        bar = bar.push(Space::new().width(Length::Fixed(theme::SM)));
 
         bar = bar.push(nav("Play", Screen::Dashboard));
         bar = bar.push(nav("Settings", Screen::Settings));
 
         column![
             container(bar).width(Length::Fill).padding([theme::SM, theme::LG]).style(theme::ribbon),
-            container(Space::with_height(Length::Fixed(1.0)))
+            container(Space::new().height(Length::Fixed(1.0)))
                 .width(Length::Fill)
                 .style(theme::ribbon_edge),
         ]
@@ -3175,14 +3189,14 @@ impl Lightforge {
             self.catalog.managed().filter(|e| e.branch == Branch::Live).collect();
         if !managed.is_empty() {
             rows = rows.push(muted("World of Warcraft".to_owned(), theme::LABEL));
-            rows = rows.push_maybe(self.hint("Downloaded and launched by Lightforge."));
+            rows = rows.extend(self.hint("Downloaded and launched by Lightforge.").map(Element::from));
             for entry in managed {
                 rows = rows.push(row_for(entry));
             }
         }
 
         rows = rows.push(muted("Other Blizzard games".to_owned(), theme::LABEL));
-        rows = rows.push_maybe(self.hint("Installed and started through Battle.net. Lightforge only opens them."));
+        rows = rows.extend(self.hint("Installed and started through Battle.net. Lightforge only opens them.").map(Element::from));
         for entry in self.catalog.hand_offs() {
             rows = rows.push(row_for(entry));
         }
@@ -3202,7 +3216,7 @@ impl Lightforge {
         let mut rows = column![
             row![
                 text("Downloads").size(theme::HEADING),
-                Space::with_width(Length::Fill),
+                Space::new().width(Length::Fill),
                 muted(
                     match self.queue.len() {
                         1 => "1 in queue".to_owned(),
@@ -3225,7 +3239,7 @@ impl Lightforge {
                 }
                 Stage::Running { .. } => {
                     let progress = entry.progress();
-                    item = item.push(progress_bar(0.0..=1.0, progress.fraction()).height(5));
+                    item = item.push(progress_bar(0.0..=1.0, progress.fraction()).girth(5));
                     item = item.push(
                         row![
                             mono(bytes_of(progress.downloaded_bytes, progress.total_bytes)),
@@ -3239,7 +3253,7 @@ impl Lightforge {
                     );
                 }
                 Stage::Paused(progress) => {
-                    item = item.push(progress_bar(0.0..=1.0, progress.fraction()).height(5));
+                    item = item.push(progress_bar(0.0..=1.0, progress.fraction()).girth(5));
                     item = item.push(muted("paused".to_owned(), theme::CAPTION));
                 }
             }
@@ -3365,12 +3379,12 @@ impl Lightforge {
     /// cut a tile in half against the navigation, so the estimate leans wide
     /// on purpose.
     fn tile_width(&self, line: &ProductLine) -> f32 {
-        let padding = theme::SM as f32 * 2.0;
+        let padding = theme::SM * 2.0;
         match self.tile_art(line) {
             Some(_) => theme::TILE + padding,
             None => {
                 let glyphs = self.name_of(line).chars().count() as f32;
-                glyphs * theme::LABEL as f32 * 0.62 + padding
+                glyphs * theme::LABEL * 0.62 + padding
             }
         }
     }
@@ -3389,7 +3403,7 @@ impl Lightforge {
 
         // Add a game sits at the end of the band whatever happens, so its
         // width is not the band's to spend.
-        let (shown, hidden) = divide_strip(&widths, selected, room - BAND_BUTTON - theme::SM as f32);
+        let (shown, hidden) = divide_strip(&widths, selected, room - BAND_BUTTON - theme::SM);
 
         let mut band = row![].align_y(Alignment::Center).spacing(theme::SM);
         for id in shown {
@@ -3419,7 +3433,7 @@ impl Lightforge {
             ));
         }
 
-        band = band.push(Space::with_width(Length::Fixed(theme::SM as f32)));
+        band = band.push(Space::new().width(Length::Fixed(theme::SM)));
         band = band.push(band_button(
             image(plus_icon()).width(Length::Fixed(BAND_GLYPH)).height(Length::Fixed(BAND_GLYPH)),
             Message::ToggleBrowse,
@@ -3579,8 +3593,8 @@ impl Lightforge {
                 container(logo)
                     .align_x(Alignment::Start)
                     .width(Length::Fill)
-                    .padding([theme::MD, 0]),
-                Space::with_height(Length::Fill),
+                    .padding([theme::MD, 0.0]),
+                Space::new().height(Length::Fill),
                 // A product Battle.net owns gets a panel that offers only what
                 // Lightforge can actually do for it. Running the normal one
                 // would put an INSTALL button on a game this launcher has no
@@ -3604,7 +3618,7 @@ impl Lightforge {
                 // A scrim: art is chosen to look good, not to be legible behind
                 // text, so the page darkens it towards the bottom where the
                 // controls live.
-                container(Space::with_height(Length::Fill))
+                container(Space::new().height(Length::Fill))
                     .width(Length::Fill)
                     .style(|_| container::Style {
                         background: Some(iced::Background::Gradient(iced::Gradient::Linear(
@@ -3664,7 +3678,7 @@ impl Lightforge {
         left = self.scan_progress(left);
 
         if let Some(progress) = progress_of(action) {
-            left = left.push(progress_bar(0.0..=1.0, progress.fraction()).height(6));
+            left = left.push(progress_bar(0.0..=1.0, progress.fraction()).girth(6));
             left = left.push(
                 row![
                     mono(bytes_of(progress.downloaded_bytes, progress.total_bytes)),
@@ -3817,7 +3831,8 @@ impl Lightforge {
         let tweaks = self.tweaks();
 
         let check = |label: &'static str, which: Tweak, on: bool| {
-            iced::widget::checkbox(label, on)
+            iced::widget::checkbox(on)
+                .label(label)
                 .on_toggle(move |on| Message::Tweak(which, on))
                 .text_size(theme::BODY)
         };
@@ -3834,9 +3849,9 @@ impl Lightforge {
                     Tweak::GamePerformance,
                     tweaks.wants_game_performance(),
                 ));
-                host = host.push_maybe(self.hint("Launches through CachyOS' game-performance, which also keeps the session \
+                host = host.extend(self.hint("Launches through CachyOS' game-performance, which also keeps the session \
                      from idling. On by default where it exists; it stands aside on hardware \
-                     with no performance profile."));
+                     with no performance profile.").map(Element::from));
             }
             false => {
                 host = host.push(muted(
@@ -3877,12 +3892,12 @@ impl Lightforge {
                 .spacing(theme::MD)
                 .align_y(Alignment::Center),
             ]
-            .push_maybe(self.hint(
+            .extend(self.hint(
                 "Which translation layer the game runs on: D3D11 goes through DXVK, D3D12 \
                  through VKD3D. Which is faster depends on the GPU — D3D12 is usually a \
                  small win on AMD and often a loss on NVIDIA, so this is worth measuring \
                  rather than assuming.",
-            ))
+            ).map(Element::from))
             .push(
                 row![
                     muted("Frame cap".to_owned(), theme::LABEL).width(Length::Fixed(150.0)),
@@ -3897,16 +3912,16 @@ impl Lightforge {
                 .spacing(theme::MD)
                 .align_y(Alignment::Center),
             )
-            .push_maybe(self.hint(
+            .extend(self.hint(
                 "The client's own limit rather than the driver's, so it keeps working if \
                  the Direct3D version above changes.",
-            ))
+            ).map(Element::from))
             .push(
                 row![secondary("Clear shader cache", Message::ClearShaderCache).enabled(true)]
-                    .push_maybe(self.hint(
+                    .extend(self.hint(
                         "Shaders this product compiled under an older Proton build. Clearing \
                          them costs one session of stutter and affects no other product.",
-                    ))
+                    ).map(Element::from))
                     .spacing(theme::SM)
                     .align_y(Alignment::Center),
             )
@@ -3936,10 +3951,10 @@ impl Lightforge {
                 ),
                 check("Raw mouse input", Tweak::RawMouse, tweaks.raw_mouse),
             ]
-            .push_maybe(self.hint(
+            .extend(self.hint(
                 "Also the fix for the cursor jumping back to the middle of the window \
                  after a click, which is a Wine problem rather than a game one.",
-            ))
+            ).map(Element::from))
             .push(check(
                 "Turn off the full-screen glow and death filter",
                 Tweak::NoScreenEffects,
@@ -3959,15 +3974,15 @@ impl Lightforge {
                 .spacing(theme::MD)
                 .align_y(Alignment::Center),
             )
-            .push_maybe(self.hint(
+            .extend(self.hint(
                 "How early the next ability may be queued. Your latency plus about 50ms \
                  is the usual advice.",
-            ))
-            .push_maybe(self.hint(
+            ).map(Element::from))
+            .extend(self.hint(
                 "These are written to this product's Config.wtf and re-applied before \
                  every launch, because the client rewrites that file from memory when it \
                  exits. Change one of them in-game and the setting here wins next time.",
-            ))
+            ).map(Element::from))
             .spacing(theme::SM),
         )
         .padding(theme::MD)
@@ -3984,10 +3999,10 @@ impl Lightforge {
                     tweaks.max_draw_distance,
                 ),
             ]
-            .push_maybe(self.hint(
+            .extend(self.hint(
                 "This one costs frames rather than winning them. It is here because \
                  people want it, not because it is an optimization.",
-            ))
+            ).map(Element::from))
             .spacing(theme::SM),
         )
         .padding(theme::MD)
@@ -4034,8 +4049,8 @@ impl Lightforge {
             .spacing(theme::SM)
             .align_y(Alignment::Center),
         );
-        env = env.push_maybe(self.hint("Set for this product's launch only, after everything Lightforge assembles — so \
-             a variable here overrides the launcher's own."));
+        env = env.extend(self.hint("Set for this product's launch only, after everything Lightforge assembles — so \
+             a variable here overrides the launcher's own.").map(Element::from));
         let env = container(env).padding(theme::MD).style(theme::card);
 
         // Optional downloads. Off by default, which is what Battle.net does:
@@ -4050,8 +4065,8 @@ impl Lightforge {
         let mut content = column![heading("Optional downloads")].spacing(theme::SM);
         match (known, available.is_empty()) {
             (false, _) => {
-                content = content.push_maybe(self.hint("What a build offers is only known once its manifest has been read. \
-                     Use Check for Updates, under the cog beside PLAY, to fill this in."));
+                content = content.extend(self.hint("What a build offers is only known once its manifest has been read. \
+                     Use Check for Updates, under the cog beside PLAY, to fill this in.").map(Element::from));
             }
             (true, true) => {
                 content = content.push(muted(
@@ -4064,13 +4079,14 @@ impl Lightforge {
                     let on = opted.iter().any(|n| n == name);
                     let tag = name.clone();
                     content = content.push(
-                        iced::widget::checkbox(optional_label(name), on)
+                        iced::widget::checkbox(on)
+                            .label(optional_label(name))
                             .on_toggle(move |on| Message::OptionalContent(tag.clone(), on))
                             .text_size(theme::BODY),
                     );
                 }
-                content = content.push_maybe(self.hint("Extra content this build offers, off unless asked for — the same \
-                     default Battle.net uses. Turning one on adds it to the next download."));
+                content = content.extend(self.hint("Extra content this build offers, off unless asked for — the same \
+                     default Battle.net uses. Turning one on adds it to the next download.").map(Element::from));
             }
         }
         let content = container(content).padding(theme::MD).style(theme::card);
@@ -4128,11 +4144,10 @@ impl Lightforge {
                 // Last and apart from the rest: the one entry that destroys.
                 item("Uninstall", Message::AskUninstall, can_uninstall),
             ]
-            .push_maybe(
+            .extend(
                 self.owed_repair
                     .is_some()
-                    .then(|| item("Repair Damaged Files", Message::RepairDamaged, !self.busy)),
-            )
+                    .then(|| item("Repair Damaged Files", Message::RepairDamaged, !self.busy)).map(Element::from))
             .spacing(theme::XS),
         )
         .padding(theme::XS)
@@ -4255,7 +4270,7 @@ impl Lightforge {
                 .spacing(theme::SM)
                 .align_y(Alignment::Center);
 
-                line = line.push(Space::with_width(Length::Fill));
+                line = line.push(Space::new().width(Length::Fill));
                 if let Some(url) = &item.website_url {
                     line = line.push(
                         secondary("Open page", Message::OpenUrl(url.clone())).enabled(true),
@@ -4315,7 +4330,7 @@ impl Lightforge {
             .spacing(theme::SM)
             .align_y(Alignment::Center);
 
-            line = line.push(Space::with_width(Length::Fill));
+            line = line.push(Space::new().width(Length::Fill));
             if let Some(managed) = &addon.managed {
                 line = line.push(
                     secondary(
@@ -4348,10 +4363,10 @@ impl Lightforge {
                 .spacing(theme::SM)
                 .align_y(Alignment::Center),
             ]
-            .push_maybe(self.hint(
+            .extend(self.hint(
                 "WoWInterface, Tukui and GitHub (type owner/repo). CurseForge needs a \
                  catalog in Settings.",
-            ))
+            ).map(Element::from))
             .spacing(theme::SM),
         )
         .padding(theme::MD)
@@ -4417,7 +4432,7 @@ impl Lightforge {
             .spacing(theme::SM)
             .align_y(Alignment::Center);
 
-            line = line.push(Space::with_width(Length::Fill));
+            line = line.push(Space::new().width(Length::Fill));
             if let Some(url) = &listing.website_url {
                 line = line.push(secondary("Page", Message::OpenUrl(url.clone())).enabled(true));
             }
@@ -4441,10 +4456,10 @@ impl Lightforge {
     /// provisions whatever isn't.
     fn setup_section(&self) -> Element<'_, Message> {
         let mut body = column![]
-            .push_maybe(self.hint(
+            .extend(self.hint(
                 "Proton, the Wine prefix and Battle.net. Each step is skipped if it is \
                  already done.",
-            ))
+            ).map(Element::from))
             .spacing(theme::SM);
 
         let step = |done: bool, label: &'static str, detail: String| {
@@ -4455,7 +4470,7 @@ impl Lightforge {
             container(
                 row![
                     container(
-                        container(Space::new(Length::Fixed(8.0), Length::Fixed(8.0)))
+                        container(Space::new().width(Length::Fixed(8.0)).height(Length::Fixed(8.0)))
                             .style(theme::dot(color)),
                     )
                     .padding(theme::SM)
@@ -4510,7 +4525,7 @@ impl Lightforge {
                 log = log.push(muted(entry.clone(), theme::CAPTION));
             }
             log = log.push(match self.setup_sample.fraction() {
-                Some(fraction) => Element::from(progress_bar(0.0..=1.0, fraction).height(6)),
+                Some(fraction) => Element::from(progress_bar(0.0..=1.0, fraction).girth(6)),
                 // A download with no content-length still has to look alive.
                 None => Element::from(mono(format!(
                     "{:.0} MB",
@@ -4584,7 +4599,7 @@ impl Lightforge {
             };
 
             rows = rows.push(
-                row![facts, Space::with_width(Length::Fill), action]
+                row![facts, Space::new().width(Length::Fill), action]
                     .spacing(theme::MD)
                     .align_y(Alignment::Center),
             );
@@ -4618,7 +4633,7 @@ impl Lightforge {
             .into(),
         };
 
-        rows = rows.push(Space::with_height(Length::Fixed(theme::XS as f32)));
+        rows = rows.push(Space::new().height(Length::Fixed(theme::XS)));
         rows = rows.push(install);
         rows.into()
     }
@@ -4660,10 +4675,10 @@ impl Lightforge {
             self.header(),
             row![
                 nav,
-                container(Space::with_width(Length::Fixed(1.0)))
+                container(Space::new().width(Length::Fixed(1.0)))
                     .height(Length::Fill)
                     .style(theme::divider),
-                scrollable(container(content).padding([0, theme::LG]))
+                scrollable(container(content).padding([0.0, theme::LG]))
                     .width(Length::Fill)
                     .height(Length::Fill),
             ]
@@ -4716,10 +4731,10 @@ impl Lightforge {
                 ),
             ),
         ]
-        .push_maybe(self.hint(
+        .extend(self.hint(
             "A product with no pin of its own follows the default. Battle.net and Agent \
              are a different workload from the game, so they pin separately.",
-        ))
+        ).map(Element::from))
         .push(
             row![
                 secondary("Check for updates", Message::CheckProton).enabled(true),
@@ -4728,7 +4743,7 @@ impl Lightforge {
             .spacing(theme::SM)
             .align_y(Alignment::Center),
         )
-        .push(Space::with_height(Length::Fixed(theme::MD as f32)))
+        .push(Space::new().height(Length::Fixed(theme::MD)))
         .push(section("Installed builds", self.proton_builds()))
         .spacing(theme::SM)
         .into()
@@ -4755,29 +4770,26 @@ impl Lightforge {
             "Speed limit".to_owned(),
             speed(&self.limit_input, "unlimited", Message::DownloadLimitChanged),
         )]
-        .push_maybe(
-            self.hint("Applies to game downloads. Proton builds and addons are not capped."),
-        )
+        .extend(
+            self.hint("Applies to game downloads. Proton builds and addons are not capped.").map(Element::from))
         .push(field_row(
             "Battle.net's limit".to_owned(),
             speed(&self.bnet_limit_input, "none", Message::BattleNetLimitChanged),
         ))
-        .push_maybe(self.hint(
+        .extend(self.hint(
             "Battle.net's own cap, for what it downloads. Read from its config and written \
              back; clearing the field removes the setting and restores its default.",
-        ))
+        ).map(Element::from))
         .push(
-            iced::widget::checkbox(
-                "Pause downloads while a game is running",
-                self.config.pause_downloads_while_playing,
-            )
-            .on_toggle(Message::PauseWhilePlaying)
+            iced::widget::checkbox(self.config.pause_downloads_while_playing)
+                .label("Pause downloads while a game is running")
+                .on_toggle(Message::PauseWhilePlaying)
             .text_size(theme::BODY),
         )
-        .push_maybe(self.hint(
+        .extend(self.hint(
             "The game you launch always pauses its own download — it and the launcher \
              would be sharing one storage file. This covers the rest of the queue.",
-        ))
+        ).map(Element::from))
         .spacing(theme::SM)
         .into()
     }
@@ -4815,10 +4827,10 @@ impl Lightforge {
                 .style(theme::field)
                 .size(theme::BODY)
                 .padding(theme::SM)]
-            .push_maybe(self.hint(
+            .extend(self.hint(
                 "World of Warcraft is installed in a folder of its own inside this one. \
                  Every WoW version you add later shares it.",
-            ))
+            ).map(Element::from))
             .spacing(theme::XS)
             .into(),
             // Battle.net's own wording and colour for the same fact. A drawn
@@ -4827,7 +4839,7 @@ impl Lightforge {
                 mono(self.layout.wow_install().display().to_string()),
                 tooltip(
                     row![
-                        container(Space::new(Length::Fixed(8.0), Length::Fixed(8.0)))
+                        container(Space::new().width(Length::Fixed(8.0)).height(Length::Fixed(8.0)))
                             .style(theme::dot(theme::PLAY)),
                         text("Sharing data").size(theme::LABEL).color(theme::PLAY),
                     ]
@@ -4879,7 +4891,8 @@ impl Lightforge {
                     body = body.push(field_row(
                         "Optional".to_owned(),
                         row![
-                            iced::widget::checkbox(optional_label(HIGH_RES), dialog.high_res)
+                            iced::widget::checkbox(dialog.high_res)
+                                .label(optional_label(HIGH_RES))
                                 .on_toggle(Message::InstallHighRes)
                                 .text_size(theme::BODY),
                             muted(format!("+{}", size_of(extra)), theme::LABEL),
@@ -4929,7 +4942,7 @@ impl Lightforge {
                 .padding([theme::SM, theme::MD])
         };
         let actions = row![
-            Space::with_width(Length::Fill),
+            Space::new().width(Length::Fill),
             choice("Cancel").style(theme::outlined).on_press(Message::InstallCancel),
             choice("Start install")
                 .style(theme::filled(theme::INSTALL))
@@ -5033,7 +5046,7 @@ impl Lightforge {
                 .padding([theme::SM, theme::MD])
         };
         let actions = row![
-            Space::with_width(Length::Fill),
+            Space::new().width(Length::Fill),
             choice("Cancel")
                 .style(theme::outlined)
                 .on_press_maybe((!dialog.working).then_some(Message::UninstallCancel)),
@@ -5069,7 +5082,7 @@ impl Lightforge {
 
         let mut location = column![row![
             mono(self.layout.root().display().to_string()),
-            Space::with_width(Length::Fill),
+            Space::new().width(Length::Fill),
             secondary("Open folder", Message::OpenLibrary).enabled(true),
         ]
         .spacing(theme::MD)
@@ -5083,7 +5096,7 @@ impl Lightforge {
                 total => used as f32 / total as f32,
             };
             location = location
-                .push(progress_bar(0.0..=1.0, fraction).height(6))
+                .push(progress_bar(0.0..=1.0, fraction).girth(6))
                 .push(muted(
                     format!("{} free of {}", size_of(disk.free), size_of(disk.total)),
                     theme::CAPTION,
@@ -5092,7 +5105,7 @@ impl Lightforge {
 
         // Editable only while it is a config change — see `relocate`.
         let movable = report.is_some() && storage::library_is_empty(&self.layout);
-        location = location.push(Space::with_height(Length::Fixed(theme::XS as f32)));
+        location = location.push(Space::new().height(Length::Fixed(theme::XS)));
         location = match movable {
             true => location
                 .push(
@@ -5108,10 +5121,10 @@ impl Lightforge {
                     .spacing(theme::SM)
                     .align_y(Alignment::Center),
                 )
-                .push_maybe(self.hint("Games and the Wine prefix are installed here. It can be changed while \
-                     nothing is installed yet.")),
-            false => location.push_maybe(self.hint("Games and the Wine prefix are installed here. Moving an installed library \
-                 is not supported yet.")),
+                .extend(self.hint("Games and the Wine prefix are installed here. It can be changed while \
+                     nothing is installed yet.").map(Element::from)),
+            false => location.extend(self.hint("Games and the Wine prefix are installed here. Moving an installed library \
+                 is not supported yet.").map(Element::from)),
         };
 
         let mut usage = column![].spacing(theme::SM);
@@ -5124,7 +5137,7 @@ impl Lightforge {
                         true => secondary("Clear", Message::ClearCache)
                             .enabled(item.bytes > 0 && !clearing)
                             .into(),
-                        false => Space::with_width(Length::Shrink).into(),
+                        false => Space::new().width(Length::Shrink).into(),
                     };
                     usage = usage.push(
                         row![
@@ -5133,7 +5146,7 @@ impl Lightforge {
                                 muted(item.path.display().to_string(), theme::CAPTION),
                             ]
                             .spacing(2),
-                            Space::with_width(Length::Fill),
+                            Space::new().width(Length::Fill),
                             mono(size_of(item.bytes)),
                             action,
                         ]
@@ -5141,9 +5154,9 @@ impl Lightforge {
                         .align_y(Alignment::Center),
                     );
                 }
-                usage = usage.push_maybe(self.hint("Clearing the cache removes downloaded art, installers and lists; each is \
+                usage = usage.extend(self.hint("Clearing the cache removes downloaded art, installers and lists; each is \
                      fetched again when needed. Shader caches are kept — rebuilding them is \
-                     what makes a game stutter."));
+                     what makes a game stutter.").map(Element::from));
                 if let Some(notice) = &self.cache_notice {
                     usage = usage.push(muted(notice.clone(), theme::LABEL));
                 }
@@ -5155,7 +5168,7 @@ impl Lightforge {
 
         column![
             location,
-            Space::with_height(Length::Fixed(theme::MD as f32)),
+            Space::new().height(Length::Fixed(theme::MD)),
             section("What's using space", usage.into()),
         ]
         .spacing(theme::SM)
@@ -5208,7 +5221,7 @@ fn optional_label(tag: &str) -> String {
 }
 
 /// Secondary text at a given size.
-fn muted<'a>(content: String, size: u16) -> iced::widget::Text<'a> {
+fn muted<'a>(content: String, size: f32) -> iced::widget::Text<'a> {
     text(content).size(size).color(theme::MUTED)
 }
 
@@ -5237,7 +5250,7 @@ fn hints_chord(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) 
 /// Pinned rather than left to the tiles: the band fills its cross axis, and a
 /// widget that does that is handed the height of its siblings — the buttons,
 /// which are shorter than a tile.
-const STRIP_HEIGHT: f32 = theme::TILE + theme::XS as f32 * 2.0;
+const STRIP_HEIGHT: f32 = theme::TILE + theme::XS * 2.0;
 
 /// Width of a band button, pinned so the band's arithmetic is exact rather
 /// than an estimate of how wide a glyph renders.
@@ -5246,7 +5259,7 @@ const BAND_BUTTON: f32 = 48.0;
 /// How big a mark on a band button is drawn: the box it sits in is
 /// [`BAND_BUTTON`] less its padding, and a mark wider than that would push the
 /// button out of the size the band's arithmetic assumes.
-const BAND_GLYPH: f32 = BAND_BUTTON - theme::MD as f32 * 2.0;
+const BAND_GLYPH: f32 = BAND_BUTTON - theme::MD * 2.0;
 
 /// Add a game, and the overflow button beside it: one mark in a fixed box, so
 /// the two match and [`BAND_BUTTON`] stays true.
@@ -5257,7 +5270,7 @@ fn band_button<'a>(
     hint: String,
 ) -> Element<'a, Message> {
     let face = container(face)
-        .center_x(Length::Fixed(BAND_BUTTON - theme::MD as f32 * 2.0))
+        .center_x(Length::Fixed(BAND_BUTTON - theme::MD * 2.0))
         .center_y(Length::Fixed(theme::TILE));
     tooltip(
         button(face)
@@ -5284,7 +5297,7 @@ fn band_button<'a>(
 /// disappears: it is the game the page is showing, so a band that dropped it
 /// would stop saying where you are.
 fn divide_strip(widths: &[f32], selected: usize, room: f32) -> (Vec<usize>, Vec<usize>) {
-    let gap = theme::SM as f32;
+    let gap = theme::SM;
     let span = |ids: &[usize]| -> f32 {
         ids.iter().map(|id| widths[*id]).sum::<f32>()
             + gap * ids.len().saturating_sub(1) as f32
@@ -5338,7 +5351,7 @@ fn mono<'a>(content: String) -> iced::widget::Text<'a> {
 /// A status pill.
 fn pill<'a>(content: String, color: iced::Color) -> Element<'a, Message> {
     container(text(content).size(theme::CAPTION))
-        .padding([2, theme::SM])
+        .padding([2.0, theme::SM])
         .style(theme::badge(color))
         .into()
 }
@@ -5406,7 +5419,7 @@ const SETTINGS_WIDTH: f32 = 720.0;
 fn section<'a>(title: impl Into<String>, body: Element<'a, Message>) -> Element<'a, Message> {
     column![
         text(title.into()).size(theme::HEADING),
-        container(Space::with_height(Length::Fixed(1.0)))
+        container(Space::new().height(Length::Fixed(1.0)))
             .width(Length::Fill)
             .style(theme::divider),
         body,
@@ -5588,7 +5601,7 @@ mod tests {
 
     /// A band wide enough for four 54pt tiles and their gaps.
     fn room_for(tiles: usize) -> f32 {
-        54.0 * tiles as f32 + theme::SM as f32 * tiles.saturating_sub(1) as f32
+        54.0 * tiles as f32 + theme::SM * tiles.saturating_sub(1) as f32
     }
 
     #[test]
