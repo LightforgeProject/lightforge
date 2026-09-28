@@ -31,8 +31,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use iced::widget::{
-    button, column, container, image, mouse_area, pick_list, progress_bar, row, scrollable,
-    stack, text, text_input, tooltip, Space,
+    button, column, container, image, mouse_area, pick_list, progress_bar, responsive, row,
+    scrollable, stack, text, text_input, tooltip, Space,
 };
 use iced::{Alignment, ContentFit, Element, Length, Subscription, Task};
 
@@ -70,6 +70,17 @@ const GEAR_ICON: &[u8] = include_bytes!("../assets/gear.png");
 fn gear_icon() -> image::Handle {
     static GEAR: OnceLock<image::Handle> = OnceLock::new();
     GEAR.get_or_init(|| image::Handle::from_bytes(GEAR_ICON)).clone()
+}
+
+/// The arrow on the band's overflow button. Bundled for the same reasons as
+/// the cog: it is Lightforge's chrome, and the UI font has no dependable
+/// chevron — U+2304 is missing from most of them and renders as a tofu box.
+const CHEVRON_ICON: &[u8] = include_bytes!("../assets/chevron-down.png");
+
+/// The chevron's one handle — see [`gear_icon`] for why it is cached.
+fn chevron_icon() -> image::Handle {
+    static CHEVRON: OnceLock<image::Handle> = OnceLock::new();
+    CHEVRON.get_or_init(|| image::Handle::from_bytes(CHEVRON_ICON)).clone()
 }
 
 /// Opening size, and the floor for resizing — deliberately the same number.
@@ -151,6 +162,7 @@ enum Message {
     ToggleManager,
     /// Show or hide the catalog of products that could be added.
     ToggleBrowse,
+    ToggleStrip,
     /// What Battle.net reports as installed, for the catalog's labels.
     InstalledVersions(HashMap<String, String>),
     /// The product codes Battle.net's own config uses.
@@ -576,6 +588,8 @@ struct Lightforge {
     manager_open: bool,
     /// Whether the catalog panel is open.
     browse_open: bool,
+    /// The band's overflow menu — only ever reachable when something is in it.
+    strip_open: bool,
     /// Whether the cog menu beside the primary button is open.
     gear_open: bool,
     /// Live progress of a store scan, and whether one is running.
@@ -729,6 +743,7 @@ impl Lightforge {
             queue: Vec::new(),
             manager_open: false,
             browse_open: false,
+            strip_open: false,
             gear_open: false,
             scan_rx: None,
             scan_sample: lightforge_core::tact::verify::Progress::default(),
@@ -1167,7 +1182,12 @@ impl Lightforge {
 
     fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::LineSelected(line) => self.select_line(&line),
+            Message::LineSelected(line) => {
+                // Picking from the overflow menu closes it: the tile is in the
+                // band now, and the menu is answering a question already asked.
+                self.strip_open = false;
+                self.select_line(&line)
+            }
 
             Message::BranchSelected(pick) => {
                 // An unconfigured branch is offered, not hidden — picking it
@@ -1459,12 +1479,23 @@ impl Lightforge {
                 self.manager_open = !self.manager_open;
                 if self.manager_open {
                     self.browse_open = false;
+                    self.strip_open = false;
+                }
+                Task::none()
+            }
+
+            Message::ToggleStrip => {
+                self.strip_open = !self.strip_open;
+                if self.strip_open {
+                    self.browse_open = false;
+                    self.manager_open = false;
                 }
                 Task::none()
             }
 
             Message::ToggleBrowse => {
                 self.browse_open = !self.browse_open;
+                self.strip_open = false;
                 if !self.browse_open {
                     return Task::none();
                 }
@@ -2307,6 +2338,7 @@ impl Lightforge {
                 self.gear_open = false;
                 self.manager_open = false;
                 self.browse_open = false;
+                self.strip_open = false;
                 Task::none()
             }
 
@@ -2914,7 +2946,7 @@ impl Lightforge {
         // hands the event to its child first and only fires when the child
         // ignored it, so a button still does its own job rather than being
         // swallowed by the dismissal.
-        let screen = match self.gear_open || self.manager_open || self.browse_open {
+        let screen = match self.gear_open || self.manager_open || self.browse_open || self.strip_open {
             true => Element::from(mouse_area(screen).on_press(Message::Dismiss)),
             false => screen,
         };
@@ -2947,26 +2979,20 @@ impl Lightforge {
 
         if self.screen == Screen::Dashboard {
             bar = bar.push(Space::with_width(Length::Fixed(theme::MD as f32)));
-            for tile in self.product_bar() {
-                bar = bar.push(tile);
-            }
-            bar = bar.push(Space::with_width(Length::Fixed(theme::SM as f32)));
-            bar = bar.push(tooltip(
-                button(text("+").size(theme::BODY))
-                    .padding([theme::SM, theme::MD])
-                    .style(match self.browse_open {
-                        true => theme::selected,
-                        false => theme::ghost,
-                    })
-                    .on_press(Message::ToggleBrowse),
-                container(text("Add a game".to_owned()).size(theme::LABEL))
-                    .padding([theme::XS, theme::SM])
-                    .style(theme::floating),
-                tooltip::Position::Bottom,
-            ));
-        }
 
-        bar = bar.push(Space::with_width(Length::Fill));
+            // The band takes the row's slack, which is also what pushes the
+            // navigation right — the spacer below is for the screens that
+            // have no band. Its height is pinned because a widget that fills
+            // its cross axis is given the height of its *siblings*, and the
+            // tiles are taller than the buttons beside them.
+            bar = bar.push(
+                container(responsive(|space| self.strip(space.width)))
+                    .width(Length::Fill)
+                    .height(Length::Fixed(STRIP_HEIGHT)),
+            );
+        } else {
+            bar = bar.push(Space::with_width(Length::Fill));
+        }
 
         // Only while something is in flight. An idle launcher has no
         // downloads to manage, and a permanent button that opens an empty
@@ -3224,59 +3250,151 @@ impl Lightforge {
             .unwrap_or_else(|| line.label().to_owned())
     }
 
-    /// One tile per configured line, the selected one marked.
+    /// The art a line's tile wears, if any.
     ///
-    /// A line with no icon in the manifest falls back to its label, so the bar
-    /// is complete and usable before any art exists and fills in one line at a
-    /// time as art is published.
-    fn product_bar(&self) -> Vec<Element<'_, Message>> {
+    /// The line's mark is its live build's, since that is the product the art
+    /// was published against; a PTR is the same game wearing the same face.
+    ///
+    /// Except for a hand-off: the manifest's `default` answers for every code
+    /// it does not name, so asking would put Retail's mark on Hearthstone.
+    fn tile_art(&self, line: &ProductLine) -> Option<&PathBuf> {
+        let head = line.head();
+        match self.kind_of(&head) {
+            Kind::Managed => self.icons.get(&head),
+            Kind::HandOff => None,
+        }
+    }
+
+    /// One tile.
+    ///
+    /// A line with no icon in the manifest falls back to its label, so the
+    /// band is complete and usable before any art exists and fills in one line
+    /// at a time as art is published.
+    fn tile(&self, line: &ProductLine) -> Element<'_, Message> {
+        let selected = line == &self.catalog.line_of(&self.selected.code);
+        let face: Element<Message> = match self.tile_art(line) {
+            Some(path) => image(image::Handle::from_path(path))
+                .content_fit(ContentFit::Contain)
+                .width(Length::Fixed(theme::TILE))
+                .height(Length::Fixed(theme::TILE))
+                .into(),
+            None => container(text(self.name_of(line)).size(theme::LABEL))
+                .center_x(Length::Shrink)
+                .center_y(Length::Fixed(theme::TILE))
+                .into(),
+        };
+
+        let tile = button(face).padding([theme::XS, theme::SM]);
+        let tile = match selected {
+            true => tile.style(theme::selected),
+            false => tile.style(theme::ghost).on_press(Message::LineSelected(line.clone())),
+        };
+
+        tooltip(
+            tile,
+            container(text(self.name_of(line)).size(theme::LABEL))
+                .padding([theme::XS, theme::SM])
+                .style(theme::floating),
+            tooltip::Position::Bottom,
+        )
+        .into()
+    }
+
+    /// How wide a tile will be.
+    ///
+    /// Exact for art: a fixed square in fixed padding. A line falling back to
+    /// its name cannot be measured without a renderer, so its width is
+    /// estimated from the glyph count at a width no glyph of this size
+    /// exceeds. Erring wide costs a little unused band; erring narrow would
+    /// cut a tile in half against the navigation, so the estimate leans wide
+    /// on purpose.
+    fn tile_width(&self, line: &ProductLine) -> f32 {
+        let padding = theme::SM as f32 * 2.0;
+        match self.tile_art(line) {
+            Some(_) => theme::TILE + padding,
+            None => {
+                let glyphs = self.name_of(line).chars().count() as f32;
+                glyphs * theme::LABEL as f32 * 0.62 + padding
+            }
+        }
+    }
+
+    /// The game band: the tiles that fit, then Add a game, and whatever did
+    /// not fit behind an overflow button.
+    ///
+    /// `room` is the width the header has left over once the title, the
+    /// navigation and the buttons beside it have taken theirs, so the band
+    /// never has to know the window's size — see [`Self::header`].
+    fn strip(&self, room: f32) -> Element<'_, Message> {
+        let lines = self.lines();
         let current = self.catalog.line_of(&self.selected.code);
+        let selected = lines.iter().position(|line| line == &current).unwrap_or(0);
+        let widths: Vec<f32> = lines.iter().map(|line| self.tile_width(line)).collect();
 
-        self.lines()
-            .into_iter()
-            .map(|line| {
-                let selected = line == current;
-                let head = line.head();
+        // Add a game sits at the end of the band whatever happens, so its
+        // width is not the band's to spend.
+        let (shown, hidden) = divide_strip(&widths, selected, room - BAND_BUTTON - theme::SM as f32);
 
-                // The line's mark is its live build's, since that is the
-                // product the art was published against; a PTR is the same
-                // game wearing the same face.
-                //
-                // Except for a hand-off: the manifest's `default` answers for
-                // every code it does not name, so asking would put Retail's
-                // mark on Hearthstone.
-                let icon = match self.kind_of(&head) {
-                    Kind::Managed => self.icons.get(&head),
-                    Kind::HandOff => None,
-                };
-                let face: Element<Message> = match icon {
-                    Some(path) => image(image::Handle::from_path(path))
+        let mut band = row![].align_y(Alignment::Center).spacing(theme::SM);
+        for id in shown {
+            band = band.push(self.tile(&lines[id]));
+        }
+
+        if !hidden.is_empty() {
+            let hidden: Vec<ProductLine> = hidden.into_iter().map(|id| lines[id].clone()).collect();
+            let more = band_button(
+                image(chevron_icon())
+                    .width(Length::Fixed(BAND_GLYPH))
+                    .height(Length::Fixed(BAND_GLYPH)),
+                Message::ToggleStrip,
+                self.strip_open,
+                format!("{} more game{}", hidden.len(), match hidden.len() {
+                    1 => "",
+                    _ => "s",
+                }),
+            );
+            // The panel hangs under the button it belongs to rather than in
+            // the corner like the download manager: which games are behind it
+            // is the button's own answer, and the corner is a long way from
+            // the band on a wide window.
+            band = band.push(popover::popover(
+                more,
+                self.strip_open.then(|| self.overflow_menu(&hidden)),
+            ));
+        }
+
+        band = band.push(Space::with_width(Length::Fixed(theme::SM as f32)));
+        band = band.push(band_button(
+            text("+").size(theme::BODY),
+            Message::ToggleBrowse,
+            self.browse_open,
+            "Add a game".to_owned(),
+        ));
+        band.into()
+    }
+
+    /// The games the band had no room for.
+    fn overflow_menu(&self, hidden: &[ProductLine]) -> Element<'_, Message> {
+        let mut rows = column![].spacing(theme::XS).width(Length::Fixed(220.0));
+        for line in hidden {
+            let mut entry = row![].spacing(theme::SM).align_y(Alignment::Center);
+            if let Some(path) = self.tile_art(line) {
+                entry = entry.push(
+                    image(image::Handle::from_path(path))
                         .content_fit(ContentFit::Contain)
-                        .width(Length::Fixed(theme::TILE))
-                        .height(Length::Fixed(theme::TILE))
-                        .into(),
-                    None => container(text(self.name_of(&line)).size(theme::LABEL))
-                        .center_x(Length::Shrink)
-                        .center_y(Length::Fixed(theme::TILE))
-                        .into(),
-                };
-
-                let tile = button(face).padding([theme::XS, theme::SM]);
-                let tile = match selected {
-                    true => tile.style(theme::selected),
-                    false => tile.style(theme::ghost).on_press(Message::LineSelected(line.clone())),
-                };
-
-                tooltip(
-                    tile,
-                    container(text(self.name_of(&line)).size(theme::LABEL))
-                        .padding([theme::XS, theme::SM])
-                        .style(theme::floating),
-                    tooltip::Position::Bottom,
-                )
-                .into()
-            })
-            .collect()
+                        .width(Length::Fixed(theme::TILE * 0.6))
+                        .height(Length::Fixed(theme::TILE * 0.6)),
+                );
+            }
+            entry = entry.push(text(self.name_of(line)).size(theme::BODY));
+            rows = rows.push(
+                button(entry.width(Length::Fill))
+                    .padding([theme::XS, theme::SM])
+                    .style(theme::ghost)
+                    .on_press(Message::LineSelected(line.clone())),
+            );
+        }
+        container(rows).padding(theme::SM).style(theme::floating).into()
     }
 
     /// Every branch of the selected line, configured or not.
@@ -5083,6 +5201,100 @@ fn muted<'a>(content: String, size: u16) -> iced::widget::Text<'a> {
     text(content).size(size).color(theme::MUTED)
 }
 
+/// Height of the game band.
+///
+/// Pinned rather than left to the tiles: the band fills its cross axis, and a
+/// widget that does that is handed the height of its siblings — the buttons,
+/// which are shorter than a tile.
+const STRIP_HEIGHT: f32 = theme::TILE + theme::XS as f32 * 2.0;
+
+/// Width of a band button, pinned so the band's arithmetic is exact rather
+/// than an estimate of how wide a glyph renders.
+const BAND_BUTTON: f32 = 48.0;
+
+/// How big a mark on a band button is drawn: the box it sits in is
+/// [`BAND_BUTTON`] less its padding, and a mark wider than that would push the
+/// button out of the size the band's arithmetic assumes.
+const BAND_GLYPH: f32 = BAND_BUTTON - theme::MD as f32 * 2.0;
+
+/// Add a game, and the overflow button beside it: one mark in a fixed box, so
+/// the two match and [`BAND_BUTTON`] stays true.
+fn band_button<'a>(
+    face: impl Into<Element<'a, Message>>,
+    message: Message,
+    open: bool,
+    hint: String,
+) -> Element<'a, Message> {
+    let face = container(face)
+        .center_x(Length::Fixed(BAND_BUTTON - theme::MD as f32 * 2.0))
+        .center_y(Length::Fixed(theme::TILE));
+    tooltip(
+        button(face)
+            .padding([theme::XS, theme::MD])
+            .style(match open {
+                true => theme::selected,
+                false => theme::ghost,
+            })
+            .on_press(message),
+        container(text(hint).size(theme::LABEL)).padding([theme::XS, theme::SM]).style(theme::floating),
+        tooltip::Position::Bottom,
+    )
+    .into()
+}
+
+/// Which tiles the band shows, and which go behind the overflow button.
+///
+/// Pure, so the rules can be tested without a window: `widths` is what each
+/// tile needs, `room` what the band has for tiles, and the answer is indices
+/// into `widths` — shown first, hidden second, both in the order given.
+///
+/// Nothing is hidden while everything fits. Once something must be, the
+/// overflow button costs room too, and the selected line is never what
+/// disappears: it is the game the page is showing, so a band that dropped it
+/// would stop saying where you are.
+fn divide_strip(widths: &[f32], selected: usize, room: f32) -> (Vec<usize>, Vec<usize>) {
+    let gap = theme::SM as f32;
+    let span = |ids: &[usize]| -> f32 {
+        ids.iter().map(|id| widths[*id]).sum::<f32>()
+            + gap * ids.len().saturating_sub(1) as f32
+    };
+
+    let all: Vec<usize> = (0..widths.len()).collect();
+    if all.is_empty() || span(&all) <= room {
+        return (all, Vec::new());
+    }
+
+    let budget = room - BAND_BUTTON - gap;
+    let mut shown: Vec<usize> = Vec::new();
+    for id in 0..widths.len() {
+        let mut next = shown.clone();
+        next.push(id);
+        if span(&next) > budget {
+            break;
+        }
+        shown = next;
+    }
+
+    // The selected line takes the place of the last tile that fit, and of the
+    // one before that if it still does not fit. A band showing only the
+    // selected line is the floor: something is always lit.
+    if !shown.contains(&selected) {
+        shown.pop();
+        while !shown.is_empty() {
+            let mut with_selected = shown.clone();
+            with_selected.push(selected);
+            if span(&with_selected) <= budget {
+                break;
+            }
+            shown.pop();
+        }
+        shown.push(selected);
+    }
+
+    let hidden = all.iter().copied().filter(|id| !shown.contains(id)).collect();
+    (shown, hidden)
+}
+
 /// Machine text — versions, paths, ids. Monospaced so a version number cannot
 /// be mistaken for prose, and so columns line up without a table.
 fn mono<'a>(content: String) -> iced::widget::Text<'a> {
@@ -5327,6 +5539,57 @@ fn eta_of(progress: state::Progress) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A band wide enough for four 54pt tiles and their gaps.
+    fn room_for(tiles: usize) -> f32 {
+        54.0 * tiles as f32 + theme::SM as f32 * tiles.saturating_sub(1) as f32
+    }
+
+    #[test]
+    fn a_band_with_room_to_spare_hides_nothing() {
+        let widths = [54.0; 3];
+        let (shown, hidden) = divide_strip(&widths, 0, room_for(3));
+        assert_eq!(shown, vec![0, 1, 2]);
+        assert!(hidden.is_empty(), "nothing overflows when everything fits");
+    }
+
+    #[test]
+    fn the_overflow_button_is_paid_for_out_of_the_band() {
+        // Room for four tiles exactly, five to place: the fifth does not fit,
+        // and making space for the button costs a fourth tile as well.
+        let widths = [54.0; 5];
+        let (shown, hidden) = divide_strip(&widths, 0, room_for(4));
+        assert_eq!(shown, vec![0, 1, 2]);
+        assert_eq!(hidden, vec![3, 4]);
+    }
+
+    #[test]
+    fn the_selected_game_is_never_the_one_that_disappears() {
+        let widths = [54.0; 5];
+        let (shown, hidden) = divide_strip(&widths, 4, room_for(4));
+        assert!(shown.contains(&4), "the game on screen stays in the band");
+        assert_eq!(shown.last(), Some(&4), "it takes the place nearest the menu");
+        assert!(!hidden.contains(&4));
+        assert_eq!(hidden, vec![2, 3], "the tiles it displaced are the ones behind the menu");
+    }
+
+    #[test]
+    fn a_band_with_almost_no_room_still_shows_the_selected_game() {
+        let widths = [54.0; 4];
+        let (shown, hidden) = divide_strip(&widths, 2, 10.0);
+        assert_eq!(shown, vec![2], "something is always lit");
+        assert_eq!(hidden, vec![0, 1, 3]);
+    }
+
+    #[test]
+    fn a_wide_name_tile_costs_more_of_the_band_than_an_icon() {
+        // Not a layout assertion — just that the estimate scales with the
+        // name, since that is what keeps a long label from being cut off.
+        let widths = [54.0, 200.0, 54.0];
+        let (shown, hidden) = divide_strip(&widths, 0, room_for(4));
+        assert_eq!(shown, vec![0], "the wide tile does not fit beside the first");
+        assert_eq!(hidden, vec![1, 2]);
+    }
 
     fn planned(remaining: u64, stored: u64) -> TransferState {
         TransferState {
