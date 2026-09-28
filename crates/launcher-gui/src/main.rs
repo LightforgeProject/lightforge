@@ -175,6 +175,7 @@ enum Message {
     /// Show or hide the catalog of products that could be added.
     ToggleBrowse,
     ToggleStrip,
+    ToggleHints,
     /// What Battle.net reports as installed, for the catalog's labels.
     InstalledVersions(HashMap<String, String>),
     /// The product codes Battle.net's own config uses.
@@ -602,6 +603,13 @@ struct Lightforge {
     browse_open: bool,
     /// The band's overflow menu — only ever reachable when something is in it.
     strip_open: bool,
+    /// Whether the explanatory prose under the controls is drawn.
+    ///
+    /// Off for the people who use Lightforge: the interface is meant to be
+    /// readable without a paragraph under every switch, and a screen of grey
+    /// sentences is what it looks like when it is not. On for whoever is
+    /// working on it — see [`HINTS_CHORD`].
+    hints: bool,
     /// Battle.net's own mark, if the prefix has one — see
     /// [`Layout::battle_net_icon`]. Held as a path, not a handle: iced keys an
     /// image by its path, so rebuilding the header does not decode it again.
@@ -761,6 +769,7 @@ impl Lightforge {
             manager_open: false,
             browse_open: false,
             strip_open: false,
+            hints: false,
             bnet_icon,
             gear_open: false,
             scan_rx: None,
@@ -1004,11 +1013,7 @@ impl Lightforge {
                     .align_y(Alignment::Center),
             );
         }
-        left = left.push(muted(
-            "Installed and updated through Battle.net. Lightforge opens it, nothing more."
-                .to_owned(),
-            theme::CAPTION,
-        ));
+        left = left.push_maybe(self.hint("Installed and updated through Battle.net. Lightforge opens it, nothing more."));
 
         // Labelled for what it will actually do. Without a known game family
         // the client cannot be told which tile to open, so the button says so
@@ -1499,6 +1504,11 @@ impl Lightforge {
                     self.browse_open = false;
                     self.strip_open = false;
                 }
+                Task::none()
+            }
+
+            Message::ToggleHints => {
+                self.hints = !self.hints;
                 Task::none()
             }
 
@@ -2874,6 +2884,12 @@ impl Lightforge {
         // nothing.
         let closing = iced::window::close_requests().map(Message::CloseRequested);
 
+        // The hint chord. `on_key_press` only produces a message when the
+        // closure returns one, so an idle window is not woken by typing.
+        let hints = iced::keyboard::on_key_press(|key, modifiers| {
+            hints_chord(&key, modifiers).then_some(Message::ToggleHints)
+        });
+
         // Resize events are only interesting to a human reading a trace, and
         // subscribing to them makes every resize step rebuild the view, so
         // this stays out of a normal run entirely.
@@ -2885,10 +2901,11 @@ impl Lightforge {
         match self.running().is_some() || self.setup_running || self.addons_busy || self.scanning {
             true => Subscription::batch([
                 closing,
+                hints,
                 resizes,
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),
             ]),
-            false => Subscription::batch([closing, resizes]),
+            false => Subscription::batch([closing, hints, resizes]),
         }
     }
 
@@ -3158,20 +3175,14 @@ impl Lightforge {
             self.catalog.managed().filter(|e| e.branch == Branch::Live).collect();
         if !managed.is_empty() {
             rows = rows.push(muted("World of Warcraft".to_owned(), theme::LABEL));
-            rows = rows.push(muted(
-                "Downloaded and launched by Lightforge.".to_owned(),
-                theme::CAPTION,
-            ));
+            rows = rows.push_maybe(self.hint("Downloaded and launched by Lightforge."));
             for entry in managed {
                 rows = rows.push(row_for(entry));
             }
         }
 
         rows = rows.push(muted("Other Blizzard games".to_owned(), theme::LABEL));
-        rows = rows.push(muted(
-            "Installed and started through Battle.net. Lightforge only opens them.".to_owned(),
-            theme::CAPTION,
-        ));
+        rows = rows.push_maybe(self.hint("Installed and started through Battle.net. Lightforge only opens them."));
         for entry in self.catalog.hand_offs() {
             rows = rows.push(row_for(entry));
         }
@@ -3269,6 +3280,15 @@ impl Lightforge {
             .padding(theme::MD)
             .style(theme::floating)
             .into()
+    }
+
+    /// Explanatory prose under a control, drawn only when the hints are on.
+    ///
+    /// `None` rather than an empty widget so a column simply does not lay the
+    /// line out: an invisible child still costs its spacing, which would leave
+    /// the controls unevenly spread once the prose is gone.
+    fn hint<'a>(&self, content: impl Into<String>) -> Option<iced::widget::Text<'a>> {
+        self.hints.then(|| muted(content.into(), theme::CAPTION))
     }
 
     /// What to call a line on screen.
@@ -3766,6 +3786,10 @@ impl Lightforge {
                 true => battle_net,
                 false => battle_net.on_press(Message::BattleNet),
             },
+            // Not a hint: it is the reason to press the button above, and a
+            // user who does not know the shop needs a Battle.net session is
+            // exactly who it is written for.
+            //
             // Held to the buttons' width so it wraps instead of setting the
             // column's. Left to itself this line is the widest thing here, so
             // the buttons end up centred inside a column wider than they are
@@ -3810,13 +3834,9 @@ impl Lightforge {
                     Tweak::GamePerformance,
                     tweaks.wants_game_performance(),
                 ));
-                host = host.push(muted(
-                    "Launches through CachyOS' game-performance, which also keeps the session \
+                host = host.push_maybe(self.hint("Launches through CachyOS' game-performance, which also keeps the session \
                      from idling. On by default where it exists; it stands aside on hardware \
-                     with no performance profile."
-                        .to_owned(),
-                    theme::CAPTION,
-                ));
+                     with no performance profile."));
             }
             false => {
                 host = host.push(muted(
@@ -3856,14 +3876,14 @@ impl Lightforge {
                 ]
                 .spacing(theme::MD)
                 .align_y(Alignment::Center),
-                muted(
-                    "Which translation layer the game runs on: D3D11 goes through DXVK, D3D12 \
-                     through VKD3D. Which is faster depends on the GPU — D3D12 is usually a \
-                     small win on AMD and often a loss on NVIDIA, so this is worth measuring \
-                     rather than assuming."
-                        .to_owned(),
-                    theme::CAPTION,
-                ),
+            ]
+            .push_maybe(self.hint(
+                "Which translation layer the game runs on: D3D11 goes through DXVK, D3D12 \
+                 through VKD3D. Which is faster depends on the GPU — D3D12 is usually a \
+                 small win on AMD and often a loss on NVIDIA, so this is worth measuring \
+                 rather than assuming.",
+            ))
+            .push(
                 row![
                     muted("Frame cap".to_owned(), theme::LABEL).width(Length::Fixed(150.0)),
                     text_input("uncapped", &self.fps_input)
@@ -3876,24 +3896,20 @@ impl Lightforge {
                 ]
                 .spacing(theme::MD)
                 .align_y(Alignment::Center),
-                muted(
-                    "The client's own limit rather than the driver's, so it keeps working if \
-                     the Direct3D version above changes."
-                        .to_owned(),
-                    theme::CAPTION,
-                ),
-                row![
-                    secondary("Clear shader cache", Message::ClearShaderCache).enabled(true),
-                    muted(
+            )
+            .push_maybe(self.hint(
+                "The client's own limit rather than the driver's, so it keeps working if \
+                 the Direct3D version above changes.",
+            ))
+            .push(
+                row![secondary("Clear shader cache", Message::ClearShaderCache).enabled(true)]
+                    .push_maybe(self.hint(
                         "Shaders this product compiled under an older Proton build. Clearing \
-                         them costs one session of stutter and affects no other product."
-                            .to_owned(),
-                        theme::CAPTION,
-                    ),
-                ]
-                .spacing(theme::SM)
-                .align_y(Alignment::Center),
-            ]
+                         them costs one session of stutter and affects no other product.",
+                    ))
+                    .spacing(theme::SM)
+                    .align_y(Alignment::Center),
+            )
             .spacing(theme::SM),
         )
         .padding(theme::MD)
@@ -3919,17 +3935,17 @@ impl Lightforge {
                     tweaks.faster_zone_loads,
                 ),
                 check("Raw mouse input", Tweak::RawMouse, tweaks.raw_mouse),
-                muted(
-                    "Also the fix for the cursor jumping back to the middle of the window \
-                     after a click, which is a Wine problem rather than a game one."
-                        .to_owned(),
-                    theme::CAPTION,
-                ),
-                check(
-                    "Turn off the full-screen glow and death filter",
-                    Tweak::NoScreenEffects,
-                    tweaks.no_screen_effects,
-                ),
+            ]
+            .push_maybe(self.hint(
+                "Also the fix for the cursor jumping back to the middle of the window \
+                 after a click, which is a Wine problem rather than a game one.",
+            ))
+            .push(check(
+                "Turn off the full-screen glow and death filter",
+                Tweak::NoScreenEffects,
+                tweaks.no_screen_effects,
+            ))
+            .push(
                 row![
                     muted("Spell queue".to_owned(), theme::LABEL).width(Length::Fixed(150.0)),
                     text_input("client default", &self.spell_input)
@@ -3942,20 +3958,16 @@ impl Lightforge {
                 ]
                 .spacing(theme::MD)
                 .align_y(Alignment::Center),
-                muted(
-                    "How early the next ability may be queued. Your latency plus about 50ms \
-                     is the usual advice."
-                        .to_owned(),
-                    theme::CAPTION,
-                ),
-                muted(
-                    "These are written to this product's Config.wtf and re-applied before \
-                     every launch, because the client rewrites that file from memory when it \
-                     exits. Change one of them in-game and the setting here wins next time."
-                        .to_owned(),
-                    theme::CAPTION,
-                ),
-            ]
+            )
+            .push_maybe(self.hint(
+                "How early the next ability may be queued. Your latency plus about 50ms \
+                 is the usual advice.",
+            ))
+            .push_maybe(self.hint(
+                "These are written to this product's Config.wtf and re-applied before \
+                 every launch, because the client rewrites that file from memory when it \
+                 exits. Change one of them in-game and the setting here wins next time.",
+            ))
             .spacing(theme::SM),
         )
         .padding(theme::MD)
@@ -3971,13 +3983,11 @@ impl Lightforge {
                     Tweak::MaxDrawDistance,
                     tweaks.max_draw_distance,
                 ),
-                muted(
-                    "This one costs frames rather than winning them. It is here because \
-                     people want it, not because it is an optimization."
-                        .to_owned(),
-                    theme::CAPTION,
-                ),
             ]
+            .push_maybe(self.hint(
+                "This one costs frames rather than winning them. It is here because \
+                 people want it, not because it is an optimization.",
+            ))
             .spacing(theme::SM),
         )
         .padding(theme::MD)
@@ -4024,12 +4034,8 @@ impl Lightforge {
             .spacing(theme::SM)
             .align_y(Alignment::Center),
         );
-        env = env.push(muted(
-            "Set for this product's launch only, after everything Lightforge assembles — so \
-             a variable here overrides the launcher's own."
-                .to_owned(),
-            theme::CAPTION,
-        ));
+        env = env.push_maybe(self.hint("Set for this product's launch only, after everything Lightforge assembles — so \
+             a variable here overrides the launcher's own."));
         let env = container(env).padding(theme::MD).style(theme::card);
 
         // Optional downloads. Off by default, which is what Battle.net does:
@@ -4044,12 +4050,8 @@ impl Lightforge {
         let mut content = column![heading("Optional downloads")].spacing(theme::SM);
         match (known, available.is_empty()) {
             (false, _) => {
-                content = content.push(muted(
-                    "What a build offers is only known once its manifest has been read. \
-                     Use Check for Updates, under the cog beside PLAY, to fill this in."
-                        .to_owned(),
-                    theme::CAPTION,
-                ));
+                content = content.push_maybe(self.hint("What a build offers is only known once its manifest has been read. \
+                     Use Check for Updates, under the cog beside PLAY, to fill this in."));
             }
             (true, true) => {
                 content = content.push(muted(
@@ -4067,12 +4069,8 @@ impl Lightforge {
                             .text_size(theme::BODY),
                     );
                 }
-                content = content.push(muted(
-                    "Extra content this build offers, off unless asked for — the same \
-                     default Battle.net uses. Turning one on adds it to the next download."
-                        .to_owned(),
-                    theme::CAPTION,
-                ));
+                content = content.push_maybe(self.hint("Extra content this build offers, off unless asked for — the same \
+                     default Battle.net uses. Turning one on adds it to the next download."));
             }
         }
         let content = container(content).padding(theme::MD).style(theme::card);
@@ -4349,12 +4347,11 @@ impl Lightforge {
                 ]
                 .spacing(theme::SM)
                 .align_y(Alignment::Center),
-                muted(
-                    "WoWInterface, Tukui and GitHub (type owner/repo). CurseForge needs a catalog in Settings."
-                        .to_owned(),
-                    theme::CAPTION,
-                ),
             ]
+            .push_maybe(self.hint(
+                "WoWInterface, Tukui and GitHub (type owner/repo). CurseForge needs a \
+                 catalog in Settings.",
+            ))
             .spacing(theme::SM),
         )
         .padding(theme::MD)
@@ -4443,13 +4440,12 @@ impl Lightforge {
     /// Proton, the prefix and Battle.net: what is there, and the button that
     /// provisions whatever isn't.
     fn setup_section(&self) -> Element<'_, Message> {
-        let mut body = column![muted(
-            "Proton, the Wine prefix and Battle.net. Each step is skipped if it is already \
-             done."
-                .to_owned(),
-            theme::CAPTION,
-        )]
-        .spacing(theme::SM);
+        let mut body = column![]
+            .push_maybe(self.hint(
+                "Proton, the Wine prefix and Battle.net. Each step is skipped if it is \
+                 already done.",
+            ))
+            .spacing(theme::SM);
 
         let step = |done: bool, label: &'static str, detail: String| {
             let color = match done {
@@ -4719,21 +4715,21 @@ impl Lightforge {
                     Message::PinBattleNetProton,
                 ),
             ),
-            muted(
-                "A product with no pin of its own follows the default. Battle.net and Agent \
-                 are a different workload from the game, so they pin separately."
-                    .to_owned(),
-                theme::CAPTION,
-            ),
+        ]
+        .push_maybe(self.hint(
+            "A product with no pin of its own follows the default. Battle.net and Agent \
+             are a different workload from the game, so they pin separately.",
+        ))
+        .push(
             row![
                 secondary("Check for updates", Message::CheckProton).enabled(true),
                 muted(self.proton_notice.clone().unwrap_or_default(), theme::LABEL),
             ]
             .spacing(theme::SM)
             .align_y(Alignment::Center),
-            Space::with_height(Length::Fixed(theme::MD as f32)),
-            section("Installed builds", self.proton_builds()),
-        ]
+        )
+        .push(Space::with_height(Length::Fixed(theme::MD as f32)))
+        .push(section("Installed builds", self.proton_builds()))
         .spacing(theme::SM)
         .into()
     }
@@ -4755,38 +4751,33 @@ impl Lightforge {
             .into()
         };
 
-        column![
-            field_row(
-                "Speed limit".to_owned(),
-                speed(&self.limit_input, "unlimited", Message::DownloadLimitChanged),
-            ),
-            muted(
-                "Applies to game downloads. Proton builds and addons are not capped.".to_owned(),
-                theme::CAPTION,
-            ),
-            field_row(
-                "Battle.net's limit".to_owned(),
-                speed(&self.bnet_limit_input, "none", Message::BattleNetLimitChanged),
-            ),
-            muted(
-                "Battle.net's own cap, for what it downloads. Read from its config and written \
-                 back; clearing the field removes the setting and restores its default."
-                    .to_owned(),
-                theme::CAPTION,
-            ),
+        column![field_row(
+            "Speed limit".to_owned(),
+            speed(&self.limit_input, "unlimited", Message::DownloadLimitChanged),
+        )]
+        .push_maybe(
+            self.hint("Applies to game downloads. Proton builds and addons are not capped."),
+        )
+        .push(field_row(
+            "Battle.net's limit".to_owned(),
+            speed(&self.bnet_limit_input, "none", Message::BattleNetLimitChanged),
+        ))
+        .push_maybe(self.hint(
+            "Battle.net's own cap, for what it downloads. Read from its config and written \
+             back; clearing the field removes the setting and restores its default.",
+        ))
+        .push(
             iced::widget::checkbox(
                 "Pause downloads while a game is running",
                 self.config.pause_downloads_while_playing,
             )
             .on_toggle(Message::PauseWhilePlaying)
             .text_size(theme::BODY),
-            muted(
-                "The game you launch always pauses its own download — it and the launcher \
-                 would be sharing one storage file. This covers the rest of the queue."
-                    .to_owned(),
-                theme::CAPTION,
-            ),
-        ]
+        )
+        .push_maybe(self.hint(
+            "The game you launch always pauses its own download — it and the launcher \
+             would be sharing one storage file. This covers the rest of the queue.",
+        ))
         .spacing(theme::SM)
         .into()
     }
@@ -4819,19 +4810,15 @@ impl Lightforge {
     /// The install dialog's card.
     fn install_card<'a>(&'a self, dialog: &'a InstallDialog) -> Element<'a, Message> {
         let location: Element<Message> = match dialog.movable {
-            true => column![
-                text_input("~/Games/Blizzard/games", &self.games_input)
-                    .on_input(Message::GamesFolderChanged)
-                    .style(theme::field)
-                    .size(theme::BODY)
-                    .padding(theme::SM),
-                muted(
-                    "World of Warcraft is installed in a folder of its own inside this one. \
-                     Every WoW version you add later shares it."
-                        .to_owned(),
-                    theme::CAPTION,
-                ),
-            ]
+            true => column![text_input("~/Games/Blizzard/games", &self.games_input)
+                .on_input(Message::GamesFolderChanged)
+                .style(theme::field)
+                .size(theme::BODY)
+                .padding(theme::SM)]
+            .push_maybe(self.hint(
+                "World of Warcraft is installed in a folder of its own inside this one. \
+                 Every WoW version you add later shares it.",
+            ))
             .spacing(theme::XS)
             .into(),
             // Battle.net's own wording and colour for the same fact. A drawn
@@ -5121,18 +5108,10 @@ impl Lightforge {
                     .spacing(theme::SM)
                     .align_y(Alignment::Center),
                 )
-                .push(muted(
-                    "Games and the Wine prefix are installed here. It can be changed while \
-                     nothing is installed yet."
-                        .to_owned(),
-                    theme::CAPTION,
-                )),
-            false => location.push(muted(
-                "Games and the Wine prefix are installed here. Moving an installed library \
-                 is not supported yet."
-                    .to_owned(),
-                theme::CAPTION,
-            )),
+                .push_maybe(self.hint("Games and the Wine prefix are installed here. It can be changed while \
+                     nothing is installed yet.")),
+            false => location.push_maybe(self.hint("Games and the Wine prefix are installed here. Moving an installed library \
+                 is not supported yet.")),
         };
 
         let mut usage = column![].spacing(theme::SM);
@@ -5162,13 +5141,9 @@ impl Lightforge {
                         .align_y(Alignment::Center),
                     );
                 }
-                usage = usage.push(muted(
-                    "Clearing the cache removes downloaded art, installers and lists; each is \
+                usage = usage.push_maybe(self.hint("Clearing the cache removes downloaded art, installers and lists; each is \
                      fetched again when needed. Shader caches are kept — rebuilding them is \
-                     what makes a game stutter."
-                        .to_owned(),
-                    theme::CAPTION,
-                ));
+                     what makes a game stutter."));
                 if let Some(notice) = &self.cache_notice {
                     usage = usage.push(muted(notice.clone(), theme::LABEL));
                 }
@@ -5235,6 +5210,26 @@ fn optional_label(tag: &str) -> String {
 /// Secondary text at a given size.
 fn muted<'a>(content: String, size: u16) -> iced::widget::Text<'a> {
     text(content).size(size).color(theme::MUTED)
+}
+
+/// The key that reveals the hints, with Control, Alt and Shift held.
+///
+/// Not a setting and not in any menu: the prose it brings back is written for
+/// whoever is building Lightforge, and a user who found it by accident would
+/// be reading notes meant for someone else. It lasts as long as the window,
+/// so nothing on disk records that it was ever pressed.
+const HINTS_CHORD: &str = "h";
+
+/// Whether a key press is the chord that reveals the hints.
+///
+/// All three modifiers, deliberately: Control and Shift alone are one slip
+/// away from shortcuts people use, and the prose behind this is not something
+/// a user should meet by fumbling a paste.
+fn hints_chord(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> bool {
+    matches!(key.as_ref(), iced::keyboard::Key::Character(HINTS_CHORD))
+        && modifiers.control()
+        && modifiers.alt()
+        && modifiers.shift()
 }
 
 /// Height of the game band.
@@ -5575,6 +5570,21 @@ fn eta_of(progress: state::Progress) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn chord(text: &str, modifiers: iced::keyboard::Modifiers) -> bool {
+        hints_chord(&iced::keyboard::Key::Character(text.into()), modifiers)
+    }
+
+    #[test]
+    fn the_hints_need_all_three_modifiers() {
+        use iced::keyboard::Modifiers;
+        let all = Modifiers::CTRL | Modifiers::ALT | Modifiers::SHIFT;
+        assert!(chord("h", all));
+        assert!(!chord("h", Modifiers::CTRL | Modifiers::SHIFT), "Ctrl+Shift+H is a near miss");
+        assert!(!chord("h", Modifiers::CTRL), "and plain Ctrl+H is someone else's shortcut");
+        assert!(!chord("h", Modifiers::default()), "typing an h is just typing");
+        assert!(!chord("g", all), "another letter is not the chord");
+    }
 
     /// A band wide enough for four 54pt tiles and their gaps.
     fn room_for(tiles: usize) -> f32 {
