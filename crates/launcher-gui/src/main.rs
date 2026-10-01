@@ -5467,20 +5467,31 @@ fn progress_of(action: &ActionState) -> Option<state::Progress> {
     }
 }
 
-/// Instantaneous transfer rate, smoothed.
+/// Transfer rate as a human should read it: an average with a real time
+/// constant, published at a pace the eye can follow.
 ///
 /// A raw delta between two samples swings wildly when a large file lands in one
-/// tick; an exponential average keeps the readout legible without lagging a
-/// real slowdown for long.
+/// tick, so the rate is averaged. Measuring often keeps the ETA honest, but a
+/// number that changes three times a second reads as flicker however well it is
+/// averaged, so what the view shows is held between refreshes.
 #[derive(Debug, Default)]
 struct Rate {
     last_bytes: u64,
     last_at: Option<Instant>,
+    /// The average, moved by every sample.
+    average: f64,
+    /// What the view shows: the average as it stood at `shown_at`.
     per_second: u64,
+    shown_at: Option<Instant>,
 }
 
 impl Rate {
-    const SMOOTHING: f64 = 0.3;
+    /// How long the average takes to cover about two thirds of a step change.
+    const TAU: f64 = 2.0;
+    /// How long a shown value stands before the average replaces it.
+    const HOLD: Duration = Duration::from_secs(1);
+    /// Shorter windows are mostly chunk-arrival noise, not a rate.
+    const MIN_WINDOW: f64 = 0.25;
 
     fn sample(&mut self, bytes: u64) {
         let now = Instant::now();
@@ -5490,19 +5501,29 @@ impl Rate {
             return;
         };
         let elapsed = now.duration_since(previous).as_secs_f64();
-        if elapsed < 0.25 {
+        if elapsed < Self::MIN_WINDOW {
             return;
         }
 
-        let delta = bytes.saturating_sub(self.last_bytes) as f64;
-        let instant = delta / elapsed;
-        self.per_second = match self.per_second {
-            0 => instant as u64,
-            previous => (previous as f64 * (1.0 - Self::SMOOTHING) + instant * Self::SMOOTHING)
-                as u64,
+        let instant = bytes.saturating_sub(self.last_bytes) as f64 / elapsed;
+        // Weighting by the time that passed rather than by the tick keeps the
+        // smoothing the same whether ticks arrive on time, late or in a burst.
+        self.average = match self.shown_at {
+            None => instant,
+            Some(_) => {
+                let alpha = 1.0 - (-elapsed / Self::TAU).exp();
+                self.average + (instant - self.average) * alpha
+            }
         };
         self.last_bytes = bytes;
         self.last_at = Some(now);
+
+        // The first real sample is shown at once -- an empty readout while the
+        // average warms up would look stalled.
+        if self.shown_at.is_none_or(|at| now.duration_since(at) >= Self::HOLD) {
+            self.per_second = self.average as u64;
+            self.shown_at = Some(now);
+        }
     }
 }
 
@@ -5560,9 +5581,13 @@ fn size_of(bytes: u64) -> String {
 }
 
 fn rate_of(per_second: u64) -> String {
+    let mb = per_second as f64 / 1e6;
     match per_second {
         0 => "—".to_owned(),
-        r => format!("{:.1} MB/s", r as f64 / 1e6),
+        // Tenths tell a slow link apart from a stalled one; at speed they are
+        // only jitter, and a digit that moves every second draws the eye.
+        _ if mb >= 10.0 => format!("{mb:.0} MB/s"),
+        _ => format!("{mb:.1} MB/s"),
     }
 }
 
@@ -5817,10 +5842,43 @@ mod tests {
         let first = rate.per_second;
         assert!(first > 0);
 
-        // A tick with nothing stored must not drop the readout to zero.
+        // A tick with nothing stored must not drop the readout to zero: the
+        // average gives up a fraction of the way, not all of it.
         std::thread::sleep(Duration::from_millis(300));
         rate.sample(30_000_000);
-        assert!(rate.per_second > 0 && rate.per_second < first);
+        assert!(rate.average > 0.0 && rate.average < first as f64);
+    }
+
+    #[test]
+    fn the_shown_rate_is_held_a_second_however_often_it_is_sampled() {
+        let mut rate = Rate::default();
+        rate.sample(0);
+        std::thread::sleep(Duration::from_millis(300));
+        rate.sample(30_000_000);
+        let shown = rate.per_second;
+
+        // Three more samples inside the hold: the average follows them, the
+        // number on screen does not move.
+        for _ in 0..3 {
+            std::thread::sleep(Duration::from_millis(260));
+            rate.sample(30_000_000);
+        }
+        assert_eq!(rate.per_second, shown);
+        assert!(rate.average < shown as f64);
+
+        // Past the hold, the next sample publishes where the average got to.
+        std::thread::sleep(Duration::from_millis(300));
+        rate.sample(30_000_000);
+        assert_eq!(rate.per_second, rate.average as u64);
+        assert!(rate.per_second < shown);
+    }
+
+    #[test]
+    fn the_rate_readout_drops_the_decimal_once_tenths_are_only_jitter() {
+        assert_eq!(rate_of(0), "—");
+        assert_eq!(rate_of(6_400_000), "6.4 MB/s");
+        assert_eq!(rate_of(9_900_000), "9.9 MB/s");
+        assert_eq!(rate_of(31_400_000), "31 MB/s");
     }
 
     #[test]
