@@ -1360,7 +1360,23 @@ impl Lightforge {
                     self.icons = themed.icons;
                 }
                 if code == self.selected.code {
-                    self.branding = themed.branding;
+                    // Only when it is actually different art. A revalidation
+                    // that answered 304 resolves to the same files, already
+                    // decoded and on screen — but assigning it hands iced new
+                    // image handles, which it has to upload again, and the
+                    // page blinks a second or two after a switch for no
+                    // reason. [`Branding`] carries each asset's path and
+                    // whether its bytes moved this run, so comparing it
+                    // answers exactly that question.
+                    let same = self.branding.as_ref().map(|art| &art.branding)
+                        == themed.branding.as_ref().map(|art| &art.branding);
+                    trace::mark(match same {
+                        true => "branding unchanged, keeping the decoded art",
+                        false => "branding changed, swapping the art",
+                    });
+                    if !same {
+                        self.branding = themed.branding;
+                    }
                 }
                 Task::none()
             }
