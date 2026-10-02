@@ -3250,9 +3250,18 @@ impl Lightforge {
                             // band: the tiles are marks without words, and one
                             // quiet word says what the row is before you know
                             // them.
-                            muted("GAMES".to_owned(), theme::LABEL),
+                            // Centred on the letters, not on the line box —
+                            // see [`optically_centred`].
+                            container(optically_centred(muted(
+                                "GAMES".to_owned(),
+                                theme::LABEL,
+                            )))
+                            .height(Length::Fill)
+                            .align_y(Alignment::Center),
                             responsive(|space| self.strip(space.width)),
-                            self.battle_net_button(),
+                            container(self.battle_net_button())
+                                .height(Length::Fill)
+                                .align_y(Alignment::Center),
                         ]
                         .spacing(theme::MD)
                         .align_y(Alignment::Center),
@@ -3696,7 +3705,9 @@ impl Lightforge {
                     .height(Length::Fixed(BAND_GLYPH)),
             );
         }
-        let face = face.push(text("Battle.net").size(theme::LABEL));
+        // Same optical correction as the band's label — the word has no
+        // descenders either, and it sits beside a 16pt mark that fills its box.
+        let face = face.push(optically_centred(text("Battle.net").size(theme::LABEL)));
 
         tooltip(
             button(face)
@@ -5630,6 +5641,31 @@ fn muted<'a>(content: String, size: f32) -> iced::widget::Text<'a> {
     text(content).size(size).color(theme::MUTED)
 }
 
+/// Centre a line of text on its *letters* rather than on its line box.
+///
+/// A line box is ascent plus descent plus leading, so centring it puts the
+/// empty descent space — the room for a `g` or a `y` — below the letters and
+/// lifts them above the middle. On a word that has no descenders at all, like
+/// `GAMES` or `Battle.net`, every bit of that space is empty and the word
+/// reads as sitting high beside something that fills its box, such as a tile.
+///
+/// Collapsing the line height to the glyphs removes the leading, and the
+/// remaining half-descent is taken by a pixel of padding above. Both are of
+/// the text's own size, so this holds at any size rather than being a nudge
+/// tuned to one.
+fn optically_centred<'a>(text: iced::widget::Text<'a>) -> Element<'a, Message> {
+    container(text.line_height(iced::widget::text::LineHeight::Relative(1.0)))
+        // Top only. Padding on both sides would grow the box symmetrically and
+        // move the letters nowhere.
+        .padding(iced::Padding { top: OPTICAL_NUDGE, right: 0.0, bottom: 0.0, left: 0.0 })
+        .into()
+}
+
+/// How far down a descenderless line is pushed to sit on the optical middle.
+/// Roughly a quarter of the font's descent at label sizes; see
+/// [`optically_centred`].
+const OPTICAL_NUDGE: f32 = 2.0;
+
 /// The key that reveals the hints, with Control, Alt and Shift held.
 ///
 /// Not a setting and not in any menu: the prose it brings back is written for
@@ -5656,8 +5692,8 @@ fn hints_chord(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) 
 /// widget that does that is handed the height of its siblings — the buttons,
 /// which are shorter than a tile. The padding is [`theme::SM`] rather than
 /// `XS` now that the row is the band's alone, so the tiles sit in it instead
-/// of filling it edge to edge.
-const STRIP_HEIGHT: f32 = theme::TILE + theme::SM * 2.0;
+/// of filling it edge to edge: [`theme::LG`] of air, split above and below.
+const STRIP_HEIGHT: f32 = theme::TILE + theme::LG;
 
 /// Width of a band button, pinned so the band's arithmetic is exact rather
 /// than an estimate of how wide a glyph renders.
