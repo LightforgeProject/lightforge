@@ -16,7 +16,7 @@
 //! accent rather than effects.
 
 use iced::widget::{button, container, overlay, pick_list, text_input};
-use iced::{border, Background, Border, Color, Font, Theme};
+use iced::{border, Background, Border, Color, Font, Shadow, Theme, Vector};
 
 // ---------------------------------------------------------------- palette --
 
@@ -30,7 +30,7 @@ pub const RAISED: Color = rgb(0x1B, 0x20, 0x27);
 /// Hairline. Always a translucent white so it works over art too.
 pub const BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
 /// Hairline for a panel laid over artwork, where a hairline meant for a flat
-/// surface disappears. Carries the separation a drop shadow used to — see
+/// surface disappears. Draws the edge that [`LIFT`]'s shadow cannot — see
 /// [`floating`].
 pub const BORDER_OVER_ART: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.16);
 
@@ -114,6 +114,21 @@ pub fn logo_height(hint: Option<f32>) -> f32 {
 pub const RADIUS: f32 = 10.0;
 pub const RADIUS_SM: f32 = 6.0;
 
+/// The one drop shadow, for a surface that floats above the page.
+///
+/// A single value rather than a scale, because depth here is binary: a panel
+/// is either part of the page or laid over it. Two shadows would imply a
+/// hierarchy among floating things that the four screens do not have.
+///
+/// Tuned for a near-black page — pure black at a low alpha, since a grey
+/// shadow over [`BG`] reads as fog rather than depth, and a downward offset
+/// smaller than the blur so the panel lifts without appearing to tilt.
+pub const LIFT: Shadow = Shadow {
+    color: Color::from_rgba(0.0, 0.0, 0.0, 0.45),
+    offset: Vector::new(0.0, 4.0),
+    blur_radius: 20.0,
+};
+
 /// Face for versions, paths and ids.
 pub const MONO: Font = Font::MONOSPACE;
 
@@ -159,15 +174,16 @@ pub fn card(_theme: &Theme) -> container::Style {
 
 /// A panel that sits over artwork.
 ///
-/// Deliberately **no drop shadow**. The software renderer's damage tracking
-/// sizes a dirty region from the quad's bounds expanded by a single pixel,
-/// with no account of a shadow's blur radius or offset, so the area under a
-/// shadow never gets cleared and the shadow composites over itself on every
-/// hover until it goes black (iced-rs/iced#2712, fixed upstream by #2715,
-/// which landed after the 0.13 we build against).
+/// Carries [`LIFT`]. Through 0.13 it could not: the software renderer sized a
+/// dirty region from the quad's bounds expanded by a single pixel, with no
+/// account of a shadow's blur radius or offset, so the area under a shadow
+/// never got cleared and the shadow composited over itself on every hover
+/// until it went black (iced-rs/iced#2712). #2715 fixed it, and 0.14 has it.
 ///
-/// A brighter hairline does the separating instead. Revisit when we move to
-/// iced 0.14: the shadow can come back as-is.
+/// The brighter hairline stays alongside it. The two do different jobs — the
+/// hairline draws the edge, the shadow separates the panel from what is
+/// behind it — and over bright artwork a shadow alone leaves the top edge
+/// indistinct, which is the case [`BORDER_OVER_ART`] exists for.
 pub fn floating(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(PANEL)),
@@ -176,6 +192,7 @@ pub fn floating(_theme: &Theme) -> container::Style {
             width: 1.0,
             radius: RADIUS.into(),
         },
+        shadow: LIFT,
         ..container::Style::default()
     }
 }
