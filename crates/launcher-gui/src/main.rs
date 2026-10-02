@@ -121,31 +121,23 @@ fn plus_icon() -> image::Handle {
 const WINDOW: iced::Size = iced::Size::new(1280.0, 820.0);
 const WINDOW_MIN: iced::Size = WINDOW;
 
-/// iced's renderer, chosen for us unless the user overrides it.
-///
-/// `wgpu` lags badly when resizing a window on native Wayland — the client
-/// keeps up (a resize is serviced here in well under a millisecond) but the
-/// buffer reaches the compositor late, so the window crawls behind the
-/// pointer. It is an upstream bug, iced-rs/iced#2750, and the software
-/// renderer does not have it.
-///
-/// Nothing is given up by paying for it. This is a launcher: the UI is static,
-/// only redraws when something changes, and never animates. GPU rasterisation
-/// buys frames we do not draw. One renderer everywhere also means what gets
-/// tested is what people run, rather than a path that breaks only on hardware
-/// no one here has.
-///
-/// `ICED_BACKEND` is read by iced itself, so setting it only when unset leaves
-/// the override in the user's hands: `ICED_BACKEND=wgpu` restores the default.
-fn choose_renderer() {
-    if std::env::var_os("ICED_BACKEND").is_none() {
-        std::env::set_var("ICED_BACKEND", "tiny-skia");
-    }
-}
+// We used to force the software renderer here. Through iced 0.13, `wgpu`
+// lagged badly when resizing a window on native Wayland: the client kept up
+// (a resize was serviced in well under a millisecond) but the buffer reached
+// the compositor late, so the window crawled behind the pointer —
+// iced-rs/iced#2750. Retested on 0.14 (KDE, native Wayland, radv on a Navi 48)
+// and it is gone: wgpu is now the smoother of the two, and the software
+// renderer is the one that stutters under a drag.
+//
+// Nothing replaces the pin, because iced's own fallback is better than ours
+// was: with `ICED_BACKEND` unset it tries wgpu and drops to tiny-skia on any
+// initialisation error (`iced_renderer`'s `fallback::Compositor`), so a
+// machine with no Vulkan, no GPU or a broken driver still gets a window.
+// `ICED_BACKEND=tiny-skia` remains as a manual escape hatch for hardware that
+// initialises fine but renders poorly, which no fallback can detect.
 
 fn main() -> iced::Result {
     trace::begin();
-    choose_renderer();
     // 0.14 takes the boot function where 0.13 took the title, and runs it
     // from `run` rather than `run_with`.
     iced::application(
