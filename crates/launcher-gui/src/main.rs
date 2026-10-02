@@ -3150,12 +3150,11 @@ impl Lightforge {
 
         let row_for = |entry: &CatalogEntry| -> Element<Message> {
             let mut facts = column![text(entry.label.clone()).size(theme::BODY)];
-            if let Some(version) = self.installed_versions.get(entry.code.as_str()) {
-                facts = facts.push(
-                    row![muted("installed".to_owned(), theme::CAPTION), mono(version.clone())]
-                        .spacing(theme::XS)
-                        .align_y(Alignment::Center),
-                );
+            // Whether it is installed, not which build: the version belongs to
+            // the panel you launch from, and this list is for choosing which
+            // games to keep in the band.
+            if self.installed_versions.contains_key(entry.code.as_str()) {
+                facts = facts.push(muted("installed".to_owned(), theme::CAPTION));
             }
             let action: Element<Message> = match tracked(&entry.code) {
                 true => secondary("Remove", Message::RemoveProduct(entry.code.clone()))
@@ -3165,8 +3164,20 @@ impl Lightforge {
                     .enabled(true)
                     .into(),
             };
+            // The mark the band would wear, so a row and its tile are plainly
+            // the same game. The column is held even when there is no icon —
+            // hand-offs have none, and art arrives one product at a time — so
+            // the labels stay in line instead of stepping in and out.
+            let mark: Element<Message> = match self.icons.get(&entry.code) {
+                Some(path) => image(image::Handle::from_path(path))
+                    .content_fit(ContentFit::Contain)
+                    .width(Length::Fixed(BROWSE_MARK))
+                    .height(Length::Fixed(BROWSE_MARK))
+                    .into(),
+                None => Space::new().width(Length::Fixed(BROWSE_MARK)).into(),
+            };
             container(
-                row![facts.width(Length::Fill), action]
+                row![mark, facts.width(Length::Fill), action]
                     .spacing(theme::MD)
                     .align_y(Alignment::Center),
             )
@@ -5271,6 +5282,14 @@ const STRIP_HEIGHT: f32 = theme::TILE + theme::XS * 2.0;
 /// Width of a band button, pinned so the band's arithmetic is exact rather
 /// than an estimate of how wide a glyph renders.
 const BAND_BUTTON: f32 = 48.0;
+
+/// A product's mark in the Add a game list.
+///
+/// Smaller than the band's [`theme::TILE`]: there the mark *is* the control,
+/// here it labels a row whose height belongs to two lines of text, and a mark
+/// taller than those two lines would set the row's height instead of fitting
+/// inside it.
+const BROWSE_MARK: f32 = theme::TILE * 0.6;
 
 /// How big a mark on a band button is drawn: the box it sits in is
 /// [`BAND_BUTTON`] less its padding, and a mark wider than that would push the
