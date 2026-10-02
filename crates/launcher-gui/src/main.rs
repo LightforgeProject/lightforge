@@ -1273,6 +1273,11 @@ impl Lightforge {
                 // Picking from the overflow menu closes it: the tile is in the
                 // band now, and the menu is answering a question already asked.
                 self.close_panels();
+                // The band is on News too, where choosing a game is a request
+                // to go and look at it — leaving you on a page that says
+                // nothing about the game you just picked would read as a dead
+                // click.
+                self.go_to(Screen::Dashboard);
                 self.select_line(&line)
             }
 
@@ -1766,11 +1771,7 @@ impl Lightforge {
                 // Asking for the page you are on is not a history step, or
                 // back would walk through a page repeated however many times
                 // its tab was clicked.
-                if screen != self.screen {
-                    self.visited.push(self.screen);
-                    self.forward.clear();
-                    self.screen = screen;
-                }
+                self.go_to(screen);
                 // Including when the page did not change: the menu entry was
                 // still a click, and it has had its answer.
                 self.close_panels();
@@ -3240,7 +3241,7 @@ impl Lightforge {
         // the window's edge. `responsive` hands `strip` the room it actually
         // has, which is what decides how many tiles fit before the overflow
         // takes the rest.
-        if self.screen == Screen::Dashboard {
+        if self.shows_band() {
             rows = rows.push(
                 container(
                     container(
@@ -3272,10 +3273,10 @@ impl Lightforge {
             );
         }
 
-        // The hairline only where the band card is not. On the dashboard the
-        // card is the separation; on a page without one, a header with no
-        // backdrop would otherwise run straight into the content.
-        match self.screen == Screen::Dashboard {
+        // The hairline only where the band card is not: the card is the
+        // separation where it appears, and on a page without one a header with
+        // no backdrop would otherwise run straight into the content.
+        match self.shows_band() {
             true => rows.push(Space::new().height(Length::Fixed(theme::SM))).into(),
             false => rows
                 .push(
@@ -3650,6 +3651,30 @@ impl Lightforge {
             .align_left(),
         );
         band.into()
+    }
+
+    /// Go to a page, remembering where you were.
+    ///
+    /// Asking for the page you are on is not a history step, or back would
+    /// walk through the same page once per click of its tab.
+    fn go_to(&mut self, screen: Screen) {
+        if screen != self.screen {
+            self.visited.push(self.screen);
+            self.forward.clear();
+            self.screen = screen;
+        }
+    }
+
+    /// Which screens wear the game band under the tabs.
+    ///
+    /// The pages you move between freely — the dashboard and News — keep the
+    /// same chrome, so switching tabs changes the content under a header that
+    /// does not move. Settings and a game's own pages (Addons, Game
+    /// Optimizations) are somewhere you went *into*: they are about one thing,
+    /// and a band offering to switch games above them invites a click that
+    /// would throw away what you are doing.
+    fn shows_band(&self) -> bool {
+        matches!(self.screen, Screen::Dashboard | Screen::News)
     }
 
     /// The hand-off into Battle.net, at the right-hand end of the game card.
@@ -4497,6 +4522,16 @@ impl Lightforge {
         mouse_area(menu).on_press(Message::MenuClick).into()
     }
 
+    /// A page that is just the chrome and some content.
+    ///
+    /// The dashboard does not use this: its header sits *inside* a `stack`, so
+    /// the product art shows behind it, which is what lets the top row go
+    /// without a backdrop. Everything else stacks nothing and wants the header
+    /// simply above its content.
+    fn framed<'a>(&'a self, content: Element<'a, Message>) -> Element<'a, Message> {
+        column![self.header(), content].into()
+    }
+
     /// News — nothing to report yet.
     ///
     /// A placeholder on purpose. The tab earns its place in the ribbon now so
@@ -4504,39 +4539,43 @@ impl Lightforge {
     /// than pretending to load something: an empty page that looks broken is
     /// worse than one that explains itself.
     fn news_screen(&self) -> Element<'_, Message> {
-        container(
-            column![
-                text("News").size(theme::DISPLAY),
-                muted(
-                    "Patch notes, sales and Wowhead headlines will land here.".to_owned(),
-                    theme::BODY,
-                ),
-            ]
-            .spacing(theme::SM)
-            .align_x(Alignment::Center),
+        self.framed(
+            container(
+                column![
+                    text("News").size(theme::DISPLAY),
+                    muted(
+                        "Patch notes, sales and Wowhead headlines will land here.".to_owned(),
+                        theme::BODY,
+                    ),
+                ]
+                .spacing(theme::SM)
+                .align_x(Alignment::Center),
+            )
+            .center(Length::Fill)
+            .into(),
         )
-        .center(Length::Fill)
-        .into()
     }
 
     /// Lightforge's own release notes — nothing here yet either.
     fn updates_screen(&self) -> Element<'_, Message> {
-        container(
-            column![
-                text("Lightforge Updates").size(theme::DISPLAY),
-                muted(
-                    format!(
-                        "You are running {}. Release notes will appear here.",
-                        env!("CARGO_PKG_VERSION"),
+        self.framed(
+            container(
+                column![
+                    text("Lightforge Updates").size(theme::DISPLAY),
+                    muted(
+                        format!(
+                            "You are running {}. Release notes will appear here.",
+                            env!("CARGO_PKG_VERSION"),
+                        ),
+                        theme::BODY,
                     ),
-                    theme::BODY,
-                ),
-            ]
-            .spacing(theme::SM)
-            .align_x(Alignment::Center),
+                ]
+                .spacing(theme::SM)
+                .align_x(Alignment::Center),
+            )
+            .center(Length::Fill)
+            .into(),
         )
-        .center(Length::Fill)
-        .into()
     }
 
     /// Addon management: what is installed, and what could be.
