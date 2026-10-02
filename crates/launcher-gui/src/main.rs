@@ -3126,7 +3126,8 @@ impl Lightforge {
     /// Title, product picker, and navigation.
     fn header(&self) -> Element<'_, Message> {
         let nav = |label: &'static str, screen: Screen| {
-            let entry = button(text(label).size(theme::LABEL)).padding([theme::SM, theme::MD]);
+            let entry = button(text(label).size(theme::LABEL).font(theme::BOLD))
+                .padding([theme::SM, theme::MD]);
             // Addons and Game Optimizations are a game's own pages, opened
             // from its panel, so Play stays lit on them — and stays clickable,
             // since it is the way back.
@@ -3252,10 +3253,9 @@ impl Lightforge {
                             // them.
                             // Centred on the letters, not on the line box —
                             // see [`optically_centred`].
-                            container(optically_centred(muted(
-                                "GAMES".to_owned(),
-                                theme::LABEL,
-                            )))
+                            container(optically_centred(
+                                muted("GAMES".to_owned(), theme::LABEL).font(theme::BOLD),
+                            ))
                             .height(Length::Fill)
                             .align_y(Alignment::Center),
                             responsive(|space| self.strip(space.width)),

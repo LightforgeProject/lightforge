@@ -137,6 +137,18 @@ pub const LIFT: Shadow = Shadow {
 /// Face for versions, paths and ids.
 pub const MONO: Font = Font::MONOSPACE;
 
+/// The emphasis weight, for the words that name a place rather than describe
+/// one: the page tabs and the band's label.
+///
+/// Spelled out rather than built from [`Font::DEFAULT`], because struct update
+/// syntax is not allowed in a `const`.
+pub const BOLD: Font = Font {
+    family: iced::font::Family::SansSerif,
+    weight: iced::font::Weight::Bold,
+    stretch: iced::font::Stretch::Normal,
+    style: iced::font::Style::Normal,
+};
+
 // The scales are invariants, so they are checked when the crate compiles
 // rather than when a test happens to run.
 const _: () = assert!(XS < SM && SM < MD && MD < LG && LG < XL);
