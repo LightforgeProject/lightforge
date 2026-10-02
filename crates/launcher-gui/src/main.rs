@@ -3242,43 +3242,57 @@ impl Lightforge {
                 tooltip::Position::Bottom,
             ),
         );
-        let mut rows = column![container(bar)
-            .width(Length::Fill)
-            .padding([theme::SM, theme::LG])
-            .style(theme::ribbon)];
+        // No backdrop behind the tabs. The wordmark, the arrows and the pages
+        // are chrome, and chrome over artwork needs no bar of its own to be
+        // legible — what made the old ribbon necessary was the band sharing
+        // its line, and the band has moved out.
+        let mut rows =
+            column![container(bar).width(Length::Fill).padding([theme::SM, theme::LG])];
 
-        // The band's own row, under the tabs and only where there are games to
-        // show. It keeps the ribbon's background so the two read as one header
-        // rather than a strip laid on the page, and spans the full width —
-        // `responsive` hands `strip` the room it actually has, which is what
-        // decides how many tiles fit before the overflow takes the rest.
+        // The band as a card of its own, inset from the window and detached
+        // from the row above — the same `floating` treatment as the action
+        // panel at the foot of the dashboard, so the two read as the same kind
+        // of object: a surface laid over the art rather than a strip welded to
+        // the window's edge. `responsive` hands `strip` the room it actually
+        // has, which is what decides how many tiles fit before the overflow
+        // takes the rest.
         if self.screen == Screen::Dashboard {
             rows = rows.push(
                 container(
-                    row![
-                        // Labelled, the way Battle.net labels its own band:
-                        // the tiles are marks without words, and one quiet
-                        // word says what the row is before you know them.
-                        muted("GAMES".to_owned(), theme::LABEL),
-                        responsive(|space| self.strip(space.width)),
-                    ]
-                    .spacing(theme::MD)
-                    .align_y(Alignment::Center),
+                    container(
+                        row![
+                            // Labelled, the way Battle.net labels its own
+                            // band: the tiles are marks without words, and one
+                            // quiet word says what the row is before you know
+                            // them.
+                            muted("GAMES".to_owned(), theme::LABEL),
+                            responsive(|space| self.strip(space.width)),
+                        ]
+                        .spacing(theme::MD)
+                        .align_y(Alignment::Center),
+                    )
+                    .height(Length::Fixed(STRIP_HEIGHT))
+                    .padding([0.0, theme::MD])
+                    .style(theme::floating),
                 )
                 .width(Length::Fill)
-                .height(Length::Fixed(STRIP_HEIGHT))
-                .padding([0.0, theme::LG])
-                .style(theme::ribbon),
+                .padding([0.0, theme::LG]),
             );
         }
 
-        rows
-            .push(
-                container(Space::new().height(Length::Fixed(1.0)))
-                    .width(Length::Fill)
-                    .style(theme::ribbon_edge),
-            )
-            .into()
+        // The hairline only where the band card is not. On the dashboard the
+        // card is the separation; on a page without one, a header with no
+        // backdrop would otherwise run straight into the content.
+        match self.screen == Screen::Dashboard {
+            true => rows.push(Space::new().height(Length::Fixed(theme::SM))).into(),
+            false => rows
+                .push(
+                    container(Space::new().height(Length::Fixed(1.0)))
+                        .width(Length::Fill)
+                        .style(theme::ribbon_edge),
+                )
+                .into(),
+        }
     }
 
     /// The configured lines, in the order their first product appears.

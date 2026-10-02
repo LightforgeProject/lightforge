@@ -90,9 +90,9 @@ pub const LOGO: f32 = 170.0;
 ///
 /// Sized for a row of its own under the tabs rather than a seat in them: when
 /// the band shared the ribbon it had to stay near the height of a button, and
-/// it no longer does. A product's mark is how you pick a game, so it is worth
-/// more than a label's worth of room.
-pub const TILE: f32 = 48.0;
+/// it no longer does. Not as large as that freedom allows, though — the band
+/// is a card over the artwork now, and a card is sized by what it holds.
+pub const TILE: f32 = 40.0;
 
 /// What a manifest's logo height hint is allowed to ask for.
 ///
@@ -221,23 +221,17 @@ pub fn dialog(_theme: &Theme) -> container::Style {
     }
 }
 
-/// The header band, running edge to edge across the top of every screen.
+/// The hairline closing the header off from the content below it.
 ///
-/// The band is the point. On the dashboard the header sits directly on
-/// product artwork, and a title over a bright sky is unreadable — so it gets
-/// the same ground the action panel stands on, which also brackets the art
-/// between two matching strips instead of letting it run under loose text.
-pub fn ribbon(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(PANEL)),
-        ..container::Style::default()
-    }
-}
-
-/// The hairline closing the band off from the artwork below it.
+/// Only on the screens without the game band: on the dashboard the band's own
+/// card does the separating. Its own element because a [`Border`] applies to
+/// all four sides and only the bottom edge wants a line here.
 ///
-/// Its own element because a [`Border`] applies to all four sides and only
-/// the bottom edge wants a line here.
+/// (There was a `ribbon` here — an edge-to-edge panel behind the whole header.
+/// It went when the band moved out into a card of its own: the bar existed to
+/// give the band and the title a readable ground, and the card now carries its
+/// own. Worth remembering why it was there, though — the header sits directly
+/// on product artwork, and loose text over a bright sky is the thing to watch.)
 pub fn ribbon_edge(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(BORDER_OVER_ART)),
