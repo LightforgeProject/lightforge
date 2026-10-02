@@ -346,6 +346,14 @@ enum Message {
     UpdateAddons,
     AddonsFinished(Result<Box<lightforge_core::addons::Report>, String>),
     RemoveAddon(String, String),
+    /// First click on a Remove: arm it. The second one removes.
+    ArmRemoveAddon(String, String),
+    /// Think better of it.
+    CancelRemoveAddon,
+    /// Narrow the installed list.
+    AddonFilterChanged(String),
+    /// Show the product's AddOns folder in the file manager.
+    OpenAddonsDir,
     AddonRemoved(Result<Vec<String>, String>),
     OpenUrl(String),
 
@@ -760,6 +768,13 @@ struct Lightforge {
 
     addons: addonwork::Listing,
     token_input: String,
+    /// Narrows the installed list. Held here rather than derived, because it
+    /// is the one piece of the addon page the user types into and expects to
+    /// survive a refresh of the list underneath it.
+    addon_filter: String,
+    /// The addon whose Remove has been clicked once. Removing deletes files,
+    /// so the second click is the one that means it.
+    addon_remove_armed: Option<(String, String)>,
     addon_rx: Option<tokio::sync::watch::Receiver<addonwork::Progress>>,
     addon_sample: addonwork::Progress,
     addons_busy: bool,
@@ -878,6 +893,8 @@ impl Lightforge {
             env_value_input: String::new(),
             addons: addonwork::Listing::default(),
             token_input: String::new(),
+            addon_filter: String::new(),
+            addon_remove_armed: None,
             addon_rx: None,
             addon_sample: addonwork::Progress::default(),
             addons_busy: false,
@@ -2113,15 +2130,40 @@ impl Lightforge {
                 }
             }
 
-            Message::RemoveAddon(provider, id) => Task::perform(
-                addonwork::remove(
-                    self.layout.clone(),
-                    self.selected.code.clone(),
-                    provider,
-                    id,
-                ),
-                Message::AddonRemoved,
-            ),
+            Message::ArmRemoveAddon(provider, id) => {
+                self.addon_remove_armed = Some((provider, id));
+                Task::none()
+            }
+
+            Message::CancelRemoveAddon => {
+                self.addon_remove_armed = None;
+                Task::none()
+            }
+
+            Message::AddonFilterChanged(text) => {
+                self.addon_filter = text;
+                Task::none()
+            }
+
+            Message::OpenAddonsDir => {
+                if let Err(e) = tasks::open_path(self.addons.dir.clone()) {
+                    self.error = Some(e);
+                }
+                Task::none()
+            }
+
+            Message::RemoveAddon(provider, id) => {
+                self.addon_remove_armed = None;
+                Task::perform(
+                    addonwork::remove(
+                        self.layout.clone(),
+                        self.selected.code.clone(),
+                        provider,
+                        id,
+                    ),
+                    Message::AddonRemoved,
+                )
+            }
 
             Message::AddonRemoved(result) => {
                 match result {
@@ -4668,6 +4710,13 @@ impl Lightforge {
                 ]
                 .spacing(theme::SM)
                 .align_y(Alignment::Center),
+                // Only once there is enough of a list to lose something in.
+                // A filter box over four addons is furniture.
+                text_input("Filter installed addons…", &self.addon_filter)
+                    .on_input(Message::AddonFilterChanged)
+                    .style(theme::field)
+                    .size(theme::BODY)
+                    .padding(theme::SM),
             ]
             .spacing(theme::SM),
         )
@@ -4703,23 +4752,44 @@ impl Lightforge {
             ));
         }
 
-        for addon in &self.addons.rows {
-            // A package's other folders belong to the addon above them; showing
-            // BigWigs' eleven folders as eleven addons would be a lie.
-            if addon.child_of.is_some() {
-                continue;
-            }
+        // Ordered and filtered before drawing, rather than in the order the
+        // folder scan happened to return. Outdated first — that is the reason
+        // to open this page — then by name, so a list of forty is something
+        // you can read down instead of search through.
+        let needle = self.addon_filter.trim().to_lowercase();
+        let mut shown: Vec<&_> = self
+            .addons
+            .rows
+            .iter()
+            // A package's other folders belong to the addon above them;
+            // showing BigWigs' eleven folders as eleven addons would be a lie.
+            .filter(|addon| addon.child_of.is_none())
+            .filter(|addon| {
+                needle.is_empty()
+                    || addon.title.to_lowercase().contains(&needle)
+                    || addon.folder.to_lowercase().contains(&needle)
+            })
+            .collect();
+        shown.sort_by_cached_key(|addon| {
+            let outdated = self.update_status(addon).is_some_and(|s| s.has_update());
+            (!outdated, addon.title.to_lowercase())
+        });
+
+        if !needle.is_empty() && shown.is_empty() && !self.addons.rows.is_empty() {
+            body = body.push(empty(
+                &format!("No installed addon matches “{}”.", self.addon_filter.trim()),
+                "Clear the filter to see everything again.",
+            ));
+        }
+
+        for addon in shown {
             let extra = self
                 .addons
                 .rows
                 .iter()
                 .filter(|r| r.child_of.as_deref() == Some(addon.folder.as_str()))
                 .count();
-            let status = addon.managed.as_ref().and_then(|m| {
-                self.updates
-                    .iter()
-                    .find(|u| u.id == m.id && u.provider == m.provider)
-            });
+            let status = self.update_status(addon);
 
             let mut heading = row![text(addon.title.clone()).size(theme::BODY), mono(addon.version.clone())]
                 .spacing(theme::SM)
@@ -4748,19 +4818,84 @@ impl Lightforge {
 
             line = line.push(Space::new().width(Length::Fill));
             if let Some(managed) = &addon.managed {
-                line = line.push(
-                    secondary(
-                        "Remove",
-                        Message::RemoveAddon(managed.provider.clone(), managed.id.clone()),
-                    )
-                    .enabled(!self.addons_busy),
-                );
+                // One addon at a time. `install_one` fetches the newest file
+                // and does not pin it, which is exactly what updating is, so
+                // this is the same path "Update all" takes for every row.
+                if status.is_some_and(|s| s.has_update()) {
+                    line = line.push(
+                        action_button(
+                            "Update",
+                            theme::UPDATE,
+                            Message::InstallAddon(
+                                managed.provider.clone(),
+                                managed.id.clone(),
+                            ),
+                        )
+                        .enabled(!self.addons_busy),
+                    );
+                }
+
+                // Two clicks, because removing deletes the addon's folders off
+                // disk and there is no undo. The second button is the way out,
+                // so the destructive one is never the only thing to press.
+                let armed = self.addon_remove_armed.as_ref().is_some_and(|(p, id)| {
+                    p == &managed.provider && id == &managed.id
+                });
+                line = match armed {
+                    true => line
+                        .push(
+                            action_button(
+                                "Delete",
+                                theme::ERROR,
+                                Message::RemoveAddon(
+                                    managed.provider.clone(),
+                                    managed.id.clone(),
+                                ),
+                            )
+                            .enabled(!self.addons_busy),
+                        )
+                        .push(
+                            secondary("Keep", Message::CancelRemoveAddon).enabled(true),
+                        ),
+                    false => line.push(
+                        secondary(
+                            "Remove",
+                            Message::ArmRemoveAddon(
+                                managed.provider.clone(),
+                                managed.id.clone(),
+                            ),
+                        )
+                        .enabled(!self.addons_busy),
+                    ),
+                };
             }
             body = body.push(container(line).padding(theme::MD).style(theme::row));
         }
 
-        body = body.push(mono(self.addons.dir.display().to_string()));
+        // The folder, as somewhere to go rather than a string to read: the
+        // path was printed raw here, which is only useful to someone who was
+        // going to open it anyway.
+        body = body.push(
+            row![
+                secondary("Open folder", Message::OpenAddonsDir).enabled(true),
+                muted(self.addons.dir.display().to_string(), theme::CAPTION),
+            ]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center),
+        );
         body.into()
+    }
+
+    /// What the last update check said about one installed addon, if it is
+    /// managed and the check covered it.
+    fn update_status(
+        &self,
+        addon: &addonwork::Row,
+    ) -> Option<&lightforge_core::addons::manage::UpdateStatus> {
+        let managed = addon.managed.as_ref()?;
+        self.updates
+            .iter()
+            .find(|u| u.id == managed.id && u.provider == managed.provider)
     }
 
     fn addons_browse(&self) -> Element<'_, Message> {
