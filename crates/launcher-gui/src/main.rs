@@ -432,6 +432,8 @@ enum AddonTab {
     Mine,
     /// Search every provider and install.
     Browse,
+    /// Bring a collection over from WoWUp in one paste.
+    Import,
 }
 
 /// Which screen is showing.
@@ -775,6 +777,11 @@ struct Lightforge {
     /// The addon whose Remove has been clicked once. Removing deletes files,
     /// so the second click is the one that means it.
     addon_remove_armed: Option<(String, String)>,
+    /// Which tab the standing report belongs to. An import's failures are read
+    /// next to the import that caused them; an update's belong with the
+    /// addons. Same type, two meanings, so it is remembered rather than
+    /// guessed at from the report's contents.
+    addon_report_tab: AddonTab,
     addon_rx: Option<tokio::sync::watch::Receiver<addonwork::Progress>>,
     addon_sample: addonwork::Progress,
     addons_busy: bool,
@@ -895,6 +902,7 @@ impl Lightforge {
             token_input: String::new(),
             addon_filter: String::new(),
             addon_remove_armed: None,
+            addon_report_tab: AddonTab::Mine,
             addon_rx: None,
             addon_sample: addonwork::Progress::default(),
             addons_busy: false,
@@ -2079,6 +2087,7 @@ impl Lightforge {
                 self.addon_rx = Some(rx);
                 self.addons_busy = true;
                 self.addon_report = None;
+                self.addon_report_tab = AddonTab::Import;
                 self.error = None;
 
                 Task::perform(
@@ -2098,6 +2107,7 @@ impl Lightforge {
                 self.addon_rx = Some(rx);
                 self.addons_busy = true;
                 self.addon_report = None;
+                self.addon_report_tab = AddonTab::Mine;
                 self.error = None;
 
                 Task::perform(
@@ -3951,10 +3961,18 @@ impl Lightforge {
     }
 
     /// A screen that is not the dashboard: header, title, content.
+    /// A page with a title, optionally something at the far end of that line,
+    /// and a scrolling body.
+    ///
+    /// `aside` is for a fact about the page rather than a control — a count,
+    /// a state. It rides on the title's line because that is where the eye
+    /// already is, and because a figure like that under the title reads as a
+    /// subtitle explaining the page, which it is not.
     fn page<'a>(
         &'a self,
         title: &'a str,
         subtitle: Option<String>,
+        aside: Option<Element<'a, Message>>,
         content: Element<'a, Message>,
     ) -> Element<'a, Message> {
         let mut heading = column![text(title).size(theme::TITLE)].spacing(theme::XS);
@@ -3962,9 +3980,14 @@ impl Lightforge {
             heading = heading.push(muted(subtitle, theme::LABEL));
         }
 
+        let mut top = row![heading].align_y(Alignment::Center);
+        if let Some(aside) = aside {
+            top = top.push(Space::new().width(Length::Fill)).push(aside);
+        }
+
         column![
             self.header(),
-            column![heading, scrollable(content).height(Length::Fill)]
+            column![top, scrollable(content).height(Length::Fill)]
                 .spacing(theme::LG)
                 .padding(theme::LG),
         ]
@@ -4501,6 +4524,7 @@ impl Lightforge {
         self.page(
             "Game Optimizations",
             Some(format!("{} · applied when this product launches", self.selected.label)),
+            None,
             body.into(),
         )
     }
@@ -4629,7 +4653,8 @@ impl Lightforge {
 
         let mut body = column![row![
             tab("My Addons", AddonTab::Mine),
-            tab("Browse", AddonTab::Browse),
+            tab("Browse Addons", AddonTab::Browse),
+            tab("Import", AddonTab::Import),
         ]
         .spacing(theme::XS)]
         .spacing(theme::MD);
@@ -4652,80 +4677,84 @@ impl Lightforge {
         body = body.push(match self.addon_tab {
             AddonTab::Mine => self.addons_mine(),
             AddonTab::Browse => self.addons_browse(),
+            AddonTab::Import => self.addons_import(),
         });
 
-        self.page(
-            "Addons",
-            Some(format!(
-                "{} · {} installed, {} managed by Lightforge{}",
-                self.selected.label,
-                self.addons.rows.len(),
-                self.addons.managed,
+        // Parent folders only, so the count matches the rows you can see —
+        // BigWigs is one addon here and eleven folders on disk.
+        let installed = self.addons.rows.iter().filter(|r| r.child_of.is_none()).count();
+        let aside = column![
+            muted(
+                match installed {
+                    1 => "1 addon installed".to_owned(),
+                    n => format!("{n} addons installed"),
+                },
+                theme::LABEL,
+            ),
+            muted(
                 match self.addons.stale {
-                    0 => String::new(),
-                    n => format!(" · {n} recorded but missing from disk"),
-                }
-            )),
-            body.into(),
-        )
+                    0 => format!("{} managed by Lightforge", self.addons.managed),
+                    n => format!(
+                        "{} managed · {n} recorded but missing from disk",
+                        self.addons.managed
+                    ),
+                },
+                theme::CAPTION,
+            ),
+        ]
+        .spacing(theme::XS)
+        .align_x(Alignment::End);
+
+        self.page("Addons", None, Some(aside.into()), body.into())
     }
 
     fn addons_mine(&self) -> Element<'_, Message> {
         let outdated = self.updates.iter().filter(|u| u.has_update()).count();
 
         let toolbar = container(
-            column![
-                row![
-                    text_input("Paste a WoWUp import token…", &self.token_input)
-                        .on_input(Message::TokenChanged)
-                        .on_submit(Message::ImportToken)
-                        .style(theme::field)
-                        .size(theme::BODY)
-                        .padding(theme::SM),
-                    action_button("Import", theme::ACCENT, Message::ImportToken)
-                        .enabled(!self.addons_busy && !self.token_input.trim().is_empty()),
-                ]
-                .spacing(theme::SM)
-                .align_y(Alignment::Center),
-                row![
-                    secondary("Check for updates", Message::CheckAddonUpdates)
-                        .enabled(!self.addons_busy && self.addons.managed > 0),
-                    action_button(
-                        "Update all",
-                        match outdated {
-                            0 => theme::PAUSE,
-                            _ => theme::UPDATE,
-                        },
-                        Message::UpdateAddons,
-                    )
-                    .enabled(!self.addons_busy && self.addons.managed > 0),
-                    muted(
-                        match (self.updates.is_empty(), outdated) {
-                            (true, _) => String::new(),
-                            (false, 0) => "everything is up to date".to_owned(),
-                            (false, n) => format!("{n} have updates"),
-                        },
-                        theme::LABEL,
-                    ),
-                ]
-                .spacing(theme::SM)
-                .align_y(Alignment::Center),
-                // Only once there is enough of a list to lose something in.
-                // A filter box over four addons is furniture.
+            row![
+                // Sized, not filling: a filter box the width of the window
+                // looks like the page's search when it only narrows the list
+                // below it.
                 text_input("Filter installed addons…", &self.addon_filter)
                     .on_input(Message::AddonFilterChanged)
                     .style(theme::field)
                     .size(theme::BODY)
-                    .padding(theme::SM),
+                    .padding(theme::SM)
+                    .width(Length::Fixed(260.0)),
+                Space::new().width(Length::Fill),
+                muted(
+                    match (self.updates.is_empty(), outdated) {
+                        (true, _) => String::new(),
+                        (false, 0) => "everything is up to date".to_owned(),
+                        (false, n) => format!("{n} have updates"),
+                    },
+                    theme::LABEL,
+                ),
+                secondary("Check for updates", Message::CheckAddonUpdates)
+                    .enabled(!self.addons_busy && self.addons.managed > 0),
+                action_button(
+                    "Update all",
+                    match outdated {
+                        0 => theme::PAUSE,
+                        _ => theme::UPDATE,
+                    },
+                    Message::UpdateAddons,
+                )
+                .enabled(!self.addons_busy && self.addons.managed > 0),
+                secondary("Open folder", Message::OpenAddonsDir).enabled(true),
             ]
-            .spacing(theme::SM),
+            .spacing(theme::SM)
+            .align_y(Alignment::Center),
         )
         .padding(theme::MD)
         .style(theme::card);
 
         let mut body = column![toolbar].spacing(theme::SM);
 
-        if let Some(report) = &self.addon_report {
+        if let Some(report) =
+            self.addon_report.as_ref().filter(|_| self.addon_report_tab == AddonTab::Mine)
+        {
             for item in &report.unavailable {
                 let mut line = row![column![
                     text(item.name.clone()).size(theme::BODY),
@@ -4747,8 +4776,8 @@ impl Lightforge {
 
         if self.addons.rows.is_empty() {
             body = body.push(empty(
-                "Nothing installed for this product yet.",
-                "Search under Browse, or paste an import token above.",
+                "No addons installed.",
+                "Find one under Browse Addons, or bring your collection over under Import.",
             ));
         }
 
@@ -4872,17 +4901,9 @@ impl Lightforge {
             body = body.push(container(line).padding(theme::MD).style(theme::row));
         }
 
-        // The folder, as somewhere to go rather than a string to read: the
-        // path was printed raw here, which is only useful to someone who was
-        // going to open it anyway.
-        body = body.push(
-            row![
-                secondary("Open folder", Message::OpenAddonsDir).enabled(true),
-                muted(self.addons.dir.display().to_string(), theme::CAPTION),
-            ]
-            .spacing(theme::SM)
-            .align_y(Alignment::Center),
-        );
+        // Where all of this lands, kept quiet: "Open folder" in the toolbar is
+        // the way there, and this is for the times you need the path itself.
+        body = body.push(muted(self.addons.dir.display().to_string(), theme::CAPTION));
         body.into()
     }
 
@@ -4896,6 +4917,69 @@ impl Lightforge {
         self.updates
             .iter()
             .find(|u| u.id == managed.id && u.provider == managed.provider)
+    }
+
+    /// Bringing a collection over from WoWUp.
+    ///
+    /// Its own tab rather than a field above the list: it is something you do
+    /// once, when you arrive, and it had the most prominent box on a page
+    /// whose job is the addons you already have.
+    fn addons_import(&self) -> Element<'_, Message> {
+        let box_ = container(
+            column![
+                text("Import from WoWUp").size(theme::HEADING),
+                muted(
+                    "In WoWUp, export your addons and paste the token here. Everything it \
+                     names is fetched from its provider and tracked by Lightforge from then \
+                     on."
+                        .to_owned(),
+                    theme::LABEL,
+                ),
+                row![
+                    text_input("Paste a WoWUp import token…", &self.token_input)
+                        .on_input(Message::TokenChanged)
+                        .on_submit(Message::ImportToken)
+                        .style(theme::field)
+                        .size(theme::BODY)
+                        .padding(theme::SM),
+                    action_button("Import", theme::ACCENT, Message::ImportToken)
+                        .enabled(!self.addons_busy && !self.token_input.trim().is_empty()),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
+            ]
+            .spacing(theme::SM),
+        )
+        .padding(theme::MD)
+        .style(theme::card);
+
+        let mut body = column![box_].spacing(theme::SM);
+
+        // What an import could not resolve belongs with the import that could
+        // not resolve it, not scattered through the installed list.
+        if let Some(report) =
+            self.addon_report.as_ref().filter(|_| self.addon_report_tab == AddonTab::Import)
+        {
+            for item in &report.unavailable {
+                let mut line = row![column![
+                    text(item.name.clone()).size(theme::BODY),
+                    muted(item.reason.clone(), theme::CAPTION),
+                ]
+                .spacing(theme::XS)]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center);
+
+                line = line.push(Space::new().width(Length::Fill));
+                if let Some(url) = &item.website_url {
+                    line = line.push(
+                        secondary("Open page", Message::OpenUrl(url.clone())).enabled(true),
+                    );
+                }
+                body = body.push(container(line).padding(theme::MD).style(theme::row));
+            }
+        }
+
+        body.into()
     }
 
     fn addons_browse(&self) -> Element<'_, Message> {
