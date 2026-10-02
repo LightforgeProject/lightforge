@@ -3210,38 +3210,6 @@ impl Lightforge {
             bar = bar.push(Space::new().width(Length::Fixed(theme::SM)));
         }
 
-        // App-level, not per-product: everything outside the WoW family is a
-        // hand-off into Battle.net, so it sits with the navigation rather
-        // than on a panel that describes one product.
-        // The mark comes out of the prefix rather than the binary: see
-        // [`Layout::battle_net_icon`]. Before Battle.net is installed there is
-        // none, and the button is the word alone.
-        let mut face = row![].spacing(theme::SM).align_y(Alignment::Center);
-        if let Some(path) = &self.bnet_icon {
-            face = face.push(
-                image(image::Handle::from_path(path))
-                    .content_fit(ContentFit::Contain)
-                    .width(Length::Fixed(BAND_GLYPH))
-                    .height(Length::Fixed(BAND_GLYPH)),
-            );
-        }
-        let face = face.push(text("Battle.net").size(theme::LABEL));
-
-        bar = bar.push(
-            tooltip(
-                button(face)
-                    .padding([theme::SM, theme::MD])
-                    .style(theme::ghost)
-                    .on_press_maybe((!self.busy).then_some(Message::OpenBattleNet)),
-                container(
-                    text("Open Battle.net for other Blizzard titles".to_owned())
-                        .size(theme::LABEL),
-                )
-                .padding([theme::XS, theme::SM])
-                .style(theme::floating),
-                tooltip::Position::Bottom,
-            ),
-        );
         // No backdrop behind the tabs. The wordmark, the arrows and the pages
         // are chrome, and chrome over artwork needs no bar of its own to be
         // legible — what made the old ribbon necessary was the band sharing
@@ -3267,10 +3235,18 @@ impl Lightforge {
                             // them.
                             muted("GAMES".to_owned(), theme::LABEL),
                             responsive(|space| self.strip(space.width)),
+                            self.battle_net_button(),
                         ]
                         .spacing(theme::MD)
                         .align_y(Alignment::Center),
                     )
+                    // Centred, not merely given the height: a container aligns
+                    // its content to the top by default, so the row's slack
+                    // all fell below the tiles and they sat against the card's
+                    // upper edge. The row's own `align_y` cannot fix that — it
+                    // centres the tiles within the row, which is exactly as
+                    // tall as they are.
+                    .align_y(Alignment::Center)
                     .height(Length::Fixed(STRIP_HEIGHT))
                     .padding([0.0, theme::MD])
                     .style(theme::floating),
@@ -3602,7 +3578,13 @@ impl Lightforge {
         // width is not the band's to spend.
         let (shown, hidden) = divide_strip(&widths, selected, room - BAND_BUTTON - theme::SM);
 
-        let mut band = row![].align_y(Alignment::Center).spacing(theme::SM);
+        // Fills the height it is given, rather than shrinking to the tiles.
+        // `responsive` lays its content out at the top of the box, so a band
+        // that is only as tall as its tiles leaves all of the card's slack
+        // underneath them and they ride high in it. Filling first, then
+        // centring, puts the slack on both sides.
+        let mut band =
+            row![].height(Length::Fill).align_y(Alignment::Center).spacing(theme::SM);
         for id in shown {
             band = band.push(self.tile(&lines[id]));
         }
@@ -3652,6 +3634,42 @@ impl Lightforge {
             .align_left(),
         );
         band.into()
+    }
+
+    /// The hand-off into Battle.net, at the right-hand end of the game card.
+    ///
+    /// App-level, not per-product: everything outside the WoW family is a
+    /// hand-off, so it belongs with the games rather than on a panel that
+    /// describes one of them — and the card is where games live now.
+    ///
+    /// The mark comes out of the prefix rather than the binary: see
+    /// [`Layout::battle_net_icon`]. Before Battle.net is installed there is
+    /// none, and the button is the word alone.
+    fn battle_net_button(&self) -> Element<'_, Message> {
+        let mut face = row![].spacing(theme::SM).align_y(Alignment::Center);
+        if let Some(path) = &self.bnet_icon {
+            face = face.push(
+                image(image::Handle::from_path(path))
+                    .content_fit(ContentFit::Contain)
+                    .width(Length::Fixed(BAND_GLYPH))
+                    .height(Length::Fixed(BAND_GLYPH)),
+            );
+        }
+        let face = face.push(text("Battle.net").size(theme::LABEL));
+
+        tooltip(
+            button(face)
+                .padding([theme::SM, theme::MD])
+                .style(theme::ghost)
+                .on_press_maybe((!self.busy).then_some(Message::OpenBattleNet)),
+            container(
+                text("Open Battle.net for other Blizzard titles".to_owned()).size(theme::LABEL),
+            )
+            .padding([theme::XS, theme::SM])
+            .style(theme::floating),
+            tooltip::Position::Bottom,
+        )
+        .into()
     }
 
     /// Whether any dismissable panel is showing.
