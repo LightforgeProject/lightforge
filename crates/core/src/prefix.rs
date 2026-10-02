@@ -370,6 +370,10 @@ pub fn provision(runner: &ProtonRunner, layout: &Layout) -> Result<PrefixStatus,
     runner.wineboot_update()?;
     runner.wineserver_kill()?;
     ensure_link(&layout.wow_symlink(), &layout.wow_install())?;
+    // Both, and for different reasons: Battle.net finds the install by the
+    // `C:` path it recorded, while the game's in-game shop only renders when
+    // the install is a drive of its own — see [`Layout::wow_drive`].
+    ensure_link(&layout.wow_drive(), &layout.wow_install())?;
     Ok(PrefixStatus::inspect(layout))
 }
 
@@ -544,6 +548,28 @@ mod tests {
         assert!(matches!(ensure_link(&full, &target), Err(PrefixError::LinkOccupied(_))));
         // The refusal must not have disturbed what was there.
         assert!(full.join("Data").is_dir());
+    }
+
+    /// The drive is what makes the in-game shop render, so it is worth a test
+    /// of its own rather than being assumed from `provision` — which cannot be
+    /// tested here, since it runs Proton.
+    #[test]
+    fn the_wow_drive_is_a_dosdevices_link_to_the_install() {
+        let dir = scratch("wow-drive");
+        let layout = Layout::with_root(&dir);
+
+        ensure_link(&layout.wow_drive(), &layout.wow_install()).unwrap();
+
+        let link = layout.wow_drive();
+        assert_eq!(link.file_name().unwrap(), "d:", "Wine reads the letter in lowercase");
+        assert_eq!(link.parent().unwrap().file_name().unwrap(), "dosdevices");
+        assert_eq!(std::fs::read_link(&link).unwrap(), layout.wow_install());
+
+        // Idempotent: provisioning runs on every launch.
+        assert_eq!(
+            ensure_link(&layout.wow_drive(), &layout.wow_install()).unwrap(),
+            LinkState::Correct,
+        );
     }
 
     #[test]

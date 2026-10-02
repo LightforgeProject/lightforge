@@ -579,7 +579,15 @@ pub async fn preflight(
 /// dead button.
 pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        let flavor = layout.wow_symlink().join(&*code.install_dir());
+        // The install's native path, *not* the `C:\Program Files (x86)`
+        // symlink — this is half of what makes the in-game shop work, and the
+        // other half is [`Layout::wow_drive`]. Wine resolves a Unix path to
+        // the most specific drive mapped over it, so launching from here puts
+        // the game on `D:`; launching through the symlink would keep it on
+        // `C:` and the shop's browser would lose its GPU child process the way
+        // it always did. Verified end to end 2026-10-02: a full checkout, from
+        // a direct launch, with no Battle.net session.
+        let flavor = layout.wow_install().join(&*code.install_dir());
         let exe = lightforge_core::paths::game_executable(&flavor, &code);
         if !exe.is_file() {
             return Err(format!("no game at {}", exe.display()));

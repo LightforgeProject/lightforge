@@ -31,8 +31,13 @@ const WOW_DIR: &str = "World of Warcraft";
 /// Not cosmetic: `.product.db` records this string, and Battle.net matches the
 /// install by it. It must be the path the symlink presents, not the Linux one.
 pub const WINDOWS_WOW_PATH: &str = "C:/Program Files (x86)/World of Warcraft";
-/// Windows-side parent that CEF expects the game to live under.
+/// Windows-side parent the install is presented under, for Battle.net's sake.
 const WINDOWS_PROGRAM_FILES: &str = "Program Files (x86)";
+
+/// `dosdevices` entry giving the WoW install a drive of its own — see
+/// [`Layout::wow_drive`]. Lowercase because that is the spelling Wine reads;
+/// it presents the drive as `D:`.
+const WOW_DRIVE_LETTER: &str = "d:";
 
 /// Resolved filesystem layout, rooted at the Blizzard directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +94,19 @@ impl Layout {
     /// `prefix/drive_c`
     pub fn drive_c(&self) -> PathBuf {
         self.prefix().join("drive_c")
+    }
+
+    /// The WoW install's own Windows drive letter, as a `dosdevices` entry.
+    ///
+    /// Not cosmetic, and not interchangeable with [`Layout::wow_symlink`]: the
+    /// game's embedded browser — `Utils/BlizzardBrowser.exe`, the CEF that
+    /// draws the in-game shop — fails to start its GPU child unless the
+    /// install is a drive of its own. Reached through `C:` or through the
+    /// catch-all `Z:`, that child dies three times and Chromium gives up,
+    /// which is the grey box the shop had instead of a page. Measured
+    /// 2026-10-02 against `Logs/BlizzardBrowser/CEF-*.log`.
+    pub fn wow_drive(&self) -> PathBuf {
+        self.prefix().join("dosdevices").join(WOW_DRIVE_LETTER)
     }
 
     /// `drive_c/Program Files (x86)`
