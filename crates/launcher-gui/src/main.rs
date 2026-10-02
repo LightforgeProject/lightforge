@@ -95,6 +95,40 @@ fn plus_icon() -> image::Handle {
     PLUS.get_or_init(|| image::Handle::from_bytes(PLUS_ICON)).clone()
 }
 
+/// The rest of the bundled marks: the app menu's column, the history arrows
+/// and the two social squares.
+///
+/// Spelled as a macro because each one is the same four lines as [`gear_icon`]
+/// above — bytes in, one cached handle out — and ten copies of it would bury
+/// the three that have something of their own to say.
+macro_rules! bundled_icons {
+    ($($name:ident => $file:literal),+ $(,)?) => {
+        $(
+            fn $name() -> image::Handle {
+                static HANDLE: OnceLock<image::Handle> = OnceLock::new();
+                HANDLE
+                    .get_or_init(|| {
+                        image::Handle::from_bytes(
+                            include_bytes!(concat!("../assets/", $file)).as_slice(),
+                        )
+                    })
+                    .clone()
+            }
+        )+
+    };
+}
+
+bundled_icons! {
+    back_icon => "arrow-left.png",
+    forward_icon => "arrow-right.png",
+    updates_icon => "file-text.png",
+    bug_icon => "bug.png",
+    feedback_icon => "message-square-quote.png",
+    exit_icon => "power.png",
+    discord_icon => "discord.png",
+    x_icon => "x.png",
+}
+
 /// Opening size, and the floor for resizing — deliberately the same number.
 ///
 /// The header sets the width: the title, the product picker (whose longest
@@ -228,6 +262,15 @@ enum Message {
     OptionalContent(String, bool),
     /// The cog beside the primary button.
     ToggleGear,
+    /// The menu under the Lightforge wordmark.
+    ToggleAppMenu,
+    /// Back and forward through the pages visited this session.
+    GoBack,
+    GoForward,
+    /// Open one of the project's own links in the browser.
+    OpenLink(&'static str),
+    /// Quit.
+    Exit,
     /// A click that no widget consumed — close whatever is open, the way
     /// every other context menu on the desktop behaves.
     Dismiss,
@@ -391,6 +434,9 @@ enum Screen {
     /// tab is in the ribbon so the shape of the app is settled, and what fills
     /// it — Wowhead, sales, patch notes — is still being decided.
     News,
+    /// Lightforge's own release notes. Placeholder, like [`Screen::News`], and
+    /// separate from it: what Lightforge changed is not what Blizzard did.
+    Updates,
     /// Setup lives here too, as the first card.
     Settings,
     Addons,
@@ -608,6 +654,16 @@ struct Lightforge {
     browse_open: bool,
     /// The band's overflow menu — only ever reachable when something is in it.
     strip_open: bool,
+    /// Whether the menu under the wordmark is open.
+    app_menu_open: bool,
+    /// Pages left behind, oldest first, and pages stepped back out of.
+    ///
+    /// Two stacks rather than an index into one list, because that is exactly
+    /// what back and forward are: going back moves the current page onto
+    /// `forward`, going forward moves it onto `visited`, and visiting a new
+    /// page from anywhere clears `forward` — the branch you did not take.
+    visited: Vec<Screen>,
+    forward: Vec<Screen>,
     /// Whether the explanatory prose under the controls is drawn.
     ///
     /// Off for the people who use Lightforge: the interface is meant to be
@@ -774,6 +830,9 @@ impl Lightforge {
             manager_open: false,
             browse_open: false,
             strip_open: false,
+            app_menu_open: false,
+            visited: Vec::new(),
+            forward: Vec::new(),
             hints: false,
             bnet_icon,
             gear_open: false,
@@ -1688,10 +1747,50 @@ impl Lightforge {
             }
 
             Message::Show(screen) => {
-                self.screen = screen;
+                // Asking for the page you are on is not a history step, or
+                // back would walk through a page repeated however many times
+                // its tab was clicked.
+                if screen != self.screen {
+                    self.visited.push(self.screen);
+                    self.forward.clear();
+                    self.screen = screen;
+                }
                 self.error = None;
                 Task::none()
             }
+
+            Message::GoBack => {
+                if let Some(screen) = self.visited.pop() {
+                    self.forward.push(self.screen);
+                    self.screen = screen;
+                    self.error = None;
+                }
+                Task::none()
+            }
+
+            Message::GoForward => {
+                if let Some(screen) = self.forward.pop() {
+                    self.visited.push(self.screen);
+                    self.screen = screen;
+                    self.error = None;
+                }
+                Task::none()
+            }
+
+            Message::ToggleAppMenu => {
+                self.app_menu_open = !self.app_menu_open;
+                Task::none()
+            }
+
+            Message::OpenLink(url) => {
+                if let Err(e) = tasks::open_url(url) {
+                    self.error = Some(e);
+                }
+                self.app_menu_open = false;
+                Task::none()
+            }
+
+            Message::Exit => iced::exit(),
 
             Message::SetupStatus(status) => {
                 let status = status.map(|boxed| *boxed);
@@ -2376,6 +2475,7 @@ impl Lightforge {
                 self.manager_open = false;
                 self.browse_open = false;
                 self.strip_open = false;
+                self.app_menu_open = false;
                 Task::none()
             }
 
@@ -2935,6 +3035,7 @@ impl Lightforge {
         let screen = match self.screen {
             Screen::Dashboard => self.dashboard(),
             Screen::News => self.news_screen(),
+            Screen::Updates => self.updates_screen(),
             Screen::Settings => self.settings(),
             Screen::Addons => self.addons_screen(),
             Screen::Tweaks => self.tweaks_screen(),
@@ -3024,18 +3125,66 @@ impl Lightforge {
             }
         };
 
+        // The wordmark is the app menu's button, so it carries a chevron the
+        // way every other menu in the app does.
+        let wordmark = button(
+            row![
+                text("LIGHTFORGE").size(theme::TITLE),
+                image(chevron_icon())
+                    .width(Length::Fixed(BAND_GLYPH * 0.75))
+                    .height(Length::Fixed(BAND_GLYPH * 0.75)),
+            ]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center),
+        )
+        .padding([theme::XS, theme::SM])
+        .style(match self.app_menu_open {
+            true => theme::selected,
+            false => theme::ghost,
+        })
+        .on_press(Message::ToggleAppMenu);
+
         // Title, then the pages, then everything that is not a page pushed to
         // the far end. The band is no longer in this row at all — it has one
         // of its own below, so the tiles answer "which game" where the tabs
         // answer "which page", instead of the two sharing a line.
-        let mut bar = row![text("LIGHTFORGE").size(theme::TITLE)]
-            .align_y(Alignment::Center)
-            .spacing(theme::SM);
+        let mut bar = row![popover::popover(
+            wordmark,
+            self.app_menu_open.then(|| {
+                Element::from(mouse_area(self.app_menu()).on_press(Message::MenuClick))
+            }),
+        )
+        .align_left()]
+        .align_y(Alignment::Center)
+        .spacing(theme::SM);
 
-        bar = bar.push(Space::new().width(Length::Fixed(theme::MD)));
+        // Back and forward, between the wordmark and the tabs as in any
+        // browser. Both are drawn always and lit only when there is somewhere
+        // to go: a control that appears and disappears moves the tabs beside
+        // it, and arrows that vanish are harder to find than arrows that are
+        // simply dim.
+        let step = |icon: image::Handle, message: Message, enabled: bool| {
+            button(
+                image(icon)
+                    .width(Length::Fixed(BAND_GLYPH * 0.85))
+                    .height(Length::Fixed(BAND_GLYPH * 0.85))
+                    .opacity(match enabled {
+                        true => 1.0_f32,
+                        false => DIMMED,
+                    }),
+            )
+            .padding([theme::XS, theme::SM])
+            .style(theme::ghost)
+            .on_press_maybe(enabled.then_some(message))
+        };
+
+        bar = bar.push(Space::new().width(Length::Fixed(theme::SM)));
+        bar = bar.push(step(back_icon(), Message::GoBack, !self.visited.is_empty()));
+        bar = bar.push(step(forward_icon(), Message::GoForward, !self.forward.is_empty()));
+
+        bar = bar.push(Space::new().width(Length::Fixed(theme::SM)));
         bar = bar.push(nav("Play", Screen::Dashboard));
         bar = bar.push(nav("News", Screen::News));
-        bar = bar.push(nav("Settings", Screen::Settings));
         bar = bar.push(Space::new().width(Length::Fill));
 
         // Only while something is in flight. An idle launcher has no
@@ -3105,11 +3254,21 @@ impl Lightforge {
         // decides how many tiles fit before the overflow takes the rest.
         if self.screen == Screen::Dashboard {
             rows = rows.push(
-                container(responsive(|space| self.strip(space.width)))
-                    .width(Length::Fill)
-                    .height(Length::Fixed(STRIP_HEIGHT))
-                    .padding([0.0, theme::LG])
-                    .style(theme::ribbon),
+                container(
+                    row![
+                        // Labelled, the way Battle.net labels its own band:
+                        // the tiles are marks without words, and one quiet
+                        // word says what the row is before you know them.
+                        muted("GAMES".to_owned(), theme::LABEL),
+                        responsive(|space| self.strip(space.width)),
+                    ]
+                    .spacing(theme::MD)
+                    .align_y(Alignment::Center),
+                )
+                .width(Length::Fill)
+                .height(Length::Fixed(STRIP_HEIGHT))
+                .padding([0.0, theme::LG])
+                .style(theme::ribbon),
             );
         }
 
@@ -3481,6 +3640,72 @@ impl Lightforge {
             .align_left(),
         );
         band.into()
+    }
+
+    /// The menu under the wordmark: the app's own business, as opposed to the
+    /// band's (which game) and the tabs' (which page).
+    ///
+    /// Settings lives here rather than in the ribbon because it is somewhere
+    /// you go rarely and deliberately, unlike Play and News.
+    fn app_menu(&self) -> Element<'_, Message> {
+        // No destination yet means no press and a dimmed face: the entry says
+        // what is coming without pretending it is here.
+        let entry = |icon: image::Handle, label: &'static str, message: Option<Message>| {
+            let live = message.is_some();
+            let face = row![
+                image(icon)
+                    .width(Length::Fixed(MENU_GLYPH))
+                    .height(Length::Fixed(MENU_GLYPH))
+                    .opacity(match live {
+                        true => 1.0_f32,
+                        false => DIMMED,
+                    }),
+                match live {
+                    true => text(label).size(theme::BODY),
+                    false => muted(label.to_owned(), theme::BODY),
+                },
+            ]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center);
+            button(face.width(Length::Fill))
+                .padding([theme::XS, theme::SM])
+                .style(theme::ghost)
+                .on_press_maybe(message)
+        };
+
+        let square = |icon: image::Handle, url: Option<&'static str>| {
+            button(
+                image(icon)
+                    .width(Length::Fixed(MENU_GLYPH))
+                    .height(Length::Fixed(MENU_GLYPH))
+                    .opacity(match url {
+                        Some(_) => 1.0_f32,
+                        None => DIMMED,
+                    }),
+            )
+            .padding(theme::SM)
+            .style(theme::ghost)
+            .on_press_maybe(url.map(Message::OpenLink))
+        };
+
+        let rows = column![
+            entry(gear_icon(), "Settings", Some(Message::Show(Screen::Settings))),
+            entry(updates_icon(), "Lightforge Updates", Some(Message::Show(Screen::Updates))),
+            container(Space::new().height(Length::Fixed(1.0)))
+                .width(Length::Fill)
+                .style(theme::divider),
+            entry(bug_icon(), "Report a Bug", BUG_URL.map(Message::OpenLink)),
+            entry(feedback_icon(), "Send Feedback", FEEDBACK_URL.map(Message::OpenLink)),
+            container(Space::new().height(Length::Fixed(1.0)))
+                .width(Length::Fill)
+                .style(theme::divider),
+            entry(exit_icon(), "Exit", Some(Message::Exit)),
+            row![square(discord_icon(), DISCORD_URL), square(x_icon(), X_URL)].spacing(theme::XS),
+        ]
+        .spacing(theme::XS)
+        .width(Length::Fixed(240.0));
+
+        container(rows).padding(theme::SM).style(theme::floating).into()
     }
 
     /// The games the band had no room for.
@@ -4211,6 +4436,26 @@ impl Lightforge {
                 text("News").size(theme::DISPLAY),
                 muted(
                     "Patch notes, sales and Wowhead headlines will land here.".to_owned(),
+                    theme::BODY,
+                ),
+            ]
+            .spacing(theme::SM)
+            .align_x(Alignment::Center),
+        )
+        .center(Length::Fill)
+        .into()
+    }
+
+    /// Lightforge's own release notes — nothing here yet either.
+    fn updates_screen(&self) -> Element<'_, Message> {
+        container(
+            column![
+                text("Lightforge Updates").size(theme::DISPLAY),
+                muted(
+                    format!(
+                        "You are running {}. Release notes will appear here.",
+                        env!("CARGO_PKG_VERSION"),
+                    ),
                     theme::BODY,
                 ),
             ]
@@ -5319,6 +5564,23 @@ const STRIP_HEIGHT: f32 = theme::TILE + theme::SM * 2.0;
 /// Width of a band button, pinned so the band's arithmetic is exact rather
 /// than an estimate of how wide a glyph renders.
 const BAND_BUTTON: f32 = 48.0;
+
+/// Mark beside a label in the app menu, and the social squares' mark.
+const MENU_GLYPH: f32 = 16.0;
+
+/// How far a control that has nowhere to go is faded: visibly present, plainly
+/// not available. One value so every dimmed thing dims by the same amount.
+const DIMMED: f32 = 0.35;
+
+/// Where the app menu's links point.
+///
+/// `None` is a destination that does not exist yet, and the entry draws itself
+/// dimmed and unclickable rather than opening a browser on nothing. Fill one
+/// in and that entry comes alive — no other change is needed.
+const BUG_URL: Option<&str> = None;
+const FEEDBACK_URL: Option<&str> = None;
+const DISCORD_URL: Option<&str> = None;
+const X_URL: Option<&str> = None;
 
 /// A product's mark in the Add a game list.
 ///
