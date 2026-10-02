@@ -87,7 +87,12 @@ pub const LOGO: f32 = 170.0;
 
 /// Edge of a product tile in the header's product bar. Square, so this is
 /// both dimensions; the art inside is drawn to fit.
-pub const TILE: f32 = 38.0;
+///
+/// Sized for a row of its own under the tabs rather than a seat in them: when
+/// the band shared the ribbon it had to stay near the height of a button, and
+/// it no longer does. A product's mark is how you pick a game, so it is worth
+/// more than a label's worth of room.
+pub const TILE: f32 = 48.0;
 
 /// What a manifest's logo height hint is allowed to ask for.
 ///

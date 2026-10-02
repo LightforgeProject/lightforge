@@ -387,6 +387,10 @@ enum AddonTab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Screen {
     Dashboard,
+    /// Live news, once there is something to show. A placeholder for now: the
+    /// tab is in the ribbon so the shape of the app is settled, and what fills
+    /// it — Wowhead, sales, patch notes — is still being decided.
+    News,
     /// Setup lives here too, as the first card.
     Settings,
     Addons,
@@ -2930,6 +2934,7 @@ impl Lightforge {
         }
         let screen = match self.screen {
             Screen::Dashboard => self.dashboard(),
+            Screen::News => self.news_screen(),
             Screen::Settings => self.settings(),
             Screen::Addons => self.addons_screen(),
             Screen::Tweaks => self.tweaks_screen(),
@@ -3019,26 +3024,19 @@ impl Lightforge {
             }
         };
 
+        // Title, then the pages, then everything that is not a page pushed to
+        // the far end. The band is no longer in this row at all — it has one
+        // of its own below, so the tiles answer "which game" where the tabs
+        // answer "which page", instead of the two sharing a line.
         let mut bar = row![text("LIGHTFORGE").size(theme::TITLE)]
             .align_y(Alignment::Center)
             .spacing(theme::SM);
 
-        if self.screen == Screen::Dashboard {
-            bar = bar.push(Space::new().width(Length::Fixed(theme::MD)));
-
-            // The band takes the row's slack, which is also what pushes the
-            // navigation right — the spacer below is for the screens that
-            // have no band. Its height is pinned because a widget that fills
-            // its cross axis is given the height of its *siblings*, and the
-            // tiles are taller than the buttons beside them.
-            bar = bar.push(
-                container(responsive(|space| self.strip(space.width)))
-                    .width(Length::Fill)
-                    .height(Length::Fixed(STRIP_HEIGHT)),
-            );
-        } else {
-            bar = bar.push(Space::new().width(Length::Fill));
-        }
+        bar = bar.push(Space::new().width(Length::Fixed(theme::MD)));
+        bar = bar.push(nav("Play", Screen::Dashboard));
+        bar = bar.push(nav("News", Screen::News));
+        bar = bar.push(nav("Settings", Screen::Settings));
+        bar = bar.push(Space::new().width(Length::Fill));
 
         // Only while something is in flight. An idle launcher has no
         // downloads to manage, and a permanent button that opens an empty
@@ -3095,18 +3093,33 @@ impl Lightforge {
                 tooltip::Position::Bottom,
             ),
         );
-        bar = bar.push(Space::new().width(Length::Fixed(theme::SM)));
+        let mut rows = column![container(bar)
+            .width(Length::Fill)
+            .padding([theme::SM, theme::LG])
+            .style(theme::ribbon)];
 
-        bar = bar.push(nav("Play", Screen::Dashboard));
-        bar = bar.push(nav("Settings", Screen::Settings));
+        // The band's own row, under the tabs and only where there are games to
+        // show. It keeps the ribbon's background so the two read as one header
+        // rather than a strip laid on the page, and spans the full width —
+        // `responsive` hands `strip` the room it actually has, which is what
+        // decides how many tiles fit before the overflow takes the rest.
+        if self.screen == Screen::Dashboard {
+            rows = rows.push(
+                container(responsive(|space| self.strip(space.width)))
+                    .width(Length::Fill)
+                    .height(Length::Fixed(STRIP_HEIGHT))
+                    .padding([0.0, theme::LG])
+                    .style(theme::ribbon),
+            );
+        }
 
-        column![
-            container(bar).width(Length::Fill).padding([theme::SM, theme::LG]).style(theme::ribbon),
-            container(Space::new().height(Length::Fixed(1.0)))
-                .width(Length::Fill)
-                .style(theme::ribbon_edge),
-        ]
-        .into()
+        rows
+            .push(
+                container(Space::new().height(Length::Fixed(1.0)))
+                    .width(Length::Fill)
+                    .style(theme::ribbon_edge),
+            )
+            .into()
     }
 
     /// The configured lines, in the order their first product appears.
@@ -4184,6 +4197,28 @@ impl Lightforge {
         .style(theme::floating);
 
         mouse_area(menu).on_press(Message::MenuClick).into()
+    }
+
+    /// News — nothing to report yet.
+    ///
+    /// A placeholder on purpose. The tab earns its place in the ribbon now so
+    /// the app's shape is settled, and it says plainly that it is empty rather
+    /// than pretending to load something: an empty page that looks broken is
+    /// worse than one that explains itself.
+    fn news_screen(&self) -> Element<'_, Message> {
+        container(
+            column![
+                text("News").size(theme::DISPLAY),
+                muted(
+                    "Patch notes, sales and Wowhead headlines will land here.".to_owned(),
+                    theme::BODY,
+                ),
+            ]
+            .spacing(theme::SM)
+            .align_x(Alignment::Center),
+        )
+        .center(Length::Fill)
+        .into()
     }
 
     /// Addon management: what is installed, and what could be.
@@ -5272,12 +5307,14 @@ fn hints_chord(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) 
         && modifiers.shift()
 }
 
-/// Height of the game band.
+/// Height of the game band's own row.
 ///
 /// Pinned rather than left to the tiles: the band fills its cross axis, and a
 /// widget that does that is handed the height of its siblings — the buttons,
-/// which are shorter than a tile.
-const STRIP_HEIGHT: f32 = theme::TILE + theme::XS * 2.0;
+/// which are shorter than a tile. The padding is [`theme::SM`] rather than
+/// `XS` now that the row is the band's alone, so the tiles sit in it instead
+/// of filling it edge to edge.
+const STRIP_HEIGHT: f32 = theme::TILE + theme::SM * 2.0;
 
 /// Width of a band button, pinned so the band's arithmetic is exact rather
 /// than an estimate of how wide a glyph renders.
