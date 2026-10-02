@@ -288,6 +288,16 @@ where
             shell,
             &bounds,
         );
+
+        // The panel owns its rectangle, including the gaps between its rows.
+        // Without this a pointer event that no entry wanted — a click in the
+        // spacing, a scroll — carried on to whatever the panel is covering,
+        // so clicking between two menu entries pressed the game tile beneath.
+        // The panel has already had the event by this point; capturing only
+        // stops it travelling further.
+        if matches!(event, Event::Mouse(_) | Event::Touch(_)) && cursor.is_over(bounds) {
+            shell.capture_event();
+        }
     }
 
     fn mouse_interaction(
@@ -299,7 +309,18 @@ where
         // 0.14 dropped the viewport argument here. The panel is laid out
         // against the whole window, so its own bounds are its viewport.
         let bounds = layout.bounds();
-        self.panel.as_widget().mouse_interaction(self.tree, layout, cursor, &bounds, renderer)
+        let interaction =
+            self.panel.as_widget().mouse_interaction(self.tree, layout, cursor, &bounds, renderer);
+
+        // What this answers decides more than the cursor's shape: iced hands
+        // the page beneath an unavailable cursor only while an overlay reports
+        // *some* interaction (`iced_runtime`'s `user_interface`). Reporting
+        // `None` anywhere over the panel would leave the widgets under it
+        // live — hovering and highlighting through a menu that covers them.
+        match (interaction, cursor.is_over(bounds)) {
+            (mouse::Interaction::None, true) => mouse::Interaction::Idle,
+            (interaction, _) => interaction,
+        }
     }
 
     fn operate(

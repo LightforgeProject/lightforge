@@ -1272,7 +1272,7 @@ impl Lightforge {
             Message::LineSelected(line) => {
                 // Picking from the overflow menu closes it: the tile is in the
                 // band now, and the menu is answering a question already asked.
-                self.strip_open = false;
+                self.close_panels();
                 self.select_line(&line)
             }
 
@@ -1755,6 +1755,9 @@ impl Lightforge {
                     self.forward.clear();
                     self.screen = screen;
                 }
+                // Including when the page did not change: the menu entry was
+                // still a click, and it has had its answer.
+                self.close_panels();
                 self.error = None;
                 Task::none()
             }
@@ -1786,7 +1789,7 @@ impl Lightforge {
                 if let Err(e) = tasks::open_url(url) {
                     self.error = Some(e);
                 }
-                self.app_menu_open = false;
+                self.close_panels();
                 Task::none()
             }
 
@@ -2471,11 +2474,7 @@ impl Lightforge {
             }
 
             Message::Dismiss => {
-                self.gear_open = false;
-                self.manager_open = false;
-                self.browse_open = false;
-                self.strip_open = false;
-                self.app_menu_open = false;
+                self.close_panels();
                 Task::none()
             }
 
@@ -3098,7 +3097,7 @@ impl Lightforge {
         // hands the event to its child first and only fires when the child
         // ignored it, so a button still does its own job rather than being
         // swallowed by the dismissal.
-        let screen = match self.gear_open || self.manager_open || self.browse_open || self.strip_open {
+        let screen = match self.panel_open() {
             true => Element::from(mouse_area(screen).on_press(Message::Dismiss)),
             false => screen,
         };
@@ -3150,9 +3149,10 @@ impl Lightforge {
         // answer "which page", instead of the two sharing a line.
         let mut bar = row![popover::popover(
             wordmark,
-            self.app_menu_open.then(|| {
-                Element::from(mouse_area(self.app_menu()).on_press(Message::MenuClick))
-            }),
+            // No `mouse_area` guard here: a popover captures the pointer over
+            // its own bounds, which is what that guard is for on the stacked
+            // panels — see [`popover`].
+            self.app_menu_open.then(|| self.app_menu()),
         )
         .align_left()]
         .align_y(Alignment::Center)
@@ -3631,15 +3631,40 @@ impl Lightforge {
                     self.browse_open,
                     "Add a game".to_owned(),
                 ),
-                self.browse_open.then(|| {
-                    // Clicks inside are absorbed so they never reach the
-                    // dismissal beneath — see [`Message::MenuClick`].
-                    Element::from(mouse_area(self.browse()).on_press(Message::MenuClick))
-                }),
+                // The popover absorbs clicks inside the panel itself, so no
+                // `mouse_area` guard is needed here — see [`popover`].
+                self.browse_open.then(|| self.browse()),
             )
             .align_left(),
         );
         band.into()
+    }
+
+    /// Whether any dismissable panel is showing.
+    ///
+    /// One list, used both to arm the click-anywhere dismissal and to clear
+    /// everything in [`Message::Dismiss`]. Adding a panel and forgetting to
+    /// name it here is what left the wordmark menu unable to be closed by
+    /// clicking the page, so the two now read from the same place.
+    fn panel_open(&self) -> bool {
+        self.gear_open
+            || self.manager_open
+            || self.browse_open
+            || self.strip_open
+            || self.app_menu_open
+    }
+
+    /// Close every one of them.
+    ///
+    /// Anything that answers the question a panel was asking closes it:
+    /// clicking the page, choosing a page, picking a game. A panel left
+    /// hanging over the thing you just changed is the bug this prevents.
+    fn close_panels(&mut self) {
+        self.gear_open = false;
+        self.manager_open = false;
+        self.browse_open = false;
+        self.strip_open = false;
+        self.app_menu_open = false;
     }
 
     /// The menu under the wordmark: the app's own business, as opposed to the
