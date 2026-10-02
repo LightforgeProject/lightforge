@@ -4163,20 +4163,6 @@ impl Lightforge {
                 true => battle_net,
                 false => battle_net.on_press(Message::BattleNet),
             },
-            // Not a hint: it is the reason to press the button above, and a
-            // user who does not know the shop needs a Battle.net session is
-            // exactly who it is written for.
-            //
-            // Held to the buttons' width so it wraps instead of setting the
-            // column's. Left to itself this line is the widest thing here, so
-            // the buttons end up centred inside a column wider than they are
-            // — and the cog menu, aligned to the card, no longer sits over
-            // the cog.
-            muted(
-                "Signs in through Battle.net so the in-game shop works.".to_owned(),
-                theme::CAPTION,
-            )
-            .width(Length::Fixed(240.0)),
         ]
         .spacing(theme::SM)
         .align_x(Alignment::Center)
