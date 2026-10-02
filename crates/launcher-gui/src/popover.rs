@@ -25,6 +25,19 @@ use iced::{Element, Length, Point, Rectangle, Size, Vector};
 /// Gap between the panel and the widget it is pinned to.
 const GAP: f32 = 8.0;
 
+/// Which of the panel's vertical edges lines up with the anchor's.
+///
+/// The anchor's own position decides this, not taste. A button at the end of a
+/// row has nothing to its right, so its panel hangs back over the content
+/// ([`Edge::Right`]); a button in the middle of one reads as the panel's
+/// left-hand corner ([`Edge::Left`]). Either way the panel is clamped to the
+/// window, so the choice only decides which way it grows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Edge {
+    Left,
+    Right,
+}
+
 /// Pin `panel` directly above `anchor`, without either one affecting the
 /// other's layout.
 pub fn popover<'a, Message, Theme, Renderer>(
@@ -34,13 +47,22 @@ pub fn popover<'a, Message, Theme, Renderer>(
 where
     Renderer: iced::advanced::Renderer,
 {
-    Popover { anchor: anchor.into(), panel }
+    Popover { anchor: anchor.into(), panel, edge: Edge::Right }
 }
 
 pub struct Popover<'a, Message, Theme, Renderer> {
     anchor: Element<'a, Message, Theme, Renderer>,
     /// `None` when nothing is showing, which costs no overlay at all.
     panel: Option<Element<'a, Message, Theme, Renderer>>,
+    edge: Edge,
+}
+
+impl<'a, Message, Theme, Renderer> Popover<'a, Message, Theme, Renderer> {
+    /// Line the panel up by its left edge instead of its right.
+    pub fn align_left(mut self) -> Self {
+        self.edge = Edge::Left;
+        self
+    }
 }
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer>
@@ -172,6 +194,7 @@ where
             panel,
             tree: &mut panel_tree[0],
             anchor: layout.bounds() + translation,
+            edge: self.edge,
         }));
 
         Some(match beneath {
@@ -186,6 +209,7 @@ struct Pinned<'a, 'b, Message, Theme, Renderer> {
     panel: &'b mut Element<'a, Message, Theme, Renderer>,
     tree: &'b mut Tree,
     anchor: Rectangle,
+    edge: Edge,
 }
 
 impl<Message, Theme, Renderer> overlay::Overlay<Message, Theme, Renderer>
@@ -201,19 +225,28 @@ where
         );
         let size = node.size();
 
-        // Above the anchor, right edges aligned — the anchor is the right-hand
-        // end of a row, so the panel hangs back over the content rather than
-        // off the window.
-        let x = self.anchor.x + self.anchor.width - size.width;
+        // Above the anchor, lined up by whichever edge [`Edge`] names. The
+        // anchor's bounds come from this layout pass, so a panel pinned to a
+        // button that moves — the band's buttons shift as games are added and
+        // removed — follows it without anything being recomputed.
+        let x = match self.edge {
+            Edge::Right => self.anchor.x + self.anchor.width - size.width,
+            Edge::Left => self.anchor.x,
+        };
         let y = self.anchor.y - size.height - GAP;
 
-        // Never off the top or the left: if there is no room above, the panel
-        // drops below the anchor instead of being cut in half.
+        // Never off the top: if there is no room above, the panel drops below
+        // the anchor instead of being cut in half.
         let y = match y < 0.0 {
             true => self.anchor.y + self.anchor.height + GAP,
             false => y,
         };
-        node.move_to(Point::new(x.max(0.0), y))
+
+        // Never off either side. A panel wider than the window keeps its left
+        // edge, since a left edge off screen hides the side you read from.
+        let x = x.min(bounds.width - size.width).max(0.0);
+
+        node.move_to(Point::new(x, y))
     }
 
     fn draw(

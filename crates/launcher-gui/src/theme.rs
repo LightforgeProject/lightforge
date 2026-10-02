@@ -15,7 +15,7 @@
 //! iced gives no cascade, so "restraint" here means type, spacing and one
 //! accent rather than effects.
 
-use iced::widget::{button, container, overlay, pick_list, text_input};
+use iced::widget::{button, container, overlay, pick_list, scrollable, text_input};
 use iced::{border, Background, Border, Color, Font, Shadow, Theme, Vector};
 
 // ---------------------------------------------------------------- palette --
@@ -254,6 +254,51 @@ pub fn row(_theme: &Theme) -> container::Style {
         background: Some(Background::Color(RAISED)),
         border: Border { color: BORDER, width: 1.0, radius: RADIUS_SM.into() },
         ..container::Style::default()
+    }
+}
+
+/// The shape of a scrollbar: narrow, and embedded rather than floating.
+///
+/// iced's default is 10pt wide and drawn *over* the content, which on a list
+/// whose rows end in a button puts the scroller on top of the button. Giving
+/// it [`SM`] of spacing makes it take layout space of its own, so it sits
+/// beside the rows and the list below is simply that much narrower.
+pub fn scrollbar_shape() -> scrollable::Scrollbar {
+    scrollable::Scrollbar::new().width(6.0).scroller_width(6.0).spacing(SM)
+}
+
+/// A scrollbar: no rail, and a scroller that is a hairline made solid.
+///
+/// Unstyled, iced draws a light grey rail that belongs to a light theme. The
+/// rail is dropped entirely — the gutter is already empty space — and the
+/// scroller is [`BORDER`]'s white at an alpha that reads over both a panel and
+/// artwork, brightening under the pointer the way the buttons do.
+pub fn scrollbar(_theme: &Theme, status: scrollable::Status) -> scrollable::Style {
+    let hovered = matches!(
+        status,
+        scrollable::Status::Hovered { is_vertical_scrollbar_hovered: true, .. }
+            | scrollable::Status::Dragged { is_vertical_scrollbar_dragged: true, .. }
+    );
+    let rail = scrollable::Rail {
+        background: None,
+        border: Border::default(),
+        scroller: scrollable::Scroller {
+            background: Background::Color(Color {
+                a: match hovered {
+                    true => 0.34,
+                    false => 0.18,
+                },
+                ..TEXT
+            }),
+            border: Border { radius: 999.0.into(), ..Border::default() },
+        },
+    };
+    scrollable::Style {
+        container: container::Style::default(),
+        vertical_rail: rail,
+        horizontal_rail: rail,
+        gap: None,
+        ..scrollable::default(_theme, status)
     }
 }
 

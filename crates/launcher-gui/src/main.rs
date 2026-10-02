@@ -2937,14 +2937,15 @@ impl Lightforge {
 
         // The manager hangs under its button on every screen, not just the
         // dashboard: a download keeps running while you are in Settings, and
-        // that is exactly when you want to look at it. iced 0.13 has no
-        // popover, so it is a stacked layer pinned to the top right, padded
-        // clear of the ribbon it drops out of.
+        // that is exactly when you want to look at it. Its button is at the
+        // end of the ribbon, so a stacked layer pinned to the top right lands
+        // under it, padded clear of the ribbon it drops out of. (Add-a-game
+        // used to share this corner; it now hangs off the `+` itself — see
+        // [`Lightforge::strip`].)
         let overlay: Option<Element<Message>> =
-            match (self.manager_open && !self.queue.is_empty(), self.browse_open) {
-                (true, _) => Some(self.manager()),
-                (_, true) => Some(self.browse()),
-                _ => None,
+            match self.manager_open && !self.queue.is_empty() {
+                true => Some(self.manager()),
+                false => None,
             };
         // Clicks inside a panel are absorbed so they never reach the dismissal
         // beneath it; without this, clicking the gap between two rows of the
@@ -3193,11 +3194,18 @@ impl Lightforge {
             rows = rows.push(row_for(entry));
         }
 
-        container(scrollable(rows))
-            .padding(theme::MD)
-            .max_height(560.0)
-            .style(theme::floating)
-            .into()
+        // Embedded rather than floating: the default scrollbar is drawn over
+        // the content, and the rows end in a button, so it landed on top of
+        // Add and Remove. Given its own column it sits beside them instead.
+        container(
+            scrollable(rows)
+                .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
+                .style(theme::scrollbar),
+        )
+        .padding(theme::MD)
+        .max_height(560.0)
+        .style(theme::floating)
+        .into()
     }
 
     /// The download manager: every transfer this session knows about.
@@ -3426,12 +3434,28 @@ impl Lightforge {
         }
 
         band = band.push(Space::new().width(Length::Fixed(theme::SM)));
-        band = band.push(band_button(
-            image(plus_icon()).width(Length::Fixed(BAND_GLYPH)).height(Length::Fixed(BAND_GLYPH)),
-            Message::ToggleBrowse,
-            self.browse_open,
-            "Add a game".to_owned(),
-        ));
+        // Under the `+` itself, not in the corner: the button moves along the
+        // band as games are added and removed, and the panel is the button's
+        // own answer. Pinned by its left edge, since the `+` has the rest of
+        // the ribbon to its right to grow into.
+        band = band.push(
+            popover::popover(
+                band_button(
+                    image(plus_icon())
+                        .width(Length::Fixed(BAND_GLYPH))
+                        .height(Length::Fixed(BAND_GLYPH)),
+                    Message::ToggleBrowse,
+                    self.browse_open,
+                    "Add a game".to_owned(),
+                ),
+                self.browse_open.then(|| {
+                    // Clicks inside are absorbed so they never reach the
+                    // dismissal beneath — see [`Message::MenuClick`].
+                    Element::from(mouse_area(self.browse()).on_press(Message::MenuClick))
+                }),
+            )
+            .align_left(),
+        );
         band.into()
     }
 
