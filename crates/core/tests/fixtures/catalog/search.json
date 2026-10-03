@@ -4,11 +4,23 @@
       "authors": [
         "Author One"
       ],
+      "download_count": 98400000,
       "id": "3358",
       "name": "BigWigs",
       "summary": "BigWigs summary",
       "thumbnail_url": "https://img.example/BigWigs.png",
       "website_url": "https://curseforge.example/BigWigs"
+    },
+    {
+      "authors": [
+        "Author One"
+      ],
+      "download_count": 98400000,
+      "id": "5151",
+      "name": "BigWigs_Voice",
+      "summary": "BigWigs_Voice summary",
+      "thumbnail_url": "https://img.example/BigWigs_Voice.png",
+      "website_url": "https://curseforge.example/BigWigs_Voice"
     }
   ]
 }

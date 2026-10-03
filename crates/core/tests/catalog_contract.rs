@@ -78,6 +78,10 @@ async fn resolve_parses_every_outcome() {
     assert!(ok.downloadable().is_some());
     assert!(ok.unavailable_reason().is_none());
     assert_eq!(ok.folders, ["BigWigs", "BigWigs_Core"]);
+    // Which build this is, in the same vocabulary the request's channel uses.
+    // "release" on CurseForge is "stable" here, and the proxy does that
+    // translation so the client has one set of names.
+    assert_eq!(ok.channel, Some(lightforge_core::addons::Channel::Stable));
 
     let opted_out = &resolved[1];
     assert_eq!(opted_out.status, Status::OptOut);
@@ -105,16 +109,19 @@ async fn search_parses_the_results_envelope() {
         .await
         .expect("search must read `{\"results\": [...]}`, not a bare array");
 
-    // These assertions describe the fixture currently checked in, which
-    // predates the proxy's slug pin. Regenerating the fixtures turns this
-    // into two hits — the pinned exact slug match first, then the text hit —
-    // each carrying `download_count: 98_400_000`. Tighten this test to that
-    // when you do; the proxy's own tests already assert both.
-    assert_eq!(hits.len(), 1);
+    // Two: the project the proxy pinned from an exact slug, then the text
+    // hit. The pin is the contract — a search for an addon by name must
+    // contain that addon, which CurseForge's own text search does not
+    // guarantee.
+    assert_eq!(hits.len(), 2);
     assert_eq!(hits[0].id, "3358", "a project id is a string");
-    assert_eq!(hits[0].name, "BigWigs");
+    assert_eq!(hits[0].name, "BigWigs", "the exact slug match comes first");
     assert_eq!(hits[0].authors, ["Author One"]);
     assert!(hits[0].website_url.is_some());
+
+    // Carried as an integer, from a count CurseForge sends in exponential
+    // form. Without it every CurseForge hit ranks as equally unpopular.
+    assert_eq!(hits[0].download_count, 98_400_000);
 }
 
 #[tokio::test]

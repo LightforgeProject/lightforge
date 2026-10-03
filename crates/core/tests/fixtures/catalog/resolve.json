@@ -1,6 +1,7 @@
 {
   "results": [
     {
+      "channel": "stable",
       "download_url": "https://edge.forgecdn.example/BigWigs.zip",
       "file_id": "800800",
       "file_length": 1234567,
