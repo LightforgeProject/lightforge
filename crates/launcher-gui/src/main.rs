@@ -4145,16 +4145,16 @@ impl Lightforge {
         let content = column![
             self.header(),
             column![
-                // Asymmetric on purpose. The gap above only has to clear the
-                // game band — the wordmark crowding it reads as one jammed
-                // corner rather than as the app's name with a product under
-                // it — while the gap below separates it from the art. Equal
-                // padding made the logo sit lower than it needed to.
+                // No gap of its own above. The wordmark belongs to the band
+                // it hangs under, and anything between them leaves it
+                // floating in the middle of the art with nothing to hold it.
+                // The page's own top padding below is the whole gap; the
+                // space beneath still separates it from the background.
                 container(logo)
                     .align_x(Alignment::Start)
                     .width(Length::Fill)
                     .padding(iced::Padding {
-                        top: theme::SM,
+                        top: 0.0,
                         right: 0.0,
                         bottom: theme::MD,
                         left: 0.0,
@@ -4171,7 +4171,16 @@ impl Lightforge {
                 },
             ]
             .spacing(theme::MD)
-            .padding(theme::LG),
+            // Tighter at the top than the other three sides: the page's
+            // inset is right for the action panel against the window edge,
+            // and too much for a wordmark that should read as hanging from
+            // the band directly above it.
+            .padding(iced::Padding {
+                top: theme::MD,
+                right: theme::LG,
+                bottom: theme::LG,
+                left: theme::LG,
+            }),
         ];
 
         match branding {
