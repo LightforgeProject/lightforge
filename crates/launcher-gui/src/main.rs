@@ -5261,7 +5261,7 @@ impl Lightforge {
                         listing.author.as_deref().unwrap_or("unknown author"),
                         match listing.downloads {
                             0 => String::new(),
-                            n => format!(" · {n} downloads"),
+                            n => format!(" · {} downloads", downloads_of(n)),
                         }
                     ),
                     theme::CAPTION,
@@ -6512,6 +6512,35 @@ impl Rate {
     }
 }
 
+/// A download count, short enough to sit in a caption beside the author.
+///
+/// One decimal, dropped when it would read ".0", so popular addons are "98.4M"
+/// and "142M" rather than nine digits the eye has to count. Short scale,
+/// matching every other addon manager; small counts are left exact, because
+/// "847" is already shorter than any abbreviation of it.
+fn downloads_of(n: u64) -> String {
+    let scaled = |n: u64, unit: f64, suffix: &str| {
+        let value = n as f64 / unit;
+        // The rounded value decides how many decimals to print, or 99,950,000
+        // renders as "100.0M" — a decimal place that is only ever ".0". The
+        // raw value is what gets printed, because rounding twice turns
+        // 999,499,999 into "1000M".
+        let rounded = (value * 10.0).round() / 10.0;
+        match rounded.fract() < 0.05 || rounded >= 100.0 {
+            true => format!("{value:.0}{suffix}"),
+            false => format!("{rounded:.1}{suffix}"),
+        }
+    };
+    // The thresholds promote half a unit early, where the smaller unit would
+    // round to four digits: 999,999,999 is "1B", never "1000M".
+    match n {
+        n if n >= 999_500_000 => scaled(n, 1e9, "B"),
+        n if n >= 999_500 => scaled(n, 1e6, "M"),
+        n if n >= 1_000 => scaled(n, 1e3, "K"),
+        n => n.to_string(),
+    }
+}
+
 fn bytes_of(done: u64, total: u64) -> String {
     let gib = |b: u64| b as f64 / 1024f64.powi(3);
     match total {
@@ -6596,6 +6625,25 @@ mod tests {
 
     fn chord(text: &str, modifiers: iced::keyboard::Modifiers) -> bool {
         hints_chord(&iced::keyboard::Key::Character(text.into()), modifiers)
+    }
+
+    #[test]
+    fn a_download_count_is_short_without_lying() {
+        assert_eq!(downloads_of(0), "0");
+        assert_eq!(downloads_of(847), "847", "small counts stay exact");
+        assert_eq!(downloads_of(999), "999");
+        assert_eq!(downloads_of(1_000), "1K", "a whole value drops the decimal");
+        assert_eq!(downloads_of(24_138), "24.1K");
+        assert_eq!(downloads_of(98_400_000), "98.4M");
+        assert_eq!(downloads_of(142_000_000), "142M", "no decimal past a hundred");
+        assert_eq!(downloads_of(300_000_000), "300M");
+        assert_eq!(downloads_of(1_500_000_000), "1.5B");
+        // Rounding up a magnitude must not leave a ".0" behind.
+        assert_eq!(downloads_of(99_950_000), "100M");
+        assert_eq!(downloads_of(999_999_999), "1B", "promoted, not four digits");
+        assert_eq!(downloads_of(999_499_999), "999M", "and not promoted early");
+        assert_eq!(downloads_of(999_499), "999K");
+        assert_eq!(downloads_of(999_500), "1M");
     }
 
     #[test]
