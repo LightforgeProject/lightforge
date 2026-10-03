@@ -60,6 +60,17 @@ pub struct Config {
 /// Where themed branding comes from unless `assets_source` says otherwise.
 pub const DEFAULT_ASSETS_SOURCE: &str = "https://lightforge.tuxcore.pro/assets/";
 
+/// Where the addon catalog is read from unless `addon_catalog` says otherwise.
+///
+/// The CurseForge API needs a key, and a key cannot live in a GPL binary, so
+/// CurseForge is reachable only through a proxy that holds one. Defaulting to
+/// ours means addon search works out of the box; pointing `addon_catalog` at
+/// your own proxy — or at a fixture directory — replaces it.
+///
+/// The keyless providers (WoWInterface, Tukui, GitHub) never come through
+/// here, so addon management keeps working whatever this says.
+pub const DEFAULT_ADDON_CATALOG: &str = "https://lightforge.tuxcore.pro/";
+
 /// Bytes in the megabyte this config counts in.
 const BYTES_PER_MB: u64 = 1_000_000;
 
@@ -192,6 +203,25 @@ impl Config {
         match source.contains("://") {
             true => crate::assets::Origin::Http(source.to_owned()),
             false => crate::assets::Origin::Dir(PathBuf::from(source)),
+        }
+    }
+
+    /// Where to read the addon catalog from.
+    ///
+    /// Same shape as [`Config::asset_origin`]: a URL is a proxy, anything else
+    /// is a fixture directory, and absent means [`DEFAULT_ADDON_CATALOG`].
+    ///
+    /// This used to be `Option`, with `None` disabling CurseForge entirely —
+    /// written before the proxy existed, and the reason a stock install could
+    /// not find a single CurseForge addon.
+    pub fn catalog_origin(&self) -> crate::addons::catalog::Origin {
+        let source = match self.addon_catalog.as_deref().map(str::trim) {
+            Some(source) if !source.is_empty() => source,
+            _ => DEFAULT_ADDON_CATALOG,
+        };
+        match source.contains("://") {
+            true => crate::addons::catalog::Origin::Http(source.to_owned()),
+            false => crate::addons::catalog::Origin::Dir(PathBuf::from(source)),
         }
     }
 
@@ -391,6 +421,47 @@ mod tests {
         let missing = std::env::temp_dir().join("lightforge-no-such-config.toml");
         let _ = std::fs::remove_file(&missing);
         assert_eq!(Config::load_or_default(&missing).unwrap(), Config::with_default_products());
+    }
+
+    /// The regression this default exists for: a stock install, with no
+    /// `addon_catalog` line, could not find a single CurseForge addon.
+    /// CurseForge needs a key, the key needs a proxy, and `None` meant "no
+    /// proxy" rather than "the usual one".
+    #[test]
+    fn an_unconfigured_install_still_reaches_curseforge() {
+        use crate::addons::catalog::Origin as CatalogOrigin;
+        let config = Config::default();
+        assert!(config.addon_catalog.is_none());
+        assert_eq!(
+            config.catalog_origin(),
+            CatalogOrigin::Http(DEFAULT_ADDON_CATALOG.to_owned())
+        );
+    }
+
+    #[test]
+    fn a_configured_catalog_wins_and_a_path_is_a_fixture_dir() {
+        use crate::addons::catalog::Origin as CatalogOrigin;
+        let mut config = Config {
+            addon_catalog: Some("https://proxy.example/".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.catalog_origin(),
+            CatalogOrigin::Http("https://proxy.example/".into())
+        );
+
+        config.addon_catalog = Some("/tmp/fixtures".into());
+        assert_eq!(
+            config.catalog_origin(),
+            CatalogOrigin::Dir(PathBuf::from("/tmp/fixtures"))
+        );
+
+        // Blank is "unset", not "disabled" — same rule as assets_source.
+        config.addon_catalog = Some("   ".into());
+        assert_eq!(
+            config.catalog_origin(),
+            CatalogOrigin::Http(DEFAULT_ADDON_CATALOG.to_owned())
+        );
     }
 
     #[test]

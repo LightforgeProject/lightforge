@@ -32,7 +32,7 @@ pub const API_PREFIX: &str = "addons/v1";
 pub const RESOLVE_LIMIT: usize = 50;
 
 /// Where the catalog is read from.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Origin {
     /// Base URL of the proxy, e.g. `https://lightforge.tuxcore.pro/`.
     Http(String),

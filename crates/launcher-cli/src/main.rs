@@ -2841,16 +2841,23 @@ fn addon_origin(
     use lightforge_core::addons::catalog::Origin;
     use lightforge_core::config::Config;
 
-    let configured = Config::load_or_default(&dirs.config_file())
-        .ok()
-        .and_then(|c| c.addon_catalog);
-    let source = flag.map(str::to_owned).or(configured)?;
-
-    Some(match source.contains("://") {
-        true => Origin::Http(source),
-        false => Origin::Dir(PathBuf::from(source)),
-    })
+    // A `--catalog` flag wins; otherwise the config decides, and the config
+    // falls back to the built-in proxy rather than to nothing.
+    if let Some(source) = flag {
+        return Some(match source.contains("://") {
+            true => Origin::Http(source.to_owned()),
+            false => Origin::Dir(PathBuf::from(source)),
+        });
+    }
+    Some(
+        Config::load_or_default(&dirs.config_file())
+            .map(|c| c.catalog_origin())
+            .unwrap_or_else(|_| Origin::Http(
+                lightforge_core::config::DEFAULT_ADDON_CATALOG.to_owned(),
+            )),
+    )
 }
+
 
 fn print_addon_event(event: &lightforge_core::addons::manage::Event) {
     use lightforge_core::addons::manage::Event;

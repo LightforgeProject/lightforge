@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use lightforge_core::addons::catalog::{Catalog, Origin, Request};
+use lightforge_core::addons::catalog::{Catalog, Request};
 use lightforge_core::addons::manage::{self, Event, Options, Report};
 use lightforge_core::addons::{self, Collection, Installed, Ledger};
 use lightforge_core::config::Config;
@@ -232,11 +232,7 @@ fn options(layout: &Layout, code: &ProductCode, pinned: bool) -> Option<Options>
 fn catalog() -> Option<Catalog> {
     let dirs = AppDirs::discover().ok()?;
     let config = Config::load_or_default(&dirs.config_file()).ok()?;
-    let source = config.addon_catalog?;
-    Some(Catalog::new(match source.contains("://") {
-        true => Origin::Http(source),
-        false => Origin::Dir(PathBuf::from(source)),
-    }))
+    Some(Catalog::new(config.catalog_origin()))
 }
 
 /// Install everything a pasted token names.
