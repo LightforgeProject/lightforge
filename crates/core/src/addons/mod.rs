@@ -136,6 +136,33 @@ impl Collection {
         serde_json::from_slice(&json).map_err(AddonError::Token)
     }
 
+    /// Encode this list as a token, in the same shape [`Collection::parse`]
+    /// reads: base64 over JSON.
+    ///
+    /// The point is that it travels — to WoWUp, to another machine, to someone
+    /// being handed a setup — so it is the format other tools already read
+    /// rather than one of Lightforge's own.
+    pub fn to_token(&self) -> Result<String, AddonError> {
+        let json = serde_json::to_vec(self).map_err(AddonError::Token)?;
+        Ok(base64_encode(&json))
+    }
+
+    /// WoWUp's name for a product, for the `client_type` an export carries.
+    ///
+    /// The inverse of what [`Collection::product`] reads. A product WoWUp has
+    /// no name for exports as retail, which is what it runs addons for.
+    pub fn client_type_of(code: &ProductCode) -> &'static str {
+        match code {
+            ProductCode::Classic | ProductCode::ClassicPtr => "Classic",
+            ProductCode::ClassicEra | ProductCode::EraPtr | ProductCode::ClassicBeta => {
+                "ClassicEra"
+            }
+            ProductCode::Ptr | ProductCode::Ptr2 => "RetailPtr",
+            ProductCode::Beta => "Beta",
+            _ => "Retail",
+        }
+    }
+
     /// The product this list was exported from, as far as it can be told.
     ///
     /// WoWUp's names are its own; anything unrecognised is left to the caller
@@ -467,6 +494,25 @@ fn strip_color_codes(text: &str) -> String {
     out.trim().to_owned()
 }
 
+/// Standard base64, padded. The inverse of [`base64_decode`], and padded
+/// because that is what WoWUp writes and what other tools expect to read.
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let packed = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        for i in 0..4 {
+            match i <= chunk.len() {
+                true => out.push(TABLE[(packed >> (18 - i * 6)) as usize & 0x3f] as char),
+                false => out.push('='),
+            }
+        }
+    }
+    out
+}
+
 /// Standard base64 with or without padding. Kept here rather than pulling in a
 /// crate for forty lines of table lookup.
 fn base64_decode(input: &str) -> Option<Vec<u8>> {
@@ -553,6 +599,47 @@ mod tests {
         assert!(matches!(Collection::parse("not a token!!"), Err(AddonError::NotBase64)));
         // Valid base64, wrong contents.
         assert!(matches!(Collection::parse("aGVsbG8="), Err(AddonError::Token(_))));
+    }
+
+    /// The point of an export is that something else can read it back, so the
+    /// test is the round trip rather than the bytes.
+    #[test]
+    fn a_token_survives_the_round_trip() {
+        let collection = Collection {
+            collection_name: "Lightforge".to_owned(),
+            client_type: "Retail".to_owned(),
+            addons: vec![
+                Entry {
+                    id: "3358".to_owned(),
+                    name: "BigWigs".to_owned(),
+                    provider: "curseforge".to_owned(),
+                    version_id: Some("5309821".to_owned()),
+                },
+                // No pinned file, and a name with a character JSON has to
+                // escape — both of which an encoder can quietly mangle.
+                Entry {
+                    id: "weakauras/WeakAuras2".to_owned(),
+                    name: "WeakAuras \"2\"".to_owned(),
+                    provider: "github".to_owned(),
+                    version_id: None,
+                },
+            ],
+        };
+
+        let token = collection.to_token().unwrap();
+        assert_eq!(Collection::parse(&token).unwrap(), collection);
+    }
+
+    /// Every length class of the final chunk, since that is where a hand-rolled
+    /// base64 goes wrong.
+    #[test]
+    fn encoding_pads_every_tail_length() {
+        for (bytes, expected) in
+            [(&b"a"[..], "YQ=="), (&b"ab"[..], "YWI="), (&b"abc"[..], "YWJj"), (&b""[..], "")]
+        {
+            assert_eq!(base64_encode(bytes), expected);
+            assert_eq!(base64_decode(&base64_encode(bytes)).unwrap(), bytes);
+        }
     }
 
     #[test]

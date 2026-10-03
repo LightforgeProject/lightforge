@@ -386,6 +386,33 @@ pub async fn install_one(
     .await
 }
 
+/// A token naming everything Lightforge installed for this product.
+///
+/// Built from the ledger rather than from the folders on disk: an addon
+/// Lightforge did not install has no provider or id to name, so it cannot be
+/// written into a token anyone could import.
+pub fn export(layout: &Layout, code: &ProductCode) -> Result<String, String> {
+    let options = options(layout, code, false).ok_or("no data directory available")?;
+    let ledger = Ledger::load(&options.ledger_path).map_err(|e| e.to_string())?;
+
+    let collection = addons::Collection {
+        collection_name: format!("Lightforge · {}", code.as_str()),
+        client_type: addons::Collection::client_type_of(code).to_owned(),
+        addons: ledger
+            .addons
+            .iter()
+            .map(|record| addons::Entry {
+                id: record.id.clone(),
+                name: record.name.clone(),
+                provider: record.provider.clone(),
+                version_id: record.file_id.clone(),
+            })
+            .collect(),
+    };
+
+    collection.to_token().map_err(|e| e.to_string())
+}
+
 /// Ask what has updates, without installing anything.
 pub async fn check_updates(
     http: Option<Http>,

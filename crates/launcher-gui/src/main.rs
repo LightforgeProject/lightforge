@@ -352,6 +352,16 @@ enum Message {
     CancelRemoveAddon,
     /// Narrow the installed list.
     AddonFilterChanged(String),
+    /// A debounced search coming due. Carries the keystroke count it was
+    /// scheduled at.
+    SearchSettled(u64),
+    /// Build a token naming everything installed here.
+    ExportAddons,
+    /// Put the built token on the clipboard.
+    CopyExport,
+    /// Typing in the export box. Kept so the field can be selected and copied
+    /// from; the token is rebuilt by Export, never by editing.
+    ExportEdited(String),
     /// Show the product's AddOns folder in the file manager.
     OpenAddonsDir,
     AddonRemoved(Result<Vec<String>, String>),
@@ -434,6 +444,8 @@ enum AddonTab {
     Browse,
     /// Bring a collection over from WoWUp in one paste.
     Import,
+    /// Hand this collection to another machine, or to WoWUp.
+    Export,
 }
 
 /// Which screen is showing.
@@ -782,6 +794,12 @@ struct Lightforge {
     /// addons. Same type, two meanings, so it is remembered rather than
     /// guessed at from the report's contents.
     addon_report_tab: AddonTab,
+    /// Counts keystrokes in the search box. A debounced search carries the
+    /// number it was scheduled at and does nothing if another key has landed
+    /// since, which is what stops a six-letter word becoming six searches.
+    search_seq: u64,
+    /// The token the Export button built, held so it can be read and copied.
+    export_token: String,
     addon_rx: Option<tokio::sync::watch::Receiver<addonwork::Progress>>,
     addon_sample: addonwork::Progress,
     addons_busy: bool,
@@ -903,6 +921,8 @@ impl Lightforge {
             addon_filter: String::new(),
             addon_remove_armed: None,
             addon_report_tab: AddonTab::Mine,
+            search_seq: 0,
+            export_token: String::new(),
             addon_rx: None,
             addon_sample: addonwork::Progress::default(),
             addons_busy: false,
@@ -2145,6 +2165,24 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::ExportAddons => {
+                match addonwork::export(&self.layout, &self.selected.code) {
+                    Ok(token) => {
+                        self.export_token = token;
+                        self.status = "export ready".to_owned();
+                    }
+                    Err(e) => self.error = Some(e),
+                }
+                Task::none()
+            }
+
+            Message::CopyExport => iced::clipboard::write(self.export_token.clone()),
+
+            Message::ExportEdited(text) => {
+                self.export_token = text;
+                Task::none()
+            }
+
             Message::CancelRemoveAddon => {
                 self.addon_remove_armed = None;
                 Task::none()
@@ -2384,7 +2422,34 @@ impl Lightforge {
 
             Message::SearchChanged(value) => {
                 self.search_input = value;
-                Task::none()
+                self.search_seq += 1;
+                let seq = self.search_seq;
+
+                // Typing is the search. The button stays — it is how you ask
+                // again after a provider was down, and pressing Enter has to
+                // do something — but nobody should have to reach for it.
+                //
+                // Two letters is where a search stops matching half the
+                // catalogue, and the pause is long enough that a word typed at
+                // speed goes out once rather than letter by letter.
+                if self.search_input.trim().chars().count() < SEARCH_MIN {
+                    return Task::none();
+                }
+                Task::perform(
+                    async move {
+                        tokio::time::sleep(SEARCH_DEBOUNCE).await;
+                        seq
+                    },
+                    Message::SearchSettled,
+                )
+            }
+
+            Message::SearchSettled(seq) => {
+                // A later keystroke has already scheduled its own search.
+                match seq == self.search_seq && !self.searching {
+                    true => self.update(Message::RunSearch),
+                    false => Task::none(),
+                }
             }
 
             Message::RunSearch => {
@@ -3987,9 +4052,15 @@ impl Lightforge {
 
         column![
             self.header(),
-            column![top, scrollable(content).height(Length::Fill)]
-                .spacing(theme::LG)
-                .padding(theme::LG),
+            column![
+                top,
+                scrollable(content)
+                    .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
+                    .style(theme::scrollbar)
+                    .height(Length::Fill),
+            ]
+            .spacing(theme::LG)
+            .padding(theme::LG),
         ]
         .into()
     }
@@ -4655,6 +4726,7 @@ impl Lightforge {
             tab("My Addons", AddonTab::Mine),
             tab("Browse Addons", AddonTab::Browse),
             tab("Import", AddonTab::Import),
+            tab("Export", AddonTab::Export),
         ]
         .spacing(theme::XS)]
         .spacing(theme::MD);
@@ -4678,32 +4750,19 @@ impl Lightforge {
             AddonTab::Mine => self.addons_mine(),
             AddonTab::Browse => self.addons_browse(),
             AddonTab::Import => self.addons_import(),
+            AddonTab::Export => self.addons_export(),
         });
 
         // Parent folders only, so the count matches the rows you can see —
         // BigWigs is one addon here and eleven folders on disk.
         let installed = self.addons.rows.iter().filter(|r| r.child_of.is_none()).count();
-        let aside = column![
-            muted(
-                match installed {
-                    1 => "1 addon installed".to_owned(),
-                    n => format!("{n} addons installed"),
-                },
-                theme::LABEL,
-            ),
-            muted(
-                match self.addons.stale {
-                    0 => format!("{} managed by Lightforge", self.addons.managed),
-                    n => format!(
-                        "{} managed · {n} recorded but missing from disk",
-                        self.addons.managed
-                    ),
-                },
-                theme::CAPTION,
-            ),
-        ]
-        .spacing(theme::XS)
-        .align_x(Alignment::End);
+        let aside = muted(
+            match installed {
+                1 => "1 addon installed".to_owned(),
+                n => format!("{n} addons installed"),
+            },
+            theme::LABEL,
+        );
 
         self.page("Addons", None, Some(aside.into()), body.into())
     }
@@ -4731,18 +4790,15 @@ impl Lightforge {
                     },
                     theme::LABEL,
                 ),
-                secondary("Check for updates", Message::CheckAddonUpdates)
+                // One shape for the three, so the toolbar reads as a set.
+                // Colour still carries state: blue is the one to press, grey
+                // is a thing you can do.
+                action_button("Check for updates", theme::PAUSE, Message::CheckAddonUpdates)
                     .enabled(!self.addons_busy && self.addons.managed > 0),
-                action_button(
-                    "Update all",
-                    match outdated {
-                        0 => theme::PAUSE,
-                        _ => theme::UPDATE,
-                    },
-                    Message::UpdateAddons,
-                )
-                .enabled(!self.addons_busy && self.addons.managed > 0),
-                secondary("Open folder", Message::OpenAddonsDir).enabled(true),
+                action_button("Update all", theme::ACCENT, Message::UpdateAddons)
+                    .enabled(!self.addons_busy && self.addons.managed > 0),
+                action_button("Open folder", theme::PAUSE, Message::OpenAddonsDir)
+                    .enabled(true),
             ]
             .spacing(theme::SM)
             .align_y(Alignment::Center),
@@ -4980,6 +5036,67 @@ impl Lightforge {
         }
 
         body.into()
+    }
+
+    /// Handing this collection to somewhere else.
+    ///
+    /// Beside Import rather than inside it: the two are opposite directions of
+    /// the same idea, and a tab that does both is a tab you have to read before
+    /// you can use.
+    fn addons_export(&self) -> Element<'_, Message> {
+        let managed = self.addons.managed;
+        let box_ = container(
+            column![
+                row![
+                    column![
+                        text("Export").size(theme::HEADING),
+                        muted(
+                            match managed {
+                                0 => "Nothing to export yet — only addons Lightforge \
+                                      installed can be named in a token."
+                                    .to_owned(),
+                                1 => "A token naming the 1 addon Lightforge manages here, \
+                                      to import on another machine or in WoWUp."
+                                    .to_owned(),
+                                n => format!(
+                                    "A token naming the {n} addons Lightforge manages here, \
+                                     to import on another machine or in WoWUp."
+                                ),
+                            },
+                            theme::LABEL,
+                        ),
+                    ]
+                    .spacing(theme::XS)
+                    .width(Length::Fill),
+                    action_button("Export", theme::ACCENT, Message::ExportAddons)
+                        .enabled(!self.addons_busy && managed > 0),
+                ]
+                .spacing(theme::MD)
+                .align_y(Alignment::Center),
+            ]
+            .extend(match self.export_token.is_empty() {
+                true => Vec::new(),
+                false => vec![Element::from(
+                    row![
+                        // Editable so it can be selected and copied by hand;
+                        // what is typed into it is never read back.
+                        text_input("", &self.export_token)
+                            .on_input(Message::ExportEdited)
+                            .style(theme::field)
+                            .size(theme::BODY)
+                            .padding(theme::SM),
+                        secondary("Copy", Message::CopyExport).enabled(true),
+                    ]
+                    .spacing(theme::SM)
+                    .align_y(Alignment::Center),
+                )],
+            })
+            .spacing(theme::SM),
+        )
+        .padding(theme::MD)
+        .style(theme::card);
+
+        column![box_].spacing(theme::SM).into()
     }
 
     fn addons_browse(&self) -> Element<'_, Message> {
@@ -5880,6 +5997,12 @@ fn optically_centred<'a>(text: iced::widget::Text<'a>) -> Element<'a, Message> {
         .into()
 }
 
+/// Shortest query worth sending to the providers while typing.
+const SEARCH_MIN: usize = 2;
+
+/// How long the search box waits for the next keystroke before going out.
+const SEARCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(400);
+
 /// How far down a descenderless line is pushed to sit on the optical middle.
 /// Roughly a quarter of the font's descent at label sizes; see
 /// [`optically_centred`].
@@ -6089,11 +6212,17 @@ fn action_button(label: &str, color: iced::Color, message: Message) -> Action<'s
     }
 }
 
+/// The quieter button: same size as [`action_button`], different colour.
+///
+/// Padded identically on purpose. These two sit side by side all over the app
+/// — Page next to Install, Keep next to Delete — and a pair of buttons that
+/// disagree about their height reads as a mistake rather than as a hierarchy.
+/// What separates them is colour, which is the thing that carries meaning.
 fn secondary(label: &str, message: Message) -> Action<'static> {
     Action {
         inner: button(text(label.to_owned()).size(theme::LABEL))
             .style(theme::outlined)
-            .padding([theme::XS, theme::MD]),
+            .padding([theme::SM, theme::MD]),
         message,
     }
 }
