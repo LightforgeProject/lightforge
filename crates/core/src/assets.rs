@@ -33,7 +33,18 @@ use crate::product::{Branch, Catalog, CatalogEntry, ProductCode};
 /// A manifest declaring a newer schema is refused rather than parsed
 /// optimistically: the cached art from the last good fetch is a better answer
 /// than half-understood theming.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// **2** made `logo` and `background` optional, so a product can be themed
+/// with nothing but its square mark. Battle.net hand-offs — Diablo,
+/// Hearthstone, StarCraft — are never drawn with a logo or a background by
+/// this launcher, but they do want a mark in the product bar and the browse
+/// list, and under schema 1 that was unreachable without inventing a wordmark
+/// and a background for each of them.
+///
+/// The bump is deliberate and not merely additive: a schema-1 client reading
+/// a manifest whose entries omit `logo` fails to parse the *whole* document,
+/// so it must be told to keep its cached copy instead.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// File name of the manifest within its base URL or fixture directory.
 pub const MANIFEST_FILE: &str = "manifest.json";
@@ -69,8 +80,12 @@ pub struct Theme {
     /// rather than guessed at; the set is closed and the UI has to render it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
-    pub logo: AssetRef,
-    pub background: AssetRef,
+    /// Optional since schema 2. A product with no wordmark is drawn with its
+    /// label, which is what every Battle.net hand-off already does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<AssetRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<AssetRef>,
     /// Small square mark for the dashboard's product bar.
     ///
     /// Optional, unlike the other two: the bar falls back to
@@ -160,7 +175,7 @@ impl Manifest {
     pub fn urls(&self, base: &str) -> Vec<String> {
         let mut out = Vec::with_capacity(self.products.len() * 3);
         for theme in self.products.values() {
-            for asset in [Some(&theme.logo), Some(&theme.background), theme.icon.as_ref()]
+            for asset in [theme.logo.as_ref(), theme.background.as_ref(), theme.icon.as_ref()]
                 .into_iter()
                 .flatten()
             {
@@ -396,12 +411,20 @@ impl Pipeline {
             .theme(code)
             .ok_or_else(|| AssetError::UnknownProduct(code.as_str().to_owned()))?;
 
+        // Since schema 2 a theme may carry nothing but a mark, which is all a
+        // Battle.net hand-off needs. [`Branding`] means drawable art, so a
+        // theme without it is not partial branding — it is none, and the
+        // caller is asking the wrong question.
+        let (Some(logo_ref), Some(background_ref)) = (&theme.logo, &theme.background) else {
+            return Err(AssetError::NoArtwork(code.as_str().to_owned()));
+        };
+
         // The two images are independent requests against the same host, so
         // they go out together: on a warm cache this halves the theming pass
         // to a single round trip, and on a cold one it halves the transfer.
         let (logo, background) = futures_util::future::try_join(
-            self.asset(http, &theme.logo, Slot::Logo),
-            self.asset(http, &theme.background, Slot::Background),
+            self.asset(http, logo_ref, Slot::Logo),
+            self.asset(http, background_ref, Slot::Background),
         )
         .await?;
 
@@ -460,8 +483,8 @@ impl Pipeline {
 
         Some(Branding {
             label: theme.label.clone(),
-            logo: self.cached_asset(&theme.logo, Slot::Logo)?,
-            background: self.cached_asset(&theme.background, Slot::Background)?,
+            logo: self.cached_asset(theme.logo.as_ref()?, Slot::Logo)?,
+            background: self.cached_asset(theme.background.as_ref()?, Slot::Background)?,
             // Optional, so a `?` here would throw away a perfectly good theme
             // over a mark the bar can do without.
             icon: theme.icon.as_ref().and_then(|i| self.cached_asset(i, Slot::Icon)),
@@ -628,6 +651,9 @@ pub enum AssetError {
     #[error("the manifest has no theme for {0} and no usable default")]
     UnknownProduct(String),
 
+    #[error("{0} is themed with a mark only — it has no logo or background")]
+    NoArtwork(String),
+
     #[error("{slot} at {url} hashed to {actual}, expected {expected}")]
     Checksum {
         slot: Slot,
@@ -700,11 +726,46 @@ mod tests {
 
     #[test]
     fn a_newer_schema_is_refused_rather_than_guessed_at() {
-        let body = FIXTURE.replace("\"schema\": 1", "\"schema\": 2");
+        let next = SCHEMA_VERSION + 1;
+        let body = FIXTURE.replace("\"schema\": 1", &format!("\"schema\": {next}"));
         assert!(matches!(
             Manifest::parse(body.as_bytes()),
-            Err(AssetError::UnsupportedSchema { found: 2, supported: 1 })
+            Err(AssetError::UnsupportedSchema { found, supported })
+                if found == next && supported == SCHEMA_VERSION
         ));
+    }
+
+    /// Schema 1 manifests still parse: the fields went optional, not away.
+    #[test]
+    fn a_schema_1_manifest_still_reads() {
+        let m = Manifest::parse(FIXTURE.as_bytes()).expect("schema 1 is still readable");
+        let theme = m.theme(&ProductCode::Retail).unwrap();
+        assert!(theme.logo.is_some());
+        assert!(theme.background.is_some());
+    }
+
+    /// What schema 2 exists for: a product themed with nothing but its mark.
+    #[test]
+    fn a_mark_only_theme_parses_and_has_no_branding() {
+        let body = r#"{
+            "schema": 2,
+            "products": {
+                "d3": { "label": "Diablo III",
+                        "icon": { "url": "d3-icon.1234abcd.png" } }
+            }
+        }"#;
+        let m = Manifest::parse(body.as_bytes()).expect("a mark-only theme is valid");
+        let theme = m.theme(&ProductCode::from("d3".to_owned())).unwrap();
+        assert_eq!(theme.label, "Diablo III");
+        assert!(theme.logo.is_none());
+        assert!(theme.background.is_none());
+        assert!(theme.icon.is_some());
+        // Its one URL still has to be prunable, or the mark would be deleted
+        // from the cache on the next manifest fetch.
+        assert_eq!(
+            m.urls("https://x/assets/manifest.json"),
+            ["https://x/assets/d3-icon.1234abcd.png"]
+        );
     }
 
     #[test]
@@ -718,7 +779,7 @@ mod tests {
     #[test]
     fn missing_sha256_is_optional() {
         let m = manifest();
-        assert!(m.theme(&ProductCode::Retail).unwrap().logo.sha256.is_none());
+        assert!(m.theme(&ProductCode::Retail).unwrap().logo.as_ref().unwrap().sha256.is_none());
     }
 
     #[test]
@@ -826,8 +887,8 @@ mod tests {
                     label: "Retail".into(),
                     line: None,
                     branch: None,
-                    logo: AssetRef { url: "l.png".into(), sha256: None, height: None },
-                    background: AssetRef { url: "b.jpg".into(), sha256: None, height: None },
+                    logo: Some(AssetRef { url: "l.png".into(), sha256: None, height: None }),
+                    background: Some(AssetRef { url: "b.jpg".into(), sha256: None, height: None }),
                     icon: None,
                 },
             )]),
@@ -984,7 +1045,7 @@ mod tests {
     fn a_manifest_without_height_hints_still_parses() {
         let manifest = Manifest::parse(FIXTURE.as_bytes()).unwrap();
         let theme = manifest.theme(&ProductCode::Retail).unwrap();
-        assert_eq!(theme.logo.height, None);
+        assert_eq!(theme.logo.as_ref().unwrap().height, None);
     }
 
     #[test]

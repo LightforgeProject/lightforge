@@ -1059,8 +1059,21 @@ impl Lightforge {
     }
 
     /// Every configured product, in the order the bar draws them.
+    /// Every product whose mark the UI may draw.
+    ///
+    /// Not just the configured ones: the browse panel lists the whole catalog
+    /// and wants each row to wear the same mark its tile would, so a game you
+    /// have not added yet is still recognisable at a glance. Marks are small,
+    /// content-addressed and cached immutably, so the extra ones cost one
+    /// fetch each, once, and nothing thereafter.
     fn product_codes(&self) -> Vec<ProductCode> {
-        self.choices.iter().map(|c| c.code.clone()).collect()
+        let mut codes: Vec<ProductCode> = self.choices.iter().map(|c| c.code.clone()).collect();
+        for entry in self.catalog.entries() {
+            if !codes.contains(&entry.code) {
+                codes.push(entry.code.clone());
+            }
+        }
+        codes
     }
 
     /// Clear the way for a launch, then let [`Message::PreflightDone`] start it.
