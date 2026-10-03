@@ -4098,12 +4098,26 @@ impl Lightforge {
         let action = self.action();
         let kind = self.kind_of(&self.selected.code);
 
-        // A hand-off product wears no art. The manifest's `default` catches
-        // every code it does not name, so theming Hearthstone would dress it
-        // in Retail's logo and key art — worse than no art at all.
+        // A hand-off wears art only when the manifest names it *itself*.
+        //
+        // The `default` entry catches every code the manifest does not name,
+        // which is deliberate for a WoW product — a line released after this
+        // binary should look like WoW rather than like nothing — and wrong for
+        // a hand-off, where it would dress Hearthstone in Retail's logo and
+        // key art. That was the whole reason hand-offs showed no art at all.
+        //
+        // Now that each one carries its own logo, the rule can be the precise
+        // one instead of the blunt one: inherit if you are WoW, otherwise show
+        // art only if it is yours. A Blizzard game that appears in the catalog
+        // before its art is published still gets nothing, which is correct.
+        let themed_itself = self.manifest.as_ref().is_some_and(|manifest| {
+            manifest
+                .own_theme(&self.selected.code)
+                .is_some_and(|theme| theme.logo.is_some())
+        });
         let branding = match kind {
             Kind::Managed => self.branding.as_ref(),
-            Kind::HandOff => None,
+            Kind::HandOff => self.branding.as_ref().filter(|_| themed_itself),
         };
 
         // The wordmark hangs under the app title in the top-left rather than
