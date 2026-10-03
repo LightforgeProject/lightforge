@@ -22,6 +22,20 @@ use lightforge_core::assets::Branding;
 /// Past this width every frame pays to scale pixels it throws away.
 const BACKGROUND_MAX_WIDTH: u32 = 2560;
 
+/// Widest a product mark is kept: twice [`crate::theme::TILE`].
+///
+/// Marks are published at 256px so they stay useful if the UI ever draws them
+/// larger, but the band draws them at 40pt. Handing the renderer 256px and
+/// letting it reduce that far samples four texels per pixel with no mipmaps,
+/// which is the crunchy, aliased look that reads as "pixelated".
+///
+/// Twice the tile rather than exactly the tile: a 2x display then maps one
+/// texel to one device pixel, and a 1x display gets a 2:1 reduction, which is
+/// the one ratio bilinear filtering handles cleanly. Measured against 64, 96
+/// and 128 at the drawn size, the differences past this point are not visible
+/// — what remains is the artwork, not the scaling.
+const MARK_MAX_WIDTH: u32 = (crate::theme::TILE * 2.0) as u32;
+
 /// Widest a logo is kept. It is drawn at most a couple of hundred pixels tall.
 const LOGO_MAX_WIDTH: u32 = 1024;
 
@@ -46,9 +60,25 @@ impl Art {
     }
 }
 
+/// A product mark, decoded and scaled for the size it is actually drawn at.
+///
+/// Unlike [`load`]'s backgrounds this is a large reduction — 256px down to
+/// 128 — so it is worth the sharper filter. The image is tiny and this runs
+/// once per product per session.
+pub fn mark(path: &Path) -> Handle {
+    scale(path, MARK_MAX_WIDTH, FilterType::Lanczos3)
+}
+
 /// Decode and downscale one image. An image this can't read falls back to
 /// its path, leaving iced to fail on it the way it did before.
 fn load(path: &Path, max_width: u32) -> Handle {
+    // Triangle rather than Lanczos: a one-off downscale by less than 2x,
+    // where the sharper filter costs several times as long for no difference
+    // behind a scrim.
+    scale(path, max_width, FilterType::Triangle)
+}
+
+fn scale(path: &Path, max_width: u32, filter: FilterType) -> Handle {
     let decoded = match image::open(path) {
         Ok(decoded) => decoded,
         Err(e) => {
@@ -60,10 +90,7 @@ fn load(path: &Path, max_width: u32) -> Handle {
     let decoded = if decoded.width() > max_width {
         let height = (u64::from(decoded.height()) * u64::from(max_width)
             / u64::from(decoded.width())) as u32;
-        // Triangle rather than Lanczos: a one-off downscale by less than 2x,
-        // where the sharper filter costs several times as long for no
-        // difference behind a scrim.
-        decoded.resize_exact(max_width, height.max(1), FilterType::Triangle)
+        decoded.resize_exact(max_width, height.max(1), filter)
     } else {
         decoded
     };

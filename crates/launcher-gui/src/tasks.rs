@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use iced::widget::image::Handle;
 use lightforge_core::assets::{Manifest, Pipeline};
 use lightforge_core::config::Config;
 use lightforge_core::net::Http;
@@ -241,12 +242,12 @@ fn cached_icons(
     pipeline: &Pipeline,
     manifest: &Manifest,
     codes: &[ProductCode],
-) -> HashMap<ProductCode, PathBuf> {
+) -> HashMap<ProductCode, Handle> {
     codes
         .iter()
         .filter_map(|code| {
             let icon = pipeline.cached_icon(manifest, code)?;
-            Some((code.clone(), icon.path))
+            Some((code.clone(), crate::art::mark(&icon.path)))
         })
         .collect()
 }
@@ -262,7 +263,7 @@ fn cached_icons(
 pub struct Themed {
     pub manifest: Option<Arc<Manifest>>,
     pub branding: Option<Art>,
-    pub icons: HashMap<ProductCode, PathBuf>,
+    pub icons: HashMap<ProductCode, Handle>,
 }
 
 /// Resolve a product's branding, or an empty [`Themed`] when theming isn't
@@ -323,7 +324,10 @@ pub async fn theme(
     let mut icons = HashMap::new();
     for product in &codes {
         if let Ok(Some(icon)) = pipeline.icon(&http, &manifest, product).await {
-            icons.insert(product.clone(), icon.path);
+            // Scaled here rather than handed over as a path: the band draws
+            // these at 40pt, and letting the renderer reduce a 256px image
+            // that far is what made them look pixelated.
+            icons.insert(product.clone(), crate::art::mark(&icon.path));
         }
     }
 
