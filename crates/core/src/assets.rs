@@ -153,6 +153,23 @@ impl Manifest {
 }
 
 impl Manifest {
+    /// Every asset URL this manifest names, as the client would resolve them.
+    ///
+    /// `base` is the manifest's own location, so relative entries resolve the
+    /// same way [`Pipeline`] resolves them when fetching.
+    pub fn urls(&self, base: &str) -> Vec<String> {
+        let mut out = Vec::with_capacity(self.products.len() * 3);
+        for theme in self.products.values() {
+            for asset in [Some(&theme.logo), Some(&theme.background), theme.icon.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                out.push(join(base, &asset.url));
+            }
+        }
+        out
+    }
+
     /// The product catalog this manifest states, over the built-in one.
     ///
     /// A product is only *stated* here — identity, grouping, what to call it.
@@ -257,6 +274,44 @@ impl Store {
         self.dir.join(Self::cache_name(url))
     }
 
+    /// Delete cached art that `keep` does not name.
+    ///
+    /// Published art is content-addressed upstream — the filename carries the
+    /// first bytes of its sha256 — so every image that changes arrives under
+    /// a *new* URL, and the cache file for the old one is never written to
+    /// again. Without this, a few megabytes are stranded on disk per art
+    /// revision, forever.
+    ///
+    /// Deliberately narrow about what it will remove: only direct children,
+    /// only names that look like something [`Store::cache_name`] produced,
+    /// and never the manifest. A cache directory is still someone's disk, and
+    /// a prune that mis-fires there is far worse than the leak it fixes.
+    pub fn prune(&self, keep: &[String]) -> usize {
+        let wanted: std::collections::HashSet<String> =
+            keep.iter().map(|url| Self::cache_name(url)).collect();
+
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return 0;
+        };
+
+        let mut removed = 0;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name == MANIFEST_FILE || wanted.contains(&name) {
+                continue;
+            }
+            if !is_cache_name(&name) {
+                continue;
+            }
+            if entry.file_type().is_ok_and(|t| t.is_file())
+                && std::fs::remove_file(entry.path()).is_ok()
+            {
+                removed += 1;
+            }
+        }
+        removed
+    }
+
     fn cache_for(&self, url: &str) -> ETagCache {
         ETagCache::new(self.path_for(url))
     }
@@ -285,6 +340,16 @@ impl Pipeline {
 
     pub fn store(&self) -> &Store {
         &self.store
+    }
+
+    /// Drop cached art this manifest no longer names, returning how many
+    /// files went.
+    ///
+    /// Call it on a *fresh* manifest: that is the only moment the complete set
+    /// of live URLs is known, and pruning against a partial view would delete
+    /// art that is still in use.
+    pub fn prune_cache(&self, manifest: &Manifest) -> usize {
+        self.store.prune(&manifest.urls(&self.origin.manifest()))
     }
 
     /// Fetch the manifest, falling back to the cached copy on `304`.
@@ -527,6 +592,16 @@ fn join(base: &str, rel: &str) -> String {
 }
 
 /// Lowercase file extension of a URL path, ignoring query and fragment.
+/// Whether a file name is one [`Store::cache_name`] would have produced:
+/// sixteen lowercase hex characters, optionally followed by an extension.
+///
+/// The gate on pruning. Anything else in that directory was not put there by
+/// this module and is not this module's to delete.
+fn is_cache_name(name: &str) -> bool {
+    let stem = name.split_once('.').map_or(name, |(stem, _)| stem);
+    stem.len() == 16 && stem.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+}
+
 fn extension(url: &str) -> Option<String> {
     let path = url.split(['?', '#']).next()?;
     let name = path.rsplit('/').next()?;
@@ -697,6 +772,69 @@ mod tests {
             height: None,
         };
         assert!(verify(bytes, &asset, Slot::Logo, "logo.png").is_ok());
+    }
+
+    #[test]
+    fn prune_keeps_what_the_manifest_names_and_drops_the_rest() {
+        let dir = std::env::temp_dir().join("lightforge-prune-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(&dir);
+
+        let live = "https://x/assets/retail-bg.0080bd8a.jpg".to_owned();
+        let stale = "https://x/assets/retail-bg.deadbeef.jpg".to_owned();
+        std::fs::write(store.path_for(&live), b"live").unwrap();
+        std::fs::write(store.path_for(&stale), b"stale").unwrap();
+        std::fs::write(dir.join(MANIFEST_FILE), b"{}").unwrap();
+        // Something this module did not write. A cache directory is still
+        // someone's disk; a prune that reaches past its own files is worse
+        // than the leak it fixes.
+        std::fs::write(dir.join("notes.txt"), b"not ours").unwrap();
+
+        assert_eq!(store.prune(std::slice::from_ref(&live)), 1);
+        assert!(store.path_for(&live).is_file(), "live art must survive");
+        assert!(!store.path_for(&stale).is_file(), "stale art must go");
+        assert!(dir.join(MANIFEST_FILE).is_file(), "the manifest is not art");
+        assert!(dir.join("notes.txt").is_file(), "foreign files are not ours to delete");
+
+        // Idempotent: nothing left to remove.
+        assert_eq!(store.prune(&[live]), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_names_this_module_produces_are_prunable() {
+        assert!(is_cache_name(&Store::cache_name("https://x/a.jpg")));
+        assert!(is_cache_name("0123456789abcdef.png"));
+        assert!(is_cache_name("0123456789abcdef"));
+        assert!(!is_cache_name("0123456789ABCDEF.png"), "uppercase is not ours");
+        assert!(!is_cache_name("retail-bg.jpg"));
+        assert!(!is_cache_name("manifest.json"));
+        assert!(!is_cache_name("0123456789abcde.png"), "fifteen characters");
+    }
+
+    /// The URL set is what pruning keeps, so a product whose icon is absent
+    /// must not silently drop its logo and background too.
+    #[test]
+    fn manifest_urls_cover_every_slot_and_resolve_relative() {
+        let manifest = Manifest {
+            schema: SCHEMA_VERSION,
+            default: None,
+            products: BTreeMap::from([(
+                "wow".to_owned(),
+                Theme {
+                    label: "Retail".into(),
+                    line: None,
+                    branch: None,
+                    logo: AssetRef { url: "l.png".into(), sha256: None, height: None },
+                    background: AssetRef { url: "b.jpg".into(), sha256: None, height: None },
+                    icon: None,
+                },
+            )]),
+        };
+
+        let urls = manifest.urls("https://x/assets/manifest.json");
+        assert_eq!(urls, ["https://x/assets/l.png", "https://x/assets/b.jpg"]);
     }
 
     #[tokio::test]

@@ -25,6 +25,26 @@
 //!    Proton on disk, and catches the subtler case where i386 is enabled but
 //!    an individual library is missing. The loader names that library, so its
 //!    stderr is kept rather than summarised.
+//!
+//! **What these checks do not prove.** They establish a floor — that 32-bit
+//! binaries can run at all — and nothing more. They cannot tell you the
+//! 32-bit *graphics* stack is present, because `wine --version` is a console
+//! program and the libraries a GUI needs are dlopened at run time, so they
+//! appear in neither the loader's view nor `ldd`'s. Measured on Fedora 44:
+//! installing `glibc.i686` and `freetype.i686` turns both checks green and
+//! the Battle.net installer still exits 1, for want of 32-bit X11 and GL.
+//!
+//! That is why [`remedy_for`] points at the distribution's 32-bit *Wine*
+//! package rather than a list of libraries. Wine's own dependencies are the
+//! closure we need, maintained by people who package it for a living; a list
+//! of our own would have to track every distro's graphics stack and would be
+//! wrong in exactly the way a green check that still fails is wrong.
+//!
+//! When the floor is met and the install fails anyway, the thing that
+//! explains it is [`crate::battlenet::BattleNetError::InstallerExited`],
+//! which carries the installer's own stderr. These checks are the cheap
+//! catch; that error is the backstop, and it is the one that found both bugs
+//! in this story.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -44,15 +64,18 @@ const LOADER_CANDIDATES: &[&str] = &[
     "/usr/lib32/ld-linux.so.2",
 ];
 
-/// What to tell someone whose 32-bit runtime is missing.
+/// What to tell someone whose 32-bit runtime is missing and whose
+/// distribution we do not recognise.
 ///
-/// Deliberately points at the distribution's own `wine` package rather than
-/// naming individual libraries. Lightforge never invokes that wine — it wants
-/// the dependency closure that installing it pulls in. One command, it exists
-/// on every distribution, and unlike a hand-maintained list of
-/// `libfreetype6:i386`-style names it does not rot as distros rename things.
-pub const ADVICE: &str = "install your distribution's `wine` package: Lightforge does not use it, \
-but installing it pulls in the 32-bit libraries Proton needs";
+/// This used to say "install your distribution's wine package", on the theory
+/// that it would pull the 32-bit dependency closure as a side effect. That is
+/// true on Debian and **false on Fedora 44**, where `dnf install wine`
+/// installs only `noarch` and `x86_64` packages and leaves the machine with
+/// no 32-bit loader at all. A generic trick that is wrong on a current
+/// mainstream distribution is worse than no trick, so this now names what is
+/// actually required and lets the user find it in their own package manager.
+pub const ADVICE: &str = "install the 32-bit (i686/i386) build of Wine that your distribution \
+ships — Lightforge does not use it, but it pulls in the whole 32-bit library stack Proton needs";
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
@@ -143,14 +166,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_advice_names_no_distro_specific_package() {
-        // The whole point of pointing at `wine` is that it is the one name
-        // every distribution shares. A library name creeping in here is the
-        // beginning of a list that will rot.
-        for rotting in ["i386", "apt", "dnf", "pacman", "libc6", "dpkg"] {
+    fn the_fallback_advice_names_no_package_manager() {
+        // The fallback is for distributions this table does not know, so it
+        // must not assume one's tooling. It may name the *libraries* — those
+        // are the actual requirement and every distro ships them under some
+        // spelling — but naming a package manager would make it wrong for
+        // everyone it is meant to serve.
+        for rotting in ["apt", "dnf", "pacman", "zypper", "dpkg", "emerge"] {
             assert!(
                 !ADVICE.contains(rotting),
-                "advice mentions `{rotting}`, which ties it to one distribution"
+                "fallback advice mentions `{rotting}`, which ties it to one distribution"
             );
         }
     }
@@ -283,9 +308,11 @@ pub fn remedy_for(os: &OsRelease) -> Remedy {
         (
             None,
             Some(
-                "NixOS is configured declaratively — add `wine` to \
-                 `environment.systemPackages` (or enable `programs.steam`, \
-                 which pulls the same 32-bit libraries) and rebuild"
+                "NixOS is configured declaratively — set \
+                 `hardware.graphics.enable32Bit = true;` (named \
+                 `hardware.opengl.driSupport32Bit` before 24.11) and \
+                 rebuild. Note that nixpkgs' `wine` is 64-bit only; \
+                 `wineWowPackages` is the 32-bit-capable set"
                     .to_owned(),
             ),
         )
@@ -303,17 +330,22 @@ pub fn remedy_for(os: &OsRelease) -> Remedy {
             ),
         )
     } else if os.is("debian") {
-        // Debian and Ubuntu ship no i386 packages at all until the
-        // architecture is enabled, which is the whole reason this check
-        // exists. Installing Steam does these three steps as a side effect.
+        // UNVERIFIED. Debian and Ubuntu ship no i386 packages at all until
+        // the architecture is enabled, which is why the first half exists;
+        // `wine32` is the i386 build and pulls the 32-bit stack with it.
+        // Installing Steam performs the equivalent as a side effect, which is
+        // why Steam appears to "fix" Lightforge on Debian.
         (
             Some(
-                "sudo dpkg --add-architecture i386 && sudo apt update && sudo apt install wine"
+                "sudo dpkg --add-architecture i386 && sudo apt update && \
+                 sudo apt install wine32:i386"
                     .to_owned(),
             ),
             None,
         )
     } else if os.is("arch") {
+        // UNVERIFIED. Arch's `wine` is built against multilib and pulls its
+        // lib32-* dependencies, so no separate 32-bit package exists.
         (
             Some("sudo pacman -S wine".to_owned()),
             Some(
@@ -324,9 +356,22 @@ pub fn remedy_for(os: &OsRelease) -> Remedy {
             ),
         )
     } else if os.id == "fedora" || os.is("fedora") {
-        (Some("sudo dnf install wine".to_owned()), None)
+        // VERIFIED on Fedora 44, after two wrong answers worth recording:
+        //
+        // `dnf install wine` resolves to x86_64 and installs nothing 32-bit
+        // at all — not even glibc.i686 — so the machine still has no loader.
+        //
+        // `dnf install glibc.i686 freetype.i686` produces the loader and is
+        // enough for `wine --version`, so both of this module's checks go
+        // green — and the Battle.net installer still exits 1, because it is a
+        // GUI application and needs the 32-bit X11, GL and audio stacks that
+        // those two packages do not bring.
+        //
+        // Naming the i686 build of wine is what pulls the whole closure.
+        (Some("sudo dnf install wine.i686".to_owned()), None)
     } else if os.is("suse") || os.is("opensuse") {
-        (Some("sudo zypper install wine".to_owned()), None)
+        // UNVERIFIED.
+        (Some("sudo zypper install wine-32bit".to_owned()), None)
     } else {
         (None, None)
     };
@@ -343,6 +388,59 @@ mod remedy_tests {
             id: id.into(),
             id_like: id_like.into(),
             pretty_name: format!("{id} (test)"),
+        }
+    }
+
+    /// The regression this table was corrected for, twice over.
+    ///
+    /// `dnf install wine` on Fedora 44 resolves to x86_64 and installs
+    /// nothing 32-bit, so the arch has to be named. The command must survive
+    /// both mistakes: no bare `install wine`, and an explicit i686.
+    #[test]
+    fn fedora_names_the_i686_arch_explicitly() {
+        let command = remedy_for(&os("fedora", "")).command.unwrap();
+        assert!(command.contains("i686"), "must name the 32-bit arch: {command}");
+        assert!(
+            !command.ends_with("install wine"),
+            "bare `install wine` resolves to x86_64 on Fedora and fixes nothing: {command}"
+        );
+    }
+
+    /// Every command asks for a 32-bit *Wine*, not a hand-picked list of
+    /// libraries.
+    ///
+    /// Picking libraries individually was tried and is a trap: glibc plus
+    /// freetype is enough to make this module's own checks pass, and still
+    /// not enough to run the Battle.net installer, which is a GUI program
+    /// wanting the 32-bit X11, GL and audio stacks too. Letting the
+    /// distribution's 32-bit Wine package resolve that closure is the only
+    /// version that does not require us to maintain a graphics-stack
+    /// dependency list per distro.
+    #[test]
+    fn every_command_installs_a_32_bit_wine() {
+        for id in ["debian", "ubuntu", "arch", "fedora", "opensuse-tumbleweed"] {
+            let os = OsRelease {
+                id: id.into(),
+                id_like: match id {
+                    "ubuntu" => "debian".into(),
+                    "opensuse-tumbleweed" => "suse".into(),
+                    _ => String::new(),
+                },
+                pretty_name: id.into(),
+            };
+            let remedy = remedy_for(&os);
+            let command = remedy.command.unwrap_or_default();
+            assert!(command.contains("wine"), "{id} installs no wine: {command}");
+            // Arch is the exception that proves the rule: its `wine` is built
+            // against multilib, so the package name carries no arch suffix
+            // and the note explains the repository instead.
+            let names_arch = ["i386", "i686", "32bit", "lib32"]
+                .iter()
+                .any(|m| command.contains(m));
+            assert!(
+                names_arch || remedy.note.is_some_and(|n| n.contains("multilib")),
+                "{id} neither names a 32-bit build nor explains why it need not: {command}"
+            );
         }
     }
 

@@ -288,7 +288,18 @@ pub async fn theme(
     let manifest = match manifest {
         Some(cached) => cached,
         None => match pipeline.manifest(&http).await {
-            Ok(fresh) => Arc::new(fresh),
+            Ok(fresh) => {
+                // Only on a fresh manifest, which is the only moment the full
+                // set of live URLs is known. Published art is
+                // content-addressed, so a changed image arrives under a new
+                // URL and the old cache file would otherwise sit there
+                // forever, a few megabytes per revision.
+                let removed = pipeline.prune_cache(&fresh);
+                if removed > 0 {
+                    crate::trace::mark(format_args!("pruned {removed} stale cached assets"));
+                }
+                Arc::new(fresh)
+            }
             Err(e) => {
                 crate::trace::mark(format_args!("manifest fetch failed: {e}"));
                 return Themed::default();
