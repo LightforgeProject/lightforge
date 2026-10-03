@@ -158,6 +158,40 @@ impl Manifest {
     ///
     /// A `default` pointing at a product that isn't in the map is treated as
     /// absent — a broken pointer shouldn't read as a themed product.
+    /// This product's own entry, with no fallback.
+    ///
+    /// [`Manifest::theme`]'s fallback to `default` is right for a logo and a
+    /// background — a WoW product released after the binary should look like
+    /// WoW rather than like nothing. It is wrong for a *mark*, which is
+    /// identity: falling back there puts World of Warcraft's icon beside the
+    /// word "Hearthstone", which is worse than no icon at all.
+    pub fn own_theme(&self, code: &ProductCode) -> Option<&Theme> {
+        self.products.get(code.as_str())
+    }
+
+    /// The theme `default` names, when it names one that exists.
+    fn default_theme(&self) -> Option<&Theme> {
+        self.default.as_deref().and_then(|code| self.products.get(code))
+    }
+
+    /// One art slot for a product: its own, else the default theme's.
+    ///
+    /// Per *slot* rather than per theme, because since schema 2 an entry can
+    /// carry a mark and nothing else. Falling back a whole theme at a time
+    /// would mean a WoW product that gains its own icon silently *loses* the
+    /// logo and background it used to inherit — it stopped being an unknown
+    /// product, so the fallback stopped applying. That is a surprising way to
+    /// lose artwork, and it bit Anniversary the moment it got a mark.
+    pub fn slot(
+        &self,
+        code: &ProductCode,
+        pick: fn(&Theme) -> Option<&AssetRef>,
+    ) -> Option<&AssetRef> {
+        self.own_theme(code)
+            .and_then(pick)
+            .or_else(|| self.default_theme().and_then(pick))
+    }
+
     pub fn theme(&self, code: &ProductCode) -> Option<&Theme> {
         self.products.get(code.as_str()).or_else(|| {
             self.default
@@ -415,7 +449,10 @@ impl Pipeline {
         // Battle.net hand-off needs. [`Branding`] means drawable art, so a
         // theme without it is not partial branding — it is none, and the
         // caller is asking the wrong question.
-        let (Some(logo_ref), Some(background_ref)) = (&theme.logo, &theme.background) else {
+        let (Some(logo_ref), Some(background_ref)) = (
+            manifest.slot(code, |t| t.logo.as_ref()),
+            manifest.slot(code, |t| t.background.as_ref()),
+        ) else {
             return Err(AssetError::NoArtwork(code.as_str().to_owned()));
         };
 
@@ -451,7 +488,7 @@ impl Pipeline {
         manifest: &Manifest,
         code: &ProductCode,
     ) -> Result<Option<Asset>, AssetError> {
-        let Some(icon) = manifest.theme(code).and_then(|t| t.icon.as_ref()) else {
+        let Some(icon) = manifest.own_theme(code).and_then(|t| t.icon.as_ref()) else {
             return Ok(None);
         };
         Ok(self.asset(http, icon, Slot::Icon).await.ok())
@@ -459,7 +496,7 @@ impl Pipeline {
 
     /// The cache-only half of [`Pipeline::icon`].
     pub fn cached_icon(&self, manifest: &Manifest, code: &ProductCode) -> Option<Asset> {
-        let icon = manifest.theme(code).and_then(|t| t.icon.as_ref())?;
+        let icon = manifest.own_theme(code).and_then(|t| t.icon.as_ref())?;
         self.cached_asset(icon, Slot::Icon)
     }
 
@@ -483,8 +520,9 @@ impl Pipeline {
 
         Some(Branding {
             label: theme.label.clone(),
-            logo: self.cached_asset(theme.logo.as_ref()?, Slot::Logo)?,
-            background: self.cached_asset(theme.background.as_ref()?, Slot::Background)?,
+            logo: self.cached_asset(manifest.slot(code, |t| t.logo.as_ref())?, Slot::Logo)?,
+            background: self
+                .cached_asset(manifest.slot(code, |t| t.background.as_ref())?, Slot::Background)?,
             // Optional, so a `?` here would throw away a perfectly good theme
             // over a mark the bar can do without.
             icon: theme.icon.as_ref().and_then(|i| self.cached_asset(i, Slot::Icon)),
@@ -833,6 +871,59 @@ mod tests {
             height: None,
         };
         assert!(verify(bytes, &asset, Slot::Logo, "logo.png").is_ok());
+    }
+
+    /// A mark of its own must not cost a product its inherited artwork.
+    ///
+    /// Anniversary had no entry at all and so fell back to Retail's logo and
+    /// background. Giving it an icon made the entry exist, and a per-theme
+    /// fallback would have dropped it to no art whatsoever — a worse outcome
+    /// produced by adding art.
+    #[test]
+    fn a_mark_only_entry_still_inherits_the_default_artwork() {
+        let body = r#"{
+            "schema": 2,
+            "default": "wow",
+            "products": {
+                "wow": { "label": "Retail",
+                         "logo": { "url": "l.png" },
+                         "background": { "url": "b.jpg" } },
+                "wow_anniversary": { "label": "Anniversary",
+                                     "icon": { "url": "a-icon.png" } }
+            }
+        }"#;
+        let m = Manifest::parse(body.as_bytes()).unwrap();
+        let anniversary = ProductCode::from("wow_anniversary".to_owned());
+
+        // Its own mark …
+        assert_eq!(
+            m.own_theme(&anniversary).unwrap().icon.as_ref().unwrap().url,
+            "a-icon.png"
+        );
+        // … and Retail's artwork behind it.
+        assert_eq!(m.slot(&anniversary, |t| t.logo.as_ref()).unwrap().url, "l.png");
+        assert_eq!(m.slot(&anniversary, |t| t.background.as_ref()).unwrap().url, "b.jpg");
+
+        // A hand-off with a mark and no default artwork to inherit is still
+        // mark-only; nothing invents art for it.
+        let d3 = ProductCode::from("d3".to_owned());
+        assert!(m.own_theme(&d3).is_none());
+    }
+
+    /// A mark is identity: a product with no entry of its own must show no
+    /// mark rather than another game's. This put World of Warcraft's icon
+    /// beside "Hearthstone" in the browse list, because Battle.net calls
+    /// Hearthstone `hs_beta` on a machine where it is installed and the
+    /// manifest entry was under `hsb`.
+    #[test]
+    fn a_product_without_its_own_entry_has_no_mark() {
+        let m = manifest();
+        let stranger = ProductCode::from("hs_beta".to_owned());
+
+        // The default fallback still answers for logo and background …
+        assert!(m.theme(&stranger).is_some());
+        // … but never lends another product its mark.
+        assert!(m.own_theme(&stranger).is_none());
     }
 
     #[test]

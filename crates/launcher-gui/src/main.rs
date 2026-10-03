@@ -3670,12 +3670,14 @@ impl Lightforge {
     ///
     /// Except for a hand-off: the manifest's `default` answers for every code
     /// it does not name, so asking would put Retail's mark on Hearthstone.
+    /// The mark a line's tile wears, if the manifest gives it one.
+    ///
+    /// Hand-offs were excluded here when nothing in the manifest described
+    /// them, which left Diablo and StarCraft as text tiles beside WoW's
+    /// icons. They have marks now, and a game is a game: what decides whether
+    /// a tile shows art is whether art exists, not who installs the game.
     fn tile_art(&self, line: &ProductLine) -> Option<&PathBuf> {
-        let head = line.head();
-        match self.kind_of(&head) {
-            Kind::Managed => self.icons.get(&head),
-            Kind::HandOff => None,
-        }
+        self.icons.get(&line.head())
     }
 
     /// One tile.
