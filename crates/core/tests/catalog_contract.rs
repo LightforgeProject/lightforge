@@ -104,6 +104,11 @@ async fn search_parses_the_results_envelope() {
         .await
         .expect("search must read `{\"results\": [...]}`, not a bare array");
 
+    // These assertions describe the fixture currently checked in, which
+    // predates the proxy's slug pin. Regenerating the fixtures turns this
+    // into two hits — the pinned exact slug match first, then the text hit —
+    // each carrying `download_count: 98_400_000`. Tighten this test to that
+    // when you do; the proxy's own tests already assert both.
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].id, "3358", "a project id is a string");
     assert_eq!(hits[0].name, "BigWigs");

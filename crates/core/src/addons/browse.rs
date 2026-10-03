@@ -132,7 +132,7 @@ pub async fn search(
                 name: p.name,
                 author: p.authors.first().cloned(),
                 version: None,
-                downloads: 0,
+                downloads: p.download_count,
                 website_url: p.website_url,
             })),
             Err(e) => problems.push(format!("CurseForge: {e}")),
@@ -160,7 +160,7 @@ pub struct Results {
 /// contains the word, or searching "BigWigs" surfaces eleven BigWigs plugins
 /// before BigWigs itself.
 fn rank(results: &mut [Listing], query: &str) {
-    let needle = query.to_lowercase();
+    let needle = fold(query);
     results.sort_by(|a, b| {
         score(&a.name, &needle)
             .cmp(&score(&b.name, &needle))
@@ -169,9 +169,10 @@ fn rank(results: &mut [Listing], query: &str) {
     });
 }
 
-/// Lower is better.
+/// Lower is better. Both sides are folded, so "big wigs" scores against
+/// "BigWigs" as an exact match rather than as no match at all.
 fn score(name: &str, needle: &str) -> u8 {
-    let name = name.to_lowercase();
+    let name = fold(name);
     match () {
         _ if name == needle => 0,
         _ if name.starts_with(needle) => 1,
@@ -180,11 +181,26 @@ fn score(name: &str, needle: &str) -> u8 {
     }
 }
 
+/// Lowercase, keeping only letters and digits.
+///
+/// Addon names are typed from memory, not copied: "big wigs", "BigWigs" and
+/// "Big-Wigs" are one query, and "ElvUI" is often typed "Elv UI". Folding
+/// also strips the decoration real titles carry — "BigWigs (Boss Timers &
+/// Tools)" still begins with the query once the punctuation is gone.
+fn fold(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 fn search_wowi(entries: &[WowiEntry], query: &str, flavor: &str) -> Vec<Listing> {
-    let needle = query.to_lowercase();
+    // Folded on both sides, so "big wigs" finds "BigWigs". A matcher that is
+    // stricter than the ranker hides results the ranker was written to order.
+    let needle = fold(query);
     entries
         .iter()
-        .filter(|e| e.title.to_lowercase().contains(&needle))
+        .filter(|e| fold(&e.title).contains(&needle))
         .filter(|e| e.flavors().is_empty() || supports(e.flavors(), flavor))
         .map(|e| Listing {
             provider: Provider::WowInterface,
@@ -199,10 +215,10 @@ fn search_wowi(entries: &[WowiEntry], query: &str, flavor: &str) -> Vec<Listing>
 }
 
 fn search_tukui(entries: &[TukuiEntry], query: &str) -> Vec<Listing> {
-    let needle = query.to_lowercase();
+    let needle = fold(query);
     entries
         .iter()
-        .filter(|e| e.name.to_lowercase().contains(&needle) || e.slug.contains(&needle))
+        .filter(|e| fold(&e.name).contains(&needle) || fold(&e.slug).contains(&needle))
         .map(|e| Listing {
             provider: Provider::TukUI,
             // Slug, not id: Tukui's ids can be negative.
@@ -359,6 +375,35 @@ mod tests {
         rank(&mut found, "BigWigs");
 
         assert_eq!(found[0].name, "BigWigs");
+    }
+
+    #[test]
+    fn a_name_typed_with_a_space_still_matches_and_outranks_a_popular_plugin() {
+        // "big wigs" is how it gets typed from memory. Folded, it is an exact
+        // match for BigWigs and only a prefix of BigWigs_Voice, so the core
+        // addon wins on match quality despite 1800x fewer downloads.
+        let entries = vec![
+            wowi(1, "BigWigs_Voice", 900_000, &["12.0.7"]),
+            wowi(2, "BigWigs", 500, &["12.0.7"]),
+        ];
+        let mut found = search_wowi(&entries, "big wigs", "retail");
+        rank(&mut found, "big wigs");
+
+        assert_eq!(found.len(), 2, "a space must not filter both out");
+        assert_eq!(found[0].name, "BigWigs");
+    }
+
+    #[test]
+    fn a_decorated_title_is_found_by_the_bare_name() {
+        // Real catalogue titles carry parentheticals. Folding reaches past
+        // them; it cannot, however, tell "BigWigs (Boss Timers)" apart from
+        // "BigWigs_Voice" on name alone — both are prefix matches, and
+        // downloads are the only honest signal left to separate them.
+        let entries = vec![wowi(1, "BigWigs (Boss Timers & Tools)", 500, &["12.0.7"])];
+
+        assert_eq!(search_wowi(&entries, "big wigs", "retail").len(), 1);
+        assert_eq!(fold("Elv UI"), "elvui");
+        assert_eq!(fold("Big-Wigs!"), "bigwigs");
     }
 
     #[test]

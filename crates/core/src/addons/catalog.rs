@@ -152,6 +152,11 @@ pub struct Project {
     pub website_url: Option<String>,
     #[serde(default)]
     pub thumbnail_url: Option<String>,
+    /// Lifetime downloads, as the proxy reports them. Absent on an older
+    /// proxy, which then ranks every CurseForge hit equally — see
+    /// [`crate::addons::browse`].
+    #[serde(default)]
+    pub download_count: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
