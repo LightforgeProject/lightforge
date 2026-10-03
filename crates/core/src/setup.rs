@@ -29,6 +29,13 @@ pub struct Status {
     pub installed: Vec<ProtonRelease>,
     pub prefix: PrefixStatus,
     pub battle_net: bool,
+    /// Whether this machine has a 32-bit runtime at all.
+    ///
+    /// Only the cheap loader check ([`runtime::check_loader`]) — one `stat`,
+    /// so inspecting is still free enough to do on every reload. The deeper
+    /// check that actually starts Proton's 32-bit wine runs in [`run`], where
+    /// Proton is guaranteed to exist and the cost is paid once.
+    pub thirty_two_bit: bool,
 }
 
 impl Status {
@@ -43,6 +50,7 @@ impl Status {
             installed,
             prefix: PrefixStatus::inspect(layout),
             battle_net: battlenet::Installer::new(layout, PathBuf::new()).is_installed(),
+            thirty_two_bit: runtime::has_32bit_loader(),
         }
     }
 
@@ -347,6 +355,9 @@ mod tests {
             installed: Vec::new(),
             prefix,
             battle_net,
+            // These tests are about which steps are outstanding, which is a
+            // question about the disk, not about the host's libraries.
+            thirty_two_bit: true,
         }
     }
 

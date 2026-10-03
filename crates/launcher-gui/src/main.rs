@@ -296,6 +296,13 @@ enum Message {
     Show(Screen),
     SetupStatus(Option<Box<SetupStatus>>),
     RunSetup,
+    /// Put the 32-bit library command on the clipboard. Lightforge never runs
+    /// it: installing system packages needs root, and the distributions where
+    /// help is most needed cannot be served by a command at all.
+    CopyRuntimeCommand(String),
+    /// Re-read the machine after the user has installed the libraries, so the
+    /// row clears without restarting the app.
+    RecheckRuntime,
     SetupFinished(Result<Box<SetupStatus>, String>),
     PinDefaultProton(ProtonChoice),
     /// The build Battle.net and Agent launch under.
@@ -1856,6 +1863,13 @@ impl Lightforge {
             }
 
             Message::Exit => iced::exit(),
+
+            Message::CopyRuntimeCommand(command) => iced::clipboard::write(command),
+
+            Message::RecheckRuntime => Task::perform(
+                provision::status(self.layout.clone(), self.config.clone()),
+                |status| Message::SetupStatus(status.map(Box::new)),
+            ),
 
             Message::SetupStatus(status) => {
                 let status = status.map(|boxed| *boxed);
@@ -5203,6 +5217,81 @@ impl Lightforge {
         body.into()
     }
 
+    /// The 32-bit runtime, when it is missing.
+    ///
+    /// Everything Lightforge does to build a prefix is 64-bit; Battle.net's
+    /// installer is the first 32-bit binary in the sequence, so a machine
+    /// without a 32-bit userspace looks perfectly healthy until the very last
+    /// step and then dies in under a second. Saying so here, before anything
+    /// is downloaded, is the whole point.
+    ///
+    /// The command is offered to copy rather than run. Installing system
+    /// packages needs root, and a launcher invoking a package manager as root
+    /// on a guess about someone's distribution is a trust escalation worth
+    /// avoiding — the more so because the systems that most need help
+    /// (read-only SteamOS, rpm-ostree, NixOS) are exactly the ones no such
+    /// button could serve.
+    fn runtime_row() -> Element<'static, Message> {
+        let remedy = lightforge_core::runtime::remedy();
+
+        let mut lines = column![
+            text("32-bit runtime").size(theme::BODY),
+            mono("missing — Battle.net's installer cannot run without it".to_owned()),
+        ]
+        .spacing(theme::XS);
+
+        if let Some(command) = &remedy.command {
+            lines = lines.push(muted(
+                format!("on {}, run:", remedy.distro),
+                theme::CAPTION,
+            ));
+            lines = lines.push(mono(command.clone()));
+        }
+        if let Some(note) = &remedy.note {
+            lines = lines.push(muted(note.clone(), theme::CAPTION));
+        }
+        if remedy.command.is_none() && remedy.note.is_none() {
+            lines = lines.push(muted(
+                lightforge_core::runtime::ADVICE.to_owned(),
+                theme::CAPTION,
+            ));
+        }
+
+        // Only offer a copy when there is something to copy. A dead button
+        // beside an immutable distro's instructions would be worse than none.
+        let mut actions = row![].spacing(theme::SM).align_y(Alignment::Center);
+        if let Some(command) = remedy.command.clone() {
+            actions = actions.push(
+                action_button(
+                    "Copy command",
+                    theme::ACCENT,
+                    Message::CopyRuntimeCommand(command),
+                )
+                .enabled(true),
+            );
+        }
+        actions = actions.push(secondary("Re-check", Message::RecheckRuntime).enabled(true));
+
+        container(
+            row![
+                container(
+                    container(Space::new().width(Length::Fixed(8.0)).height(Length::Fixed(8.0)))
+                        .style(theme::dot(theme::ERROR)),
+                )
+                .padding(theme::SM)
+                .style(theme::badge(theme::ERROR)),
+                lines.width(Length::Fill),
+                actions,
+            ]
+            .spacing(theme::MD)
+            .align_y(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .padding(theme::MD)
+        .style(theme::row)
+        .into()
+    }
+
     /// First-run provisioning: what is missing, and one button to fix it.
     /// Proton, the prefix and Battle.net: what is there, and the button that
     /// provisions whatever isn't.
@@ -5240,6 +5329,13 @@ impl Lightforge {
         match &self.setup {
             None => body = body.push(muted("checking what is installed…".to_owned(), theme::BODY)),
             Some(status) => {
+                // A precondition rather than a step: nothing below can be
+                // provisioned without it, and unlike the three steps it is not
+                // something Lightforge can do on the user's behalf. It leads
+                // the list for the same reason it blocks setup.
+                if !status.thirty_two_bit {
+                    body = body.push(Self::runtime_row());
+                }
                 body = body.push(step(
                     status.proton.is_some(),
                     "Proton-GE",

@@ -194,3 +194,220 @@ mod tests {
         assert_eq!(has_32bit_loader(), check_loader().is_ok());
     }
 }
+
+// ---------------------------------------------------------------------
+// Telling the user what to run
+// ---------------------------------------------------------------------
+
+/// A distribution-specific way to get the 32-bit libraries.
+///
+/// Lightforge never runs this itself. Installing system packages needs root,
+/// and a launcher that invokes a package manager as root on a guess about the
+/// user's distribution is a trust escalation this project does not need to
+/// make — especially since on the distributions where a button would work the
+/// user can run one command, and on the ones where help is most needed
+/// (read-only SteamOS, rpm-ostree, NixOS) no button could work at all.
+///
+/// So this is text to copy, and [`Remedy::distro`] is shown beside it so the
+/// user can see what was guessed and ignore it if the guess is wrong.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Remedy {
+    /// What this system appears to be, in its own words.
+    pub distro: String,
+    /// The command to run, when there is one worth printing.
+    pub command: Option<String>,
+    /// What the command alone does not cover.
+    pub note: Option<String>,
+}
+
+/// The relevant fields of `/etc/os-release`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OsRelease {
+    pub id: String,
+    pub id_like: String,
+    pub pretty_name: String,
+}
+
+impl OsRelease {
+    pub fn read() -> Self {
+        Self::parse(&std::fs::read_to_string("/etc/os-release").unwrap_or_default())
+    }
+
+    pub fn parse(text: &str) -> Self {
+        let mut os = Self::default();
+        for line in text.lines() {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let value = value.trim().trim_matches('"').to_owned();
+            match key.trim() {
+                "ID" => os.id = value,
+                "ID_LIKE" => os.id_like = value,
+                "PRETTY_NAME" => os.pretty_name = value,
+                _ => {}
+            }
+        }
+        os
+    }
+
+    /// Whether this system is, or is derived from, `family`.
+    fn is(&self, family: &str) -> bool {
+        self.id == family || self.id_like.split_whitespace().any(|l| l == family)
+    }
+}
+
+/// What to tell this machine's owner to run.
+pub fn remedy() -> Remedy {
+    remedy_for(&OsRelease::read())
+}
+
+/// The table, kept deliberately short.
+///
+/// Every entry here is a maintenance liability — package names move and
+/// distributions fork — so this covers the families that actually ship WoW
+/// players and says nothing at all about the rest, rather than guessing.
+/// An unrecognised system gets [`ADVICE`] and no command, which is honest and
+/// still actionable.
+pub fn remedy_for(os: &OsRelease) -> Remedy {
+    let distro = match os.pretty_name.is_empty() {
+        false => os.pretty_name.clone(),
+        true => match os.id.is_empty() {
+            false => os.id.clone(),
+            true => "this system".to_owned(),
+        },
+    };
+
+    let (command, note) = if os.id == "nixos" {
+        // Declarative: there is no imperative command to copy, and telling
+        // someone to run one would be actively wrong.
+        (
+            None,
+            Some(
+                "NixOS is configured declaratively — add `wine` to \
+                 `environment.systemPackages` (or enable `programs.steam`, \
+                 which pulls the same 32-bit libraries) and rebuild"
+                    .to_owned(),
+            ),
+        )
+    } else if os.id == "steamos" || os.is("steamos") {
+        // SteamOS already ships the 32-bit stack, so reaching this is odd —
+        // and its rootfs is read-only, so `pacman` is the wrong instruction.
+        (
+            None,
+            Some(
+                "SteamOS ships these libraries already and its system \
+                 partition is read-only — if they are genuinely missing, \
+                 `steamos-readonly disable` is the documented route, at your \
+                 own risk"
+                    .to_owned(),
+            ),
+        )
+    } else if os.is("debian") {
+        // Debian and Ubuntu ship no i386 packages at all until the
+        // architecture is enabled, which is the whole reason this check
+        // exists. Installing Steam does these three steps as a side effect.
+        (
+            Some(
+                "sudo dpkg --add-architecture i386 && sudo apt update && sudo apt install wine"
+                    .to_owned(),
+            ),
+            None,
+        )
+    } else if os.is("arch") {
+        (
+            Some("sudo pacman -S wine".to_owned()),
+            Some(
+                "`wine` lives in the multilib repository — if pacman cannot \
+                 find it, uncomment the `[multilib]` section in \
+                 /etc/pacman.conf first"
+                    .to_owned(),
+            ),
+        )
+    } else if os.id == "fedora" || os.is("fedora") {
+        (Some("sudo dnf install wine".to_owned()), None)
+    } else if os.is("suse") || os.is("opensuse") {
+        (Some("sudo zypper install wine".to_owned()), None)
+    } else {
+        (None, None)
+    };
+
+    Remedy { distro, command, note }
+}
+
+#[cfg(test)]
+mod remedy_tests {
+    use super::*;
+
+    fn os(id: &str, id_like: &str) -> OsRelease {
+        OsRelease {
+            id: id.into(),
+            id_like: id_like.into(),
+            pretty_name: format!("{id} (test)"),
+        }
+    }
+
+    #[test]
+    fn os_release_parses_quotes_and_ignores_the_rest() {
+        let text = "NAME=\"Debian GNU/Linux\"\nID=debian\nPRETTY_NAME=\"Debian GNU/Linux 13\"\nVERSION_ID=\"13\"\n";
+        let parsed = OsRelease::parse(text);
+        assert_eq!(parsed.id, "debian");
+        assert_eq!(parsed.pretty_name, "Debian GNU/Linux 13");
+        assert!(parsed.id_like.is_empty());
+    }
+
+    /// The case that started all this: Ubuntu is `ID=ubuntu ID_LIKE=debian`,
+    /// and must get Debian's answer rather than falling through to nothing.
+    #[test]
+    fn derivatives_inherit_their_family() {
+        let ubuntu = remedy_for(&os("ubuntu", "debian"));
+        assert!(ubuntu.command.as_deref().unwrap().contains("add-architecture i386"));
+
+        let mint = remedy_for(&os("linuxmint", "ubuntu debian"));
+        assert_eq!(mint.command, ubuntu.command);
+
+        let endeavour = remedy_for(&os("endeavouros", "arch"));
+        assert!(endeavour.command.as_deref().unwrap().contains("pacman"));
+    }
+
+    #[test]
+    fn debian_enables_the_architecture_before_installing() {
+        let remedy = remedy_for(&os("debian", ""));
+        let command = remedy.command.unwrap();
+        // Order matters: `apt install wine` alone does nothing useful on a
+        // machine that has never had i386 enabled.
+        let add = command.find("add-architecture").unwrap();
+        let install = command.find("apt install").unwrap();
+        assert!(add < install, "the architecture has to be enabled first: {command}");
+    }
+
+    #[test]
+    fn arch_warns_about_multilib() {
+        let remedy = remedy_for(&os("arch", ""));
+        assert!(remedy.note.unwrap().contains("multilib"));
+    }
+
+    /// Distributions where running a package manager would be wrong get a
+    /// note and no command, so the UI shows no button to press.
+    #[test]
+    fn immutable_and_declarative_systems_get_no_command() {
+        for id in ["nixos", "steamos"] {
+            let remedy = remedy_for(&os(id, ""));
+            assert!(remedy.command.is_none(), "{id} must not be handed a command");
+            assert!(remedy.note.is_some(), "{id} still has to say something useful");
+        }
+    }
+
+    #[test]
+    fn an_unknown_system_says_nothing_rather_than_guessing() {
+        let remedy = remedy_for(&os("某", ""));
+        assert!(remedy.command.is_none());
+        assert!(remedy.note.is_none());
+    }
+
+    #[test]
+    fn the_distro_name_falls_back_sensibly() {
+        assert_eq!(remedy_for(&OsRelease::default()).distro, "this system");
+        let id_only = OsRelease { id: "debian".into(), ..Default::default() };
+        assert_eq!(remedy_for(&id_only).distro, "debian");
+    }
+}
