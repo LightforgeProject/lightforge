@@ -660,7 +660,7 @@ struct Lightforge {
     /// The branding manifest, read once and themed from thereafter.
     manifest: Option<Arc<Manifest>>,
     /// Every configured product's bar icon, for those that have one.
-    icons: HashMap<ProductCode, image::Handle>,
+    icons: HashMap<ProductCode, tasks::Mark>,
     /// The branch last used in each line, so returning to a tile returns to
     /// the build you were on rather than snapping back to live.
     last_branch: HashMap<ProductLine, ProductCode>,
@@ -1426,7 +1426,12 @@ impl Lightforge {
                     self.manifest = themed.manifest;
                     self.refresh_catalog();
                 }
-                if !themed.icons.is_empty() {
+                // Same reasoning as the branding swap below. A revalidation
+                // that answered 304 produces the same files decoded again;
+                // assigning them hands the renderer brand-new texture ids for
+                // pixels already on screen, and the whole band blinks after
+                // every switch.
+                if !themed.icons.is_empty() && !tasks::same_marks(&self.icons, &themed.icons) {
                     self.icons = themed.icons;
                 }
                 if code == self.selected.code {
@@ -3501,7 +3506,7 @@ impl Lightforge {
             // hand-offs have none, and art arrives one product at a time — so
             // the labels stay in line instead of stepping in and out.
             let mark: Element<Message> = match self.icons.get(&entry.code) {
-                Some(handle) => image(handle.clone())
+                Some(mark) => image(mark.handle.clone())
                     .content_fit(ContentFit::Contain)
                     .width(Length::Fixed(BROWSE_MARK))
                     .height(Length::Fixed(BROWSE_MARK))
@@ -3676,7 +3681,7 @@ impl Lightforge {
     /// them, which left Diablo and StarCraft as text tiles beside WoW's
     /// icons. They have marks now, and a game is a game: what decides whether
     /// a tile shows art is whether art exists, not who installs the game.
-    fn tile_art(&self, line: &ProductLine) -> Option<&image::Handle> {
+    fn tile_art(&self, line: &ProductLine) -> Option<&tasks::Mark> {
         self.icons.get(&line.head())
     }
 
@@ -3688,7 +3693,7 @@ impl Lightforge {
     fn tile(&self, line: &ProductLine) -> Element<'_, Message> {
         let selected = line == &self.catalog.line_of(&self.selected.code);
         let face: Element<Message> = match self.tile_art(line) {
-            Some(handle) => image(handle.clone())
+            Some(mark) => image(mark.handle.clone())
                 .content_fit(ContentFit::Contain)
                 .width(Length::Fixed(theme::TILE))
                 .height(Length::Fixed(theme::TILE))
@@ -3968,9 +3973,9 @@ impl Lightforge {
         let mut rows = column![].spacing(theme::XS).width(Length::Fixed(220.0));
         for line in hidden {
             let mut entry = row![].spacing(theme::SM).align_y(Alignment::Center);
-            if let Some(handle) = self.tile_art(line) {
+            if let Some(mark) = self.tile_art(line) {
                 entry = entry.push(
-                    image(handle.clone())
+                    image(mark.handle.clone())
                         .content_fit(ContentFit::Contain)
                         .width(Length::Fixed(theme::TILE * 0.6))
                         .height(Length::Fixed(theme::TILE * 0.6)),

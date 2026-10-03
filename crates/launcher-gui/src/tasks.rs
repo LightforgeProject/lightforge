@@ -242,12 +242,12 @@ fn cached_icons(
     pipeline: &Pipeline,
     manifest: &Manifest,
     codes: &[ProductCode],
-) -> HashMap<ProductCode, Handle> {
+) -> HashMap<ProductCode, Mark> {
     codes
         .iter()
         .filter_map(|code| {
             let icon = pipeline.cached_icon(manifest, code)?;
-            Some((code.clone(), crate::art::mark(&icon.path)))
+            Some((code.clone(), Mark::decode(icon.path)))
         })
         .collect()
 }
@@ -263,7 +263,36 @@ fn cached_icons(
 pub struct Themed {
     pub manifest: Option<Arc<Manifest>>,
     pub branding: Option<Art>,
-    pub icons: HashMap<ProductCode, Handle>,
+    pub icons: HashMap<ProductCode, Mark>,
+}
+
+/// A product's decoded mark, beside the file it came from.
+///
+/// The path is kept for one reason: to tell whether a theming pass produced
+/// *different* marks or the same ones again. [`Handle::from_path`] used to
+/// make that free, because iced caches those by path and reassigning one costs
+/// nothing. A handle built from pixels is a fresh id every time, so assigning
+/// an identical set makes the renderer re-upload every texture — which is the
+/// band blinking after a switch. Comparing paths answers it exactly, the same
+/// way [`Art`] compares its [`lightforge_core::assets::Branding`].
+#[derive(Debug, Clone)]
+pub struct Mark {
+    pub path: PathBuf,
+    pub handle: Handle,
+}
+
+impl Mark {
+    fn decode(path: PathBuf) -> Self {
+        let handle = crate::art::mark(&path);
+        Self { path, handle }
+    }
+}
+
+/// Whether two icon sets name the same files, regardless of handle identity.
+pub fn same_marks(a: &HashMap<ProductCode, Mark>, b: &HashMap<ProductCode, Mark>) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .all(|(code, mark)| b.get(code).is_some_and(|other| other.path == mark.path))
 }
 
 /// Resolve a product's branding, or an empty [`Themed`] when theming isn't
@@ -327,7 +356,7 @@ pub async fn theme(
             // Scaled here rather than handed over as a path: the band draws
             // these at 40pt, and letting the renderer reduce a 256px image
             // that far is what made them look pixelated.
-            icons.insert(product.clone(), crate::art::mark(&icon.path));
+            icons.insert(product.clone(), Mark::decode(icon.path));
         }
     }
 
@@ -987,5 +1016,38 @@ mod uninstall_tests {
         assert_eq!(after.len(), had.len() - 1);
         assert!(after.iter().all(|r| r.product != "wow_classic_era"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod mark_tests {
+    use super::*;
+
+    fn mark(path: &str) -> Mark {
+        Mark { path: PathBuf::from(path), handle: Handle::from_rgba(1, 1, vec![0, 0, 0, 0]) }
+    }
+
+    /// The regression this guards: icons became decoded handles, and a handle
+    /// built from pixels is a fresh id every time. Reassigning an identical
+    /// set makes the renderer re-upload every texture, which is the band
+    /// blinking a second after each product switch — the same fault the
+    /// branding swap was fixed for in October.
+    #[test]
+    fn identical_icon_sets_compare_equal_despite_new_handles() {
+        let retail = ProductCode::from("wow".to_owned());
+        let a = HashMap::from([(retail.clone(), mark("/cache/abc.png"))]);
+        let b = HashMap::from([(retail.clone(), mark("/cache/abc.png"))]);
+        assert!(same_marks(&a, &b), "same file must compare equal");
+
+        let c = HashMap::from([(retail, mark("/cache/def.png"))]);
+        assert!(!same_marks(&a, &c), "a different file must swap");
+    }
+
+    #[test]
+    fn a_changed_set_size_is_not_the_same() {
+        let a = HashMap::from([(ProductCode::from("wow".to_owned()), mark("/x.png"))]);
+        let b = HashMap::new();
+        assert!(!same_marks(&a, &b));
+        assert!(!same_marks(&b, &a));
     }
 }

@@ -335,9 +335,21 @@ impl Store {
     /// only names that look like something [`Store::cache_name`] produced,
     /// and never the manifest. A cache directory is still someone's disk, and
     /// a prune that mis-fires there is far worse than the leak it fixes.
+    ///
+    /// **Each kept file keeps its `.etag` sidecar too.** Missing that was a
+    /// real bug: every pass deleted every validator, so the next revalidation
+    /// had nothing to send, re-downloaded art it already had, and the UI
+    /// swapped pictures that had not changed — which looks like the page
+    /// flickering a second after each product switch.
     pub fn prune(&self, keep: &[String]) -> usize {
-        let wanted: std::collections::HashSet<String> =
-            keep.iter().map(|url| Self::cache_name(url)).collect();
+        let mut wanted: std::collections::HashSet<String> =
+            std::collections::HashSet::with_capacity(keep.len() * 2);
+        for url in keep {
+            let name = Self::cache_name(url);
+            wanted.insert(format!("{name}.etag"));
+            wanted.insert(name);
+        }
+        wanted.insert(format!("{MANIFEST_FILE}.etag"));
 
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return 0;
@@ -943,7 +955,21 @@ mod tests {
         // than the leak it fixes.
         std::fs::write(dir.join("notes.txt"), b"not ours").unwrap();
 
-        assert_eq!(store.prune(std::slice::from_ref(&live)), 1);
+        // The ETag sidecars the fetcher writes beside each body.
+        std::fs::write(format!("{}.etag", store.path_for(&live).display()), b"\"v1\"").unwrap();
+        std::fs::write(format!("{}.etag", store.path_for(&stale).display()), b"\"v2\"").unwrap();
+        std::fs::write(dir.join(format!("{MANIFEST_FILE}.etag")), b"\"m\"").unwrap();
+
+        // Two gone: the stale body and its validator.
+        assert_eq!(store.prune(std::slice::from_ref(&live)), 2);
+        assert!(
+            std::path::Path::new(&format!("{}.etag", store.path_for(&live).display())).is_file(),
+            "a live asset must keep its validator, or the next launch re-downloads it"
+        );
+        assert!(
+            dir.join(format!("{MANIFEST_FILE}.etag")).is_file(),
+            "the manifest's own validator is not art"
+        );
         assert!(store.path_for(&live).is_file(), "live art must survive");
         assert!(!store.path_for(&stale).is_file(), "stale art must go");
         assert!(dir.join(MANIFEST_FILE).is_file(), "the manifest is not art");
