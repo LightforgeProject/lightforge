@@ -4150,6 +4150,12 @@ impl Lightforge {
                 // floating in the middle of the art with nothing to hold it.
                 // The page's own top padding below is the whole gap; the
                 // space beneath still separates it from the background.
+                //
+                // Inset from the left, though, rather than flush with the
+                // panel below it. Each logo is trimmed to its own artwork, so
+                // flush meant *touching* the page edge with no margin of its
+                // own — alignment the eye reads as a mistake rather than as a
+                // column.
                 container(logo)
                     .align_x(Alignment::Start)
                     .width(Length::Fill)
@@ -4157,7 +4163,7 @@ impl Lightforge {
                         top: 0.0,
                         right: 0.0,
                         bottom: theme::MD,
-                        left: 0.0,
+                        left: theme::XL,
                     }),
                 Space::new().height(Length::Fill),
                 // A product Battle.net owns gets a panel that offers only what
@@ -4189,9 +4195,24 @@ impl Lightforge {
                     .content_fit(ContentFit::Cover)
                     .width(Length::Fill)
                     .height(Length::Fill),
-                // A scrim: art is chosen to look good, not to be legible behind
-                // text, so the page darkens it towards the bottom where the
-                // controls live.
+                // A scrim at both ends. Art is chosen to look good, not to be
+                // legible behind text, so the page darkens where text sits:
+                // the controls at the bottom, and the navigation row at the
+                // top, which hangs straight over the picture with no backdrop
+                // of its own. That was a deliberate choice when the header was
+                // rebuilt — a bar behind it fought the art — and this is the
+                // fix the note left in its place called for: not a bar, a
+                // gradient, so bright art loses contrast to the text instead
+                // of the other way round.
+                //
+                // Offsets run bottom (0.0) to top (1.0). The top pair holds
+                // rather than ramps: the navigation row sits about 6% down, so
+                // a gradient that starts fading at the very edge leaves the
+                // text in the middle of the fade at roughly half strength —
+                // legible on most art and marginal on a bright sky. Holding
+                // full strength across the row and fading below it puts the
+                // whole of the text on even cover, and the fade lands over the
+                // game band, which carries its own card and needs none.
                 container(Space::new().height(Length::Fill))
                     .width(Length::Fill)
                     .style(|_| container::Style {
@@ -4199,7 +4220,9 @@ impl Lightforge {
                             iced::gradient::Linear::new(0.0)
                                 .add_stop(0.0, iced::Color { a: 0.95, ..theme::BG })
                                 .add_stop(0.45, iced::Color { a: 0.35, ..theme::BG })
-                                .add_stop(1.0, iced::Color { a: 0.15, ..theme::BG }),
+                                .add_stop(0.84, iced::Color { a: 0.12, ..theme::BG })
+                                .add_stop(0.93, iced::Color { a: 0.75, ..theme::BG })
+                                .add_stop(1.0, iced::Color { a: 0.75, ..theme::BG }),
                         ))),
                         ..container::Style::default()
                     }),
