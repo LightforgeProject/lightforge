@@ -18,6 +18,7 @@ use crate::net::Http;
 use crate::paths::{AppDirs, Layout};
 use crate::prefix::{self, PrefixStatus, ProtonRunner};
 use crate::proton::{self, ProtonRelease};
+use crate::runtime;
 
 /// What provisioning still has to do on this machine.
 #[derive(Debug, Clone)]
@@ -115,6 +116,13 @@ pub async fn run(
     proton_version: Option<&str>,
     mut on_event: impl FnMut(Event),
 ) -> Result<Status, SetupError> {
+    // Before anything is downloaded. Battle.net's installer is 32-bit, and it
+    // is the only 32-bit thing in this sequence — so a machine with no 32-bit
+    // userspace sails through Proton and prefix creation and dies on the last
+    // step. Checking here costs one `stat` and saves a 400 MB download the
+    // user could not have used.
+    runtime::check_loader()?;
+
     let http = Http::new()?;
     let mut status = Status::inspect(layout, dirs, config);
 
@@ -175,7 +183,15 @@ pub async fn run(
         status.prefix = prefix;
     }
 
-    // 3. Battle.net, which needs a built prefix to install into.
+    // 3. Battle.net, which needs a built prefix to install into — and, unlike
+    //    every step before it, a working 32-bit wine. The loader check above
+    //    catches a system with no 32-bit userspace at all; this catches one
+    //    where it exists but a library Proton's wine needs does not, and the
+    //    dynamic loader says which.
+    if !status.battle_net {
+        runtime::check_wine(runner.dist())?;
+    }
+
     if status.battle_net {
         on_event(Event::Finished {
             step: Step::BattleNet,
@@ -272,6 +288,9 @@ pub enum SetupError {
 
     #[error(transparent)]
     Prefix(#[from] prefix::PrefixError),
+
+    #[error(transparent)]
+    Runtime(#[from] runtime::RuntimeError),
 
     #[error(transparent)]
     BattleNet(#[from] battlenet::BattleNetError),

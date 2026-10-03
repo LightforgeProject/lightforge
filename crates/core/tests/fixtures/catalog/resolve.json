@@ -1,0 +1,29 @@
+{
+  "results": [
+    {
+      "download_url": "https://edge.forgecdn.example/BigWigs.zip",
+      "file_id": "800800",
+      "file_length": 1234567,
+      "file_name": "Addon-800800.zip",
+      "folders": [
+        "BigWigs",
+        "BigWigs_Core"
+      ],
+      "id": "3358",
+      "md5": "0123456789abcdef0123456789abcdef",
+      "name": "BigWigs",
+      "status": "ok",
+      "website_url": "https://curseforge.example/BigWigs"
+    },
+    {
+      "id": "4242",
+      "name": "PrivateAddon",
+      "status": "opt_out",
+      "website_url": "https://curseforge.example/PrivateAddon"
+    },
+    {
+      "id": "9999",
+      "status": "not_found"
+    }
+  ]
+}

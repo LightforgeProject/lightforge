@@ -18,8 +18,9 @@
 //! Phases 3 and 4 run with no Battle.net process alive: the client rewrites
 //! `Battle.net.config` on exit and would otherwise clobber the injection.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -53,6 +54,35 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 /// Gap between filesystem checks while waiting for the install.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
+/// How long to keep watching after the installer process has exited.
+///
+/// Exiting is not the same as failing: Blizzard's setup bootstraps a second
+/// process and the first can return before the files land, so a short grace
+/// period after a *clean* exit avoids calling a working install a failure.
+const EXIT_GRACE: Duration = Duration::from_secs(60);
+
+/// The same grace after a *failed* exit.
+///
+/// Kept short deliberately. A non-zero exit is the installer telling us it
+/// gave up; the only reason to wait at all is the vanishing chance that the
+/// files landed in the same instant.
+const FAILED_EXIT_GRACE: Duration = Duration::from_secs(5);
+
+/// Most stderr kept from the installer, in bytes.
+///
+/// Enough for a dynamic-loader complaint or a stack of Wine warnings, bounded
+/// so a chatty installer cannot grow this without limit.
+const STDERR_TAIL: usize = 8 * 1024;
+
+/// How many of those lines the error message itself shows.
+///
+/// Capturing generously and displaying briefly are different jobs: the tail is
+/// kept in full for a debug bundle, while the message goes into a banner in
+/// the GUI, where eight kilobytes of Wine chatter would bury the one line that
+/// matters. The last lines are the right ones — a failing process says why
+/// just before it stops.
+const STDERR_LINES_SHOWN: usize = 8;
+
 /// Consecutive successful checks required before the install counts as done.
 /// The installer writes the launcher before the versioned client directory is
 /// fully populated, so one positive sample is not enough.
@@ -81,6 +111,8 @@ pub struct Installer {
     locale: String,
     timeout: Duration,
     poll_interval: Duration,
+    exit_grace: Duration,
+    failed_exit_grace: Duration,
 }
 
 impl Installer {
@@ -91,6 +123,8 @@ impl Installer {
             install_dir: layout.battle_net_dir(),
             locale: DEFAULT_LOCALE.to_owned(),
             timeout: DEFAULT_TIMEOUT,
+            exit_grace: EXIT_GRACE,
+            failed_exit_grace: FAILED_EXIT_GRACE,
             poll_interval: POLL_INTERVAL,
         }
     }
@@ -108,6 +142,15 @@ impl Installer {
     }
 
     /// Shorten the polling gap — used by tests, and by nothing else.
+    /// How long to keep watching after the installer exits — cleanly, then
+    /// with a failure. Exists for the same reason [`Installer::with_timeout`]
+    /// does: so a test does not have to wait a real minute.
+    pub fn with_exit_grace(mut self, clean: Duration, failed: Duration) -> Self {
+        self.exit_grace = clean;
+        self.failed_exit_grace = failed;
+        self
+    }
+
     pub fn with_poll_interval(mut self, interval: Duration) -> Self {
         self.poll_interval = interval;
         self
@@ -150,10 +193,14 @@ impl Installer {
         let mut child = runner
             .command("run", &self.installer, self.args())
             .stdin(Stdio::null())
-            // The installer is chatty and nothing reads its output; piping it
-            // without a reader would eventually block the child on a full pipe.
+            // stdout is noise nobody reads. stderr is the one thing worth
+            // having when this goes wrong — it is where Proton's dynamic
+            // loader names a missing 32-bit library — so it is piped and
+            // drained on a thread. Piping without a reader would eventually
+            // block the child on a full pipe, which is why the drain exists
+            // rather than a plain `.stderr(piped())`.
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| {
                 BattleNetError::Prefix(PrefixError::Spawn {
@@ -162,7 +209,9 @@ impl Installer {
                 })
             })?;
 
-        let outcome = self.wait_for_install(started);
+        let drain = child.stderr.take().map(|pipe| std::thread::spawn(move || tail_of(pipe)));
+
+        let waited = self.wait_for_install(started, Some(&mut child));
 
         // Either way the session has to go: on success the installer left a
         // client running, and on failure a half-finished one.
@@ -170,13 +219,43 @@ impl Installer {
         let _ = child.wait();
         runner.wineserver_kill()?;
 
-        outcome
+        // Only joined after the child is gone, so the pipe is closed and the
+        // reader cannot block.
+        let stderr = drain.and_then(|handle| handle.join().ok()).unwrap_or_default();
+
+        match waited {
+            Ok(outcome) => Ok(outcome),
+            Err(Wait::TimedOut) => Err(BattleNetError::InstallTimeout {
+                after: self.timeout,
+                dir: self.install_dir.clone(),
+            }),
+            Err(Wait::Exited(code)) => Err(BattleNetError::InstallerExited {
+                code,
+                dir: self.install_dir.clone(),
+                stderr,
+            }),
+        }
     }
 
-    /// Poll the filesystem until the install settles, times out, or the
-    /// installer is confirmed to have produced nothing.
-    fn wait_for_install(&self, started: Instant) -> Result<InstallOutcome, BattleNetError> {
+    /// Poll the filesystem until the install settles, the installer gives up,
+    /// or the timeout expires.
+    ///
+    /// Watching the files is still the primary signal — the installer stays
+    /// alive after a successful install, having launched the client — but
+    /// watching *only* the files means a process that died in the first
+    /// second is indistinguishable from one still downloading, and the user
+    /// waits the full ten minutes to be told it "timed out". It did not time
+    /// out; it failed immediately, and said why on a stderr nobody kept.
+    ///
+    /// `child` is optional so the timeout path can be tested without one.
+    fn wait_for_install(
+        &self,
+        started: Instant,
+        mut child: Option<&mut Child>,
+    ) -> Result<InstallOutcome, Wait> {
         let mut settled = 0;
+        let mut exit: Option<(Instant, Option<i32>)> = None;
+
         loop {
             if is_installed(&self.install_dir) {
                 settled += 1;
@@ -191,15 +270,74 @@ impl Installer {
                 settled = 0;
             }
 
+            if exit.is_none() {
+                if let Some(child) = child.as_deref_mut() {
+                    if let Ok(Some(status)) = child.try_wait() {
+                        exit = Some((Instant::now(), status.code()));
+                    }
+                }
+            }
+
+            // An exit is not itself a failure — the files may still be
+            // landing — but it bounds how long waiting can be worthwhile.
+            if let Some((at, code)) = exit {
+                let grace = match code {
+                    Some(0) | None => self.exit_grace,
+                    Some(_) => self.failed_exit_grace,
+                };
+                if at.elapsed() >= grace {
+                    return Err(Wait::Exited(code));
+                }
+            }
+
             if started.elapsed() >= self.timeout {
-                return Err(BattleNetError::InstallTimeout {
-                    after: self.timeout,
-                    dir: self.install_dir.clone(),
-                });
+                return Err(Wait::TimedOut);
             }
             std::thread::sleep(self.poll_interval);
         }
     }
+}
+
+/// Why [`Installer::wait_for_install`] stopped waiting.
+///
+/// Internal: the caller turns these into [`BattleNetError`], which it can only
+/// do once it has drained the installer's stderr.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Wait {
+    /// Nothing happened for the whole timeout.
+    TimedOut,
+    /// The installer process ended and the files never appeared.
+    Exited(Option<i32>),
+}
+
+/// The last `n` non-empty lines of `text`, in order.
+fn last_lines(text: &str, n: usize) -> String {
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    lines[lines.len().saturating_sub(n)..].join("\n")
+}
+
+/// Read a pipe to the end, keeping only the last [`STDERR_TAIL`] bytes.
+///
+/// Reads everything so the writer never blocks on a full pipe, but retains a
+/// bounded tail — the end is where the error is.
+fn tail_of(mut pipe: impl Read) -> String {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match pipe.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.len() > STDERR_TAIL * 2 {
+                    buf.drain(..buf.len() - STDERR_TAIL);
+                }
+            }
+        }
+    }
+    if buf.len() > STDERR_TAIL {
+        buf.drain(..buf.len() - STDERR_TAIL);
+    }
+    String::from_utf8_lossy(&buf).trim().to_owned()
 }
 
 /// What [`Installer::install`] did.
@@ -832,6 +970,17 @@ pub enum BattleNetError {
     #[error("Battle.net did not finish installing into {dir} within {}s", after.as_secs())]
     InstallTimeout { after: Duration, dir: PathBuf },
 
+    #[error(
+        "the Battle.net installer exited{} without installing into {dir}{}",
+        match code { Some(c) => format!(" with code {c}"), None => " on a signal".to_owned() },
+        match stderr.is_empty() { true => String::new(), false => format!("\n{}", last_lines(stderr, STDERR_LINES_SHOWN)) }
+    )]
+    InstallerExited {
+        code: Option<i32>,
+        dir: PathBuf,
+        stderr: String,
+    },
+
     #[error("{path} is not valid JSON")]
     MalformedConfig {
         path: PathBuf,
@@ -917,6 +1066,109 @@ mod tests {
         assert!(is_installed(&dir));
     }
 
+    /// The Debian regression: no 32-bit runtime, so the installer dies in
+    /// under a second. Before this, the filesystem poll ignored the dead
+    /// child and sat there for the full ten minutes, then blamed a timeout.
+    #[test]
+    fn an_installer_that_dies_is_reported_as_exited_not_timed_out() {
+        let dir = scratch("exited");
+        let layout = Layout::with_root(&dir);
+        let installer = Installer::new(&layout, dir.join("setup.exe"))
+            // Deliberately generous: the point is that it does NOT wait this
+            // long once the process is gone.
+            .with_timeout(Duration::from_secs(60))
+            .with_poll_interval(Duration::from_millis(10))
+            .with_exit_grace(Duration::from_millis(50), Duration::from_millis(20));
+
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 3")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn");
+
+        let started = Instant::now();
+        let err = installer
+            .wait_for_install(started, Some(&mut child))
+            .unwrap_err();
+
+        assert_eq!(err, Wait::Exited(Some(3)));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "a dead installer must not be waited out: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// Exiting is not failing. Blizzard's setup bootstraps a second process,
+    /// so a clean exit with the files still landing has to stay a success.
+    #[test]
+    fn files_landing_after_a_clean_exit_still_count() {
+        let dir = scratch("late-files");
+        let layout = Layout::with_root(&dir);
+        let install_dir = layout.battle_net_dir();
+        let installer = Installer::new(&layout, dir.join("setup.exe"))
+            .with_timeout(Duration::from_secs(60))
+            .with_poll_interval(Duration::from_millis(10))
+            .with_exit_grace(Duration::from_secs(10), Duration::from_millis(20));
+
+        let mut child = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 0")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn");
+
+        let writer = {
+            let install_dir = install_dir.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(80));
+                std::fs::create_dir_all(install_dir.join("Battle.net.15000")).unwrap();
+                std::fs::write(install_dir.join("Battle.net Launcher.exe"), b"MZ").unwrap();
+            })
+        };
+
+        let outcome = installer
+            .wait_for_install(Instant::now(), Some(&mut child))
+            .expect("files arriving within the grace period is a success");
+        assert!(!outcome.skipped);
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn the_message_shows_the_end_of_stderr_not_all_of_it() {
+        let noise: String = (0..200).map(|i| format!("warn {i}\n")).collect();
+        let err = BattleNetError::InstallerExited {
+            code: Some(127),
+            dir: PathBuf::from("/tmp/bn"),
+            stderr: format!("{noise}libfreetype.so.6: cannot open shared object file"),
+        };
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("libfreetype.so.6"), "the real error must survive");
+        assert!(rendered.contains("code 127"));
+        assert!(
+            rendered.lines().count() <= STDERR_LINES_SHOWN + 1,
+            "a banner cannot show 200 lines of Wine chatter:\n{rendered}"
+        );
+        assert!(!rendered.contains("warn 0\n"), "the start is the least useful part");
+    }
+
+    #[test]
+    fn stderr_is_kept_from_the_end_and_bounded() {
+        let noise = "x".repeat(STDERR_TAIL * 3);
+        let text = format!("{noise}libfreetype.so.6: cannot open shared object file");
+        let kept = tail_of(text.as_bytes());
+
+        assert!(kept.len() <= STDERR_TAIL, "kept {} bytes", kept.len());
+        assert!(
+            kept.ends_with("cannot open shared object file"),
+            "the end is where the error is"
+        );
+    }
+
     #[test]
     fn a_stalled_installer_times_out_instead_of_hanging() {
         let dir = scratch("timeout");
@@ -925,8 +1177,8 @@ mod tests {
             .with_timeout(Duration::from_millis(60))
             .with_poll_interval(Duration::from_millis(10));
 
-        let err = installer.wait_for_install(Instant::now()).unwrap_err();
-        assert!(matches!(err, BattleNetError::InstallTimeout { .. }));
+        let err = installer.wait_for_install(Instant::now(), None).unwrap_err();
+        assert_eq!(err, Wait::TimedOut);
     }
 
     #[test]

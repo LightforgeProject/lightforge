@@ -1,0 +1,14 @@
+{
+  "results": [
+    {
+      "authors": [
+        "Author One"
+      ],
+      "id": "3358",
+      "name": "BigWigs",
+      "summary": "BigWigs summary",
+      "thumbnail_url": "https://img.example/BigWigs.png",
+      "website_url": "https://curseforge.example/BigWigs"
+    }
+  ]
+}
