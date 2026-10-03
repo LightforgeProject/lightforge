@@ -29,6 +29,8 @@ pub struct Options {
     /// Honour the `version_id` an import token pins, instead of taking the
     /// newest file. Reproduces someone's exact setup rather than tracking them.
     pub pinned: bool,
+    /// Which builds to accept for an addon that has no opinion of its own.
+    pub channel: super::Channel,
 }
 
 #[derive(Debug, Clone)]
@@ -82,11 +84,12 @@ pub async fn install_all(
     let mut report = Report::default();
 
     // Pins only make sense when reproducing an export; otherwise ask for the
-    // newest file the flavor has.
+    // newest file the flavor has, on whichever channel this addon accepts.
     let requests: Vec<Request> = requests
         .iter()
         .map(|r| Request {
             version_id: options.pinned.then(|| r.version_id.clone()).flatten(),
+            channel: Some(effective_channel(&ledger, r, options)),
             ..r.clone()
         })
         .collect();
@@ -164,6 +167,9 @@ pub async fn update_all(
             id: record.id.clone(),
             // Updating means the newest file, never the pinned one.
             version_id: None,
+            // install_all recomputes this from the ledger; set here too so a
+            // caller reading these requests sees what will be asked for.
+            channel: Some(record.channel.unwrap_or(options.channel)),
         })
         .collect();
 
@@ -231,6 +237,9 @@ async fn fetch_and_install(
         name: name.to_owned(),
         file_id: entry.file_id.clone(),
         folders: extracted.folders.clone(),
+        // An install replaces the record wholesale, so anything the user
+        // chose about this addon has to be carried over by hand.
+        channel: ledger.find(provider, &entry.id).and_then(|r| r.channel),
     });
     Ok(extracted.folders)
 }
@@ -296,6 +305,7 @@ pub async fn check_updates(
             provider: record.provider.clone(),
             id: record.id.clone(),
             version_id: None,
+            channel: Some(record.channel.unwrap_or(options.channel)),
         })
         .collect();
     if requests.is_empty() {
@@ -348,6 +358,33 @@ pub fn unsupported(collection: &super::Collection) -> Vec<&super::Entry> {
         .collect()
 }
 
+/// Which builds one request accepts: the addon's own choice, else the default.
+fn effective_channel(ledger: &Ledger, request: &Request, options: &Options) -> super::Channel {
+    ledger
+        .find(&request.provider, &request.id)
+        .and_then(|record| record.channel)
+        .or(request.channel)
+        .unwrap_or(options.channel)
+}
+
+/// Set or clear one addon's channel override.
+///
+/// Clearing it (`None`) returns the addon to following the global default,
+/// which is not the same as setting it to stable.
+pub fn set_channel(
+    options: &Options,
+    provider: &str,
+    id: &str,
+    channel: Option<super::Channel>,
+) -> Result<(), ManageError> {
+    let mut ledger = Ledger::load(&options.ledger_path)?;
+    if let Some(record) = ledger.find_mut(provider, id) {
+        record.channel = channel;
+        ledger.save(&options.ledger_path)?;
+    }
+    Ok(())
+}
+
 /// The ledger path for one install of a product.
 pub fn ledger_path(
     data_dir: &Path,
@@ -393,6 +430,89 @@ mod tests {
         "ZSIsInZlcnNpb25faWQiOiI4ODY2NTA4In0seyJpZCI6IjEzMzQ0IiwibmFtZSI6IkJ1Z0dyYWJiZXIi",
         "LCJwcm92aWRlcl9uYW1lIjoiQ3Vyc2UiLCJ2ZXJzaW9uX2lkIjoiODkwNzU4NyJ9XX0"
     );
+
+    fn options_with(channel: crate::addons::Channel, ledger: &Path) -> Options {
+        Options {
+            flavor: "retail".to_owned(),
+            addons_dir: PathBuf::from("/nowhere"),
+            ledger_path: ledger.to_path_buf(),
+            pinned: false,
+            channel,
+        }
+    }
+
+    #[test]
+    fn an_addons_own_channel_beats_the_default_and_none_means_follow_it() {
+        use crate::addons::Channel;
+
+        let mut ledger = Ledger::default();
+        ledger.record(Record {
+            provider: "curse".into(),
+            id: "2382".into(),
+            name: "BigWigs".into(),
+            file_id: None,
+            folders: vec!["BigWigs".into()],
+            channel: Some(Channel::Alpha),
+        });
+        ledger.record(Record {
+            provider: "curse".into(),
+            id: "13344".into(),
+            name: "BugGrabber".into(),
+            file_id: None,
+            folders: vec!["BugGrabber".into()],
+            channel: None,
+        });
+
+        let options = options_with(Channel::Beta, Path::new("/nowhere/ledger.json"));
+        let ask = |id: &str| Request {
+            provider: "curse".to_owned(),
+            id: id.to_owned(),
+            version_id: None,
+            channel: None,
+        };
+
+        assert_eq!(effective_channel(&ledger, &ask("2382"), &options), Channel::Alpha);
+        // No opinion of its own, so it moves with the default.
+        assert_eq!(effective_channel(&ledger, &ask("13344"), &options), Channel::Beta);
+        // And an addon the ledger has never seen takes the default too.
+        assert_eq!(effective_channel(&ledger, &ask("999"), &options), Channel::Beta);
+    }
+
+    #[test]
+    fn setting_a_channel_survives_a_reload_and_clearing_it_returns_to_the_default() {
+        use crate::addons::Channel;
+
+        let dir = std::env::temp_dir().join(format!("lf-channel-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ledger.json");
+
+        let mut ledger = Ledger::default();
+        ledger.record(Record {
+            provider: "curse".into(),
+            id: "2382".into(),
+            name: "BigWigs".into(),
+            file_id: None,
+            folders: vec!["BigWigs".into()],
+            channel: None,
+        });
+        ledger.save(&path).unwrap();
+
+        let options = options_with(Channel::Stable, &path);
+        set_channel(&options, "curse", "2382", Some(Channel::Beta)).unwrap();
+        assert_eq!(
+            Ledger::load(&path).unwrap().find("curse", "2382").unwrap().channel,
+            Some(Channel::Beta)
+        );
+
+        set_channel(&options, "curse", "2382", None).unwrap();
+        assert_eq!(
+            Ledger::load(&path).unwrap().find("curse", "2382").unwrap().channel,
+            None,
+            "cleared means follow the default, not stable"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_token_becomes_requests_that_keep_the_pin() {

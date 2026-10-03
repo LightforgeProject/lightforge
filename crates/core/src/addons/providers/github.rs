@@ -21,6 +21,7 @@ use serde::Deserialize;
 
 use super::{blank, missing, ProviderResult};
 use crate::addons::catalog::{Request, Resolved};
+use crate::addons::Channel;
 use crate::net::Http;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -30,6 +31,10 @@ struct Release {
     html_url: Option<String>,
     #[serde(default)]
     assets: Vec<Asset>,
+    #[serde(default)]
+    prerelease: bool,
+    #[serde(default)]
+    draft: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -64,18 +69,43 @@ pub async fn resolve(http: &Http, requests: &[Request], flavor: &str) -> Provide
     let mut resolved = Vec::with_capacity(requests.len());
 
     for request in requests {
-        let url = format!(
-            "https://api.github.com/repos/{}/releases/latest",
-            request.id.trim_matches('/')
-        );
-        let release: Release = match http.get_json(&url).await {
-            Ok(release) => release,
-            // A repo with no releases at all is the common case, not a fault —
-            // ElvUI's own repo has none.
-            Err(e) => {
-                resolved.push(missing(&request.id, format!("no GitHub release found ({e})")));
-                continue;
+        let repo = request.id.trim_matches('/');
+        let wants_prerelease = request.channel.is_some_and(|c| c > Channel::Stable);
+
+        // `releases/latest` is GitHub's own "newest non-draft, non-prerelease",
+        // which is exactly the stable channel and one request. Anything above
+        // stable has to page the list instead and choose.
+        let release = match wants_prerelease {
+            false => {
+                let url = format!("https://api.github.com/repos/{repo}/releases/latest");
+                match http.get_json::<Release>(&url).await {
+                    Ok(release) => Some(release),
+                    // A repo with no releases at all is the common case, not a
+                    // fault — ElvUI's own repo has none.
+                    Err(e) => {
+                        resolved
+                            .push(missing(&request.id, format!("no GitHub release found ({e})")));
+                        continue;
+                    }
+                }
             }
+            true => {
+                let url = format!("https://api.github.com/repos/{repo}/releases?per_page=10");
+                match http.get_json::<Vec<Release>>(&url).await {
+                    // Newest first, as GitHub returns them. A draft is not
+                    // published at all, so it is never a candidate.
+                    Ok(releases) => releases.into_iter().find(|r| !r.draft),
+                    Err(e) => {
+                        resolved
+                            .push(missing(&request.id, format!("no GitHub release found ({e})")));
+                        continue;
+                    }
+                }
+            }
+        };
+        let Some(release) = release else {
+            resolved.push(missing(&request.id, "this repo publishes no releases"));
+            continue;
         };
 
         let manifest = fetch_manifest(http, &release).await;
@@ -86,6 +116,7 @@ pub async fn resolve(http: &Http, requests: &[Request], flavor: &str) -> Provide
                 let guessed = matches!(picked, Pick::Guess(_));
                 Resolved {
                     name: Some(request.id.clone()),
+                    channel: Some(channel_of(&release)),
                     file_id: Some(release.tag_name.clone()),
                     file_name: Some(asset.name.clone()),
                     file_length: Some(asset.size),
@@ -117,6 +148,18 @@ pub async fn resolve(http: &Http, requests: &[Request], flavor: &str) -> Provide
         });
     }
     Ok(resolved)
+}
+
+/// What kind of build a GitHub release is.
+///
+/// GitHub publishes one pre-release flag, not three channels, so a
+/// pre-release is reported as beta whether the asker said beta or alpha.
+/// Calling it alpha would invent a distinction GitHub does not make.
+fn channel_of(release: &Release) -> Channel {
+    match release.prerelease {
+        true => Channel::Beta,
+        false => Channel::Stable,
+    }
 }
 
 /// Fetch the packager's `release.json`, if the release publishes one.
@@ -230,7 +273,17 @@ mod tests {
                     size: *size,
                 })
                 .collect(),
+            prerelease: false,
+            draft: false,
         }
+    }
+
+    #[test]
+    fn a_prerelease_is_reported_as_beta_and_a_release_as_stable() {
+        let mut r = release(&[("WeakAuras-5.22.0.zip", 10)]);
+        assert_eq!(channel_of(&r), Channel::Stable);
+        r.prerelease = true;
+        assert_eq!(channel_of(&r), Channel::Beta, "never alpha: GitHub has no such flag");
     }
 
     /// Trimmed from WeakAuras 5.22.0's real release.json.

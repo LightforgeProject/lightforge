@@ -36,6 +36,8 @@ use iced::widget::{
 };
 use iced::{Alignment, ContentFit, Element, Length, Subscription, Task};
 
+use lightforge_core::addons::manage;
+use lightforge_core::addons::Channel;
 use lightforge_core::assets::{Manifest, Pipeline, Store};
 use lightforge_core::config::Config;
 use lightforge_core::debug::DebugInfo;
@@ -375,6 +377,10 @@ enum Message {
     OpenUrl(String),
 
     AddonTab(AddonTab),
+    /// The channel every addon follows unless it has one of its own.
+    AddonChannelDefault(ChannelChoice),
+    /// One addon's own channel, or `None` to follow the default again.
+    AddonChannelFor(String, String, RowChannel),
     SettingsTab(SettingsTab),
     SearchChanged(String),
     RunSearch,
@@ -423,19 +429,27 @@ enum SettingsTab {
     Setup,
     Proton,
     Downloads,
+    Addons,
     Storage,
     About,
 }
 
 impl SettingsTab {
-    const ALL: [Self; 5] =
-        [Self::Setup, Self::Proton, Self::Downloads, Self::Storage, Self::About];
+    const ALL: [Self; 6] = [
+        Self::Setup,
+        Self::Proton,
+        Self::Downloads,
+        Self::Addons,
+        Self::Storage,
+        Self::About,
+    ];
 
     fn label(self) -> &'static str {
         match self {
             Self::Setup => "Setup",
             Self::Proton => "Proton",
             Self::Downloads => "Downloads",
+            Self::Addons => "Addons",
             Self::Storage => "Storage",
             Self::About => "About",
         }
@@ -2015,6 +2029,31 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::AddonChannelDefault(choice) => {
+                self.config.addon_channel = choice.0;
+                self.save_config();
+                // Nothing is fetched here: the new default applies at the next
+                // check or update, which is also when it could matter.
+                Task::none()
+            }
+
+            Message::AddonChannelFor(provider, id, choice) => {
+                let Some(options) = addonwork::manage_options(
+                    &self.layout,
+                    &self.selected.code,
+                    self.config.addon_channel,
+                ) else {
+                    return Task::none();
+                };
+                if let Err(e) = manage::set_channel(&options, &provider, &id, choice.0) {
+                    self.error = Some(e.to_string());
+                }
+                Task::perform(
+                    addonwork::list(self.layout.clone(), self.selected.code.clone()),
+                    |listing| Message::AddonsListed(Box::new(listing)),
+                )
+            }
+
             Message::PauseWhilePlaying(on) => {
                 self.config.pause_downloads_while_playing = on;
                 self.save_config();
@@ -2148,6 +2187,7 @@ impl Lightforge {
                         self.layout.clone(),
                         self.selected.code.clone(),
                         token,
+                        self.config.addon_channel,
                         tx,
                     ),
                     |result| Message::AddonsFinished(result.map(Box::new)),
@@ -2167,6 +2207,7 @@ impl Lightforge {
                         self.http.clone(),
                         self.layout.clone(),
                         self.selected.code.clone(),
+                        self.config.addon_channel,
                         tx,
                     ),
                     |result| Message::AddonsFinished(result.map(Box::new)),
@@ -2266,6 +2307,10 @@ impl Lightforge {
             Message::AddonTab(tab) => {
                 self.addon_tab = tab;
                 self.error = None;
+                // Leaving the list disarms it: a Remove waiting to be
+                // confirmed must not survive out of sight of the row it
+                // belongs to.
+                self.addon_remove_armed = None;
                 Task::none()
             }
 
@@ -2524,6 +2569,7 @@ impl Lightforge {
                         self.selected.code.clone(),
                         provider,
                         id,
+                        self.config.addon_channel,
                         tx,
                     ),
                     |result| Message::AddonsFinished(result.map(Box::new)),
@@ -2535,6 +2581,7 @@ impl Lightforge {
                     self.http.clone(),
                     self.layout.clone(),
                     self.selected.code.clone(),
+                    self.config.addon_channel,
                 ),
                 Message::AddonUpdatesChecked,
             ),
@@ -4056,7 +4103,23 @@ impl Lightforge {
         // These are per-product, so they follow the selection rather than
         // carrying Retail's frame cap over to Classic's panel.
         self.load_tweak_inputs();
+        self.reset_addon_screen();
         self.reload(choice.code)
+    }
+
+    /// Clear everything on the addon screen that belongs to one product.
+    ///
+    /// A search is run against a product's flavor, so Retail's hits are the
+    /// wrong answer for Classic and a filter typed over Retail's installed
+    /// list hides Classic's. An armed Remove is worse than wrong: it is a
+    /// confirmation the user gave about an addon they are no longer looking
+    /// at. An in-flight search needs no cancelling — its reply is matched
+    /// against the current query and dropped.
+    fn reset_addon_screen(&mut self) {
+        self.search_input.clear();
+        self.search = addonwork::SearchOutcome::default();
+        self.addon_filter.clear();
+        self.addon_remove_armed = None;
     }
 
     /// A screen that is not the dashboard: header, title, content.
@@ -4990,6 +5053,32 @@ impl Lightforge {
 
             line = line.push(Space::new().width(Length::Fill));
             if let Some(managed) = &addon.managed {
+                // Which builds this addon accepts. Narrow and first, so the
+                // buttons that act stay where the eye expects them whether or
+                // not there is an update to show.
+                line = line.push(
+                    pick_list(
+                        RowChannel::ALL.to_vec(),
+                        Some(RowChannel(managed.channel)),
+                        {
+                            let provider = managed.provider.clone();
+                            let id = managed.id.clone();
+                            move |choice| {
+                                Message::AddonChannelFor(
+                                    provider.clone(),
+                                    id.clone(),
+                                    choice,
+                                )
+                            }
+                        },
+                    )
+                    .text_size(theme::CAPTION)
+                    .padding([theme::XS, theme::SM])
+                    .width(Length::Fixed(104.0))
+                    .style(theme::picker)
+                    .menu_style(theme::picker_menu),
+                );
+
                 // One addon at a time. `install_one` fetches the newest file
                 // and does not pin it, which is exactly what updating is, so
                 // this is the same path "Update all" takes for every row.
@@ -5579,6 +5668,7 @@ impl Lightforge {
             SettingsTab::Setup => ("Setup", self.setup_section()),
             SettingsTab::Proton => ("Proton", self.proton_section()),
             SettingsTab::Downloads => ("Downloads", self.downloads_section()),
+            SettingsTab::Addons => ("Addons", self.addons_section()),
             SettingsTab::Storage => ("Storage", self.storage_section()),
             SettingsTab::About => ("About", self.about_section()),
         };
@@ -5671,6 +5761,36 @@ impl Lightforge {
     }
 
     /// Speed caps, ours and Battle.net's, and pausing while playing.
+    /// The Addons section: what every addon follows unless it says otherwise.
+    fn addons_section(&self) -> Element<'_, Message> {
+        let choices: Vec<ChannelChoice> = Channel::ALL.map(ChannelChoice).to_vec();
+
+        column![field_row(
+            "Default addon channel".to_owned(),
+            pick_list(
+                choices,
+                Some(ChannelChoice(self.config.addon_channel)),
+                Message::AddonChannelDefault,
+            )
+            .text_size(theme::LABEL)
+            .padding([theme::XS, theme::SM])
+            .style(theme::picker)
+            .menu_style(theme::picker_menu)
+            .into(),
+        )]
+        .extend(
+            self.hint(
+                "A channel is a floor, not a filter: allowing alpha builds still installs \
+                 the newest release when that is newer. Only CurseForge and GitHub publish \
+                 pre-release builds — other sources have one build, so the setting is \
+                 inert there. An addon given its own channel on the Addons page keeps it.",
+            )
+            .map(Element::from),
+        )
+        .spacing(theme::SM)
+        .into()
+    }
+
     fn downloads_section(&self) -> Element<'_, Message> {
         let speed = |input: &str, placeholder: &str, on_input: fn(String) -> Message| {
             row![
@@ -6415,6 +6535,43 @@ fn section<'a>(title: impl Into<String>, body: Element<'a, Message>) -> Element<
 
 /// A fixed-width label beside its control, so every control in a section
 /// starts on the same line.
+/// A channel as a `pick_list` option; the widget needs `Display`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ChannelChoice(Channel);
+
+impl std::fmt::Display for ChannelChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0.label())
+    }
+}
+
+/// One addon's channel: its own, or whatever the default happens to be.
+///
+/// "Default" is a real option rather than a blank, because following the
+/// default and choosing stable look identical until the default changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RowChannel(Option<Channel>);
+
+impl RowChannel {
+    const ALL: [Self; 4] = [
+        Self(None),
+        Self(Some(Channel::Stable)),
+        Self(Some(Channel::Beta)),
+        Self(Some(Channel::Alpha)),
+    ];
+}
+
+impl std::fmt::Display for RowChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self.0 {
+            None => "Default",
+            Some(Channel::Stable) => "Stable",
+            Some(Channel::Beta) => "Beta",
+            Some(Channel::Alpha) => "Alpha",
+        })
+    }
+}
+
 fn field_row<'a>(label: String, control: Element<'a, Message>) -> Element<'a, Message> {
     row![muted(label, theme::LABEL).width(Length::Fixed(160.0)), control]
         .spacing(theme::MD)

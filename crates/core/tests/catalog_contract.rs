@@ -43,6 +43,7 @@ fn request(id: &str) -> Request {
         provider: "curse".to_owned(),
         id: id.to_owned(),
         version_id: None,
+        channel: None,
     }
 }
 

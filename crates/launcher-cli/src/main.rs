@@ -1754,9 +1754,11 @@ async fn main() -> Result<()> {
                     &code,
                 ),
                 pinned: false,
+                channel: addon_channel(&dirs),
             };
 
-            let requests = vec![Request { provider, id, version_id: None }];
+            // install_all fills the channel in from the ledger or the default.
+            let requests = vec![Request { provider, id, version_id: None, channel: None }];
             let http = Http::new()?;
             let report =
                 manage::install_all(&http, catalog.as_ref(), &requests, &options, |event| {
@@ -1797,6 +1799,7 @@ async fn main() -> Result<()> {
                 addons_dir: layout.addons_dir(&code),
                 ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code),
                 pinned,
+                channel: addon_channel(&dirs),
             };
             println!("addons dir      {}", options.addons_dir.display());
             println!("flavor          {}\n", options.flavor);
@@ -1848,6 +1851,7 @@ async fn main() -> Result<()> {
                 addons_dir: layout.addons_dir(&code),
                 ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code),
                 pinned: false,
+                channel: addon_channel(&dirs),
             };
 
             let http = Http::new()?;
@@ -1867,6 +1871,7 @@ async fn main() -> Result<()> {
                 addons_dir: layout.addons_dir(&code),
                 ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code),
                 pinned: false,
+                channel: addon_channel(&dirs),
             };
 
             let removed = manage::remove(&options, &provider, &id)?;
@@ -2830,6 +2835,16 @@ fn read_token(token: &str) -> Result<String> {
             .map(|s| s.trim().to_owned()),
         None => Ok(token.trim().to_owned()),
     }
+}
+
+/// The configured default addon channel, or stable when there is no config.
+///
+/// The CLI has no settings UI, so it reads the same `addon_channel` the GUI
+/// writes rather than inventing a second default.
+fn addon_channel(dirs: &AppDirs) -> lightforge_core::addons::Channel {
+    Config::load_or_default(&dirs.config_file())
+        .map(|config| config.addon_channel)
+        .unwrap_or_default()
 }
 
 /// Where the addon catalog lives: the flag, else config, else the public

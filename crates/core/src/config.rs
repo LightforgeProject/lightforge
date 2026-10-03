@@ -38,6 +38,10 @@ pub struct Config {
     /// Base URL of the addon catalog proxy, or a local fixture directory.
     /// `None` disables addon management rather than failing at use.
     pub addon_catalog: Option<String>,
+    /// Which addon builds to accept for an addon that has no channel of its
+    /// own. Stable by default; a per-addon override lives in the ledger.
+    #[serde(default)]
+    pub addon_channel: crate::addons::Channel,
     /// Cap on game download speed, in megabytes per second. `None` is
     /// unlimited.
     ///
@@ -84,6 +88,7 @@ impl Default for Config {
             default_proton: ProtonPin::default(),
             assets_source: None,
             addon_catalog: None,
+            addon_channel: crate::addons::Channel::default(),
             download_limit_mbps: None,
             pause_downloads_while_playing: true,
             products: Vec::new(),

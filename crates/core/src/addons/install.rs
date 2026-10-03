@@ -48,6 +48,12 @@ pub struct Record {
     pub file_id: Option<String>,
     /// Every folder the package wrote. Removal deletes exactly these.
     pub folders: Vec<String>,
+    /// Which builds this addon accepts, overriding the global default.
+    ///
+    /// `None` means "follow the default", not "stable" — so changing the
+    /// default moves every addon that was never given an opinion of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<super::Channel>,
 }
 
 impl Ledger {
@@ -105,6 +111,10 @@ impl Ledger {
 
     pub fn find(&self, provider: &str, id: &str) -> Option<&Record> {
         self.addons.iter().find(|r| r.id == id && r.provider == provider)
+    }
+
+    pub fn find_mut(&mut self, provider: &str, id: &str) -> Option<&mut Record> {
+        self.addons.iter_mut().find(|r| r.id == id && r.provider == provider)
     }
 
     /// Record an install, replacing any previous record of the same addon.
@@ -461,6 +471,7 @@ mod tests {
             name: "Mine".into(),
             file_id: Some("100".into()),
             folders: vec!["Mine".into(), "Mine_Extra".into()],
+            channel: None,
         });
 
         let removed = remove(&mut ledger, &dir, "curse", "1").unwrap();
@@ -490,6 +501,7 @@ mod tests {
             name: "BigWigs".into(),
             file_id: Some("100".into()),
             folders: vec!["BigWigs".into()],
+            channel: None,
         });
 
         let mut resolved = Resolved {
@@ -504,6 +516,7 @@ mod tests {
             folders: vec![],
             website_url: None,
             note: None,
+            channel: None,
         };
         assert!(!ledger.needs_update(&resolved, "curse"));
 
@@ -542,6 +555,7 @@ mod tests {
             name: "BigWigs".into(),
             file_id: Some("8866508".into()),
             folders: vec!["BigWigs".into()],
+            channel: None,
         });
         ledger.save(&path).unwrap();
 
@@ -561,6 +575,7 @@ mod tests {
             file_id: None,
             // Half the package deleted by hand: still ours to repair.
             folders: vec!["BigWigs".into(), "BigWigs_Options".into()],
+            channel: None,
         });
         ledger.record(Record {
             provider: "tukui".into(),
@@ -568,6 +583,7 @@ mod tests {
             name: "ElvUI".into(),
             file_id: None,
             folders: vec!["ElvUI".into(), "ElvUI_Options".into()],
+            channel: None,
         });
 
         assert_eq!(ledger.prune_missing(&addons), vec!["ElvUI".to_owned()]);

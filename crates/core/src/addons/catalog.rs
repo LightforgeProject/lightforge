@@ -82,6 +82,10 @@ pub struct Resolved {
     /// flavor, or why a provider could not answer.
     #[serde(default)]
     pub note: Option<String>,
+    /// What kind of build this is. Absent from providers that publish only
+    /// one, and from an older proxy.
+    #[serde(default)]
+    pub channel: Option<super::Channel>,
 }
 
 impl Resolved {
@@ -115,6 +119,10 @@ pub struct Request {
     /// Pin to an exact file, as a WoWUp token records. Omit for the newest.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version_id: Option<String>,
+    /// Which builds are acceptable. Omitted means the proxy's own default,
+    /// which is stable — so an older client keeps getting releases.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<super::Channel>,
 }
 
 impl From<&super::Entry> for Request {
@@ -123,6 +131,9 @@ impl From<&super::Entry> for Request {
             provider: entry.provider().as_str().to_owned(),
             id: entry.id.clone(),
             version_id: entry.version_id.clone(),
+            // An import token says nothing about channels; the importing
+            // machine's own default applies, filled in by `install_all`.
+            channel: None,
         }
     }
 }
@@ -235,6 +246,7 @@ impl Catalog {
                             download_url: None,
                             folders: Vec::new(),
                             website_url: None,
+                            channel: None,
                             note: None,
                         })
                 })
@@ -344,6 +356,7 @@ mod tests {
             folders: vec!["BigWigs".into()],
             website_url: Some("https://www.curseforge.com/wow/addons/big-wigs".into()),
             note: None,
+            channel: None,
         }
     }
 

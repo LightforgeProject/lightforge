@@ -36,6 +36,55 @@ use serde::{Deserialize, Serialize};
 
 use crate::product::ProductCode;
 
+/// Which builds of an addon are acceptable.
+///
+/// A **floor, not a filter** — the same semantics WoWUp settled on. Asking for
+/// [`Channel::Alpha`] does not mean "only alphas": it means alphas are
+/// allowed, and the newest acceptable build still wins, which is usually the
+/// stable one. Anything else would pin a user to a stale alpha the day the
+/// author shipped a release.
+///
+/// Only providers that publish pre-release builds can honour this — of ours,
+/// CurseForge and GitHub. WoWInterface and Tukui publish one build, so a
+/// channel there is inert rather than wrong.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Channel {
+    /// Releases only. The default, because an addon manager that quietly
+    /// installs alphas is a bug report waiting to happen.
+    #[default]
+    Stable,
+    Beta,
+    Alpha,
+}
+
+impl Channel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Beta => "beta",
+            Self::Alpha => "alpha",
+        }
+    }
+
+    /// For a menu or a settings row, in floor order.
+    pub const ALL: [Channel; 3] = [Channel::Stable, Channel::Beta, Channel::Alpha];
+
+    /// How it reads in the UI.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Stable => "Stable only",
+            Self::Beta => "Stable and beta",
+            Self::Alpha => "Stable, beta and alpha",
+        }
+    }
+
+    /// Whether a build of this kind may be installed under this channel.
+    pub fn accepts(&self, build: Channel) -> bool {
+        build <= *self
+    }
+}
+
 /// Where an addon came from.
 ///
 /// [`Provider::Other`] keeps an unrecognised name rather than dropping the
@@ -571,6 +620,39 @@ mod tests {
         "ZSIsInZlcnNpb25faWQiOiI4ODY2NTA4In0seyJpZCI6IjEzMzQ0IiwibmFtZSI6IkJ1Z0dyYWJiZXIi",
         "LCJwcm92aWRlcl9uYW1lIjoiQ3Vyc2UiLCJ2ZXJzaW9uX2lkIjoiODkwNzU4NyJ9XX0"
     );
+
+    #[test]
+    fn a_channel_is_a_floor_not_a_filter() {
+        // Asking for alpha accepts a stable build; asking for stable does not
+        // accept an alpha. This is WoWUp's rule, and the reason for it is that
+        // "alpha" means "I'll take risky builds", not "never give me a
+        // release" — the newest acceptable build still wins.
+        assert!(Channel::Alpha.accepts(Channel::Stable));
+        assert!(Channel::Alpha.accepts(Channel::Beta));
+        assert!(Channel::Alpha.accepts(Channel::Alpha));
+        assert!(Channel::Beta.accepts(Channel::Stable));
+        assert!(!Channel::Beta.accepts(Channel::Alpha));
+        assert!(Channel::Stable.accepts(Channel::Stable));
+        assert!(!Channel::Stable.accepts(Channel::Beta));
+
+        // Stable is the default, so a config or ledger that says nothing
+        // never opts someone into pre-release builds.
+        assert_eq!(Channel::default(), Channel::Stable);
+    }
+
+    #[test]
+    fn a_channel_goes_over_the_wire_in_lowercase() {
+        // The proxy reads these strings; a rename here is a contract break.
+        assert_eq!(serde_json::to_string(&Channel::Beta).unwrap(), "\"beta\"");
+        assert_eq!(
+            serde_json::from_str::<Channel>("\"alpha\"").unwrap(),
+            Channel::Alpha
+        );
+        for channel in Channel::ALL {
+            let wire = serde_json::to_string(&channel).unwrap();
+            assert_eq!(wire.trim_matches('"'), channel.as_str());
+        }
+    }
 
     #[test]
     fn a_real_token_decodes_to_its_wrapper_object() {

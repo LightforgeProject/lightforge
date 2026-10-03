@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use lightforge_core::addons::catalog::{Catalog, Request};
 use lightforge_core::addons::manage::{self, Event, Options, Report};
-use lightforge_core::addons::{self, Collection, Installed, Ledger};
+use lightforge_core::addons::{self, Channel, Collection, Installed, Ledger};
 use lightforge_core::config::Config;
 use lightforge_core::net::Http;
 use lightforge_core::paths::{AppDirs, Layout};
@@ -31,6 +31,8 @@ pub struct Row {
 pub struct Managed {
     pub provider: String,
     pub id: String,
+    /// This addon's own channel, or `None` when it follows the default.
+    pub channel: Option<Channel>,
 }
 
 /// What the addon screen shows.
@@ -102,14 +104,18 @@ pub async fn list(layout: Layout, code: ProductCode) -> Listing {
 /// separate addons with eleven Remove buttons, each of which would delete the
 /// other ten.
 pub fn rows_from(installed: &[Installed], ledger: &Ledger) -> Vec<Row> {
-    let mut owner: std::collections::BTreeMap<&str, (&str, &str, &str)> = Default::default();
+    type Owner<'a> = (&'a str, &'a str, &'a str, Option<Channel>);
+    let mut owner: std::collections::BTreeMap<&str, Owner<'_>> = Default::default();
     for record in &ledger.addons {
         for (position, folder) in record.folders.iter().enumerate() {
             let head = match position {
                 0 => "",
                 _ => record.folders[0].as_str(),
             };
-            owner.insert(folder, (record.provider.as_str(), record.id.as_str(), head));
+            owner.insert(
+                folder,
+                (record.provider.as_str(), record.id.as_str(), head, record.channel),
+            );
         }
     }
 
@@ -121,12 +127,13 @@ pub fn rows_from(installed: &[Installed], ledger: &Ledger) -> Vec<Row> {
                 folder: addon.folder.clone(),
                 title: addon.title.clone().unwrap_or_else(|| addon.folder.clone()),
                 version: addon.version.clone().unwrap_or_else(|| "—".to_owned()),
-                managed: known.map(|(provider, id, _)| Managed {
+                managed: known.map(|(provider, id, _, channel)| Managed {
                     provider: (*provider).to_owned(),
                     id: (*id).to_owned(),
+                    channel: *channel,
                 }),
                 child_of: known
-                    .map(|(_, _, head)| *head)
+                    .map(|(_, _, head, _)| *head)
                     .filter(|head| !head.is_empty())
                     .map(str::to_owned),
             }
@@ -165,6 +172,7 @@ mod tests {
             name: "BigWigs".into(),
             file_id: Some("v424.8".into()),
             folders: vec!["BigWigs".into(), "BigWigs_Core".into(), "BigWigs_Options".into()],
+            channel: None,
         });
 
         let rows = rows_from(&scan, &ledger);
@@ -192,6 +200,30 @@ mod tests {
     }
 
     #[test]
+    fn a_rows_channel_comes_from_the_ledger_and_children_do_not_lose_it() {
+        let mut ledger = Ledger::default();
+        ledger.record(Record {
+            provider: "curse".into(),
+            id: "2382".into(),
+            name: "BigWigs".into(),
+            file_id: None,
+            folders: vec!["BigWigs".into(), "BigWigs_Options".into()],
+            channel: Some(Channel::Beta),
+        });
+
+        let scan = vec![installed("BigWigs", "1.0"), installed("BigWigs_Options", "1.0")];
+        let rows = rows_from(&scan, &ledger);
+
+        let head = rows.iter().find(|r| r.folder == "BigWigs").unwrap();
+        assert_eq!(head.managed.as_ref().unwrap().channel, Some(Channel::Beta));
+        // The picker is only drawn on the head row, but a child carrying the
+        // wrong channel would be a lie waiting to be shown.
+        let child = rows.iter().find(|r| r.folder == "BigWigs_Options").unwrap();
+        assert_eq!(child.managed.as_ref().unwrap().channel, Some(Channel::Beta));
+        assert_eq!(child.child_of.as_deref(), Some("BigWigs"));
+    }
+
+    #[test]
     fn a_stale_ledger_entry_is_not_counted_as_managed() {
         // Seen for real: the game folder was deleted by hand and the screen
         // then read "0 installed · 1 managed", which is a contradiction.
@@ -202,6 +234,7 @@ mod tests {
             name: "BigWigs".into(),
             file_id: None,
             folders: vec!["BigWigs".into()],
+            channel: None,
         });
 
         let present: std::collections::BTreeSet<&str> = Default::default();
@@ -223,6 +256,7 @@ mod tests {
             name: "Deleted".into(),
             file_id: None,
             folders: vec!["Deleted".into()],
+            channel: None,
         });
 
         // The scan is the truth about what exists on disk.
@@ -238,13 +272,25 @@ pub struct Progress {
     pub total: usize,
 }
 
-fn options(layout: &Layout, code: &ProductCode, pinned: bool) -> Option<Options> {
+/// The same options the work functions build, for a caller that only needs to
+/// read or write the ledger — setting one addon's channel, say.
+pub fn manage_options(layout: &Layout, code: &ProductCode, channel: Channel) -> Option<Options> {
+    options(layout, code, false, channel)
+}
+
+fn options(
+    layout: &Layout,
+    code: &ProductCode,
+    pinned: bool,
+    channel: Channel,
+) -> Option<Options> {
     let dirs = AppDirs::discover().ok()?;
     Some(Options {
         flavor: addons::flavor_of(code).to_owned(),
         addons_dir: layout.addons_dir(code),
         ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(code), code),
         pinned,
+        channel,
     })
 }
 
@@ -260,6 +306,7 @@ pub async fn import(
     layout: Layout,
     code: ProductCode,
     token: String,
+    channel: Channel,
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Report, String> {
     let collection = Collection::parse(&token).map_err(|e| e.to_string())?;
@@ -267,7 +314,7 @@ pub async fn import(
     if requests.is_empty() {
         return Err("that token names no addons Lightforge can install".to_owned());
     }
-    run(http, layout, code, requests, false, tx).await
+    run(http, layout, code, requests, false, channel, tx).await
 }
 
 /// Update everything the ledger tracks.
@@ -275,6 +322,7 @@ pub async fn update(
     http: Option<Http>,
     layout: Layout,
     code: ProductCode,
+    channel: Channel,
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Report, String> {
     let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
@@ -287,13 +335,14 @@ pub async fn update(
             provider: record.provider.clone(),
             id: record.id.clone(),
             version_id: None,
+            channel: Some(record.channel.unwrap_or(channel)),
         })
         .collect();
 
     if requests.is_empty() {
         return Ok(Report::default());
     }
-    run(http, layout, code, requests, false, tx).await
+    run(http, layout, code, requests, false, channel, tx).await
 }
 
 async fn run(
@@ -302,9 +351,11 @@ async fn run(
     code: ProductCode,
     requests: Vec<Request>,
     pinned: bool,
+    channel: Channel,
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Report, String> {
-    let options = options(&layout, &code, pinned).ok_or("no data directory available")?;
+    let options =
+        options(&layout, &code, pinned, channel).ok_or("no data directory available")?;
     let catalog = catalog();
     let http = http.ok_or(crate::tasks::NO_HTTP)?;
 
@@ -388,14 +439,17 @@ pub async fn install_one(
     code: ProductCode,
     provider: String,
     id: String,
+    channel: Channel,
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Report, String> {
     run(
         http,
         layout,
         code,
-        vec![Request { provider, id, version_id: None }],
+        // `install_all` fills the channel in from the ledger or the default.
+        vec![Request { provider, id, version_id: None, channel: None }],
         false,
+        channel,
         tx,
     )
     .await
@@ -407,7 +461,9 @@ pub async fn install_one(
 /// Lightforge did not install has no provider or id to name, so it cannot be
 /// written into a token anyone could import.
 pub fn export(layout: &Layout, code: &ProductCode) -> Result<String, String> {
-    let options = options(layout, code, false).ok_or("no data directory available")?;
+    // Reads the ledger and resolves nothing, so the channel is never consulted.
+    let options =
+        options(layout, code, false, Channel::default()).ok_or("no data directory available")?;
     let ledger = Ledger::load(&options.ledger_path).map_err(|e| e.to_string())?;
 
     let collection = addons::Collection {
@@ -433,8 +489,10 @@ pub async fn check_updates(
     http: Option<Http>,
     layout: Layout,
     code: ProductCode,
+    channel: Channel,
 ) -> Result<Vec<manage::UpdateStatus>, String> {
-    let options = options(&layout, &code, false).ok_or("no data directory available")?;
+    let options =
+        options(&layout, &code, false, channel).ok_or("no data directory available")?;
     let http = http.ok_or(crate::tasks::NO_HTTP)?;
     manage::check_updates(&http, catalog().as_ref(), &options)
         .await
@@ -449,7 +507,9 @@ pub async fn remove(
     id: String,
 ) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || {
-        let options = options(&layout, &code, false).ok_or("no data directory available")?;
+        // Deletes folders the ledger names; resolves nothing.
+        let options = options(&layout, &code, false, Channel::default())
+            .ok_or("no data directory available")?;
         manage::remove(&options, &provider, &id).map_err(|e| e.to_string())
     })
     .await

@@ -70,6 +70,7 @@ pub(crate) fn unsupported(requests: &[Request], reason: &str) -> Vec<Resolved> {
             folders: Vec::new(),
             website_url: None,
             note: Some(reason.to_owned()),
+            channel: None,
         })
         .collect()
 }
@@ -88,6 +89,7 @@ pub(crate) fn blank(id: &str) -> Resolved {
         folders: Vec::new(),
         website_url: None,
         note: None,
+        channel: None,
     }
 }
 
