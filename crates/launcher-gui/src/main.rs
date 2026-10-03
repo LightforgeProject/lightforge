@@ -4145,13 +4145,20 @@ impl Lightforge {
         let content = column![
             self.header(),
             column![
-                // Extra room above: at the column's own spacing the wordmark
-                // crowds the band and the pair reads as one jammed corner
-                // rather than as the app's name with a product under it.
+                // Asymmetric on purpose. The gap above only has to clear the
+                // game band — the wordmark crowding it reads as one jammed
+                // corner rather than as the app's name with a product under
+                // it — while the gap below separates it from the art. Equal
+                // padding made the logo sit lower than it needed to.
                 container(logo)
                     .align_x(Alignment::Start)
                     .width(Length::Fill)
-                    .padding([theme::MD, 0.0]),
+                    .padding(iced::Padding {
+                        top: theme::SM,
+                        right: 0.0,
+                        bottom: theme::MD,
+                        left: 0.0,
+                    }),
                 Space::new().height(Length::Fill),
                 // A product Battle.net owns gets a panel that offers only what
                 // Lightforge can actually do for it. Running the normal one
