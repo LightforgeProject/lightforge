@@ -115,6 +115,31 @@ impl Ledger {
         self.addons.sort_by_key(|r| r.name.to_lowercase());
     }
 
+    /// Drop records whose folders have all vanished from disk.
+    ///
+    /// Addons deleted by hand, or lost to a reinstall of the game, would
+    /// otherwise be offered for update and remove forever. A record keeping
+    /// even one of its folders is left alone: a partly deleted package is
+    /// still ours to repair.
+    ///
+    /// Callers must only reconcile against a directory they can actually read
+    /// — an AddOns directory that is missing because the library is offline
+    /// says nothing about what is installed.
+    pub fn prune_missing(&mut self, addons_dir: &Path) -> Vec<String> {
+        let mut dropped = Vec::new();
+        self.addons.retain(|record| {
+            let alive = record
+                .folders
+                .iter()
+                .any(|folder| addons_dir.join(folder).is_dir());
+            if !alive {
+                dropped.push(record.name.clone());
+            }
+            alive
+        });
+        dropped
+    }
+
     pub fn forget(&mut self, provider: &str, id: &str) -> Option<Record> {
         let index = self
             .addons
@@ -521,5 +546,36 @@ mod tests {
         ledger.save(&path).unwrap();
 
         assert_eq!(Ledger::load(&path).unwrap(), ledger);
+    }
+
+    #[test]
+    fn pruning_drops_only_the_records_whose_folders_are_all_gone() {
+        let addons = tmpdir("prune");
+        std::fs::create_dir_all(addons.join("BigWigs")).unwrap();
+
+        let mut ledger = Ledger::default();
+        ledger.record(Record {
+            provider: "curse".into(),
+            id: "2382".into(),
+            name: "BigWigs".into(),
+            file_id: None,
+            // Half the package deleted by hand: still ours to repair.
+            folders: vec!["BigWigs".into(), "BigWigs_Options".into()],
+        });
+        ledger.record(Record {
+            provider: "tukui".into(),
+            id: "elvui".into(),
+            name: "ElvUI".into(),
+            file_id: None,
+            folders: vec!["ElvUI".into(), "ElvUI_Options".into()],
+        });
+
+        assert_eq!(ledger.prune_missing(&addons), vec!["ElvUI".to_owned()]);
+        assert_eq!(ledger.addons.len(), 1);
+        assert_eq!(ledger.addons[0].name, "BigWigs");
+
+        // Idempotent, and a file where a folder belongs does not count.
+        std::fs::write(addons.join("ElvUI"), b"not a folder").unwrap();
+        assert!(ledger.prune_missing(&addons).is_empty());
     }
 }

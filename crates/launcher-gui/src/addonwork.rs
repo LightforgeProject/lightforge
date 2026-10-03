@@ -39,9 +39,10 @@ pub struct Listing {
     pub rows: Vec<Row>,
     /// Ledger entries whose folders are actually on disk.
     pub managed: usize,
-    /// Ledger entries whose folders are gone — deleted by hand, or the game
-    /// reinstalled. Counted separately because claiming to manage something
-    /// that is not there is how "0 installed · 3 managed" happens.
+    /// Ledger entries whose folders are gone. Reconciled away on every scan
+    /// of a readable directory, so this is only ever non-zero for a library
+    /// we cannot reach — where claiming to manage something that is not there
+    /// is how "0 installed · 3 managed" happens.
     pub stale: usize,
     pub dir: PathBuf,
 }
@@ -51,11 +52,29 @@ pub async fn list(layout: Layout, code: ProductCode) -> Listing {
     tokio::task::spawn_blocking(move || {
         let dir = layout.addons_dir(&code);
         let installed = addons::scan(&dir).unwrap_or_default();
-        let ledger = AppDirs::discover()
+        let path = AppDirs::discover()
             .ok()
-            .map(|dirs| manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
-            .and_then(|path| Ledger::load(&path).ok())
+            .map(|dirs| manage::ledger_path(dirs.data_dir(), &dir, &code));
+        let mut ledger = path
+            .as_ref()
+            .and_then(|path| Ledger::load(path).ok())
             .unwrap_or_default();
+
+        // An addon whose folders are all gone is not installed, whatever the
+        // ledger says, and offering to update it is a promise we cannot keep.
+        // Only ever reconciled against a directory we could read.
+        if dir.is_dir() {
+            let dropped = ledger.prune_missing(&dir);
+            if !dropped.is_empty() {
+                if let Some(path) = &path {
+                    let _ = ledger.save(path);
+                }
+                crate::trace::mark(format_args!(
+                    "dropped from the addon ledger, folders gone: {}",
+                    dropped.join(", ")
+                ));
+            }
+        }
 
         let present: std::collections::BTreeSet<&str> =
             installed.iter().map(|a| a.folder.as_str()).collect();
