@@ -54,6 +54,14 @@ pub struct Record {
     /// default moves every addon that was never given an opinion of its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<super::Channel>,
+    /// What kind of build is actually installed — a *fact*, where
+    /// [`Record::channel`] is a *preference*.
+    ///
+    /// Without it, moving an addon from alpha back to stable looks exactly
+    /// like an update, because the only thing to compare is two opaque file
+    /// ids. `None` means it was installed before this was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<super::Channel>,
 }
 
 impl Ledger {
@@ -472,6 +480,7 @@ mod tests {
             file_id: Some("100".into()),
             folders: vec!["Mine".into(), "Mine_Extra".into()],
             channel: None,
+            build: None,
         });
 
         let removed = remove(&mut ledger, &dir, "curse", "1").unwrap();
@@ -502,6 +511,7 @@ mod tests {
             file_id: Some("100".into()),
             folders: vec!["BigWigs".into()],
             channel: None,
+            build: None,
         });
 
         let mut resolved = Resolved {
@@ -556,6 +566,7 @@ mod tests {
             file_id: Some("8866508".into()),
             folders: vec!["BigWigs".into()],
             channel: None,
+            build: None,
         });
         ledger.save(&path).unwrap();
 
@@ -576,6 +587,7 @@ mod tests {
             // Half the package deleted by hand: still ours to repair.
             folders: vec!["BigWigs".into(), "BigWigs_Options".into()],
             channel: None,
+            build: None,
         });
         ledger.record(Record {
             provider: "tukui".into(),
@@ -584,6 +596,7 @@ mod tests {
             file_id: None,
             folders: vec!["ElvUI".into(), "ElvUI_Options".into()],
             channel: None,
+            build: None,
         });
 
         assert_eq!(ledger.prune_missing(&addons), vec!["ElvUI".to_owned()]);

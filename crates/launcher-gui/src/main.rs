@@ -5029,11 +5029,34 @@ impl Lightforge {
             let mut heading = row![text(addon.title.clone()).size(theme::BODY), mono(addon.version.clone())]
                 .spacing(theme::SM)
                 .align_y(Alignment::Center);
-            if status.is_some_and(|s| s.has_update()) {
-                heading = heading.push(pill(
-                    format!("→ {}", status.and_then(|s| s.available.clone()).unwrap_or_default()),
-                    theme::UPDATE,
-                ));
+            if let Some(status) = status.filter(|s| s.has_update()) {
+                // What is on offer, named the way the provider names it — a
+                // version people recognise, not the opaque file id the
+                // ledger trades in. A channel switch says so instead, because
+                // "→ 1.4.26" beside an alpha looks like going forwards.
+                heading = heading.push(match status.is_channel_switch() {
+                    true => pill(
+                        format!(
+                            "{} build",
+                            status
+                                .available_build
+                                .map(|c| c.as_str())
+                                .unwrap_or("different"),
+                        ),
+                        theme::ACCENT,
+                    ),
+                    false => pill(
+                        format!(
+                            "→ {}",
+                            status
+                                .available_name
+                                .clone()
+                                .or_else(|| status.available.clone())
+                                .unwrap_or_default()
+                        ),
+                        theme::UPDATE,
+                    ),
+                });
             }
 
             let mut line = row![column![
@@ -5082,10 +5105,17 @@ impl Lightforge {
                 // One addon at a time. `install_one` fetches the newest file
                 // and does not pin it, which is exactly what updating is, so
                 // this is the same path "Update all" takes for every row.
-                if status.is_some_and(|s| s.has_update()) {
+                if let Some(status) = status.filter(|s| s.has_update()) {
+                    // "Update" would be a lie when the channel changed: going
+                    // back to stable from an alpha installs an *older* build,
+                    // which is right, but not what the word promises.
+                    let label = match status.is_channel_switch() {
+                        true => "Switch",
+                        false => "Update",
+                    };
                     line = line.push(
                         action_button(
-                            "Update",
+                            label,
                             theme::UPDATE,
                             Message::InstallAddon(
                                 managed.provider.clone(),

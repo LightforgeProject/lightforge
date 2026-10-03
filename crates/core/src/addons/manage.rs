@@ -240,6 +240,7 @@ async fn fetch_and_install(
         // An install replaces the record wholesale, so anything the user
         // chose about this addon has to be carried over by hand.
         channel: ledger.find(provider, &entry.id).and_then(|r| r.channel),
+        build: entry.channel,
     });
     Ok(extracted.folders)
 }
@@ -274,11 +275,33 @@ pub struct UpdateStatus {
     pub installed: Option<String>,
     /// Newest the provider offers, when it could be asked.
     pub available: Option<String>,
+    /// What kind of build is installed, as recorded at install time.
+    pub installed_build: Option<super::Channel>,
+    /// What kind of build is on offer.
+    pub available_build: Option<super::Channel>,
+    /// How the offered build calls itself — a version, not a file id, for
+    /// showing to someone.
+    pub available_name: Option<String>,
     /// Why there is no answer, if there isn't one.
     pub problem: Option<String>,
 }
 
 impl UpdateStatus {
+    /// True when the offered build is a different *kind* from the installed
+    /// one — moving between channels rather than forward on one.
+    ///
+    /// Calling that an update is how "Update" ends up installing an older
+    /// version: switching back to stable from an alpha is a different file,
+    /// which is all `has_update` can see.
+    pub fn is_channel_switch(&self) -> bool {
+        match (self.installed_build, self.available_build) {
+            (Some(installed), Some(available)) => installed != available,
+            // One side unknown: an addon installed before builds were
+            // recorded. Treat it as an ordinary update rather than guessing.
+            _ => false,
+        }
+    }
+
     pub fn has_update(&self) -> bool {
         match (&self.installed, &self.available) {
             (Some(installed), Some(available)) => installed != available,
@@ -325,6 +348,9 @@ pub async fn check_updates(
                 name: record.name.clone(),
                 installed: record.file_id.clone(),
                 available: found.and_then(|r| r.file_id.clone()),
+                installed_build: record.build,
+                available_build: found.and_then(|r| r.channel),
+                available_name: found.and_then(|r| r.file_name.clone()),
                 problem: found.and_then(|r| r.unavailable_reason().or_else(|| r.note.clone())),
             }
         })
@@ -453,6 +479,7 @@ mod tests {
             file_id: None,
             folders: vec!["BigWigs".into()],
             channel: Some(Channel::Alpha),
+            build: None,
         });
         ledger.record(Record {
             provider: "curse".into(),
@@ -461,6 +488,7 @@ mod tests {
             file_id: None,
             folders: vec!["BugGrabber".into()],
             channel: None,
+            build: None,
         });
 
         let options = options_with(Channel::Beta, Path::new("/nowhere/ledger.json"));
@@ -494,6 +522,7 @@ mod tests {
             file_id: None,
             folders: vec!["BigWigs".into()],
             channel: None,
+            build: None,
         });
         ledger.save(&path).unwrap();
 
@@ -554,6 +583,41 @@ mod tests {
     }
 
     #[test]
+    fn a_channel_change_is_a_switch_rather_than_an_update() {
+        use crate::addons::Channel;
+
+        let status = |installed_build, available_build| UpdateStatus {
+            provider: "curse".into(),
+            id: "1682733".into(),
+            name: "Naowh Smart Reminders".into(),
+            // Different files, so `has_update` is true either way — which is
+            // exactly why the label cannot be decided from that alone.
+            installed: Some("8986554".into()),
+            available: Some("8986546".into()),
+            installed_build,
+            available_build,
+            available_name: Some("NaowhSmartReminders-1.4.26.zip".into()),
+            problem: None,
+        };
+
+        // The real case: an alpha was installed, stable is now what is wanted,
+        // and the stable file is *older*. Offering "Update" would be a lie.
+        let back_to_stable = status(Some(Channel::Alpha), Some(Channel::Stable));
+        assert!(back_to_stable.has_update());
+        assert!(back_to_stable.is_channel_switch());
+
+        // Opting into a pre-release is a switch too, not an update.
+        assert!(status(Some(Channel::Stable), Some(Channel::Alpha)).is_channel_switch());
+
+        // Moving forward on the same channel is an ordinary update.
+        assert!(!status(Some(Channel::Stable), Some(Channel::Stable)).is_channel_switch());
+
+        // Installed before builds were recorded: do not guess.
+        assert!(!status(None, Some(Channel::Stable)).is_channel_switch());
+        assert!(!status(Some(Channel::Beta), None).is_channel_switch());
+    }
+
+    #[test]
     fn an_unknown_remote_version_is_not_an_update() {
         let status = |installed: Option<&str>, available: Option<&str>| UpdateStatus {
             provider: "curse".into(),
@@ -561,6 +625,9 @@ mod tests {
             name: "Thing".into(),
             installed: installed.map(str::to_owned),
             available: available.map(str::to_owned),
+            installed_build: None,
+            available_build: None,
+            available_name: None,
             problem: None,
         };
 

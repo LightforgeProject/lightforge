@@ -173,6 +173,7 @@ mod tests {
             file_id: Some("v424.8".into()),
             folders: vec!["BigWigs".into(), "BigWigs_Core".into(), "BigWigs_Options".into()],
             channel: None,
+            build: None,
         });
 
         let rows = rows_from(&scan, &ledger);
@@ -209,6 +210,7 @@ mod tests {
             file_id: None,
             folders: vec!["BigWigs".into(), "BigWigs_Options".into()],
             channel: Some(Channel::Beta),
+            build: None,
         });
 
         let scan = vec![installed("BigWigs", "1.0"), installed("BigWigs_Options", "1.0")];
@@ -235,6 +237,7 @@ mod tests {
             file_id: None,
             folders: vec!["BigWigs".into()],
             channel: None,
+            build: None,
         });
 
         let present: std::collections::BTreeSet<&str> = Default::default();
@@ -257,6 +260,7 @@ mod tests {
             file_id: None,
             folders: vec!["Deleted".into()],
             channel: None,
+            build: None,
         });
 
         // The scan is the truth about what exists on disk.
