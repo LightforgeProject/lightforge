@@ -14,6 +14,7 @@ pub mod config;
 pub mod cvars;
 pub mod debug;
 pub mod error;
+pub mod families;
 pub mod net;
 pub mod paths;
 pub mod prefix;

@@ -150,6 +150,22 @@ impl Layout {
             .join("Logs")
     }
 
+    /// `%LOCALAPPDATA%/Battle.net/Cache` — the client's content-addressed
+    /// cache, where it keeps Blizzard's published product catalogue.
+    ///
+    /// Read, never written. It is the only place in the prefix that says
+    /// which game family a product belongs to, which is what a hand-off has
+    /// to name — see [`crate::families`].
+    pub fn battle_net_cache(&self, user: &str) -> PathBuf {
+        self.drive_c()
+            .join("users")
+            .join(user)
+            .join("AppData")
+            .join("Local")
+            .join("Battle.net")
+            .join("Cache")
+    }
+
     /// The Battle.net mark, as Wine left it in the prefix.
     ///
     /// When `winemenubuilder` writes a program's `.desktop` file it also

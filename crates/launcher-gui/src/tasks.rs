@@ -14,6 +14,7 @@ use iced::widget::image::Handle;
 use lightforge_core::assets::{Manifest, Pipeline};
 use lightforge_core::config::Config;
 use lightforge_core::net::Http;
+use lightforge_core::families::Families;
 use lightforge_core::paths::{AppDirs, Layout};
 use lightforge_core::preflight::{DownloadGuard, GameProcess, Preflight, PreflightError};
 use lightforge_core::product::ProductCode;
@@ -665,10 +666,21 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
 }
 
 /// Hand off to Battle.net so the session is SSO'd and the in-game shop works.
+/// Read the client's cached catalogue, for the game families in it.
+///
+/// About 25 ms against a real cache, and only at startup: the answer changes
+/// when Blizzard publishes a new title, not while the launcher is open.
+pub async fn game_families(layout: Layout, user: String) -> Families {
+    tokio::task::spawn_blocking(move || Families::read(&layout, &user))
+        .await
+        .unwrap_or_default()
+}
+
 pub async fn launch_via_battle_net(
     layout: Layout,
     code: ProductCode,
     user: String,
+    family: Option<String>,
 ) -> Result<Handoff, String> {
     tokio::task::spawn_blocking(move || {
         use lightforge_core::battlenet::{self, Launch, Readiness};
@@ -712,7 +724,10 @@ pub async fn launch_via_battle_net(
 
         // Now it lands: the running client picks these up over its IPC queue
         // and starts the game.
-        let launch = Launch::Product { code: code.clone(), exec: None };
+        // The family the panel resolved, which for anything but WoW came out
+        // of the client's own catalogue. `Launch::command` falls back to the
+        // compiled-in table when there is none.
+        let launch = Launch::Product { code: code.clone(), exec: family };
         battlenet::launch(&runner, &layout, &launch).map_err(|e| e.to_string())?;
 
         Ok(

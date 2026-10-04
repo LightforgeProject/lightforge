@@ -395,6 +395,8 @@ enum Message {
     AddonPin(String, String, Option<String>),
     /// Whether the next import pins to the versions the token names.
     ImportPinned(bool),
+    /// The client's catalogue has been read.
+    FamiliesRead(Box<lightforge_core::families::Families>),
     /// Fetch one addon again and replace what it wrote.
     ReinstallAddon(String, String),
     /// Whether addons update themselves unless they say otherwise.
@@ -839,6 +841,10 @@ struct Lightforge {
     /// default: most tokens are someone saying which addons they use, not
     /// which builds of them.
     import_pinned: bool,
+    /// Game families, as Blizzard's own catalogue names them, read out of the
+    /// client's cache at startup. Empty on a prefix whose client has never
+    /// run, which falls the hand-off back to the compiled-in families.
+    families: lightforge_core::families::Families,
     /// Products whose unattended pass has already run this session. Addons
     /// are per product, so switching to Classic is the first chance to bring
     /// Classic's up to date — but only the first chance: clicking back and
@@ -987,6 +993,7 @@ impl Lightforge {
             addon_filter: String::new(),
             addon_remove_armed: None,
             addon_menu_open: None,
+            families: lightforge_core::families::Families::default(),
             import_pinned: false,
             addon_auto_done: Vec::new(),
             addon_auto_running: false,
@@ -1041,9 +1048,15 @@ impl Lightforge {
         // the time anyone presses Play. Quiet, and nothing waits for it
         // except a launch — see `preflight`.
         let addons = Task::done(Message::AutoUpdateAddons);
+        // Which tile each product belongs to, for the games Battle.net runs.
+        let families = Task::perform(
+            tasks::game_families(app.layout.clone(), app.config.prefix_user.clone()),
+            |families| Message::FamiliesRead(Box::new(families)),
+        );
         let task = Task::batch([
             app.reload(selected.code),
             addons,
+            families,
             probe,
             installed,
             codes,
@@ -1195,6 +1208,16 @@ impl Lightforge {
         )
     }
 
+    /// Which Battle.net tile a product belongs to, or `None` when neither
+    /// the compiled-in families nor the client's catalogue name one.
+    ///
+    /// `None` is the honest answer rather than a guess: the client resolves
+    /// an unknown family to the first one it knows, which is Warcraft III,
+    /// so a wrong uid opens somebody else's game.
+    fn family_of(&self, code: &ProductCode) -> Option<String> {
+        lightforge_core::battlenet::resolve_game_uid(code, &self.families)
+    }
+
     /// Whether Lightforge installs this product or hands it to Battle.net.
     ///
     /// The catalog's answer where it has one, the code's shape otherwise, so a
@@ -1228,7 +1251,8 @@ impl Lightforge {
         // Labelled for what it will actually do. Without a known game family
         // the client cannot be told which tile to open, so the button says so
         // rather than promising a hand-off that lands on someone else's game.
-        let launches = lightforge_core::battlenet::game_uid(&self.selected.code).is_some();
+        let family = self.family_of(&self.selected.code);
+        let launches = family.is_some();
         let open = button(
             container(
                 text(match launches {
@@ -1740,7 +1764,21 @@ impl Lightforge {
                         self.queue[at].stage = Stage::Queued;
                     }
                 }
-                Task::batch([self.pump(), self.reload(self.selected.code.clone())])
+                // A Battle.net session may have filled a cache that was
+                // empty when the app started — the first non-WoW install in
+                // a prefix is exactly when its catalogue first appears. It is
+                // 25 ms of reading, so it costs less than remembering not to.
+                Task::batch([
+                    self.pump(),
+                    self.reload(self.selected.code.clone()),
+                    Task::perform(
+                        tasks::game_families(
+                            self.layout.clone(),
+                            self.config.prefix_user.clone(),
+                        ),
+                        |families| Message::FamiliesRead(Box::new(families)),
+                    ),
+                ])
             }
 
             Message::HandoffStarted(result) => {
@@ -1933,6 +1971,7 @@ impl Lightforge {
                                 self.layout.clone(),
                                 self.selected.code.clone(),
                                 self.config.prefix_user.clone(),
+                                self.family_of(&self.selected.code),
                             ),
                             Message::HandoffStarted,
                         )
@@ -2210,6 +2249,11 @@ impl Lightforge {
                     addonwork::list(self.layout.clone(), self.selected.code.clone()),
                     |listing| Message::AddonsListed(Box::new(listing)),
                 )
+            }
+
+            Message::FamiliesRead(families) => {
+                self.families = *families;
+                Task::none()
             }
 
             Message::ImportPinned(on) => {

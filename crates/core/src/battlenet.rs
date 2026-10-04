@@ -1002,6 +1002,18 @@ impl Launch {
 /// resolve it and **falls back to the first family it knows, which is
 /// Warcraft III**, so the user lands on a game they may not even own. That was
 /// a real bug: `launch wow_classic_era` put Gabriel on the W3 page every time.
+/// The family for a product, preferring what is compiled in and falling back
+/// to the client's own catalogue.
+///
+/// That order, not the other way round: the WoW families were read out of a
+/// real log and carry decisions the catalogue cannot express — a PTR and a
+/// beta live in the retail tile's version list, and Forever is a tile of its
+/// own. Everything else comes from [`crate::families`], which knows every
+/// title Blizzard publishes rather than the two that were observed.
+pub fn resolve_game_uid(code: &ProductCode, families: &crate::families::Families) -> Option<String> {
+    game_uid(code).or_else(|| families.family_of(code.as_str()).map(str::to_owned))
+}
+
 pub fn game_uid(code: &ProductCode) -> Option<String> {
     let uid = match code {
         // PTR and beta builds of retail live in the retail tile's version list.
