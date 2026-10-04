@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use lightforge_core::addons::catalog::{Catalog, Request};
 use lightforge_core::addons::manage::{self, Event, Options, Report};
-use lightforge_core::addons::{self, Channel, Collection, Installed, Ledger};
+use lightforge_core::addons::{self, Channel, Collection, Installed, Ledger, Record};
 use lightforge_core::config::Config;
 use lightforge_core::net::Http;
 use lightforge_core::paths::{AppDirs, Layout};
@@ -33,6 +33,8 @@ pub struct Managed {
     pub id: String,
     /// This addon's own channel, or `None` when it follows the default.
     pub channel: Option<Channel>,
+    /// Left out of everything that updates in bulk.
+    pub ignored: bool,
 }
 
 /// What the addon screen shows.
@@ -104,7 +106,10 @@ pub async fn list(layout: Layout, code: ProductCode) -> Listing {
 /// separate addons with eleven Remove buttons, each of which would delete the
 /// other ten.
 pub fn rows_from(installed: &[Installed], ledger: &Ledger) -> Vec<Row> {
-    type Owner<'a> = (&'a str, &'a str, &'a str, Option<Channel>);
+    // The record itself, plus which folder heads the package it came in —
+    // empty for the package's own first folder. Carrying the record rather
+    // than a widening tuple keeps a new per-addon setting to one line below.
+    type Owner<'a> = (&'a Record, &'a str);
     let mut owner: std::collections::BTreeMap<&str, Owner<'_>> = Default::default();
     for record in &ledger.addons {
         for (position, folder) in record.folders.iter().enumerate() {
@@ -112,10 +117,7 @@ pub fn rows_from(installed: &[Installed], ledger: &Ledger) -> Vec<Row> {
                 0 => "",
                 _ => record.folders[0].as_str(),
             };
-            owner.insert(
-                folder,
-                (record.provider.as_str(), record.id.as_str(), head, record.channel),
-            );
+            owner.insert(folder, (record, head));
         }
     }
 
@@ -127,13 +129,14 @@ pub fn rows_from(installed: &[Installed], ledger: &Ledger) -> Vec<Row> {
                 folder: addon.folder.clone(),
                 title: addon.title.clone().unwrap_or_else(|| addon.folder.clone()),
                 version: addon.version.clone().unwrap_or_else(|| "—".to_owned()),
-                managed: known.map(|(provider, id, _, channel)| Managed {
-                    provider: (*provider).to_owned(),
-                    id: (*id).to_owned(),
-                    channel: *channel,
+                managed: known.map(|(record, _)| Managed {
+                    provider: record.provider.clone(),
+                    id: record.id.clone(),
+                    channel: record.channel,
+                    ignored: record.ignored,
                 }),
                 child_of: known
-                    .map(|(_, _, head, _)| *head)
+                    .map(|(_, head)| *head)
                     .filter(|head| !head.is_empty())
                     .map(str::to_owned),
             }
@@ -144,7 +147,6 @@ pub fn rows_from(installed: &[Installed], ledger: &Ledger) -> Vec<Row> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightforge_core::addons::Record;
 
     fn installed(folder: &str, version: &str) -> Installed {
         Installed {
@@ -173,7 +175,7 @@ mod tests {
             file_id: Some("v424.8".into()),
             folders: vec!["BigWigs".into(), "BigWigs_Core".into(), "BigWigs_Options".into()],
             channel: None,
-            build: None,
+            ..Default::default()
         });
 
         let rows = rows_from(&scan, &ledger);
@@ -210,7 +212,7 @@ mod tests {
             file_id: None,
             folders: vec!["BigWigs".into(), "BigWigs_Options".into()],
             channel: Some(Channel::Beta),
-            build: None,
+            ..Default::default()
         });
 
         let scan = vec![installed("BigWigs", "1.0"), installed("BigWigs_Options", "1.0")];
@@ -226,6 +228,25 @@ mod tests {
     }
 
     #[test]
+    fn an_ignored_addon_reaches_the_row_and_leaves_the_update_set() {
+        let mut ledger = Ledger::default();
+        ledger.record(Record {
+            provider: "curse".into(),
+            id: "2382".into(),
+            name: "BigWigs".into(),
+            folders: vec!["BigWigs".into(), "BigWigs_Core".into()],
+            ignored: true,
+            ..Default::default()
+        });
+
+        let rows = rows_from(&[installed("BigWigs", "1.0"), installed("BigWigs_Core", "1.0")], &ledger);
+        // Both folders carry it: the child row is the same addon, so it must
+        // not read as managed-and-updating while its parent is ignored.
+        assert!(rows.iter().all(|row| row.managed.as_ref().unwrap().ignored));
+        assert!(manage::update_requests(&ledger, Channel::Stable).is_empty());
+    }
+
+    #[test]
     fn a_stale_ledger_entry_is_not_counted_as_managed() {
         // Seen for real: the game folder was deleted by hand and the screen
         // then read "0 installed · 1 managed", which is a contradiction.
@@ -237,7 +258,7 @@ mod tests {
             file_id: None,
             folders: vec!["BigWigs".into()],
             channel: None,
-            build: None,
+            ..Default::default()
         });
 
         let present: std::collections::BTreeSet<&str> = Default::default();
@@ -260,7 +281,7 @@ mod tests {
             file_id: None,
             folders: vec!["Deleted".into()],
             channel: None,
-            build: None,
+            ..Default::default()
         });
 
         // The scan is the truth about what exists on disk.
@@ -332,16 +353,7 @@ pub async fn update(
     let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
     let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
         .map_err(|e| e.to_string())?;
-    let requests: Vec<Request> = ledger
-        .addons
-        .iter()
-        .map(|record| Request {
-            provider: record.provider.clone(),
-            id: record.id.clone(),
-            version_id: None,
-            channel: Some(record.channel.unwrap_or(channel)),
-        })
-        .collect();
+    let requests = manage::update_requests(&ledger, channel);
 
     if requests.is_empty() {
         return Ok(Report::default());

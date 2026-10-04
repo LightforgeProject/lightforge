@@ -14,6 +14,7 @@ comes from the manifest at runtime.
 | `bug.png` | Lucide `bug`, same treatment | ISC |
 | `message-square-quote.png` | Lucide `message-square-quote`, same treatment | ISC |
 | `power.png` | Lucide `power`, same treatment | ISC |
+| `ellipsis.png` | Lucide `ellipsis`, same treatment | ISC |
 | `discord.png` | [Simple Icons](https://simpleicons.org) `discord`, filled white, 64x64 | CC0 |
 | `x.png` | Simple Icons `x`, same treatment | CC0 |
 

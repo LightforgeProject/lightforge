@@ -127,6 +127,7 @@ bundled_icons! {
     bug_icon => "bug.png",
     feedback_icon => "message-square-quote.png",
     exit_icon => "power.png",
+    ellipsis_icon => "ellipsis.png",
     discord_icon => "discord.png",
     x_icon => "x.png",
 }
@@ -381,6 +382,10 @@ enum Message {
     AddonChannelDefault(ChannelChoice),
     /// One addon's own channel, or `None` to follow the default again.
     AddonChannelFor(String, String, RowChannel),
+    /// Show one addon's own menu, or close whichever is showing.
+    AddonMenu(Option<(String, String)>),
+    /// Leave one addon out of everything that updates in bulk, or stop doing so.
+    AddonIgnore(String, String, bool),
     SettingsTab(SettingsTab),
     SearchChanged(String),
     RunSearch,
@@ -810,6 +815,9 @@ struct Lightforge {
     /// The addon whose Remove has been clicked once. Removing deletes files,
     /// so the second click is the one that means it.
     addon_remove_armed: Option<(String, String)>,
+    /// The addon whose per-addon menu is showing. One at a time: the panel is
+    /// an overlay, and two of them would draw over each other.
+    addon_menu_open: Option<(String, String)>,
     /// Which tab the standing report belongs to. An import's failures are read
     /// next to the import that caused them; an update's belong with the
     /// addons. Same type, two meanings, so it is remembered rather than
@@ -941,6 +949,7 @@ impl Lightforge {
             token_input: String::new(),
             addon_filter: String::new(),
             addon_remove_armed: None,
+            addon_menu_open: None,
             addon_report_tab: AddonTab::Mine,
             search_seq: 0,
             export_token: String::new(),
@@ -2048,6 +2057,31 @@ impl Lightforge {
                 if let Err(e) = manage::set_channel(&options, &provider, &id, choice.0) {
                     self.error = Some(e.to_string());
                 }
+                Task::perform(
+                    addonwork::list(self.layout.clone(), self.selected.code.clone()),
+                    |listing| Message::AddonsListed(Box::new(listing)),
+                )
+            }
+
+            Message::AddonMenu(which) => {
+                self.addon_menu_open = which;
+                Task::none()
+            }
+
+            Message::AddonIgnore(provider, id, ignored) => {
+                self.addon_menu_open = None;
+                let Some(options) = addonwork::manage_options(
+                    &self.layout,
+                    &self.selected.code,
+                    self.config.addon_channel,
+                ) else {
+                    return Task::none();
+                };
+                if let Err(e) = manage::set_ignored(&options, &provider, &id, ignored) {
+                    self.error = Some(e.to_string());
+                }
+                // Re-list rather than patch the row in place: the ledger on
+                // disk is the truth the rest of the page is drawn from.
                 Task::perform(
                     addonwork::list(self.layout.clone(), self.selected.code.clone()),
                     |listing| Message::AddonsListed(Box::new(listing)),
@@ -3934,6 +3968,7 @@ impl Lightforge {
             || self.browse_open
             || self.strip_open
             || self.app_menu_open
+            || self.addon_menu_open.is_some()
     }
 
     /// Close every one of them.
@@ -3947,6 +3982,7 @@ impl Lightforge {
         self.browse_open = false;
         self.strip_open = false;
         self.app_menu_open = false;
+        self.addon_menu_open = None;
     }
 
     /// The menu under the wordmark: the app's own business, as opposed to the
@@ -4008,6 +4044,44 @@ impl Lightforge {
                 .style(theme::divider),
             entry(exit_icon(), "Exit", Some(Message::Exit)),
             row![square(discord_icon(), DISCORD_URL), square(x_icon(), X_URL)].spacing(theme::XS),
+        ]
+        .spacing(theme::XS)
+        .width(Length::Fixed(240.0));
+
+        container(rows).padding(theme::SM).style(theme::floating).into()
+    }
+
+    /// One addon's own settings: what is true of this addon rather than what
+    /// to do to it right now.
+    ///
+    /// Ignore is the only one today. Auto-update, a version pin and re-install
+    /// belong here too, which is the reason for a menu rather than a fourth
+    /// button on an already full row.
+    fn addon_row_menu(&self, managed: &addonwork::Managed) -> Element<'static, Message> {
+        let (provider, id) = (managed.provider.clone(), managed.id.clone());
+        let entry = |label: String, message: Message| {
+            button(text(label).size(theme::BODY).width(Length::Fill))
+                .padding([theme::XS, theme::SM])
+                .style(theme::ghost)
+                .on_press(message)
+        };
+
+        let rows = column![
+            entry(
+                match managed.ignored {
+                    true => "Stop ignoring".to_owned(),
+                    false => "Ignore this addon".to_owned(),
+                },
+                Message::AddonIgnore(provider, id, !managed.ignored),
+            ),
+            // Why it is worth having, in the menu that offers it: the word
+            // alone does not say that the addon stays installed and working.
+            muted(
+                "Left out of Check for updates and Update all. Updating it \
+                 from its own row still works."
+                    .to_owned(),
+                theme::CAPTION,
+            ),
         ]
         .spacing(theme::XS)
         .width(Length::Fixed(240.0));
@@ -4120,6 +4194,7 @@ impl Lightforge {
         self.search = addonwork::SearchOutcome::default();
         self.addon_filter.clear();
         self.addon_remove_armed = None;
+        self.addon_menu_open = None;
     }
 
     /// A screen that is not the dashboard: header, title, content.
@@ -5029,6 +5104,11 @@ impl Lightforge {
             let mut heading = row![text(addon.title.clone()).size(theme::BODY), mono(addon.version.clone())]
                 .spacing(theme::SM)
                 .align_y(Alignment::Center);
+            if addon.managed.as_ref().is_some_and(|m| m.ignored) {
+                // Said once, in the place an update would be announced: this
+                // row is why "Update all" leaves something behind.
+                heading = heading.push(pill("ignored".to_owned(), theme::MUTED));
+            }
             if let Some(status) = status.filter(|s| s.has_update()) {
                 // What is on offer, named the way the provider names it — a
                 // version people recognise, not the opaque file id the
@@ -5159,6 +5239,27 @@ impl Lightforge {
                         .enabled(!self.addons_busy),
                     ),
                 };
+
+                // Everything that is a setting rather than an action lives
+                // behind this, so the row keeps its width as the settings
+                // grow. Only one menu is open at a time, and the panel hangs
+                // off the button itself rather than the row's corner.
+                let key = (managed.provider.clone(), managed.id.clone());
+                let open = self.addon_menu_open.as_ref() == Some(&key);
+                line = line.push(popover::popover(
+                    button(
+                        image(ellipsis_icon())
+                            .width(Length::Fixed(MENU_GLYPH))
+                            .height(Length::Fixed(MENU_GLYPH)),
+                    )
+                    .padding(theme::SM)
+                    .style(theme::ghost)
+                    .on_press(Message::AddonMenu(match open {
+                        true => None,
+                        false => Some(key.clone()),
+                    })),
+                    open.then(|| self.addon_row_menu(managed)),
+                ));
             }
             body = body.push(container(line).padding(theme::MD).style(theme::row));
         }

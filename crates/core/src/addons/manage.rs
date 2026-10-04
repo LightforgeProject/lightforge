@@ -159,19 +159,7 @@ pub async fn update_all(
     on_event: impl FnMut(Event),
 ) -> Result<Report, ManageError> {
     let ledger = Ledger::load(&options.ledger_path)?;
-    let requests: Vec<Request> = ledger
-        .addons
-        .iter()
-        .map(|record| Request {
-            provider: record.provider.clone(),
-            id: record.id.clone(),
-            // Updating means the newest file, never the pinned one.
-            version_id: None,
-            // install_all recomputes this from the ledger; set here too so a
-            // caller reading these requests sees what will be asked for.
-            channel: Some(record.channel.unwrap_or(options.channel)),
-        })
-        .collect();
+    let requests = update_requests(&ledger, options.channel);
 
     let options = Options { pinned: false, ..options.clone() };
     install_all(http, catalog, &requests, &options, on_event).await
@@ -241,6 +229,7 @@ async fn fetch_and_install(
         // chose about this addon has to be carried over by hand.
         channel: ledger.find(provider, &entry.id).and_then(|r| r.channel),
         build: entry.channel,
+        ignored: ledger.find(provider, &entry.id).is_some_and(|r| r.ignored),
     });
     Ok(extracted.folders)
 }
@@ -314,6 +303,32 @@ impl UpdateStatus {
     }
 }
 
+/// What a bulk update or update check asks for: every tracked addon that has
+/// not been ignored.
+///
+/// Both front-ends and both operations share this, because the set is a rule
+/// rather than a detail — an ignored addon that one of them still asked about
+/// would be ignored everywhere except the one place it mattered.
+///
+/// An ignored addon can still be asked for by name. `install_all` takes
+/// explicit requests, and an explicit request is the user asking.
+pub fn update_requests(ledger: &Ledger, default_channel: super::Channel) -> Vec<Request> {
+    ledger
+        .addons
+        .iter()
+        .filter(|record| !record.ignored)
+        .map(|record| Request {
+            provider: record.provider.clone(),
+            id: record.id.clone(),
+            // Updating means the newest file, never the pinned one.
+            version_id: None,
+            // install_all recomputes this from the ledger; set here too so a
+            // caller reading these requests sees what will be asked for.
+            channel: Some(record.channel.unwrap_or(default_channel)),
+        })
+        .collect()
+}
+
 /// Ask every provider what the tracked addons are at now, without installing.
 pub async fn check_updates(
     http: &Http,
@@ -321,16 +336,9 @@ pub async fn check_updates(
     options: &Options,
 ) -> Result<Vec<UpdateStatus>, ManageError> {
     let ledger = Ledger::load(&options.ledger_path)?;
-    let requests: Vec<Request> = ledger
-        .addons
-        .iter()
-        .map(|record| Request {
-            provider: record.provider.clone(),
-            id: record.id.clone(),
-            version_id: None,
-            channel: Some(record.channel.unwrap_or(options.channel)),
-        })
-        .collect();
+    // No request for an ignored addon either: there is nothing to be done
+    // with the answer, and every round-trip costs someone's bandwidth.
+    let requests = update_requests(&ledger, options.channel);
     if requests.is_empty() {
         return Ok(Vec::new());
     }
@@ -341,7 +349,12 @@ pub async fn check_updates(
         .addons
         .iter()
         .map(|record| {
-            let found = resolved.iter().find(|r| r.id == record.id);
+            // Nothing was asked for an ignored addon, so nothing is offered:
+            // the row still exists, it just never reads as outdated.
+            let found = match record.ignored {
+                true => None,
+                false => resolved.iter().find(|r| r.id == record.id),
+            };
             UpdateStatus {
                 provider: record.provider.clone(),
                 id: record.id.clone(),
@@ -406,6 +419,24 @@ pub fn set_channel(
     let mut ledger = Ledger::load(&options.ledger_path)?;
     if let Some(record) = ledger.find_mut(provider, id) {
         record.channel = channel;
+        ledger.save(&options.ledger_path)?;
+    }
+    Ok(())
+}
+
+/// Leave one addon out of everything that updates in bulk, or stop doing so.
+///
+/// Deliberately not a toggle: the caller knows which state it is showing, and
+/// a toggle would flip the wrong way against a ledger changed under it.
+pub fn set_ignored(
+    options: &Options,
+    provider: &str,
+    id: &str,
+    ignored: bool,
+) -> Result<(), ManageError> {
+    let mut ledger = Ledger::load(&options.ledger_path)?;
+    if let Some(record) = ledger.find_mut(provider, id) {
+        record.ignored = ignored;
         ledger.save(&options.ledger_path)?;
     }
     Ok(())
@@ -479,7 +510,7 @@ mod tests {
             file_id: None,
             folders: vec!["BigWigs".into()],
             channel: Some(Channel::Alpha),
-            build: None,
+            ..Default::default()
         });
         ledger.record(Record {
             provider: "curse".into(),
@@ -488,7 +519,7 @@ mod tests {
             file_id: None,
             folders: vec!["BugGrabber".into()],
             channel: None,
-            build: None,
+            ..Default::default()
         });
 
         let options = options_with(Channel::Beta, Path::new("/nowhere/ledger.json"));
@@ -507,6 +538,52 @@ mod tests {
     }
 
     #[test]
+    fn an_ignored_addon_is_left_out_of_bulk_work_but_can_still_be_asked_for() {
+        use crate::addons::Channel;
+
+        let dir = std::env::temp_dir().join(format!("lf-ignore-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ledger.json");
+
+        let mut ledger = Ledger::default();
+        ledger.record(Record {
+            provider: "curse".into(),
+            id: "2382".into(),
+            name: "BigWigs".into(),
+            file_id: Some("100".into()),
+            folders: vec!["BigWigs".into()],
+            ..Default::default()
+        });
+        ledger.record(Record {
+            provider: "curse".into(),
+            id: "13344".into(),
+            name: "BugGrabber".into(),
+            file_id: Some("200".into()),
+            folders: vec!["BugGrabber".into()],
+            ..Default::default()
+        });
+        ledger.save(&path).unwrap();
+
+        let options = options_with(Channel::Stable, &path);
+        set_ignored(&options, "curse", "13344", true).unwrap();
+
+        let reloaded = Ledger::load(&path).unwrap();
+        assert!(!reloaded.find("curse", "2382").unwrap().ignored);
+        assert!(reloaded.find("curse", "13344").unwrap().ignored);
+
+        // What "update everything" would ask for: the one addon still in.
+        let requests = update_requests(&reloaded, Channel::Stable);
+        let asked: Vec<&str> = requests.iter().map(|request| request.id.as_str()).collect();
+        assert_eq!(asked, vec!["2382"], "an ignored addon is never asked about");
+
+        // Ignoring is not a one-way door.
+        set_ignored(&options, "curse", "13344", false).unwrap();
+        assert!(!Ledger::load(&path).unwrap().find("curse", "13344").unwrap().ignored);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn setting_a_channel_survives_a_reload_and_clearing_it_returns_to_the_default() {
         use crate::addons::Channel;
 
@@ -522,7 +599,7 @@ mod tests {
             file_id: None,
             folders: vec!["BigWigs".into()],
             channel: None,
-            build: None,
+            ..Default::default()
         });
         ledger.save(&path).unwrap();
 

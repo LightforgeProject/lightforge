@@ -39,7 +39,10 @@ pub struct Ledger {
 }
 
 /// One installed addon.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Default` exists for tests and for growing the struct: a new per-addon
+/// setting should not mean editing every literal that never cared about it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record {
     pub provider: String,
     pub id: String,
@@ -62,6 +65,19 @@ pub struct Record {
     /// ids. `None` means it was installed before this was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<super::Channel>,
+    /// Left alone by anything that updates in bulk.
+    ///
+    /// For an addon kept at a version on purpose, or one a parent package
+    /// drags along: without it, every "Update all" quietly undoes the choice.
+    /// An explicit Update on the addon itself still works — this is about what
+    /// happens *without* being asked.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ignored: bool,
+}
+
+/// `skip_serializing_if` needs a path; `bool::not` is not one.
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Ledger {
@@ -480,7 +496,7 @@ mod tests {
             file_id: Some("100".into()),
             folders: vec!["Mine".into(), "Mine_Extra".into()],
             channel: None,
-            build: None,
+            ..Default::default()
         });
 
         let removed = remove(&mut ledger, &dir, "curse", "1").unwrap();
@@ -511,7 +527,7 @@ mod tests {
             file_id: Some("100".into()),
             folders: vec!["BigWigs".into()],
             channel: None,
-            build: None,
+            ..Default::default()
         });
 
         let mut resolved = Resolved {
@@ -566,7 +582,7 @@ mod tests {
             file_id: Some("8866508".into()),
             folders: vec!["BigWigs".into()],
             channel: None,
-            build: None,
+            ..Default::default()
         });
         ledger.save(&path).unwrap();
 
@@ -587,7 +603,7 @@ mod tests {
             // Half the package deleted by hand: still ours to repair.
             folders: vec!["BigWigs".into(), "BigWigs_Options".into()],
             channel: None,
-            build: None,
+            ..Default::default()
         });
         ledger.record(Record {
             provider: "tukui".into(),
@@ -596,7 +612,7 @@ mod tests {
             file_id: None,
             folders: vec!["ElvUI".into(), "ElvUI_Options".into()],
             channel: None,
-            build: None,
+            ..Default::default()
         });
 
         assert_eq!(ledger.prune_missing(&addons), vec!["ElvUI".to_owned()]);
