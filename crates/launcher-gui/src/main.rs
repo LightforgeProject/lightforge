@@ -392,6 +392,8 @@ enum Message {
     AddonPin(String, String, Option<String>),
     /// Whether the next import pins to the versions the token names.
     ImportPinned(bool),
+    /// Fetch one addon again and replace what it wrote.
+    ReinstallAddon(String, String),
     /// Whether addons update themselves unless they say otherwise.
     AddonAutoUpdateDefault(bool),
     /// Update whatever updates itself, for the product on screen.
@@ -2776,6 +2778,29 @@ impl Lightforge {
                 )
             }
 
+            Message::ReinstallAddon(provider, id) => {
+                self.addon_menu_open = None;
+                let (tx, rx) = tokio::sync::watch::channel(addonwork::Progress::default());
+                self.addon_rx = Some(rx);
+                self.addons_busy = true;
+                self.addon_report = None;
+                self.addon_report_tab = AddonTab::Mine;
+                self.error = None;
+
+                Task::perform(
+                    addonwork::reinstall_one(
+                        self.http.clone(),
+                        self.layout.clone(),
+                        self.selected.code.clone(),
+                        provider,
+                        id,
+                        self.config.addon_channel,
+                        tx,
+                    ),
+                    |result| Message::AddonsFinished(result.map(Box::new)),
+                )
+            }
+
             Message::CheckAddonUpdates => Task::perform(
                 addonwork::check_updates(
                     self.http.clone(),
@@ -4289,6 +4314,23 @@ impl Lightforge {
             (None, None) => {}
         }
 
+        // An action, not a setting, so it sits under a rule of its own —
+        // and busy means busy: a second fetch into the same directory while
+        // one is running is the race the whole page guards against.
+        rows = rows.push(
+            container(Space::new().height(Length::Fixed(1.0)))
+                .width(Length::Fill)
+                .style(theme::divider),
+        );
+        rows = rows.push(
+            button(text("Re-install".to_owned()).size(theme::BODY).width(Length::Fill))
+                .padding([theme::XS, theme::SM])
+                .style(theme::ghost)
+                .on_press_maybe((!self.addons_busy).then(|| {
+                    Message::ReinstallAddon(managed.provider.clone(), managed.id.clone())
+                })),
+        );
+
         // Why either is worth having, in the menu that offers them: the words
         // alone do not say that the addon stays installed and working.
         rows = rows.push(muted(
@@ -5417,9 +5459,15 @@ impl Lightforge {
                             }
                         },
                     )
-                    .text_size(theme::CAPTION)
-                    .padding([theme::XS, theme::SM])
-                    .width(Length::Fixed(104.0))
+                    // Sized like the buttons it sits beside, down to the text
+                    // and the padding: three controls on one line that
+                    // disagree about their height read as a mistake rather
+                    // than as a hierarchy. The width is fixed so the buttons
+                    // do not shift as the word changes between Default,
+                    // Stable, Beta and Alpha.
+                    .text_size(theme::LABEL)
+                    .padding([theme::SM, theme::MD])
+                    .width(Length::Fixed(120.0))
                     .style(theme::picker)
                     .menu_style(theme::picker_menu),
                 );
@@ -5665,7 +5713,7 @@ impl Lightforge {
         let search = container(
             column![
                 row![
-                    text_input("Search addons…", &self.search_input)
+                    text_input("Search addons, or paste a project page URL…", &self.search_input)
                         .on_input(Message::SearchChanged)
                         .on_submit(Message::RunSearch)
                         .style(theme::field)
@@ -5679,7 +5727,9 @@ impl Lightforge {
             ]
             .extend(self.hint(
                 "WoWInterface, Tukui and GitHub (type owner/repo). CurseForge needs a \
-                 catalog in Settings.",
+                 catalog in Settings. A pasted CurseForge, GitHub, WoWInterface or Tukui \
+                 page is looked up at that provider — it installs the same way as a \
+                 search hit, so a dead link says so rather than failing oddly.",
             ).map(Element::from))
             .spacing(theme::SM),
         )
@@ -5700,7 +5750,8 @@ impl Lightforge {
             body = body.push(match self.search.query.is_empty() {
                 true => empty(
                     "Search for an addon.",
-                    "Results come from WoWInterface and Tukui; type owner/repo for GitHub.",
+                    "Results come from WoWInterface and Tukui; type owner/repo for GitHub, \
+                     or paste an addon's page URL.",
                 ),
                 false => empty(
                     &format!("Nothing found for “{}”.", self.search.query),

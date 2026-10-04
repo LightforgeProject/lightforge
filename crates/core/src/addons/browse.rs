@@ -105,6 +105,13 @@ pub async fn search(
         return Results::default();
     }
 
+    // A pasted project page is the same question as a typed name, so it is
+    // answered by rewriting it into one rather than by a second code path:
+    // every provider below already knows how to find an addon by the thing
+    // its URL carries — a slug, an `owner/repo`, a numeric id.
+    let from_url = query_from_url(query);
+    let query = from_url.as_ref().map(|(_, text)| text.as_str()).unwrap_or(query);
+
     let mut results = Vec::new();
     let mut problems = Vec::new();
 
@@ -137,6 +144,13 @@ pub async fn search(
             })),
             Err(e) => problems.push(format!("CurseForge: {e}")),
         }
+    }
+
+    // A link names one addon at one provider. Offering the same name from
+    // the others is answering a question that was not asked, and the one
+    // that was asked may not even be the top hit.
+    if let Some((provider, _)) = &from_url {
+        results.retain(|listing| &listing.provider == provider);
     }
 
     rank(&mut results, query);
@@ -200,7 +214,9 @@ fn search_wowi(entries: &[WowiEntry], query: &str, flavor: &str) -> Vec<Listing>
     let needle = fold(query);
     entries
         .iter()
-        .filter(|e| fold(&e.title).contains(&needle))
+        // An id matches exactly, which is what a pasted WoWInterface URL
+        // becomes: its title is decoration and changes, the id does not.
+        .filter(|e| e.id.to_string() == needle || fold(&e.title).contains(&needle))
         .filter(|e| e.flavors().is_empty() || supports(e.flavors(), flavor))
         .map(|e| Listing {
             provider: Provider::WowInterface,
@@ -230,6 +246,68 @@ fn search_tukui(entries: &[TukuiEntry], query: &str) -> Vec<Listing> {
             website_url: e.web_url.clone(),
         })
         .collect()
+}
+
+/// What a pasted addon page URL means, as a query the search already handles.
+///
+/// Returns `None` for anything that is not one of these, including a URL from
+/// a provider Lightforge does not install from — searching the text of a
+/// Wago link finds nothing, which is the honest answer, where guessing at an
+/// id from it would install something else.
+///
+/// Deliberately a string rewrite rather than a direct install: the result
+/// goes through the same resolve every other hit does, so a dead link reports
+/// `not_found` like anything else instead of failing in its own way.
+pub fn query_from_url(input: &str) -> Option<(Provider, String)> {
+    let rest = input
+        .trim()
+        .strip_prefix("https://")
+        .or_else(|| input.trim().strip_prefix("http://"))?;
+    // Path only, with the query string and fragment kept aside: Tukui puts
+    // the addon's name in the query string, everyone else in the path.
+    let (host_path, params) = match rest.split_once('?') {
+        Some((before, after)) => (before, after.split('#').next().unwrap_or(after)),
+        None => (rest.split('#').next().unwrap_or(rest), ""),
+    };
+    let (host, path) = host_path.split_once('/').unwrap_or((host_path, ""));
+    let host = host.strip_prefix("www.").unwrap_or(host);
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+
+    match host {
+        // curseforge.com/wow/addons/<slug>, with anything after it ignored:
+        // a link copied from the Files tab still names the project.
+        "curseforge.com" | "legacy.curseforge.com" => match segments.as_slice() {
+            [_game, "addons", slug, ..] => Some((Provider::Curse, (*slug).to_owned())),
+            _ => None,
+        },
+        // github.com/<owner>/<repo>, which is already a query this
+        // understands. `.git` because that is what a clone URL carries.
+        "github.com" => match segments.as_slice() {
+            [owner, repo, ..] => {
+                let repo = repo.strip_suffix(".git").unwrap_or(repo);
+                Some((Provider::GitHub, format!("{owner}/{repo}")))
+            }
+            _ => None,
+        },
+        // wowinterface.com/downloads/info24608-SomeAddon.html — the id is the
+        // only part that is stable, so it is the part that is kept.
+        "wowinterface.com" => segments.iter().find_map(|segment| {
+            let digits: String = segment
+                .strip_prefix("info")?
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            (!digits.is_empty()).then_some((Provider::WowInterface, digits))
+        }),
+        // tukui.org/download.php?ui=elvui, or an addon page path.
+        "tukui.org" => params
+            .split('&')
+            .find_map(|pair| pair.strip_prefix("ui="))
+            .map(str::to_owned)
+            .or_else(|| segments.last().map(|s| (*s).to_owned()))
+            .map(|slug| (Provider::TukUI, slug)),
+        _ => None,
+    }
 }
 
 /// `owner/repo` typed exactly, offered as a direct GitHub result.
@@ -319,6 +397,76 @@ fn is_fresh(path: &PathBuf) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_pasted_project_page_becomes_a_query_for_that_provider() {
+        let at = |url: &str| query_from_url(url);
+
+        assert_eq!(
+            at("https://www.curseforge.com/wow/addons/big-wigs"),
+            Some((Provider::Curse, "big-wigs".to_owned()))
+        );
+        // A link copied from the Files tab still names the project, and a
+        // trailing slash or tracking parameters change nothing.
+        assert_eq!(
+            at("https://www.curseforge.com/wow/addons/big-wigs/files/8986546"),
+            Some((Provider::Curse, "big-wigs".to_owned()))
+        );
+        assert_eq!(
+            at("http://curseforge.com/wow/addons/big-wigs/?utm_source=x#files"),
+            Some((Provider::Curse, "big-wigs".to_owned()))
+        );
+
+        assert_eq!(
+            at("https://github.com/Stanzilla/AdvancedInterfaceOptions"),
+            Some((Provider::GitHub, "Stanzilla/AdvancedInterfaceOptions".to_owned()))
+        );
+        // What a clone URL carries, which is what people paste from the
+        // green button.
+        assert_eq!(
+            at("https://github.com/Stanzilla/AdvancedInterfaceOptions.git"),
+            Some((Provider::GitHub, "Stanzilla/AdvancedInterfaceOptions".to_owned()))
+        );
+
+        // The title in a WoWInterface URL is decoration and changes; the id
+        // does not.
+        assert_eq!(
+            at("https://www.wowinterface.com/downloads/info24608-DBMVoicepack.html"),
+            Some((Provider::WowInterface, "24608".to_owned()))
+        );
+
+        assert_eq!(
+            at("https://www.tukui.org/download.php?ui=elvui"),
+            Some((Provider::TukUI, "elvui".to_owned()))
+        );
+
+        // Not a provider Lightforge installs from, and not a URL at all.
+        assert_eq!(at("https://addons.wago.io/addons/weakauras"), None);
+        assert_eq!(at("BigWigs"), None);
+        assert_eq!(at("github.com/owner/repo"), None, "a bare host is a search, not a link");
+    }
+
+    #[test]
+    fn a_wowinterface_id_finds_the_addon_the_url_named() {
+        let entries = vec![WowiEntry {
+            id: 24608,
+            title: "DBM Voicepack".to_owned(),
+            author: None,
+            version: None,
+            downloads: 0,
+            game_versions: None,
+            file_info_uri: None,
+        }];
+
+        // What a pasted URL turns into. The title is never consulted.
+        let hits = search_wowi(&entries, "24608", "retail");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "24608");
+
+        // And a number that is not an id still finds nothing.
+        assert!(search_wowi(&entries, "99999", "retail").is_empty());
+    }
+
     use super::*;
 
     fn wowi(id: u64, title: &str, downloads: u64, versions: &[&str]) -> WowiEntry {

@@ -352,8 +352,17 @@ pub fn remove(
         .forget(provider, id)
         .ok_or_else(|| InstallError::NotTracked(id.to_owned()))?;
 
+    delete_folders(addons_dir, &record.folders)
+}
+
+/// Delete addon folders, and report which were actually there.
+///
+/// Only ever called with folders a [`Record`] names — the rule that nothing
+/// Lightforge did not install is ever deleted lives in the callers, and the
+/// path check here is the second lock on it.
+pub fn delete_folders(addons_dir: &Path, folders: &[String]) -> Result<Vec<String>, InstallError> {
     let mut removed = Vec::new();
-    for folder in &record.folders {
+    for folder in folders {
         if safe_relative(Path::new(folder)).is_none() {
             return Err(InstallError::UnsafePath(folder.clone()));
         }
@@ -551,6 +560,31 @@ mod tests {
             remove(&mut ledger, &dir, "curse", "999"),
             Err(InstallError::NotTracked(_))
         ));
+    }
+
+    #[test]
+    fn deleting_folders_reports_what_was_there_and_refuses_an_escape() {
+        let dir = tmpdir("delete-folders");
+        std::fs::create_dir_all(dir.join("BigWigs")).unwrap();
+        std::fs::write(dir.join("BigWigs/BigWigs.toc"), b"x").unwrap();
+
+        // A folder that is gone already is not a failure: half-deleted is
+        // exactly the state a repair exists to fix.
+        let removed = delete_folders(
+            &dir,
+            &["BigWigs".to_owned(), "BigWigs_Core".to_owned()],
+        )
+        .unwrap();
+        assert_eq!(removed, vec!["BigWigs"]);
+        assert!(!dir.join("BigWigs").exists());
+
+        // The second lock on "only what the ledger recorded is ever deleted".
+        assert!(matches!(
+            delete_folders(&dir, &["../elsewhere".to_owned()]),
+            Err(InstallError::UnsafePath(_))
+        ));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

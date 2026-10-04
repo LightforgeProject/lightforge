@@ -29,6 +29,13 @@ pub struct Options {
     /// Honour the `version_id` an import token pins, instead of taking the
     /// newest file. Reproduces someone's exact setup rather than tracking them.
     pub pinned: bool,
+    /// Install even when the ledger says the addon is already on this file,
+    /// replacing the folders it recorded rather than writing over them.
+    ///
+    /// What "re-install" means: the ledger can only say which *file* is
+    /// installed, never whether the folders it wrote are still intact, so
+    /// repairing one has to be something the user can ask for directly.
+    pub reinstall: bool,
     /// Which builds to accept for an addon that has no opinion of its own.
     pub channel: super::Channel,
 }
@@ -127,7 +134,9 @@ pub async fn install_all(
             });
             continue;
         }
-        if !ledger.needs_update(entry, &provider) {
+        // Being on the right file is the whole question for an update and
+        // beside the point for a repair.
+        if !options.reinstall && !ledger.needs_update(entry, &provider) {
             on_event(Event::UpToDate { name: name.clone() });
             report.up_to_date.push(name);
             continue;
@@ -164,7 +173,7 @@ pub async fn update_all(
     let ledger = Ledger::load(&options.ledger_path)?;
     let requests = update_requests(&ledger, options.channel);
 
-    let options = Options { pinned: false, ..options.clone() };
+    let options = Options { pinned: false, reinstall: false, ..options.clone() };
     install_all(http, catalog, &requests, &options, on_event).await
 }
 
@@ -219,6 +228,16 @@ async fn fetch_and_install(
     let package = http.get_bytes(url).await?;
 
     verify_md5(&package, entry.md5.as_deref(), name)?;
+
+    // A repair replaces the folders rather than writing over them, so a file
+    // an older build shipped and this one does not goes too. Deliberately
+    // after the download: until the package is in hand there is nothing to
+    // put back, and a failed fetch must not leave the addon gone.
+    if options.reinstall {
+        if let Some(record) = ledger.find(provider, &entry.id) {
+            install::delete_folders(&options.addons_dir, &record.folders)?;
+        }
+    }
 
     // Trust what the package contains over what the catalog said it contains:
     // the folders are what removal will delete, so they have to be real.
@@ -581,6 +600,7 @@ mod tests {
             addons_dir: PathBuf::from("/nowhere"),
             ledger_path: ledger.to_path_buf(),
             pinned: false,
+            reinstall: false,
             channel,
         }
     }

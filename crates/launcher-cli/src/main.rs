@@ -1754,6 +1754,7 @@ async fn main() -> Result<()> {
                     &code,
                 ),
                 pinned: false,
+                reinstall: false,
                 channel: addon_channel(&dirs),
             };
 
@@ -1799,6 +1800,7 @@ async fn main() -> Result<()> {
                 addons_dir: layout.addons_dir(&code),
                 ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code),
                 pinned,
+                reinstall: false,
                 channel: addon_channel(&dirs),
             };
             println!("addons dir      {}", options.addons_dir.display());
@@ -1851,6 +1853,7 @@ async fn main() -> Result<()> {
                 addons_dir: layout.addons_dir(&code),
                 ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code),
                 pinned: false,
+                reinstall: false,
                 channel: addon_channel(&dirs),
             };
 
@@ -1871,6 +1874,7 @@ async fn main() -> Result<()> {
                 addons_dir: layout.addons_dir(&code),
                 ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code),
                 pinned: false,
+                reinstall: false,
                 channel: addon_channel(&dirs),
             };
 

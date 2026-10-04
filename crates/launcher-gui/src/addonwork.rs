@@ -367,6 +367,7 @@ fn options(
         addons_dir: layout.addons_dir(code),
         ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(code), code),
         pinned,
+        reinstall: false,
         channel,
     })
 }
@@ -394,7 +395,7 @@ pub async fn import(
     if requests.is_empty() {
         return Err("that token names no addons Lightforge can install".to_owned());
     }
-    run(http, layout, code, requests, pinned, channel, tx).await
+    run(http, layout, code, requests, Mode { pinned, ..Mode::default() }, channel, tx).await
 }
 
 /// Update everything the ledger tracks.
@@ -413,7 +414,7 @@ pub async fn update(
     if requests.is_empty() {
         return Ok(Report::default());
     }
-    run(http, layout, code, requests, false, channel, tx).await
+    run(http, layout, code, requests, Mode::default(), channel, tx).await
 }
 
 /// Update the addons that update themselves, with nobody watching.
@@ -436,7 +437,19 @@ pub async fn auto_update(
     if requests.is_empty() {
         return Ok(None);
     }
-    run(http, layout, code, requests, false, channel, tx).await.map(Some)
+    run(http, layout, code, requests, Mode::default(), channel, tx).await.map(Some)
+}
+
+/// How one run differs from an ordinary install.
+///
+/// A struct rather than two positional `bool`s: `run(.., false, true, ..)` at
+/// the call site says nothing about which is which.
+#[derive(Debug, Clone, Copy, Default)]
+struct Mode {
+    /// Honour the version ids the requests name, instead of taking the newest.
+    pinned: bool,
+    /// Install over what is there even when the ledger says it is current.
+    reinstall: bool,
 }
 
 async fn run(
@@ -444,12 +457,15 @@ async fn run(
     layout: Layout,
     code: ProductCode,
     requests: Vec<Request>,
-    pinned: bool,
+    mode: Mode,
     channel: Channel,
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Report, String> {
-    let options =
-        options(&layout, &code, pinned, channel).ok_or("no data directory available")?;
+    let options = Options {
+        reinstall: mode.reinstall,
+        ..options(&layout, &code, mode.pinned, channel)
+            .ok_or("no data directory available")?
+    };
     let catalog = catalog();
     let http = http.ok_or(crate::tasks::NO_HTTP)?;
 
@@ -542,7 +558,43 @@ pub async fn install_one(
         code,
         // `install_all` fills the channel in from the ledger or the default.
         vec![Request { provider, id, version_id: None, channel: None }],
-        false,
+        Mode::default(),
+        channel,
+        tx,
+    )
+    .await
+}
+
+/// Fetch one addon again and replace the folders it wrote.
+///
+/// A pin is read from the ledger here rather than passed in: repairing a
+/// pinned addon has to put back the version it is held at, and the ledger is
+/// the only thing that knows that for certain.
+pub async fn reinstall_one(
+    http: Option<Http>,
+    layout: Layout,
+    code: ProductCode,
+    provider: String,
+    id: String,
+    channel: Channel,
+    tx: tokio::sync::watch::Sender<Progress>,
+) -> Result<Report, String> {
+    let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
+    let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
+        .map_err(|e| e.to_string())?;
+    let pinned_file = ledger.find(&provider, &id).and_then(|record| record.pinned.clone());
+
+    run(
+        http,
+        layout,
+        code,
+        vec![Request {
+            provider,
+            id,
+            version_id: pinned_file.clone(),
+            channel: None,
+        }],
+        Mode { pinned: pinned_file.is_some(), reinstall: true },
         channel,
         tx,
     )
