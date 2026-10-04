@@ -1235,13 +1235,26 @@ impl Lightforge {
                     true => "Play via Battle.net",
                     false => "Open Battle.net",
                 })
-                .size(theme::BODY),
+                .size(theme::HEADING),
             )
             .center_x(Length::Fill),
         )
-        .style(theme::outlined)
+        // Dressed as the Play control on a game Lightforge runs itself —
+        // same 240 by CONTROL_HEIGHT, same heading, same filled face — because
+        // it is the same act. The hand-off drives Battle.net end to end now,
+        // so a quiet outlined button would be understating what it does.
+        //
+        // Blue rather than PLAY's green: it starts through Battle.net, and
+        // the colour is the one thing that can say so without a second line
+        // of text. When there is no game family to ask for, the button only
+        // opens the client — not a launch, so it does not dress as one.
+        .style(move |base: &iced::Theme, status| match launches {
+            true => theme::filled(theme::ACCENT)(base, status),
+            false => theme::outlined(base, status),
+        })
         .padding([theme::MD, theme::LG])
-        .width(Length::Fixed(240.0));
+        .width(Length::Fixed(240.0))
+        .height(Length::Fixed(theme::CONTROL_HEIGHT));
 
         let press = match launches {
             true => Message::BattleNet,
