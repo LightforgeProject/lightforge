@@ -26,6 +26,11 @@
 //! Steps 4 and 5 are gated on step 3 having actually succeeded. The client
 //! rewrites its configs on exit and Agent memory-maps its cache, so writing
 //! into a live prefix loses the write at best and corrupts it at worst.
+//!
+//! The same process table answers the question at the *other* end of a
+//! launch — see [`wait_for_game_start`]. Handing a game to Battle.net gives
+//! nothing back to wait on, because the client exits as soon as the game is
+//! up, so the only way to know a session is running is to watch for it.
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -557,6 +562,149 @@ impl Report {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Watching a hand-off
+// ---------------------------------------------------------------------------
+
+/// How often the prefix is re-scanned while waiting on a handed-off game.
+///
+/// Slower than [`POLL`]: that one is a shutdown the user is waiting through,
+/// this one runs for the length of a gaming session.
+const HANDOFF_POLL: Duration = Duration::from_millis(500);
+
+/// Wine's own processes, which live in every prefix and are nobody's game.
+///
+/// The before-snapshot is the primary filter — these are already running when
+/// the hand-off starts — but Wine spawns services on demand too, and a
+/// `winedevice.exe` that appears two seconds after the click would otherwise
+/// be reported as the game and "played" for a quarter of a second.
+const WINE_SERVICES: [&str; 12] = [
+    "services",
+    "winedevice",
+    "plugplay",
+    "explorer",
+    "rpcss",
+    "svchost",
+    "conhost",
+    "start",
+    "wineboot",
+    "winemenubuilder",
+    "tabtip",
+    "msiexec",
+];
+
+/// A process in the prefix that is neither Battle.net's nor Wine's own.
+///
+/// After a hand-off there is exactly one thing that fits: the game Battle.net
+/// was asked to start. Identifying it this way rather than by name is what
+/// makes the hand-off work for a title Lightforge has never heard of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GameProcess {
+    pub pid: u32,
+    pub name: String,
+}
+
+/// Whether a Battle.net client is already up in this prefix.
+///
+/// The question a hand-off asks first: a client that is already running and
+/// signed in can be handed a launch command straight away, and starting a
+/// second one would only be told to go away by the first.
+pub fn client_running(layout: &Layout) -> bool {
+    scan(layout).iter().any(|p| p.kind == ProcKind::BattleNet)
+}
+
+/// Processes in the prefix that are not Battle.net's and not Wine's own.
+pub fn games_running(layout: &Layout) -> Vec<GameProcess> {
+    let mut system = System::new();
+    refresh(&mut system);
+    collect_games(&system, layout)
+}
+
+fn collect_games(system: &System, layout: &Layout) -> Vec<GameProcess> {
+    let prefixes = owned_prefixes(layout);
+
+    system
+        .processes()
+        .iter()
+        .filter_map(|(pid, proc)| {
+            if proc.thread_kind().is_some() {
+                return None;
+            }
+            let fallback = proc.name().to_string_lossy();
+            let name = names_a_game(proc.cmd(), &fallback)?;
+            if !belongs_to(proc.environ(), &prefixes) {
+                return None;
+            }
+            Some(GameProcess { pid: pid.as_u32(), name })
+        })
+        .collect()
+}
+
+/// The executable's name, when a process could be a game at all.
+///
+/// Ownership is checked separately; this is the "what is it" half. Three
+/// things are not games: Battle.net's own processes, Wine's plumbing, and a
+/// browser child re-execing its parent.
+fn names_a_game(argv: &[std::ffi::OsString], fallback: &str) -> Option<String> {
+    // Anything Battle.net's is accounted for elsewhere; what is left is
+    // either Wine's own or the game.
+    if ProcKind::classify(argv, fallback).is_some() {
+        return None;
+    }
+    let name = executable_name(argv, fallback);
+    let stem = name.to_ascii_lowercase();
+    if WINE_SERVICES.contains(&stem.trim_end_matches(".exe")) {
+        return None;
+    }
+    // A CEF or Electron child re-execs its parent, and the parent is the
+    // process that represents the game.
+    if argv.iter().skip(1).any(is_cef_child_arg) {
+        return None;
+    }
+    Some(name)
+}
+
+/// Wait for a handed-off game to start.
+///
+/// `before` is what [`games_running`] returned *prior* to the hand-off, so a
+/// game already playing does not count as this launch's. `None` means nothing
+/// started in time — almost always a client sitting at its login screen,
+/// which is not an error, but is the point at which the launcher has to stop
+/// claiming a launch is in progress.
+///
+/// This is the half of a hand-off that Battle.net does not give back: the
+/// client exits as soon as the game is up (`GameLaunchWindowBehavior: 2`), so
+/// the child process says nothing about whether anything is playing.
+pub fn wait_for_game_start(
+    layout: &Layout,
+    before: &[GameProcess],
+    appear_within: Duration,
+) -> Option<GameProcess> {
+    let known: HashSet<u32> = before.iter().map(|p| p.pid).collect();
+    let deadline = Instant::now() + appear_within;
+
+    loop {
+        if let Some(found) = games_running(layout).into_iter().find(|p| !known.contains(&p.pid)) {
+            return Some(found);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(HANDOFF_POLL);
+    }
+}
+
+/// Block until a game seen by [`wait_for_game_start`] is gone.
+///
+/// Watched by pid: a title that re-execs itself becomes a different process,
+/// and calling the session over at that point is better than hanging forever
+/// on a pid that is never coming back.
+pub fn wait_for_game_exit(layout: &Layout, pid: u32) {
+    while games_running(layout).iter().any(|p| p.pid == pid) {
+        std::thread::sleep(HANDOFF_POLL);
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PreflightError {
     #[error(
@@ -606,6 +754,46 @@ mod tests {
 
     const BNET: &str = r"C:\Program Files (x86)\Battle.net\Battle.net.exe";
     const AGENT: &str = r"C:\ProgramData\Battle.net\Agent\Agent.9775\Agent.exe";
+
+    #[test]
+    fn a_handed_off_game_is_whatever_is_not_battle_net_or_wine() {
+        // The point of the rule: a title nobody wrote a table entry for is
+        // still recognised, which is what makes the hand-off work for
+        // anything Blizzard ships.
+        assert_eq!(
+            names_a_game(&argv([r"C:\Program Files (x86)\Hearthstone\Hearthstone.exe"].as_ref()), "Hearthstone.e"),
+            Some("Hearthstone.exe".to_owned())
+        );
+        assert_eq!(
+            names_a_game(&argv(&[r"C:\...\_retail_\Wow.exe"]), "Wow.exe"),
+            Some("Wow.exe".to_owned())
+        );
+
+        // Battle.net's own are somebody else's problem, including the CEF
+        // children that report themselves as CrBrowserMain.
+        assert_eq!(names_a_game(&argv(&[BNET, "--from-launcher"]), "CrBrowserMain"), None);
+        assert_eq!(names_a_game(&argv(&[AGENT]), "Agent.exe"), None);
+
+        // Wine runs these in every prefix, and one of them appearing a
+        // second after the click would otherwise be "the game", played for
+        // a quarter of a second.
+        for service in ["services.exe", "explorer.exe", "winedevice.exe", "rpcss.exe"] {
+            assert_eq!(
+                names_a_game(&argv(&[&format!(r"C:\windows\system32\{service}")]), service),
+                None,
+                "{service} is Wine's, not a game"
+            );
+        }
+
+        // A browser child of the game is not a second game.
+        assert_eq!(
+            names_a_game(
+                &argv(&[r"C:\Games\Something.exe", "--type=renderer"]),
+                "CrRendererMain"
+            ),
+            None
+        );
+    }
 
     #[test]
     fn only_the_processes_that_cause_the_deadlock_are_classified() {

@@ -244,6 +244,9 @@ enum Message {
     Downloaded(ProductCode, Result<Complete, String>),
     CloseRequested(iced::window::Id),
     Launched(Result<String, String>),
+    /// A hand-off ran to the point where there is something to say: the
+    /// game is up, the client needs a person, or nothing started.
+    HandoffStarted(Result<tasks::Handoff, String>),
     BattleNet,
     ManageSubscription,
     OpenFiles,
@@ -1727,6 +1730,36 @@ impl Lightforge {
                 Task::batch([self.pump(), self.reload(self.selected.code.clone())])
             }
 
+            Message::HandoffStarted(result) => {
+                match result {
+                    // Found it. `busy` stays set and the queue stays paused
+                    // for the length of the session, exactly as a direct
+                    // launch does — the whole point of watching.
+                    Ok(tasks::Handoff::Playing(game)) => {
+                        self.status = format!(
+                            "{} is running — this unlocks when it exits",
+                            game.name,
+                        );
+                        Task::perform(
+                            tasks::await_game_exit(self.layout.clone(), game),
+                            Message::Launched,
+                        )
+                    }
+                    // The client is up and waiting on a person — two-factor,
+                    // an outage, an update of its own. Said plainly, with the
+                    // client left running so it can be finished there.
+                    Ok(tasks::Handoff::NeedsAttention) => self.update(Message::Launched(Ok(
+                        "Battle.net needs attention — finish in its window and press Play there"
+                            .to_owned(),
+                    ))),
+                    // Signed in, told to launch, and nothing came up.
+                    Ok(tasks::Handoff::NothingStarted) => self.update(Message::Launched(Ok(
+                        "Battle.net is open — no game started".to_owned(),
+                    ))),
+                    Err(e) => self.update(Message::Launched(Err(e))),
+                }
+            }
+
             Message::BattleNet => self.preflight(Launch::BattleNet),
 
             Message::OpenBattleNet => self.preflight(Launch::Client),
@@ -1877,13 +1910,18 @@ impl Lightforge {
                         )
                     }
                     Launch::BattleNet => {
+                        // Two steps, because Battle.net gives nothing back:
+                        // the client is told to launch, then the prefix is
+                        // watched until the game shows up. Until it does,
+                        // this is still a launch in progress.
                         self.status = "handing off to Battle.net…".to_owned();
                         Task::perform(
                             tasks::launch_via_battle_net(
                                 self.layout.clone(),
                                 self.selected.code.clone(),
+                                self.config.prefix_user.clone(),
                             ),
-                            Message::Launched,
+                            Message::HandoffStarted,
                         )
                     }
                     Launch::Client => {

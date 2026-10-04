@@ -15,7 +15,7 @@ use lightforge_core::assets::{Manifest, Pipeline};
 use lightforge_core::config::Config;
 use lightforge_core::net::Http;
 use lightforge_core::paths::{AppDirs, Layout};
-use lightforge_core::preflight::{DownloadGuard, Preflight, PreflightError};
+use lightforge_core::preflight::{DownloadGuard, GameProcess, Preflight, PreflightError};
 use lightforge_core::product::ProductCode;
 use lightforge_core::state::Local;
 use lightforge_core::tact::download::{Cancel, Downloads, Progress};
@@ -668,14 +668,99 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
 pub async fn launch_via_battle_net(
     layout: Layout,
     code: ProductCode,
-) -> Result<String, String> {
+    user: String,
+) -> Result<Handoff, String> {
     tokio::task::spawn_blocking(move || {
-        use lightforge_core::battlenet::{self, Launch};
+        use lightforge_core::battlenet::{self, Launch, Readiness};
+        use lightforge_core::preflight;
 
         let runner = runner_for(&layout, &code, Runs::BattleNet)?;
+
+        // Taken before the client is told anything, so a game that was
+        // already playing is not mistaken for this launch's.
+        let before = preflight::games_running(&layout);
+
+        // Two phases, because one does not work. A cold client handed
+        // `--exec=launch` parses it and then does nothing with it: measured
+        // on a real start, the client was signed in after five seconds and
+        // the game did not begin for another forty-eight. The arguments have
+        // to arrive at a client that is already up, which is what the
+        // client's own IPC queue is for — a second invocation hands them to
+        // the first.
+        if !preflight::client_running(&layout) {
+            // Out of the way, but only where it can sign itself in. A
+            // sign-in form nobody can see is a launch that quietly never
+            // happens, so a prefix without auto-login gets a normal window.
+            let minimize = battlenet::signs_in_by_itself(&layout, &user);
+            let _ = battlenet::configure_accounts(
+                &layout,
+                &user,
+                &battlenet::window_state_tweaks(minimize),
+            );
+
+            let started = std::time::SystemTime::now();
+            battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| e.to_string())?;
+
+            if battlenet::wait_until_signed_in(&layout, &user, started, SIGN_IN_TIMEOUT)
+                == Readiness::NeedsAttention
+            {
+                // Stop driving. The client is up and is the only thing that
+                // can finish this, so it is left running for the user.
+                return Ok(Handoff::NeedsAttention);
+            }
+        }
+
+        // Now it lands: the running client picks these up over its IPC queue
+        // and starts the game.
         let launch = Launch::Product { code: code.clone(), exec: None };
         battlenet::launch(&runner, &layout, &launch).map_err(|e| e.to_string())?;
-        Ok(format!("Battle.net launching {}", code.as_str()))
+
+        Ok(
+            match preflight::wait_for_game_start(&layout, &before, HANDOFF_TIMEOUT) {
+                Some(game) => Handoff::Playing(game),
+                None => Handoff::NothingStarted,
+            },
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// What came of a hand-off.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Handoff {
+    /// The game is running.
+    Playing(GameProcess),
+    /// The client never reported signing in. Someone has to look at it.
+    NeedsAttention,
+    /// Signed in, told to launch, and nothing appeared.
+    NothingStarted,
+}
+
+/// How long the client gets to start and sign itself in.
+///
+/// A cold start under Proton reaches "Logged into Battle.net successfully" in
+/// about five and a half seconds. A minute is for the bad days — a client
+/// updating itself, or a slow network — and running out of it is not an
+/// error, just the point where a person is needed.
+const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How long a handed-off game gets to appear/// How long a handed-off game gets to appear before the launcher stops
+/// claiming a launch is in progress.
+///
+/// Generous: a cold Battle.net under Wine has to start, update itself if it
+/// feels like it, and may stop at a login screen — and the cost of being
+/// wrong in this direction is only an unlocked button.
+const HANDOFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Block until a handed-off game exits.
+///
+/// Split from the launch so the screen can say which game is running in
+/// between, instead of "handing off…" for the length of a session.
+pub async fn await_game_exit(layout: Layout, game: GameProcess) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        lightforge_core::preflight::wait_for_game_exit(&layout, game.pid);
+        Ok(format!("{} exited", game.name))
     })
     .await
     .map_err(|e| e.to_string())?

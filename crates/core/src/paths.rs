@@ -134,6 +134,22 @@ impl Layout {
             .join("Battle.net.config")
     }
 
+    /// `%LOCALAPPDATA%/Battle.net/Logs` — where the client writes its own
+    /// running commentary, one timestamped file per start.
+    ///
+    /// Read, never written. It is the only place the client says out loud
+    /// that it has finished starting and signed in, which is what a hand-off
+    /// has to wait for.
+    pub fn battle_net_logs(&self, user: &str) -> PathBuf {
+        self.drive_c()
+            .join("users")
+            .join(user)
+            .join("AppData")
+            .join("Local")
+            .join("Battle.net")
+            .join("Logs")
+    }
+
     /// The Battle.net mark, as Wine left it in the prefix.
     ///
     /// When `winemenubuilder` writes a program's `.desktop` file it also

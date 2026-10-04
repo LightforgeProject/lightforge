@@ -21,7 +21,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{json, Value};
 
@@ -506,6 +506,140 @@ pub fn account_tweaks() -> Vec<Tweak> {
             "quit immediately instead of showing the close countdown",
         ),
     ]
+}
+
+/// Where the client remembers how its window was last left.
+///
+/// Qt's own `WindowState` flags, written by the client when it exits and read
+/// when it starts: `0` is a normal window, `1` is minimized. Setting it is the
+/// only lever there is for starting the client out of the way — Wine cannot
+/// minimize a window for us, and nothing on Wayland can do it from outside.
+pub const WINDOW_STATE_KEY: &str = "User.Client.Windows.BrowserMainWindow.WindowState";
+
+/// Start the client minimized, or normally.
+///
+/// Has to be re-applied before each start, because the client writes this key
+/// back from its live window every time it exits — the same reason the game's
+/// CVars are re-asserted per launch rather than set once.
+pub fn window_state_tweaks(minimized: bool) -> Vec<Tweak> {
+    vec![Tweak::new(
+        WINDOW_STATE_KEY,
+        json!(match minimized {
+            true => "1",
+            false => "0",
+        }),
+        match minimized {
+            true => "come up minimized: the hand-off drives the client, nobody needs to see it",
+            false => "come up as a normal window",
+        },
+    )]
+}
+
+/// Whether the client is set up to sign in without being asked.
+///
+/// Decides whether it is safe to start minimized. Without auto-login the
+/// client comes up at a sign-in form, and a sign-in form nobody can see is a
+/// launch that quietly never happens.
+pub fn signs_in_by_itself(layout: &Layout, user: &str) -> bool {
+    let Ok(text) = std::fs::read_to_string(layout.battle_net_config(user)) else {
+        return false;
+    };
+    let Ok(config) = serde_json::from_str::<Value>(&text) else {
+        return false;
+    };
+    let client = config.get("Client");
+    let flag = |key: &str| {
+        client
+            .and_then(|c| c.get(key))
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+    };
+    let named = client
+        .and_then(|c| c.get("SavedAccountNames"))
+        .and_then(Value::as_str)
+        .is_some_and(|names| !names.trim().is_empty());
+
+    flag("AutoLogin") && named
+}
+
+/// What the client's log said while we waited for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Readiness {
+    /// Signed in and idle: a launch command sent now will be acted on.
+    SignedIn,
+    /// Still not signed in when the wait ran out. Two-factor, an outage, a
+    /// pending client update — all of them need a person, and none of them
+    /// are ours to drive.
+    NeedsAttention,
+}
+
+/// The line the client writes once it is signed in and the UI is live.
+const SIGNED_IN: &str = "Logged into Battle.net successfully";
+
+/// How often the log is re-read while waiting.
+const READY_POLL: Duration = Duration::from_millis(250);
+
+/// Wait until the client says it is signed in.
+///
+/// Watches the newest log in [`Layout::battle_net_logs`] that the client
+/// wrote *after* `since`, so a previous session's log cannot answer for this
+/// one. Reading a log file is the whole mechanism — nothing is injected,
+/// nothing is scraped out of the client's memory, and the marker is a line
+/// the client prints for its own benefit:
+///
+/// ```text
+/// I [GSStateTracker] State changed to: Ready
+/// I [AccountManager] Account manager state has changed to: Ready
+/// I [BNLogin] Logged into Battle.net successfully. |bnet=…
+/// ```
+///
+/// Measured on a cold start under Proton: about five and a half seconds from
+/// the process appearing to that last line.
+pub fn wait_until_signed_in(
+    layout: &Layout,
+    user: &str,
+    since: SystemTime,
+    within: Duration,
+) -> Readiness {
+    let dir = layout.battle_net_logs(user);
+    let deadline = Instant::now() + within;
+
+    loop {
+        if let Some(path) = newest_log_after(&dir, since) {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if text.contains(SIGNED_IN) {
+                    return Readiness::SignedIn;
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return Readiness::NeedsAttention;
+        }
+        std::thread::sleep(READY_POLL);
+    }
+}
+
+/// The most recently written `battle.net-*.log`, if it is newer than `since`.
+///
+/// By modification time rather than by the timestamp in the name: the name is
+/// the client's local time, and a prefix does not have to agree with the host
+/// about what that is.
+fn newest_log_after(dir: &Path, since: SystemTime) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("battle.net-")
+        })
+        .filter_map(|entry| {
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            (modified >= since).then(|| (modified, entry.path()))
+        })
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
 }
 
 /// Merge `tweaks` into a parsed config, creating missing objects on the way
@@ -1013,6 +1147,79 @@ impl BattleNetError {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_window_state_key_is_qts_own_and_is_written_as_a_string() {
+        // The client stores every one of these as a string, and a real
+        // integer here is a value it reads back as zero.
+        let minimized = window_state_tweaks(true);
+        assert_eq!(minimized.len(), 1);
+        assert_eq!(minimized[0].path, WINDOW_STATE_KEY.split('.').collect::<Vec<_>>());
+        assert_eq!(minimized[0].value, json!("1"));
+        assert_eq!(window_state_tweaks(false)[0].value, json!("0"));
+    }
+
+    #[test]
+    fn minimizing_is_only_safe_where_the_client_signs_itself_in() {
+        let dir = scratch("auto-login");
+        let layout = Layout::with_root(&dir);
+        let path = layout.battle_net_config("steamuser");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        let write = |value: Value| std::fs::write(&path, value.to_string()).unwrap();
+
+        // Both halves are needed: a remembered account with auto-login off
+        // still stops at the sign-in form, and auto-login with nothing
+        // remembered has nobody to sign in as.
+        write(json!({"Client": {"AutoLogin": "true", "SavedAccountNames": "a@b.c"}}));
+        assert!(signs_in_by_itself(&layout, "steamuser"));
+
+        write(json!({"Client": {"AutoLogin": "false", "SavedAccountNames": "a@b.c"}}));
+        assert!(!signs_in_by_itself(&layout, "steamuser"));
+
+        write(json!({"Client": {"AutoLogin": "true", "SavedAccountNames": ""}}));
+        assert!(!signs_in_by_itself(&layout, "steamuser"));
+
+        // A prefix with no client installed yet answers no, not a panic.
+        let _ = std::fs::remove_file(&path);
+        assert!(!signs_in_by_itself(&layout, "steamuser"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn readiness_is_read_from_the_log_this_start_wrote() {
+        let dir = scratch("signed-in");
+        let layout = Layout::with_root(&dir);
+        let logs = layout.battle_net_logs("steamuser");
+        std::fs::create_dir_all(&logs).unwrap();
+
+        // A previous session's log, saying it signed in, must not answer for
+        // this start — that is how a hand-off fires at a client that is
+        // still booting.
+        let old = logs.join("battle.net-20260101T000000.000000.log");
+        std::fs::write(&old, format!("I [BNLogin] {SIGNED_IN}. |bnet=1:0:x\n")).unwrap();
+
+        let since = SystemTime::now() + Duration::from_secs(60);
+        assert_eq!(
+            wait_until_signed_in(&layout, "steamuser", since, Duration::from_millis(1)),
+            Readiness::NeedsAttention,
+            "a log older than this start says nothing about it"
+        );
+
+        // And one written now does answer.
+        assert_eq!(
+            wait_until_signed_in(
+                &layout,
+                "steamuser",
+                SystemTime::UNIX_EPOCH,
+                Duration::from_millis(1),
+            ),
+            Readiness::SignedIn
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     #[test]
     fn game_uids_are_client_family_ids_not_tact_codes() {
         use super::*;
@@ -1511,3 +1718,4 @@ mod tests {
         ));
     }
 }
+
