@@ -386,6 +386,14 @@ enum Message {
     AddonMenu(Option<(String, String)>),
     /// Leave one addon out of everything that updates in bulk, or stop doing so.
     AddonIgnore(String, String, bool),
+    /// One addon's auto-update choice, or `None` to follow the default again.
+    AddonAutoUpdate(String, String, Option<bool>),
+    /// Whether addons update themselves unless they say otherwise.
+    AddonAutoUpdateDefault(bool),
+    /// Update whatever updates itself, for the product on screen.
+    AutoUpdateAddons,
+    /// `None` when there was nothing to update.
+    AutoUpdateFinished(Result<Option<Box<lightforge_core::addons::Report>>, String>),
     SettingsTab(SettingsTab),
     SearchChanged(String),
     RunSearch,
@@ -818,6 +826,22 @@ struct Lightforge {
     /// The addon whose per-addon menu is showing. One at a time: the panel is
     /// an overlay, and two of them would draw over each other.
     addon_menu_open: Option<(String, String)>,
+    /// Products whose unattended pass has already run this session. Addons
+    /// are per product, so switching to Classic is the first chance to bring
+    /// Classic's up to date — but only the first chance: clicking back and
+    /// forth along the band must not re-ask CurseForge each time.
+    addon_auto_done: Vec<ProductCode>,
+    /// An unattended addon pass is in flight. Separate from `addons_busy`,
+    /// which disables the buttons a person pressed: this one nobody asked
+    /// for, so it must not grey the page out.
+    addon_auto_running: bool,
+    /// What the unattended pass did, said once on the Addons page. `None`
+    /// when it has not run or had nothing to do — "0 addons updated" is noise.
+    addon_auto_note: Option<String>,
+    /// A launch waiting for that pass to finish. The game reads AddOns once,
+    /// at login, and extracting into that directory while it does is how a
+    /// half-written addon gets loaded.
+    launch_after_addons: Option<Launch>,
     /// Which tab the standing report belongs to. An import's failures are read
     /// next to the import that caused them; an update's belong with the
     /// addons. Same type, two meanings, so it is remembered rather than
@@ -950,6 +974,10 @@ impl Lightforge {
             addon_filter: String::new(),
             addon_remove_armed: None,
             addon_menu_open: None,
+            addon_auto_done: Vec::new(),
+            addon_auto_running: false,
+            addon_auto_note: None,
+            launch_after_addons: None,
             addon_report_tab: AddonTab::Mine,
             search_seq: 0,
             export_token: String::new(),
@@ -995,8 +1023,13 @@ impl Lightforge {
         // What was downloading when the app closed carries on, as it does in
         // Battle.net.
         let resume = app.pump();
+        // Addons that update themselves do it now, so they are current by
+        // the time anyone presses Play. Quiet, and nothing waits for it
+        // except a launch — see `preflight`.
+        let addons = Task::done(Message::AutoUpdateAddons);
         let task = Task::batch([
             app.reload(selected.code),
+            addons,
             probe,
             installed,
             codes,
@@ -1104,6 +1137,17 @@ impl Lightforge {
         self.busy = true;
         self.error = None;
         self.status = "pre-flight…".to_owned();
+
+        // An unattended addon pass is extracting into the directory the
+        // client is about to read. Hold the launch until it is done rather
+        // than racing it — it is seconds, and the alternative is a half
+        // written addon loaded at login. Opening the Battle.net client reads
+        // nothing of ours, so it does not wait.
+        if self.addon_auto_running && !matches!(what, Launch::Client) {
+            self.status = "finishing addon updates…".to_owned();
+            self.launch_after_addons = Some(what);
+            return Task::none();
+        }
 
         // Pre-flight pauses the launched product's own download by itself —
         // that one is a correctness guard, since the client and the
@@ -2086,6 +2130,95 @@ impl Lightforge {
                     addonwork::list(self.layout.clone(), self.selected.code.clone()),
                     |listing| Message::AddonsListed(Box::new(listing)),
                 )
+            }
+
+            Message::AddonAutoUpdate(provider, id, choice) => {
+                self.addon_menu_open = None;
+                let Some(options) = addonwork::manage_options(
+                    &self.layout,
+                    &self.selected.code,
+                    self.config.addon_channel,
+                ) else {
+                    return Task::none();
+                };
+                if let Err(e) = manage::set_auto_update(&options, &provider, &id, choice) {
+                    self.error = Some(e.to_string());
+                }
+                Task::perform(
+                    addonwork::list(self.layout.clone(), self.selected.code.clone()),
+                    |listing| Message::AddonsListed(Box::new(listing)),
+                )
+            }
+
+            Message::AddonAutoUpdateDefault(on) => {
+                self.config.addon_auto_update = on;
+                self.save_config();
+                // Nothing is fetched here: the new default applies at the next
+                // pass, which is also the first time it could matter.
+                Task::perform(
+                    addonwork::list(self.layout.clone(), self.selected.code.clone()),
+                    |listing| Message::AddonsListed(Box::new(listing)),
+                )
+            }
+
+            Message::AutoUpdateAddons => {
+                // Never against a running game, and never on top of work the
+                // user started: both write the same directory.
+                if self.addon_auto_running
+                    || self.addons_busy
+                    || self.running().is_some()
+                    || self.addon_auto_done.contains(&self.selected.code)
+                {
+                    return Task::none();
+                }
+                self.addon_auto_done.push(self.selected.code.clone());
+                self.addon_auto_running = true;
+                let (tx, _rx) = tokio::sync::watch::channel(addonwork::Progress::default());
+                Task::perform(
+                    addonwork::auto_update(
+                        self.http.clone(),
+                        self.layout.clone(),
+                        self.selected.code.clone(),
+                        self.config.addon_channel,
+                        self.config.addon_auto_update,
+                        tx,
+                    ),
+                    |result| Message::AutoUpdateFinished(result.map(|r| r.map(Box::new))),
+                )
+            }
+
+            Message::AutoUpdateFinished(result) => {
+                self.addon_auto_running = false;
+                let mut tasks = Vec::new();
+
+                match result {
+                    // Nothing to do, so nothing to say.
+                    Ok(None) => {}
+                    Ok(Some(report)) => {
+                        if !report.installed.is_empty() {
+                            self.addon_auto_note = Some(match report.installed.len() {
+                                1 => format!("{} updated automatically", report.installed[0]),
+                                n => format!("{n} addons updated automatically"),
+                            });
+                            tasks.push(Task::perform(
+                                addonwork::list(
+                                    self.layout.clone(),
+                                    self.selected.code.clone(),
+                                ),
+                                |listing| Message::AddonsListed(Box::new(listing)),
+                            ));
+                        }
+                    }
+                    // Said quietly and only here: a launcher that cannot
+                    // reach CurseForge is not a launcher that cannot play.
+                    Err(e) => self.addon_auto_note = Some(format!("addon check failed: {e}")),
+                }
+
+                // Whoever was waiting on this can go now.
+                if let Some(what) = self.launch_after_addons.take() {
+                    tasks.push(self.preflight(what));
+                }
+                Task::batch(tasks)
             }
 
             Message::PauseWhilePlaying(on) => {
@@ -4054,11 +4187,11 @@ impl Lightforge {
     /// One addon's own settings: what is true of this addon rather than what
     /// to do to it right now.
     ///
-    /// Ignore is the only one today. Auto-update, a version pin and re-install
-    /// belong here too, which is the reason for a menu rather than a fourth
-    /// button on an already full row.
+    /// A version pin and re-install belong here too, which is the reason for
+    /// a menu rather than more buttons on an already full row.
     fn addon_row_menu(&self, managed: &addonwork::Managed) -> Element<'static, Message> {
         let (provider, id) = (managed.provider.clone(), managed.id.clone());
+        let default_auto = self.config.addon_auto_update;
         let entry = |label: String, message: Message| {
             button(text(label).size(theme::BODY).width(Length::Fill))
                 .padding([theme::XS, theme::SM])
@@ -4066,25 +4199,53 @@ impl Lightforge {
                 .on_press(message)
         };
 
-        let rows = column![
+        // What this addon does today: its own choice where it has one, the
+        // app's default otherwise.
+        let auto = managed.auto_update.unwrap_or(default_auto);
+        let mut rows = column![
             entry(
                 match managed.ignored {
                     true => "Stop ignoring".to_owned(),
                     false => "Ignore this addon".to_owned(),
                 },
-                Message::AddonIgnore(provider, id, !managed.ignored),
+                Message::AddonIgnore(provider.clone(), id.clone(), !managed.ignored),
             ),
-            // Why it is worth having, in the menu that offers it: the word
-            // alone does not say that the addon stays installed and working.
-            muted(
-                "Left out of Check for updates and Update all. Updating it \
-                 from its own row still works."
-                    .to_owned(),
-                theme::CAPTION,
+            entry(
+                match auto {
+                    true => "Do not update automatically".to_owned(),
+                    false => "Update automatically".to_owned(),
+                },
+                Message::AddonAutoUpdate(provider.clone(), id.clone(), Some(!auto)),
             ),
         ]
         .spacing(theme::XS)
         .width(Length::Fixed(240.0));
+
+        // Only worth offering once the addon has an opinion to give up, and
+        // worth naming the default so clearing it is not a leap of faith.
+        if managed.auto_update.is_some() {
+            rows = rows.push(entry(
+                match default_auto {
+                    true => "Follow the default (on)".to_owned(),
+                    false => "Follow the default (off)".to_owned(),
+                },
+                Message::AddonAutoUpdate(provider, id, None),
+            ));
+        }
+
+        // Why either is worth having, in the menu that offers them: the words
+        // alone do not say that the addon stays installed and working.
+        rows = rows.push(muted(
+            match managed.ignored {
+                true => "Ignored: left out of every pass, automatic or not. \
+                         Updating it from its own row still works."
+                    .to_owned(),
+                false => "Ignoring leaves it out of Check for updates and Update \
+                          all; its own row still updates it."
+                    .to_owned(),
+            },
+            theme::CAPTION,
+        ));
 
         container(rows).padding(theme::SM).style(theme::floating).into()
     }
@@ -4178,7 +4339,7 @@ impl Lightforge {
         // carrying Retail's frame cap over to Classic's panel.
         self.load_tweak_inputs();
         self.reset_addon_screen();
-        self.reload(choice.code)
+        Task::batch([self.reload(choice.code), Task::done(Message::AutoUpdateAddons)])
     }
 
     /// Clear everything on the addon screen that belongs to one product.
@@ -4195,6 +4356,7 @@ impl Lightforge {
         self.addon_filter.clear();
         self.addon_remove_armed = None;
         self.addon_menu_open = None;
+        self.addon_auto_note = None;
     }
 
     /// A screen that is not the dashboard: header, title, content.
@@ -5033,6 +5195,13 @@ impl Lightforge {
 
         let mut body = column![toolbar].spacing(theme::SM);
 
+        // What happened without anyone asking, said where the addons are.
+        // Nothing interrupted the user to tell them, so this is the only
+        // place it is said at all.
+        if let Some(note) = &self.addon_auto_note {
+            body = body.push(muted(note.clone(), theme::CAPTION));
+        }
+
         if let Some(report) =
             self.addon_report.as_ref().filter(|_| self.addon_report_tab == AddonTab::Mine)
         {
@@ -5104,10 +5273,19 @@ impl Lightforge {
             let mut heading = row![text(addon.title.clone()).size(theme::BODY), mono(addon.version.clone())]
                 .spacing(theme::SM)
                 .align_y(Alignment::Center);
-            if addon.managed.as_ref().is_some_and(|m| m.ignored) {
+            match addon.managed.as_ref() {
                 // Said once, in the place an update would be announced: this
                 // row is why "Update all" leaves something behind.
-                heading = heading.push(pill("ignored".to_owned(), theme::MUTED));
+                Some(m) if m.ignored => {
+                    heading = heading.push(pill("ignored".to_owned(), theme::MUTED));
+                }
+                // Only worth a word when it differs from what everything else
+                // on the page is doing; with the default on, that is the
+                // addon somebody decided to keep still.
+                Some(m) if !m.auto_update.unwrap_or(self.config.addon_auto_update) => {
+                    heading = heading.push(pill("manual".to_owned(), theme::MUTED));
+                }
+                _ => {}
             }
             if let Some(status) = status.filter(|s| s.has_update()) {
                 // What is on offer, named the way the provider names it — a
@@ -5915,6 +6093,22 @@ impl Lightforge {
                  the newest release when that is newer. Only CurseForge and GitHub publish \
                  pre-release builds — other sources have one build, so the setting is \
                  inert there. An addon given its own channel on the Addons page keeps it.",
+            )
+            .map(Element::from),
+        )
+        .push(
+            iced::widget::checkbox(self.config.addon_auto_update)
+                .label("Keep addons up to date automatically")
+                .on_toggle(Message::AddonAutoUpdateDefault)
+                .text_size(theme::BODY),
+        )
+        .extend(
+            self.hint(
+                "Runs once per game per session — when Lightforge starts, and again the \
+                 first time you switch to another game — so addons are current before you \
+                 play. A launch waits for it rather than writing into the AddOns folder \
+                 the client is reading. An addon can opt out on its own, and an ignored \
+                 addon never moves either way.",
             )
             .map(Element::from),
         )

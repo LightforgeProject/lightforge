@@ -73,6 +73,25 @@ pub struct Record {
     /// happens *without* being asked.
     #[serde(default, skip_serializing_if = "is_false")]
     pub ignored: bool,
+    /// Updated without being asked, when Lightforge makes its own pass.
+    ///
+    /// `None` means "follow the app-wide default", the way [`Record::channel`]
+    /// does, so changing that default moves every addon that was never given
+    /// an opinion of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_update: Option<bool>,
+}
+
+impl Record {
+    /// Whether an unattended pass should update this addon.
+    ///
+    /// Ignoring wins over auto-updating, and is not a contradiction to be
+    /// resolved: "leave this alone" is the stronger of the two statements,
+    /// and an addon can carry an auto-update choice from before it was
+    /// ignored that should come back if it stops being ignored.
+    pub fn updates_itself(&self, default: bool) -> bool {
+        !self.ignored && self.auto_update.unwrap_or(default)
+    }
 }
 
 /// `skip_serializing_if` needs a path; `bool::not` is not one.

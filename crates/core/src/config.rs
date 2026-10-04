@@ -42,6 +42,14 @@ pub struct Config {
     /// own. Stable by default; a per-addon override lives in the ledger.
     #[serde(default)]
     pub addon_channel: crate::addons::Channel,
+    /// Whether addons update themselves when Lightforge makes its own pass,
+    /// for an addon that has no opinion of its own.
+    ///
+    /// On by default: keeping addons current is what an addon manager is for,
+    /// and an addon that should not move has two ways to say so — its own
+    /// auto-update choice, or being ignored outright.
+    #[serde(default = "yes")]
+    pub addon_auto_update: bool,
     /// Cap on game download speed, in megabytes per second. `None` is
     /// unlimited.
     ///
@@ -78,6 +86,11 @@ pub const DEFAULT_ADDON_CATALOG: &str = "https://lightforge.tuxcore.pro/";
 /// Bytes in the megabyte this config counts in.
 const BYTES_PER_MB: u64 = 1_000_000;
 
+/// `true`, for a `serde(default)` that is on rather than off.
+fn yes() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -89,6 +102,7 @@ impl Default for Config {
             assets_source: None,
             addon_catalog: None,
             addon_channel: crate::addons::Channel::default(),
+            addon_auto_update: true,
             download_limit_mbps: None,
             pause_downloads_while_playing: true,
             products: Vec::new(),

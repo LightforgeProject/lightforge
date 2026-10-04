@@ -219,17 +219,19 @@ async fn fetch_and_install(
     // Trust what the package contains over what the catalog said it contains:
     // the folders are what removal will delete, so they have to be real.
     let extracted = install::extract(&package, &options.addons_dir)?;
+    // An install replaces the record wholesale, so everything the user chose
+    // about this addon is read off the old one first and carried across.
+    let chosen = ledger.find(provider, &entry.id).cloned().unwrap_or_default();
     ledger.record(Record {
         provider: provider.to_owned(),
         id: entry.id.clone(),
         name: name.to_owned(),
         file_id: entry.file_id.clone(),
         folders: extracted.folders.clone(),
-        // An install replaces the record wholesale, so anything the user
-        // chose about this addon has to be carried over by hand.
-        channel: ledger.find(provider, &entry.id).and_then(|r| r.channel),
+        channel: chosen.channel,
         build: entry.channel,
-        ignored: ledger.find(provider, &entry.id).is_some_and(|r| r.ignored),
+        ignored: chosen.ignored,
+        auto_update: chosen.auto_update,
     });
     Ok(extracted.folders)
 }
@@ -313,10 +315,31 @@ impl UpdateStatus {
 /// An ignored addon can still be asked for by name. `install_all` takes
 /// explicit requests, and an explicit request is the user asking.
 pub fn update_requests(ledger: &Ledger, default_channel: super::Channel) -> Vec<Request> {
+    requests_for(ledger, default_channel, |record| !record.ignored)
+}
+
+/// What an unattended pass asks for: every addon that updates itself.
+///
+/// Separate from [`update_requests`] because the two answer different
+/// questions. Pressing "Update all" is the user updating everything they have
+/// not excluded; this is Lightforge updating what it was told it may.
+pub fn auto_update_requests(
+    ledger: &Ledger,
+    default_channel: super::Channel,
+    default_auto: bool,
+) -> Vec<Request> {
+    requests_for(ledger, default_channel, |record| record.updates_itself(default_auto))
+}
+
+fn requests_for(
+    ledger: &Ledger,
+    default_channel: super::Channel,
+    wanted: impl Fn(&install::Record) -> bool,
+) -> Vec<Request> {
     ledger
         .addons
         .iter()
-        .filter(|record| !record.ignored)
+        .filter(|record| wanted(record))
         .map(|record| Request {
             provider: record.provider.clone(),
             id: record.id.clone(),
@@ -437,6 +460,24 @@ pub fn set_ignored(
     let mut ledger = Ledger::load(&options.ledger_path)?;
     if let Some(record) = ledger.find_mut(provider, id) {
         record.ignored = ignored;
+        ledger.save(&options.ledger_path)?;
+    }
+    Ok(())
+}
+
+/// Set or clear one addon's auto-update choice.
+///
+/// Clearing it (`None`) returns the addon to following the app-wide default,
+/// which is not the same as turning auto-update off.
+pub fn set_auto_update(
+    options: &Options,
+    provider: &str,
+    id: &str,
+    auto_update: Option<bool>,
+) -> Result<(), ManageError> {
+    let mut ledger = Ledger::load(&options.ledger_path)?;
+    if let Some(record) = ledger.find_mut(provider, id) {
+        record.auto_update = auto_update;
         ledger.save(&options.ledger_path)?;
     }
     Ok(())
@@ -579,6 +620,84 @@ mod tests {
         // Ignoring is not a one-way door.
         set_ignored(&options, "curse", "13344", false).unwrap();
         assert!(!Ledger::load(&path).unwrap().find("curse", "13344").unwrap().ignored);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auto_update_follows_the_default_until_an_addon_says_otherwise() {
+        use crate::addons::Channel;
+
+        let mut ledger = Ledger::default();
+        let mut add = |id: &str, auto: Option<bool>, ignored: bool| {
+            ledger.record(Record {
+                provider: "curse".into(),
+                id: id.into(),
+                name: id.into(),
+                folders: vec![id.into()],
+                auto_update: auto,
+                ignored,
+                ..Default::default()
+            });
+        };
+        add("follows", None, false);
+        add("opted-in", Some(true), false);
+        add("opted-out", Some(false), false);
+        add("ignored-but-opted-in", Some(true), true);
+
+        let asked = |default_auto: bool| {
+            let mut ids: Vec<String> = auto_update_requests(&ledger, Channel::Stable, default_auto)
+                .iter()
+                .map(|request| request.id.clone())
+                .collect();
+            ids.sort();
+            ids
+        };
+
+        // Ignoring beats auto-updating: "leave this alone" is the stronger
+        // of the two statements, whichever way the default points.
+        assert_eq!(asked(true), vec!["follows", "opted-in"]);
+        assert_eq!(asked(false), vec!["opted-in"]);
+
+        // And "Update all" is a different question: it asks for everything
+        // not ignored, whatever each addon does on its own.
+        let mut all: Vec<String> = update_requests(&ledger, Channel::Stable)
+            .iter()
+            .map(|request| request.id.clone())
+            .collect();
+        all.sort();
+        assert_eq!(all, vec!["follows", "opted-in", "opted-out"]);
+    }
+
+    #[test]
+    fn setting_an_auto_update_choice_survives_a_reload_and_can_be_cleared() {
+        use crate::addons::Channel;
+
+        let dir = std::env::temp_dir().join(format!("lf-auto-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ledger.json");
+
+        let mut ledger = Ledger::default();
+        ledger.record(Record {
+            provider: "curse".into(),
+            id: "2382".into(),
+            name: "BigWigs".into(),
+            folders: vec!["BigWigs".into()],
+            ..Default::default()
+        });
+        ledger.save(&path).unwrap();
+
+        let options = options_with(Channel::Stable, &path);
+        set_auto_update(&options, "curse", "2382", Some(false)).unwrap();
+        let record = Ledger::load(&path).unwrap().find("curse", "2382").unwrap().clone();
+        assert_eq!(record.auto_update, Some(false));
+        assert!(!record.updates_itself(true), "its own choice beats the default");
+
+        set_auto_update(&options, "curse", "2382", None).unwrap();
+        let record = Ledger::load(&path).unwrap().find("curse", "2382").unwrap().clone();
+        assert_eq!(record.auto_update, None, "cleared means follow the default");
+        assert!(record.updates_itself(true));
+        assert!(!record.updates_itself(false));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -35,6 +35,9 @@ pub struct Managed {
     pub channel: Option<Channel>,
     /// Left out of everything that updates in bulk.
     pub ignored: bool,
+    /// This addon's own auto-update choice, or `None` when it follows the
+    /// app-wide default.
+    pub auto_update: Option<bool>,
 }
 
 /// What the addon screen shows.
@@ -134,6 +137,7 @@ pub fn rows_from(installed: &[Installed], ledger: &Ledger) -> Vec<Row> {
                     id: record.id.clone(),
                     channel: record.channel,
                     ignored: record.ignored,
+                    auto_update: record.auto_update,
                 }),
                 child_of: known
                     .map(|(_, head)| *head)
@@ -244,6 +248,26 @@ mod tests {
         // not read as managed-and-updating while its parent is ignored.
         assert!(rows.iter().all(|row| row.managed.as_ref().unwrap().ignored));
         assert!(manage::update_requests(&ledger, Channel::Stable).is_empty());
+    }
+
+    #[test]
+    fn an_addons_own_auto_update_choice_reaches_the_row() {
+        let mut ledger = Ledger::default();
+        ledger.record(Record {
+            provider: "curse".into(),
+            id: "2382".into(),
+            name: "BigWigs".into(),
+            folders: vec!["BigWigs".into()],
+            auto_update: Some(false),
+            ..Default::default()
+        });
+
+        let rows = rows_from(&[installed("BigWigs", "1.0")], &ledger);
+        // `None` and `Some(false)` mean different things to the row — one
+        // follows the app's default, the other overrides it — so the row has
+        // to carry the choice itself rather than a resolved boolean.
+        assert_eq!(rows[0].managed.as_ref().unwrap().auto_update, Some(false));
+        assert!(manage::auto_update_requests(&ledger, Channel::Stable, true).is_empty());
     }
 
     #[test]
@@ -359,6 +383,29 @@ pub async fn update(
         return Ok(Report::default());
     }
     run(http, layout, code, requests, false, channel, tx).await
+}
+
+/// Update the addons that update themselves, with nobody watching.
+///
+/// Returns `None` when there is nothing to do, so the caller can tell "no work"
+/// from "worked, and here is what happened" without inspecting a report.
+pub async fn auto_update(
+    http: Option<Http>,
+    layout: Layout,
+    code: ProductCode,
+    channel: Channel,
+    default_auto: bool,
+    tx: tokio::sync::watch::Sender<Progress>,
+) -> Result<Option<Report>, String> {
+    let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
+    let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
+        .map_err(|e| e.to_string())?;
+    let requests = manage::auto_update_requests(&ledger, channel, default_auto);
+
+    if requests.is_empty() {
+        return Ok(None);
+    }
+    run(http, layout, code, requests, false, channel, tx).await.map(Some)
 }
 
 async fn run(
