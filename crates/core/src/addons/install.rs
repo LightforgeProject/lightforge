@@ -80,6 +80,14 @@ pub struct Record {
     /// an opinion of its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_update: Option<bool>,
+    /// Held at this catalog file id, whatever is newer.
+    ///
+    /// A file id rather than a version string, because that is what both
+    /// providers and [`Record::file_id`] trade in: a version string would
+    /// have to be matched back to a file to be acted on, and two files can
+    /// carry the same one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<String>,
 }
 
 impl Record {
@@ -90,7 +98,16 @@ impl Record {
     /// and an addon can carry an auto-update choice from before it was
     /// ignored that should come back if it stops being ignored.
     pub fn updates_itself(&self, default: bool) -> bool {
-        !self.ignored && self.auto_update.unwrap_or(default)
+        self.tracks_updates() && self.auto_update.unwrap_or(default)
+    }
+
+    /// Whether this addon moves with its channel at all.
+    ///
+    /// Two different statements, both ending here: ignoring means "not in any
+    /// pass", pinning means "not to any other version". Either one makes an
+    /// update request for this addon pointless.
+    pub fn tracks_updates(&self) -> bool {
+        !self.ignored && self.pinned.is_none()
     }
 }
 

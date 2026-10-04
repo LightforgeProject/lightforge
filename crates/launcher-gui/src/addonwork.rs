@@ -38,6 +38,10 @@ pub struct Managed {
     /// This addon's own auto-update choice, or `None` when it follows the
     /// app-wide default.
     pub auto_update: Option<bool>,
+    /// The catalog file id installed, which is what a pin would hold.
+    pub file_id: Option<String>,
+    /// The file id this addon is held at, when it is pinned.
+    pub pinned: Option<String>,
 }
 
 /// What the addon screen shows.
@@ -138,6 +142,8 @@ pub fn rows_from(installed: &[Installed], ledger: &Ledger) -> Vec<Row> {
                     channel: record.channel,
                     ignored: record.ignored,
                     auto_update: record.auto_update,
+                    file_id: record.file_id.clone(),
+                    pinned: record.pinned.clone(),
                 }),
                 child_of: known
                     .map(|(_, head)| *head)
@@ -271,6 +277,28 @@ mod tests {
     }
 
     #[test]
+    fn a_pinned_addon_reaches_the_row_with_the_file_it_is_held_at() {
+        let mut ledger = Ledger::default();
+        ledger.record(Record {
+            provider: "curse".into(),
+            id: "2382".into(),
+            name: "BigWigs".into(),
+            file_id: Some("100".into()),
+            folders: vec!["BigWigs".into()],
+            pinned: Some("100".into()),
+            ..Default::default()
+        });
+
+        let rows = rows_from(&[installed("BigWigs", "1.0")], &ledger);
+        let managed = rows[0].managed.as_ref().unwrap();
+        // The row needs both: the pin to know it is held, and the installed
+        // file so the menu can offer to pin an addon that is not.
+        assert_eq!(managed.pinned.as_deref(), Some("100"));
+        assert_eq!(managed.file_id.as_deref(), Some("100"));
+        assert!(manage::update_requests(&ledger, Channel::Stable).is_empty());
+    }
+
+    #[test]
     fn a_stale_ledger_entry_is_not_counted_as_managed() {
         // Seen for real: the game folder was deleted by hand and the screen
         // then read "0 installed · 1 managed", which is a contradiction.
@@ -356,6 +384,9 @@ pub async fn import(
     code: ProductCode,
     token: String,
     channel: Channel,
+    // Install the exact files the token names and hold them there, rather
+    // than taking the newest of each.
+    pinned: bool,
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Report, String> {
     let collection = Collection::parse(&token).map_err(|e| e.to_string())?;
@@ -363,7 +394,7 @@ pub async fn import(
     if requests.is_empty() {
         return Err("that token names no addons Lightforge can install".to_owned());
     }
-    run(http, layout, code, requests, false, channel, tx).await
+    run(http, layout, code, requests, pinned, channel, tx).await
 }
 
 /// Update everything the ledger tracks.

@@ -108,11 +108,14 @@ pub async fn install_all(
     })?;
 
     for entry in &resolved {
-        let provider = requests
-            .iter()
-            .find(|r| r.id == entry.id)
+        let asked = requests.iter().find(|r| r.id == entry.id);
+        let provider = asked
             .map(|r| r.provider.clone())
             .unwrap_or_else(|| "curse".to_owned());
+        // A request naming a file is someone reproducing an exact setup, and
+        // that is a pin: it has to survive the install, or the next pass
+        // moves the addon straight off the version they asked for.
+        let pin = asked.and_then(|r| r.version_id.clone());
         let name = entry.name.clone().unwrap_or_else(|| entry.id.clone());
 
         if let Some(reason) = entry.unavailable_reason() {
@@ -130,7 +133,7 @@ pub async fn install_all(
             continue;
         }
 
-        match fetch_and_install(http, entry, &provider, &name, options, &mut ledger).await {
+        match fetch_and_install(http, entry, &provider, &name, pin, options, &mut ledger).await {
             Ok(folders) => {
                 on_event(Event::Installed { name: name.clone(), folders });
                 report.installed.push(name);
@@ -208,6 +211,7 @@ async fn fetch_and_install(
     entry: &Resolved,
     provider: &str,
     name: &str,
+    pin: Option<String>,
     options: &Options,
     ledger: &mut Ledger,
 ) -> Result<Vec<String>, ManageError> {
@@ -232,8 +236,29 @@ async fn fetch_and_install(
         build: entry.channel,
         ignored: chosen.ignored,
         auto_update: chosen.auto_update,
+        pinned: pin_after_install(pin, options.pinned, chosen.pinned, entry.file_id.as_deref()),
     });
     Ok(extracted.folders)
+}
+
+/// What an addon is pinned to once a file has been installed over it.
+///
+/// `asked` is the file this request named, which only counts as a pin when
+/// the run is reproducing an export (`importing`). Otherwise whatever pin was
+/// already held carries over — but either way only while it still describes
+/// what is on disk: an explicit install of a different file has moved the
+/// addon off its pin, and a pin naming a file that is not there would be a
+/// lie the next pass would act on.
+fn pin_after_install(
+    asked: Option<String>,
+    importing: bool,
+    held: Option<String>,
+    installed: Option<&str>,
+) -> Option<String> {
+    asked
+        .filter(|_| importing)
+        .or(held)
+        .filter(|pin| Some(pin.as_str()) == installed)
 }
 
 /// Check a package against a published MD5, when there is one.
@@ -315,7 +340,7 @@ impl UpdateStatus {
 /// An ignored addon can still be asked for by name. `install_all` takes
 /// explicit requests, and an explicit request is the user asking.
 pub fn update_requests(ledger: &Ledger, default_channel: super::Channel) -> Vec<Request> {
-    requests_for(ledger, default_channel, |record| !record.ignored)
+    requests_for(ledger, default_channel, install::Record::tracks_updates)
 }
 
 /// What an unattended pass asks for: every addon that updates itself.
@@ -359,8 +384,9 @@ pub async fn check_updates(
     options: &Options,
 ) -> Result<Vec<UpdateStatus>, ManageError> {
     let ledger = Ledger::load(&options.ledger_path)?;
-    // No request for an ignored addon either: there is nothing to be done
-    // with the answer, and every round-trip costs someone's bandwidth.
+    // No request for an addon held still either, ignored or pinned: there is
+    // nothing to be done with the answer, and every round-trip costs
+    // someone's bandwidth.
     let requests = update_requests(&ledger, options.channel);
     if requests.is_empty() {
         return Ok(Vec::new());
@@ -372,11 +398,12 @@ pub async fn check_updates(
         .addons
         .iter()
         .map(|record| {
-            // Nothing was asked for an ignored addon, so nothing is offered:
-            // the row still exists, it just never reads as outdated.
-            let found = match record.ignored {
-                true => None,
-                false => resolved.iter().find(|r| r.id == record.id),
+            // Nothing was asked for an addon that does not track updates, so
+            // nothing is offered: the row still exists, it just never reads
+            // as outdated.
+            let found = match record.tracks_updates() {
+                true => resolved.iter().find(|r| r.id == record.id),
+                false => None,
             };
             UpdateStatus {
                 provider: record.provider.clone(),
@@ -478,6 +505,25 @@ pub fn set_auto_update(
     let mut ledger = Ledger::load(&options.ledger_path)?;
     if let Some(record) = ledger.find_mut(provider, id) {
         record.auto_update = auto_update;
+        ledger.save(&options.ledger_path)?;
+    }
+    Ok(())
+}
+
+/// Hold one addon at a file id, or let it track its channel again.
+///
+/// The caller passes the file to hold rather than a flag, because a pin is a
+/// statement about a particular file: re-pinning after an update means
+/// pinning to the *new* file, which a toggle could not express.
+pub fn set_pinned(
+    options: &Options,
+    provider: &str,
+    id: &str,
+    file_id: Option<String>,
+) -> Result<(), ManageError> {
+    let mut ledger = Ledger::load(&options.ledger_path)?;
+    if let Some(record) = ledger.find_mut(provider, id) {
+        record.pinned = file_id;
         ledger.save(&options.ledger_path)?;
     }
     Ok(())
@@ -700,6 +746,69 @@ mod tests {
         assert!(!record.updates_itself(false));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pinned_addon_is_asked_about_by_nothing() {
+        use crate::addons::Channel;
+
+        let dir = std::env::temp_dir().join(format!("lf-pin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ledger.json");
+
+        let mut ledger = Ledger::default();
+        ledger.record(Record {
+            provider: "curse".into(),
+            id: "2382".into(),
+            name: "BigWigs".into(),
+            file_id: Some("100".into()),
+            folders: vec!["BigWigs".into()],
+            ..Default::default()
+        });
+        ledger.save(&path).unwrap();
+
+        let options = options_with(Channel::Stable, &path);
+        set_pinned(&options, "curse", "2382", Some("100".to_owned())).unwrap();
+
+        let reloaded = Ledger::load(&path).unwrap();
+        let record = reloaded.find("curse", "2382").unwrap();
+        assert_eq!(record.pinned.as_deref(), Some("100"));
+        // Pinning and ignoring are different statements that reach the same
+        // place: an addon held still is not worth asking a provider about.
+        assert!(!record.tracks_updates());
+        assert!(!record.updates_itself(true));
+        assert!(update_requests(&reloaded, Channel::Stable).is_empty());
+        assert!(auto_update_requests(&reloaded, Channel::Stable, true).is_empty());
+
+        // Unpinning is not a one-way door either.
+        set_pinned(&options, "curse", "2382", None).unwrap();
+        let reloaded = Ledger::load(&path).unwrap();
+        assert!(reloaded.find("curse", "2382").unwrap().tracks_updates());
+        assert_eq!(update_requests(&reloaded, Channel::Stable).len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pin_describes_a_file_and_is_dropped_once_it_no_longer_does() {
+        let resolve = |asked: Option<&str>, import: bool, held: Option<&str>, got: &str| {
+            pin_after_install(
+                asked.map(str::to_owned),
+                import,
+                held.map(str::to_owned),
+                Some(got),
+            )
+        };
+
+        // Importing someone's exact setup records the pin they asked for.
+        assert_eq!(resolve(Some("100"), true, None, "100").as_deref(), Some("100"));
+        // The same token imported as a list of addons pins nothing.
+        assert_eq!(resolve(Some("100"), false, None, "100"), None);
+        // An ordinary reinstall at the pinned file keeps the pin.
+        assert_eq!(resolve(None, false, Some("100"), "100").as_deref(), Some("100"));
+        // Installing a different file has moved the addon off the pin, and a
+        // pin naming a file that is not there would be a lie.
+        assert_eq!(resolve(None, false, Some("100"), "101"), None);
     }
 
     #[test]

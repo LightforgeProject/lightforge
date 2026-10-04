@@ -388,6 +388,10 @@ enum Message {
     AddonIgnore(String, String, bool),
     /// One addon's auto-update choice, or `None` to follow the default again.
     AddonAutoUpdate(String, String, Option<bool>),
+    /// Hold one addon at a file id, or `None` to let it track its channel.
+    AddonPin(String, String, Option<String>),
+    /// Whether the next import pins to the versions the token names.
+    ImportPinned(bool),
     /// Whether addons update themselves unless they say otherwise.
     AddonAutoUpdateDefault(bool),
     /// Update whatever updates itself, for the product on screen.
@@ -826,6 +830,10 @@ struct Lightforge {
     /// The addon whose per-addon menu is showing. One at a time: the panel is
     /// an overlay, and two of them would draw over each other.
     addon_menu_open: Option<(String, String)>,
+    /// Whether the next import reproduces the token's exact versions. Off by
+    /// default: most tokens are someone saying which addons they use, not
+    /// which builds of them.
+    import_pinned: bool,
     /// Products whose unattended pass has already run this session. Addons
     /// are per product, so switching to Classic is the first chance to bring
     /// Classic's up to date — but only the first chance: clicking back and
@@ -974,6 +982,7 @@ impl Lightforge {
             addon_filter: String::new(),
             addon_remove_armed: None,
             addon_menu_open: None,
+            import_pinned: false,
             addon_auto_done: Vec::new(),
             addon_auto_running: false,
             addon_auto_note: None,
@@ -2150,6 +2159,29 @@ impl Lightforge {
                 )
             }
 
+            Message::ImportPinned(on) => {
+                self.import_pinned = on;
+                Task::none()
+            }
+
+            Message::AddonPin(provider, id, file_id) => {
+                self.addon_menu_open = None;
+                let Some(options) = addonwork::manage_options(
+                    &self.layout,
+                    &self.selected.code,
+                    self.config.addon_channel,
+                ) else {
+                    return Task::none();
+                };
+                if let Err(e) = manage::set_pinned(&options, &provider, &id, file_id) {
+                    self.error = Some(e.to_string());
+                }
+                Task::perform(
+                    addonwork::list(self.layout.clone(), self.selected.code.clone()),
+                    |listing| Message::AddonsListed(Box::new(listing)),
+                )
+            }
+
             Message::AddonAutoUpdateDefault(on) => {
                 self.config.addon_auto_update = on;
                 self.save_config();
@@ -2355,6 +2387,7 @@ impl Lightforge {
                         self.selected.code.clone(),
                         token,
                         self.config.addon_channel,
+                        self.import_pinned,
                         tx,
                     ),
                     |result| Message::AddonsFinished(result.map(Box::new)),
@@ -4189,7 +4222,11 @@ impl Lightforge {
     ///
     /// A version pin and re-install belong here too, which is the reason for
     /// a menu rather than more buttons on an already full row.
-    fn addon_row_menu(&self, managed: &addonwork::Managed) -> Element<'static, Message> {
+    fn addon_row_menu(
+        &self,
+        managed: &addonwork::Managed,
+        version: &str,
+    ) -> Element<'static, Message> {
         let (provider, id) = (managed.provider.clone(), managed.id.clone());
         let default_auto = self.config.addon_auto_update;
         let entry = |label: String, message: Message| {
@@ -4229,19 +4266,41 @@ impl Lightforge {
                     true => "Follow the default (on)".to_owned(),
                     false => "Follow the default (off)".to_owned(),
                 },
-                Message::AddonAutoUpdate(provider, id, None),
+                Message::AddonAutoUpdate(provider.clone(), id.clone(), None),
             ));
+        }
+
+        // Pinning names the version it will hold, because "pin" alone does
+        // not say *to what* — and after an update that is a different file.
+        // An addon whose file the ledger never recorded has nothing to hold.
+        match (&managed.pinned, &managed.file_id) {
+            (Some(_), _) => {
+                rows = rows.push(entry(
+                    format!("Unpin (held at {version})"),
+                    Message::AddonPin(provider, id, None),
+                ));
+            }
+            (None, Some(file_id)) => {
+                rows = rows.push(entry(
+                    format!("Pin to {version}"),
+                    Message::AddonPin(provider, id, Some(file_id.clone())),
+                ));
+            }
+            (None, None) => {}
         }
 
         // Why either is worth having, in the menu that offers them: the words
         // alone do not say that the addon stays installed and working.
         rows = rows.push(muted(
-            match managed.ignored {
-                true => "Ignored: left out of every pass, automatic or not. \
-                         Updating it from its own row still works."
+            match (managed.ignored, managed.pinned.is_some()) {
+                (true, _) => "Ignored: left out of every pass, automatic or not. \
+                              Updating it from its own row still works."
                     .to_owned(),
-                false => "Ignoring leaves it out of Check for updates and Update \
-                          all; its own row still updates it."
+                (false, true) => "Pinned: held at this version until you unpin it, \
+                                  and its row offers no update."
+                    .to_owned(),
+                (false, false) => "Ignoring leaves it out of Check for updates and \
+                                   Update all; pinning holds it at one version."
                     .to_owned(),
             },
             theme::CAPTION,
@@ -5279,6 +5338,11 @@ impl Lightforge {
                 Some(m) if m.ignored => {
                     heading = heading.push(pill("ignored".to_owned(), theme::MUTED));
                 }
+                // The version it is held at is already beside the title, so
+                // the pill says the state and not the number twice.
+                Some(m) if m.pinned.is_some() => {
+                    heading = heading.push(pill("pinned".to_owned(), theme::MUTED));
+                }
                 // Only worth a word when it differs from what everything else
                 // on the page is doing; with the default on, that is the
                 // addon somebody decided to keep still.
@@ -5363,7 +5427,12 @@ impl Lightforge {
                 // One addon at a time. `install_one` fetches the newest file
                 // and does not pin it, which is exactly what updating is, so
                 // this is the same path "Update all" takes for every row.
-                if let Some(status) = status.filter(|s| s.has_update()) {
+                //
+                // A pin is a statement about which version this addon is on,
+                // so the row stops offering to move it — unlike Ignore, which
+                // only means "not in bulk". Unpinning brings the button back.
+                let pinned = managed.pinned.is_some();
+                if let Some(status) = status.filter(|s| s.has_update() && !pinned) {
                     // "Update" would be a lie when the channel changed: going
                     // back to stable from an alpha installs an *older* build,
                     // which is right, but not what the word promises.
@@ -5436,7 +5505,7 @@ impl Lightforge {
                         true => None,
                         false => Some(key.clone()),
                     })),
-                    open.then(|| self.addon_row_menu(managed)),
+                    open.then(|| self.addon_row_menu(managed, &addon.version)),
                 ));
             }
             body = body.push(container(line).padding(theme::MD).style(theme::row));
@@ -5488,6 +5557,14 @@ impl Lightforge {
                 ]
                 .spacing(theme::SM)
                 .align_y(Alignment::Center),
+                // A WoWUp token names a file for every addon. Taking them is
+                // reproducing someone's setup exactly, which is a pin and is
+                // recorded as one; leaving them is taking their list of
+                // addons and tracking each from there.
+                iced::widget::checkbox(self.import_pinned)
+                    .label("Install the exact versions this token names, and pin them")
+                    .on_toggle(Message::ImportPinned)
+                    .text_size(theme::BODY),
             ]
             .spacing(theme::SM),
         )
