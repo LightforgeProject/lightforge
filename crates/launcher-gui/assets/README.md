@@ -10,6 +10,7 @@ comes from the manifest at runtime.
 | `chevron-down.png` | [Lucide](https://lucide.dev) `chevron-down`, stroked white and rendered to 64x64 | ISC, which GPL-3.0 may redistribute |
 | `plus.png` | [Lucide](https://lucide.dev) `plus`, same treatment | ISC |
 | `arrow-left.png`, `arrow-right.png` | Lucide `arrow-left` / `arrow-right`, same treatment | ISC |
+| `arrow-up-right.png` | Lucide `arrow-up-right`, stroked white and rendered to 64x64 from a viewBox cropped to its ink (`6 6 12 12`) | ISC |
 | `file-text.png` | Lucide `file-text`, same treatment | ISC |
 | `bug.png` | Lucide `bug`, same treatment | ISC |
 | `message-square-quote.png` | Lucide `message-square-quote`, same treatment | ISC |
@@ -21,6 +22,12 @@ comes from the manifest at runtime.
 All are white with an alpha channel, 64x64, and drawn small (18pt for the cog,
 16pt for the band's two marks): one source at a size no display asks to
 upscale.
+
+`arrow-up-right.png` is trimmed, like the band marks and unlike the menu
+column: it is drawn beside a word in the navigation row, where a box of empty
+margin would push it away from its label and make `OUTBOUND_GLYPH` mean
+something other than the size it renders. Cropping the viewBox rather than the
+rendered PNG keeps all 64 pixels on the mark itself.
 
 The two band marks — `chevron-down` and `plus` — were trimmed to their own ink
 and then scaled so their strokes land on the same width: Lucide draws a chevron

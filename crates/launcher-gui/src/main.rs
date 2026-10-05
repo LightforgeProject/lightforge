@@ -123,6 +123,7 @@ macro_rules! bundled_icons {
 bundled_icons! {
     back_icon => "arrow-left.png",
     forward_icon => "arrow-right.png",
+    outbound_icon => "arrow-up-right.png",
     updates_icon => "file-text.png",
     bug_icon => "bug.png",
     feedback_icon => "message-square-quote.png",
@@ -3912,6 +3913,27 @@ impl Lightforge {
             }
         };
 
+        // A tab that leaves the app rather than changing the screen, so it
+        // cannot go through `nav`: there is no `Screen` to compare against and
+        // nothing behind it to light up. It wears the arrow for exactly that
+        // reason — it is the only thing in this row that opens a browser, and
+        // without the mark it reads as a page that never arrives.
+        let outbound = |label: &'static str, url: &'static str| {
+            button(
+                row![
+                    text(label).size(theme::LABEL).font(theme::BOLD),
+                    image(outbound_icon())
+                        .width(Length::Fixed(OUTBOUND_GLYPH))
+                        .height(Length::Fixed(OUTBOUND_GLYPH)),
+                ]
+                .spacing(OUTBOUND_GAP)
+                .align_y(Alignment::Center),
+            )
+            .padding([theme::SM, theme::MD])
+            .style(theme::ghost)
+            .on_press(Message::OpenLink(url))
+        };
+
         // The wordmark is the app menu's button, so it carries a chevron the
         // way every other menu in the app does.
         let wordmark = button(
@@ -3973,6 +3995,7 @@ impl Lightforge {
         bar = bar.push(Space::new().width(Length::Fixed(theme::SM)));
         bar = bar.push(nav("Play", Screen::Dashboard));
         bar = bar.push(nav("News", Screen::News));
+        bar = bar.push(outbound("Battle.net Shop", SHOP_URL));
         bar = bar.push(Space::new().width(Length::Fill));
 
         // Only while something is in flight. An idle launcher has no
@@ -7340,6 +7363,23 @@ const BAND_BUTTON: f32 = 48.0;
 /// Mark beside a label in the app menu, and the social squares' mark.
 const MENU_GLYPH: f32 = 16.0;
 
+/// The arrow on a tab that opens a browser. Smaller than [`MENU_GLYPH`]
+/// because this one is trimmed to its own ink, the way the band's marks are:
+/// it is read beside a word rather than down a column, so the box is the mark
+/// and the number is the size it actually draws. 8 sits just under the cap
+/// height of 12pt bold: a mark on a word, not a second word.
+const OUTBOUND_GLYPH: f32 = 8.0;
+
+/// Air between that label and its arrow.
+///
+/// Tighter than [`theme::XS`] on purpose. Every tab in the navigation row is
+/// separated by the same `SM`, but only this one carries anything after its
+/// label, and that padding is *inside* the button — so air there widens the
+/// space between "News" and "Battle.net Shop" without the row's spacing
+/// changing at all. Keeping the arrow against its word is what makes the two
+/// gaps match by eye as well as in the arithmetic.
+const OUTBOUND_GAP: f32 = 2.0;
+
 /// How far a control that has nowhere to go is faded: visibly present, plainly
 /// not available. One value so every dimmed thing dims by the same amount.
 const DIMMED: f32 = 0.35;
@@ -7349,6 +7389,13 @@ const DIMMED: f32 = 0.35;
 /// `None` is a destination that does not exist yet, and the entry draws itself
 /// dimmed and unclickable rather than opening a browser on nothing. Fill one
 /// in and that entry comes alive — no other change is needed.
+/// Blizzard's own shop, which redirects to the viewer's region on its own, so
+/// one address serves every account without Lightforge guessing at a locale.
+///
+/// Unlike the four constants below this is a plain `&str`: it has a
+/// destination today, so the tab is never the dimmed placeholder those are.
+const SHOP_URL: &str = "https://shop.battle.net";
+
 const BUG_URL: Option<&str> = None;
 const FEEDBACK_URL: Option<&str> = None;
 const DISCORD_URL: Option<&str> = None;
