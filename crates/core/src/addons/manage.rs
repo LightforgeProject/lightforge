@@ -581,31 +581,31 @@ pub async fn adopt(
 
     let on_disk: std::collections::BTreeSet<&str> =
         present.iter().map(String::as_str).collect();
+
+    let by_project = group_by_project(&matches, &by_print);
     let mut adopted = Vec::new();
-
-    for (print, found) in matches {
-        let Ok(print) = print.parse::<u32>() else { continue };
-        let Some(folder) = by_print.get(&print) else { continue };
-
+    for (id, (found, matched)) in by_project {
         // The package's folders, limited to what is here and not already
-        // somebody else's. The folder that matched is included even if the
-        // catalog's list somehow omits it.
+        // somebody else's — plus every folder that actually matched, which
+        // is the stronger evidence of the two.
         let mut folders: Vec<String> = found
             .folders
             .iter()
             .filter(|f| on_disk.contains(f.as_str()) && !claimed.contains(*f))
             .cloned()
+            .chain(matched)
             .collect();
-        if !folders.contains(folder) {
-            folders.push(folder.clone());
-        }
         folders.sort();
         folders.dedup();
 
-        let name = found.name.clone().unwrap_or_else(|| folder.clone());
+        let name = found
+            .name
+            .clone()
+            .or_else(|| folders.first().cloned())
+            .unwrap_or_else(|| id.clone());
         ledger.record(Record {
             provider: "curse".to_owned(),
-            id: found.id.clone(),
+            id,
             name: name.clone(),
             file_id: found.file_id.clone(),
             folders: folders.clone(),
@@ -621,6 +621,30 @@ pub async fn adopt(
     }
     adopted.sort_by_key(|a| a.name.to_lowercase());
     Ok(adopted)
+}
+
+/// Gather fingerprint matches into one entry per project.
+///
+/// Every folder of a package matches separately — BigWigs answers twelve
+/// times, EllesmereUI twenty-two — and each answer names the same project.
+/// Writing one record per match records one addon a dozen times over, and
+/// reports it a dozen times to the user, which is how this was noticed.
+fn group_by_project(
+    matches: &std::collections::BTreeMap<String, super::catalog::Match>,
+    by_print: &std::collections::BTreeMap<u32, String>,
+) -> std::collections::BTreeMap<String, (super::catalog::Match, Vec<String>)> {
+    let mut out: std::collections::BTreeMap<String, (super::catalog::Match, Vec<String>)> =
+        Default::default();
+    for (print, found) in matches {
+        let Ok(print) = print.parse::<u32>() else { continue };
+        let Some(folder) = by_print.get(&print) else { continue };
+
+        out.entry(found.id.clone())
+            .or_insert_with(|| (found.clone(), Vec::new()))
+            .1
+            .push(folder.clone());
+    }
+    out
 }
 
 /// Set or clear one addon's auto-update choice.
@@ -878,6 +902,47 @@ mod tests {
         assert!(!record.updates_itself(false));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_folder_of_a_package_matches_but_it_is_still_one_addon() {
+        use crate::addons::catalog::Match;
+
+        let bigwigs = Match {
+            id: "2382".to_owned(),
+            name: Some("BigWigs".to_owned()),
+            file_id: Some("9017404".to_owned()),
+            folders: vec!["BigWigs".to_owned(), "BigWigs_Core".to_owned()],
+        };
+        let other = Match {
+            id: "1477613".to_owned(),
+            name: Some("EllesmereUI".to_owned()),
+            file_id: Some("9069177".to_owned()),
+            folders: vec!["EllesmereUI".to_owned()],
+        };
+
+        // Three hashes, three answers, two addons — which is exactly the
+        // shape that produced twelve BigWigs rows before this was grouped.
+        let matches = std::collections::BTreeMap::from([
+            ("10".to_owned(), bigwigs.clone()),
+            ("20".to_owned(), bigwigs),
+            ("30".to_owned(), other),
+        ]);
+        let by_print = std::collections::BTreeMap::from([
+            (10, "BigWigs".to_owned()),
+            (20, "BigWigs_Core".to_owned()),
+            (30, "EllesmereUI".to_owned()),
+            (40, "NotMatched".to_owned()),
+        ]);
+
+        let grouped = group_by_project(&matches, &by_print);
+        assert_eq!(grouped.len(), 2, "one entry per project, not per folder");
+        assert_eq!(grouped["2382"].1, ["BigWigs", "BigWigs_Core"]);
+        assert_eq!(grouped["1477613"].1, ["EllesmereUI"]);
+
+        // A hash nobody claimed contributes nothing rather than an entry
+        // with no project.
+        assert!(grouped.values().all(|(_, folders)| !folders.contains(&"NotMatched".to_owned())));
     }
 
     #[test]
