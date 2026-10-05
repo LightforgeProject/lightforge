@@ -713,7 +713,7 @@ pub async fn launch_via_battle_net(
             let started = std::time::SystemTime::now();
             battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| e.to_string())?;
 
-            if battlenet::wait_until_signed_in(&layout, &user, started, SIGN_IN_TIMEOUT)
+            if battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT)
                 == Readiness::NeedsAttention
             {
                 // Stop driving. The client is up and is the only thing that
@@ -722,11 +722,19 @@ pub async fn launch_via_battle_net(
             }
         }
 
-        // Now it lands: the running client picks these up over its IPC queue
-        // and starts the game.
-        // The family the panel resolved, which for anything but WoW came out
-        // of the client's own catalogue. `Launch::command` falls back to the
-        // compiled-in table when there is none.
+        // The client can be gone by now: signing in takes a few seconds, and
+        // a window nobody expected is a window somebody closes — with
+        // `HideOnClose` off, closing it quits. Sending the launch anyway
+        // would start a *second*, cold client, and a cold client drops the
+        // `--exec` it was handed. Saying so is the better outcome.
+        if !preflight::client_running(&layout) {
+            return Ok(Handoff::ClientClosed);
+        }
+
+        // Now it lands: the running client picks this up over its IPC queue
+        // and starts the game. The family the panel resolved, which for
+        // anything but WoW came out of the client's own catalogue;
+        // `Launch::command` falls back to the compiled-in table without one.
         let launch = Launch::Product { code: code.clone(), exec: family };
         battlenet::launch(&runner, &layout, &launch).map_err(|e| e.to_string())?;
 
@@ -741,56 +749,46 @@ pub async fn launch_via_battle_net(
     .map_err(|e| e.to_string())?
 }
 
-/// Put the client on a game's tile, so its Install button can be pressed.
+/// Open the client's install flow for a game, dialog and all.
 ///
-/// The same two phases as a launch, with two differences that both come from
-/// the same fact — an install needs a person:
+/// Three mechanisms were tried against a real client, and only this one
+/// works, for one reason: the client always boots to its homepage.
 ///
-/// - the window is left normal rather than minimized, because there is a
-///   location to choose and a download size to agree to;
-/// - nothing is waited for afterwards. A game that is not installed will not
-///   appear in minutes, and holding the launcher busy for an hour to find out
-///   would be claiming to do something Battle.net is doing.
+/// - `--exec="launch <uid>"` sets the active product and the homepage then
+///   draws over it. Nothing visible happens.
+/// - `--uri="battlenet://<family>"` is handled properly, by a `UriController`
+///   that waits until the client is ready — but all it does is select the
+///   game, and the homepage still wins the window.
+/// - `--game=<uid> --install` starts the install flow, which has a **view of
+///   its own**. It opens over the homepage, with the path picker, which is
+///   the screen this button is for.
+///
+/// One invocation covers both cases: a running client takes it over its IPC
+/// queue, and with no client running this *is* the client.
 pub async fn install_via_battle_net(
     layout: Layout,
     code: ProductCode,
     user: String,
-    family: Option<String>,
+    uid: String,
     label: String,
 ) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        use lightforge_core::battlenet::{self, Launch, Readiness};
-        use lightforge_core::preflight;
+        use lightforge_core::battlenet::{self, Launch};
 
         let runner = runner_for(&layout, &code, Runs::BattleNet)?;
 
-        if !preflight::client_running(&layout) {
-            // Normal window, whatever the launch path would have chosen: the
-            // next thing that happens is a person pressing Install.
-            let _ = battlenet::configure_accounts(
-                &layout,
-                &user,
-                &battlenet::window_state_tweaks(false),
-            );
+        // Normal window, whatever a launch would have chosen: the next thing
+        // that happens is a person choosing where to install.
+        let _ = battlenet::configure_accounts(
+            &layout,
+            &user,
+            &battlenet::window_state_tweaks(false),
+        );
 
-            let started = std::time::SystemTime::now();
-            battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| e.to_string())?;
+        battlenet::launch(&runner, &layout, &Launch::InstallFlow { uid })
+            .map_err(|e| e.to_string())?;
 
-            if battlenet::wait_until_signed_in(&layout, &user, started, SIGN_IN_TIMEOUT)
-                == Readiness::NeedsAttention
-            {
-                return Ok("Battle.net is open — sign in to install".to_owned());
-            }
-        }
-
-        // Selecting a tile is the same command as launching it. On a product
-        // that is not installed the client has nothing to launch, so it
-        // settles on the tile with its Install button — which is the screen
-        // this whole path exists to reach.
-        let launch = Launch::Product { code, exec: family };
-        battlenet::launch(&runner, &layout, &launch).map_err(|e| e.to_string())?;
-
-        Ok(format!("Battle.net is open on {label} — press Install there"))
+        Ok(format!("Battle.net is asking where to install {label}"))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -803,6 +801,8 @@ pub enum Handoff {
     Playing(GameProcess),
     /// The client never reported signing in. Someone has to look at it.
     NeedsAttention,
+    /// It was there and then it was not — closed while we waited.
+    ClientClosed,
     /// Signed in, told to launch, and nothing appeared.
     NothingStarted,
 }

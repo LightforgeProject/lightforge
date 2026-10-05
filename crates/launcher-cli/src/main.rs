@@ -80,6 +80,13 @@ enum Command {
         /// Override the `--exec="launch <uid>"` verb Battle.net is given.
         #[arg(long, requires = "product")]
         exec: Option<String>,
+        /// Hand the client a `battlenet://` link instead, the way the system
+        /// protocol handler does. Takes a game family, e.g. `WTCG`.
+        #[arg(long, conflicts_with_all = ["product", "exec"])]
+        uri: Option<String>,
+        /// Open the client's install flow for an install uid, e.g. `w1r`.
+        #[arg(long, conflicts_with_all = ["product", "exec", "uri"])]
+        install_game: Option<String>,
         /// Skip pre-flight. For testing a hand-off against a client that is
         /// already running, without killing the session first.
         #[arg(long)]
@@ -826,17 +833,21 @@ async fn main() -> Result<()> {
                 print_tweaks(&account_tweaks);
             }
         }
-        Command::BattlenetRun { proton, product, exec, skip_preflight } => {
+        Command::BattlenetRun { proton, product, exec, uri, install_game, skip_preflight } => {
             use lightforge_core::battlenet::{self, Launch};
             use lightforge_core::config::Config;
             use lightforge_core::preflight::{DownloadGuard, NoDownloads, Preflight};
 
-            let launch = match &product {
-                Some(code) => Launch::Product {
+            let launch = match (&product, &uri) {
+                _ if install_game.is_some() => Launch::InstallFlow {
+                    uid: install_game.clone().unwrap_or_default(),
+                },
+                (_, Some(family)) => Launch::Uri(battlenet::game_uri(family)),
+                (Some(code), None) => Launch::Product {
                     code: code.parse().expect("product codes are infallible"),
                     exec: exec.clone(),
                 },
-                None => Launch::Client,
+                (None, None) => Launch::Client,
             };
 
             let (runner, build) = proton_runner(&layout, battle_net_pin(proton.as_deref()))?;
@@ -846,7 +857,7 @@ async fn main() -> Result<()> {
             // Never spawn the client into a prefix that still has one running.
             let code = match &launch {
                 Launch::Product { code, .. } => Some(code.clone()),
-                Launch::Client => None,
+                Launch::Client | Launch::Uri(_) | Launch::InstallFlow { .. } => None,
             };
             let mut downloads = NoDownloads;
             let mut download_paused = false;
@@ -1612,7 +1623,13 @@ async fn main() -> Result<()> {
                 "{:<16} {:>4} {:>6}  {:>12} {:>9}  {:>12} {:>9}",
                 "tag", "kind", "named", "selected", "GiB", "missing", "GiB"
             );
-            for row in by_tag.rows.iter().filter(|r| r.selected.files > 0) {
+            // Normally only the tags doing work are worth printing. When
+            // *nothing* is selected the interesting question is the opposite
+            // one — what vocabulary does this manifest even have — and that
+            // is exactly the case where the filtered table is empty and says
+            // nothing at all.
+            let selects_nothing = by_tag.rows.iter().all(|r| r.selected.files == 0);
+            for row in by_tag.rows.iter().filter(|r| selects_nothing || r.selected.files > 0) {
                 println!(
                     "{:<16} {:>4} {:>6}  {:>12} {:>9.2}  {:>12} {:>9.2}",
                     row.name,

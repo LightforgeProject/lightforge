@@ -50,6 +50,10 @@ const MAX_FRAGMENT: u64 = 4 * 1024 * 1024;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Families {
     by_code: BTreeMap<String, String>,
+    /// The client's own install key for a product, which is what its install
+    /// flow is addressed by and is not always the TACT code: Hearthstone is
+    /// `hsb` to the CDN and `hs_beta` to Battle.net.
+    uids: BTreeMap<String, String>,
 }
 
 impl Families {
@@ -88,18 +92,27 @@ impl Families {
         // Battle.net's registry calls a product; the TACT code is what the
         // CDN and Lightforge call it, and for most titles they differ.
         let mut by_code = BTreeMap::new();
+        let mut uids = BTreeMap::new();
         for (uid, family) in uid_to_family {
             if let Some(tact) = uid_to_tact.get(&uid) {
                 by_code.insert(tact.to_ascii_lowercase(), family.clone());
+                uids.insert(tact.to_ascii_lowercase(), uid.clone());
             }
+            uids.insert(uid.to_ascii_lowercase(), uid.clone());
             by_code.insert(uid.to_ascii_lowercase(), family);
         }
-        Self { by_code }
+        Self { by_code, uids }
     }
 
     /// The family a product code belongs to, if the catalogue names one.
     pub fn family_of(&self, code: &str) -> Option<&str> {
         self.by_code.get(&code.to_ascii_lowercase()).map(String::as_str)
+    }
+
+    /// The client's install key for a product code — what its install flow
+    /// is addressed by, as opposed to the family its tile belongs to.
+    pub fn install_uid(&self, code: &str) -> Option<&str> {
+        self.uids.get(&code.to_ascii_lowercase()).map(String::as_str)
     }
 
     /// How many product codes resolve. Zero means a cache that has never been
@@ -238,6 +251,12 @@ mod tests {
         assert_eq!(families.family_of("hsb"), Some("WTCG"));
         assert_eq!(families.family_of("HSB"), Some("WTCG"), "codes are not case");
         assert_eq!(families.family_of("nonesuch"), None);
+
+        // And the install key, which the install flow is addressed by. The
+        // CDN's name for the product is not the client's.
+        assert_eq!(families.install_uid("hsb"), Some("hs_beta"));
+        assert_eq!(families.install_uid("hs_beta"), Some("hs_beta"));
+        assert_eq!(families.install_uid("nonesuch"), None);
 
         let _ = std::fs::remove_dir_all(&cache);
     }

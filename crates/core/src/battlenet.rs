@@ -573,8 +573,16 @@ pub enum Readiness {
     NeedsAttention,
 }
 
-/// The line the client writes once it is signed in and the UI is live.
+/// The line the client writes once it is signed in.
 const SIGNED_IN: &str = "Logged into Battle.net successfully";
+
+// There is deliberately no "the window has drawn" marker here. The obvious
+// candidate — `End recording load sequence for browser content_browser` — is
+// missing from one full-client log in six, so waiting for it stalls for the
+// whole grace period on a client that is perfectly ready, long enough for
+// someone to close the window out from under the launch. Anything that must
+// survive the client's startup is sent as a `battlenet://` URI instead, which
+// the client queues and runs when it is ready. See [`Launch::Uri`].
 
 /// How often the log is re-read while waiting.
 const READY_POLL: Duration = Duration::from_millis(250);
@@ -594,8 +602,8 @@ const READY_POLL: Duration = Duration::from_millis(250);
 /// ```
 ///
 /// Measured on a cold start under Proton: about five and a half seconds from
-/// the process appearing to that last line.
-pub fn wait_until_signed_in(
+/// the process appearing to the sign-in line.
+pub fn wait_until_ready(
     layout: &Layout,
     user: &str,
     since: SystemTime,
@@ -940,6 +948,30 @@ pub enum Launch {
     /// Battle.net UI. Paired with `GameLaunchWindowBehavior: 2`, the client
     /// exits by itself once the game is up.
     Product { code: ProductCode, exec: Option<String> },
+    /// Open the client's install flow for a product, by its install uid.
+    ///
+    /// The one thing that is neither view state nor a link: an action with a
+    /// view of its own, which is why it is the only candidate that can
+    /// survive the client's boot straight to its homepage.
+    ///
+    /// `install` and `game` are the client's own option names, pooled beside
+    /// `repair` and `modify` in its binary against the descriptions "Start a
+    /// package installation" and "Game registration/installation uid".
+    InstallFlow { uid: String },
+    /// A `battlenet://` link, handed to the client the way the system would.
+    ///
+    /// The form Wine registered for the protocol at install time:
+    ///
+    /// ```text
+    /// [Software\Classes\battlenet\shell\open\command]
+    /// @="\"C:\Program Files (x86)\Battle.net\Battle.net.exe\" --uri=\"%1\""
+    /// ```
+    ///
+    /// This is how Blizzard's own web buttons drive the client, which makes
+    /// it the one documented way to say "show me this game" — and unlike a
+    /// tile selection it is a command the client acts on rather than view
+    /// state its own startup can overwrite.
+    Uri(String),
 }
 
 impl Launch {
@@ -957,6 +989,14 @@ impl Launch {
     pub fn command(&self, install_dir: &Path) -> (PathBuf, Vec<String>) {
         match self {
             Self::Client => (install_dir.join("Battle.net Launcher.exe"), Vec::new()),
+            Self::InstallFlow { uid } => (
+                install_dir.join("Battle.net.exe"),
+                vec![format!("--game={uid}"), "--install".to_owned()],
+            ),
+            Self::Uri(uri) => (
+                install_dir.join("Battle.net.exe"),
+                vec![format!("--uri={uri}")],
+            ),
             Self::Product { code, exec } => match exec.clone().or_else(|| game_uid(code)) {
                 Some(uid) => (
                     install_dir.join("Battle.net.exe"),
@@ -978,9 +1018,15 @@ impl Launch {
     pub fn hands_off(&self) -> bool {
         match self {
             Self::Client => false,
+            Self::Uri(_) | Self::InstallFlow { .. } => true,
             Self::Product { code, exec } => exec.is_some() || game_uid(code).is_some(),
         }
     }
+}
+
+/// The `battlenet://` link for a game family.
+pub fn game_uri(family: &str) -> String {
+    format!("battlenet://{family}")
 }
 
 /// Battle.net's own identifier for a game, as used by `--exec="launch <uid>"`.
@@ -1200,6 +1246,19 @@ mod tests {
     }
 
     #[test]
+    fn a_uri_is_the_command_the_system_protocol_handler_sends() {
+        let dir = PathBuf::from("/bn");
+        let (exe, args) = Launch::Uri(game_uri("W1R")).command(&dir);
+
+        // Exactly what Wine registered for battlenet:// at install time, so
+        // the client treats it as a protocol link and queues it for its
+        // UriController instead of applying it mid-startup and losing it.
+        assert_eq!(exe, dir.join("Battle.net.exe"));
+        assert_eq!(args, vec!["--uri=battlenet://W1R"]);
+        assert!(Launch::Uri(game_uri("W1R")).hands_off());
+    }
+
+    #[test]
     fn readiness_is_read_from_the_log_this_start_wrote() {
         let dir = scratch("signed-in");
         let layout = Layout::with_root(&dir);
@@ -1214,14 +1273,14 @@ mod tests {
 
         let since = SystemTime::now() + Duration::from_secs(60);
         assert_eq!(
-            wait_until_signed_in(&layout, "steamuser", since, Duration::from_millis(1)),
+            wait_until_ready(&layout, "steamuser", since, Duration::from_millis(1)),
             Readiness::NeedsAttention,
             "a log older than this start says nothing about it"
         );
 
         // And one written now does answer.
         assert_eq!(
-            wait_until_signed_in(
+            wait_until_ready(
                 &layout,
                 "steamuser",
                 SystemTime::UNIX_EPOCH,

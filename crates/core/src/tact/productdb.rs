@@ -1114,17 +1114,3 @@ mod read_tests {
         let _ = decode(&noise);
     }
 }
-
-#[cfg(test)]
-mod scratch_check {
-    use super::*;
-    #[test]
-    fn tmp_dump() {
-        let p = "/home/kenny/Games/Blizzard/prefix/pfx/drive_c/ProgramData/Battle.net/Agent/product.db";
-        let bytes = std::fs::read(p).unwrap();
-        let db = decode(&bytes);
-        for i in &db {
-            println!("product={:?} family={:?} path={:?}", i.product, i.family, i.install_path);
-        }
-    }
-}

@@ -701,17 +701,16 @@ impl HandoffAct {
         }
     }
 
-    /// `None` draws outlined: opening the client is not an act on this game,
-    /// so it does not dress as one.
+    /// Blue means ready to play, and only that.
     ///
-    /// Blue rather than PLAY's green, because it happens through Battle.net
-    /// and colour is the only thing that can say so without a second line of
-    /// text; INSTALL for an install, which is the colour that already means
-    /// that everywhere else in the app.
+    /// Installing is a filled button too — it is still the thing to press on
+    /// this panel — but a neutral one, so the blue is never spent on a game
+    /// that cannot be played yet. `None` draws outlined: opening the client
+    /// is not an act on this game at all, so it does not dress as one.
     fn colour(self) -> Option<iced::Color> {
         match self {
             Self::Play => Some(theme::ACCENT),
-            Self::Install => Some(theme::INSTALL),
+            Self::Install => Some(theme::PAUSE),
             Self::OpenClient => None,
         }
     }
@@ -725,9 +724,9 @@ impl HandoffAct {
                  updates it; Lightforge never touches its files."
             }
             Self::Install => {
-                "Lightforge opens Battle.net on this game, where its Install button is. \
-                 The install is Battle.net's — it chooses the location and does the \
-                 downloading, and this panel shows Play once its registry lists the game."
+                "Lightforge opens Battle.net's install dialog for this game, where you \
+                 choose the location and start it. The install is Battle.net's own \
+                 — this panel shows Play once its registry lists the game."
             }
             Self::OpenClient => {
                 "No game family is known for this product, so the client cannot be told \
@@ -1297,6 +1296,18 @@ impl Lightforge {
     /// so a wrong uid opens somebody else's game.
     fn family_of(&self, code: &ProductCode) -> Option<String> {
         lightforge_core::battlenet::resolve_game_uid(code, &self.families)
+    }
+
+    /// What Battle.net's install flow calls this product.
+    ///
+    /// The catalogue's install key where there is one, the product code
+    /// otherwise — they are the same for most titles, and differ where the
+    /// CDN and the client disagree (`hsb` against `hs_beta`).
+    fn install_uid_of(&self, code: &ProductCode) -> String {
+        self.families
+            .install_uid(code.as_str())
+            .unwrap_or_else(|| code.as_str())
+            .to_owned()
     }
 
     /// Whether Lightforge installs this product or hands it to Battle.net.
@@ -1889,6 +1900,11 @@ impl Lightforge {
                     // The client is up and waiting on a person — two-factor,
                     // an outage, an update of its own. Said plainly, with the
                     // client left running so it can be finished there.
+                    // Closed while we were waiting for it to sign in. Not a
+                    // failure to report as one — just nothing to hand off to.
+                    Ok(tasks::Handoff::ClientClosed) => self.update(Message::Launched(Ok(
+                        "Battle.net was closed before the game could start".to_owned(),
+                    ))),
                     Ok(tasks::Handoff::NeedsAttention) => self.update(Message::Launched(Ok(
                         "Battle.net needs attention — finish in its window and press Play there"
                             .to_owned(),
@@ -2075,7 +2091,7 @@ impl Lightforge {
                                 self.layout.clone(),
                                 self.selected.code.clone(),
                                 self.config.prefix_user.clone(),
-                                self.family_of(&self.selected.code),
+                                self.install_uid_of(&self.selected.code),
                                 self.selected.label.clone(),
                             ),
                             Message::Launched,
@@ -7458,7 +7474,11 @@ mod tests {
         assert_eq!(HandoffAct::Install.label(), "Install via Battle.net");
         assert_eq!(HandoffAct::OpenClient.label(), "Open Battle.net");
         assert_eq!(HandoffAct::Play.colour(), Some(theme::ACCENT));
-        assert_eq!(HandoffAct::Install.colour(), Some(theme::INSTALL));
+        assert_eq!(
+            HandoffAct::Install.colour(),
+            Some(theme::PAUSE),
+            "blue is reserved for a game that can actually be played"
+        );
         assert_eq!(
             HandoffAct::OpenClient.colour(),
             None,
