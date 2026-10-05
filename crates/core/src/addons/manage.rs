@@ -256,6 +256,9 @@ async fn fetch_and_install(
         ignored: chosen.ignored,
         auto_update: chosen.auto_update,
         pinned: pin_after_install(pin, options.pinned, chosen.pinned, entry.file_id.as_deref()),
+        // Stamped now, not carried over: the question it answers is when
+        // *this* build arrived, and a new build arriving is this line.
+        installed_at: Some(install::today()),
     });
     Ok(extracted.folders)
 }
@@ -317,6 +320,8 @@ pub struct UpdateStatus {
     /// How the offered build calls itself — a version, not a file id, for
     /// showing to someone.
     pub available_name: Option<String>,
+    /// When the offered build was published, as the provider states it.
+    pub available_date: Option<String>,
     /// Why there is no answer, if there isn't one.
     pub problem: Option<String>,
 }
@@ -433,6 +438,7 @@ pub async fn check_updates(
                 installed_build: record.build,
                 available_build: found.and_then(|r| r.channel),
                 available_name: found.and_then(|r| r.file_name.clone()),
+                available_date: found.and_then(|r| r.file_date.clone()),
                 problem: found.and_then(|r| r.unavailable_reason().or_else(|| r.note.clone())),
             }
         })
@@ -922,6 +928,7 @@ mod tests {
             installed_build,
             available_build,
             available_name: Some("NaowhSmartReminders-1.4.26.zip".into()),
+            available_date: None,
             problem: None,
         };
 
@@ -953,6 +960,7 @@ mod tests {
             installed_build: None,
             available_build: None,
             available_name: None,
+            available_date: None,
             problem: None,
         };
 

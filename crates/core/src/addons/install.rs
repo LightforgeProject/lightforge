@@ -88,6 +88,49 @@ pub struct Record {
     /// carry the same one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned: Option<String>,
+    /// The day this build was installed, `YYYY-MM-DD`.
+    ///
+    /// Ours to record, because no provider knows it: the catalogue can say
+    /// when a build was *published*, which is a different question from when
+    /// this machine took it. `None` on anything installed before this was
+    /// recorded — an absent fact, not a zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_at: Option<String>,
+}
+
+/// Today, as `YYYY-MM-DD` in UTC.
+///
+/// UTC rather than local time because the string is stored and compared, not
+/// announced: a ledger written in one timezone and read in another should not
+/// disagree with itself about what day it was.
+pub fn today() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    let (year, month, day) = civil_from_unix(secs);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// Days since the epoch to a civil date, by Howard Hinnant's `civil_from_days`.
+///
+/// Written out rather than pulled in: one date, one direction, no timezones
+/// and no formatting — a calendar crate for this would be a dependency to
+/// audit and update forever in exchange for nine lines.
+fn civil_from_unix(secs: u64) -> (i64, u32, u32) {
+    let z = (secs / 86_400) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = match mp < 10 {
+        true => (mp + 3) as u32,
+        false => (mp - 9) as u32,
+    };
+    (y + i64::from(m <= 2), m, d)
 }
 
 impl Record {
@@ -560,6 +603,21 @@ mod tests {
             remove(&mut ledger, &dir, "curse", "999"),
             Err(InstallError::NotTracked(_))
         ));
+    }
+
+    #[test]
+    fn the_civil_date_matches_known_epochs() {
+        // Dates nobody can argue with, including the two the algorithm is
+        // easiest to get wrong on: a leap day, and the century that is not a
+        // leap year's exception.
+        assert_eq!(civil_from_unix(0), (1970, 1, 1));
+        assert_eq!(civil_from_unix(951_782_400), (2000, 2, 29), "a leap day");
+        assert_eq!(civil_from_unix(1_709_164_800), (2024, 2, 29));
+        assert_eq!(civil_from_unix(1_767_225_600), (2026, 1, 1));
+        assert_eq!(civil_from_unix(1_791_331_200), (2026, 10, 7));
+        // And the string the ledger stores, zero-padded so it sorts.
+        assert_eq!(today().len(), 10);
+        assert_eq!(today().matches('-').count(), 2);
     }
 
     #[test]

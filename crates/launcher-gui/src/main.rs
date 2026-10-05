@@ -5620,6 +5620,24 @@ impl Lightforge {
 
         let mut body = column![toolbar].spacing(theme::SM);
 
+        // A header, because four right-hand columns of bare dates are not
+        // self-describing. Indented and spaced to match a row's own columns.
+        if !self.addons.rows.is_empty() {
+            body = body.push(
+                container(
+                    row![
+                        muted("NAME".to_owned(), theme::CAPTION).width(Length::Fill),
+                        column_head("LATEST"),
+                        column_head("RELEASED"),
+                        column_head("INSTALLED"),
+                    ]
+                    .spacing(theme::SM)
+                    .align_y(Alignment::Center),
+                )
+                .padding([0.0, theme::MD]),
+            );
+        }
+
         // What happened without anyone asking, said where the addons are.
         // Nothing interrupted the user to tell them, so this is the only
         // place it is said at all.
@@ -5758,11 +5776,30 @@ impl Lightforge {
                     theme::CAPTION,
                 ),
             ]
-            .spacing(theme::XS)]
+            .spacing(theme::XS)
+            .width(Length::Fill)]
             .spacing(theme::SM)
             .align_y(Alignment::Center);
 
-            line = line.push(Space::new().width(Length::Fill));
+            // The three facts, in the columns the header names. A dash
+            // rather than a blank for a fact we do not have: an empty cell
+            // reads as a layout bug, where "—" reads as "not known", which
+            // is what it is for an addon installed before this was recorded
+            // or a provider that publishes no dates.
+            let managed_row = addon.managed.as_ref();
+            line = line.push(cell(
+                status.and_then(|s| s.available_name.clone()).or_else(|| {
+                    // Up to date: what is latest is what is installed, and
+                    // saying so beats an empty column.
+                    managed_row.map(|_| addon.version.clone())
+                }),
+            ));
+            line = line.push(cell(
+                status.and_then(|s| s.available_date.as_deref().map(short_day)),
+            ));
+            line = line.push(cell(
+                managed_row.and_then(|m| m.installed_at.as_deref().map(short_day)),
+            ));
             if let Some(managed) = &addon.managed {
                 // Which builds this addon accepts. Narrow and first, so the
                 // buttons that act stay where the eye expects them whether or
@@ -7422,6 +7459,47 @@ fn section<'a>(title: impl Into<String>, body: Element<'a, Message>) -> Element<
 
 /// A fixed-width label beside its control, so every control in a section
 /// starts on the same line.
+/// Width of each fact column on an addon row. One number, so the header and
+/// the rows cannot drift apart.
+const ADDON_COLUMN: f32 = 92.0;
+
+/// One fact in an addon row's column, or a dash where there is none.
+fn cell<'a>(value: Option<String>) -> Element<'a, Message> {
+    match value {
+        Some(text) => muted(text, theme::CAPTION),
+        None => muted("—".to_owned(), theme::CAPTION),
+    }
+    .width(Length::Fixed(ADDON_COLUMN))
+    .into()
+}
+
+/// A column heading over those cells.
+fn column_head<'a>(label: &str) -> Element<'a, Message> {
+    muted(label.to_owned(), theme::CAPTION)
+        .width(Length::Fixed(ADDON_COLUMN))
+        .into()
+}
+
+/// `2026-10-04T20:10:34.237Z` -> `4 Oct`.
+///
+/// Day and month only: the year is almost always this one, and a column wide
+/// enough for a full timestamp is a column that costs the addon's name.
+fn short_day(timestamp: &str) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let date = timestamp.split('T').next().unwrap_or(timestamp);
+    let mut parts = date.split('-');
+    let (Some(_year), Some(month), Some(day)) = (parts.next(), parts.next(), parts.next()) else {
+        // Not a shape we know. Showing it raw is more use than hiding it.
+        return timestamp.to_owned();
+    };
+    match (month.parse::<usize>(), day.parse::<u32>()) {
+        (Ok(m), Ok(d)) if (1..=12).contains(&m) => format!("{d} {}", MONTHS[m - 1]),
+        _ => timestamp.to_owned(),
+    }
+}
+
 /// The day out of an RFC 3339 timestamp, which is all a build list needs.
 ///
 /// Not parsed into a date type: the string is the provider's, the only part
@@ -7678,6 +7756,20 @@ mod tests {
 
     fn chord(text: &str, modifiers: iced::keyboard::Modifiers) -> bool {
         hints_chord(&iced::keyboard::Key::Character(text.into()), modifiers)
+    }
+
+    #[test]
+    fn a_date_column_is_a_day_and_a_month_or_the_string_itself() {
+        // What the proxy sends, straight from CurseForge.
+        assert_eq!(short_day("2026-10-04T20:10:34.237Z"), "4 Oct");
+        // What our own ledger stamps.
+        assert_eq!(short_day("2026-01-09"), "9 Jan");
+        assert_eq!(short_day("2026-12-31"), "31 Dec");
+        // A shape we do not know shows as itself. A column that silently
+        // blanks is a column that looks broken, and the raw value at least
+        // says what the provider sent.
+        assert_eq!(short_day("whenever"), "whenever");
+        assert_eq!(short_day("2026-13-01"), "2026-13-01", "no such month");
     }
 
     #[test]

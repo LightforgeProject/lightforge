@@ -42,6 +42,9 @@ pub struct Managed {
     pub file_id: Option<String>,
     /// The file id this addon is held at, when it is pinned.
     pub pinned: Option<String>,
+    /// The day this build was installed, `YYYY-MM-DD`. `None` for anything
+    /// installed before Lightforge started recording it.
+    pub installed_at: Option<String>,
 }
 
 /// What the addon screen shows.
@@ -144,6 +147,7 @@ pub fn rows_from(installed: &[Installed], ledger: &Ledger) -> Vec<Row> {
                     auto_update: record.auto_update,
                     file_id: record.file_id.clone(),
                     pinned: record.pinned.clone(),
+                    installed_at: record.installed_at.clone(),
                 }),
                 child_of: known
                     .map(|(_, head)| *head)
