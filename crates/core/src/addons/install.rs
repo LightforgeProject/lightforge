@@ -605,14 +605,8 @@ mod tests {
             status: super::super::Status::Ok,
             name: Some("BigWigs".into()),
             file_id: Some("100".into()),
-            file_name: None,
-            file_length: None,
-            md5: None,
             download_url: Some("https://x/y.zip".into()),
-            folders: vec![],
-            website_url: None,
-            note: None,
-            channel: None,
+            ..Resolved::default()
         };
         assert!(!ledger.needs_update(&resolved, "curse"));
 

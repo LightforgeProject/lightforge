@@ -42,9 +42,10 @@ pub enum Origin {
 }
 
 /// What became of one requested addon.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
+    #[default]
     Ok,
     /// The author disabled third-party distribution.
     OptOut,
@@ -53,7 +54,10 @@ pub enum Status {
 }
 
 /// One resolved addon, ready to download — or a reason it is not.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// `Default` exists so a field the catalog starts reporting does not mean
+/// editing every construction that never cared about it — the same reason
+/// [`crate::addons::Record`] has one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Resolved {
     pub id: String,
     pub status: Status,
@@ -78,6 +82,13 @@ pub struct Resolved {
     /// Where to send the user when the download is unavailable.
     #[serde(default)]
     pub website_url: Option<String>,
+    /// When the provider published this file, RFC 3339 as it states it.
+    ///
+    /// Carried on the resolve reply rather than fetched per addon: the files
+    /// endpoint answers this for one project, and an installed list of thirty
+    /// addons would be thirty requests for one column.
+    #[serde(default)]
+    pub file_date: Option<String>,
     /// Anything worth telling the user about how this was resolved — a guessed
     /// flavor, or why a provider could not answer.
     #[serde(default)]
@@ -170,6 +181,31 @@ pub struct Project {
     pub download_count: u64,
 }
 
+/// One file a project offers, as the catalog describes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileInfo {
+    pub file_id: String,
+    /// What the author calls this build — a version people recognise, where
+    /// the file id is an opaque number.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub file_name: Option<String>,
+    /// `release`, `beta` or `alpha`, in the provider's own vocabulary.
+    #[serde(default)]
+    pub release_type: Option<String>,
+    #[serde(default)]
+    pub game_versions: Vec<String>,
+    #[serde(default)]
+    pub file_date: Option<String>,
+    #[serde(default)]
+    pub file_length: Option<u64>,
+    #[serde(default)]
+    pub md5: Option<String>,
+    #[serde(default)]
+    pub folders: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct SearchReply {
     #[serde(default)]
@@ -238,16 +274,7 @@ impl Catalog {
                         .unwrap_or_else(|| Resolved {
                             id: request.id.clone(),
                             status: Status::NotFound,
-                            name: None,
-                            file_id: None,
-                            file_name: None,
-                            file_length: None,
-                            md5: None,
-                            download_url: None,
-                            folders: Vec::new(),
-                            website_url: None,
-                            channel: None,
-                            note: None,
+                            ..Resolved::default()
                         })
                 })
                 .collect());
@@ -289,6 +316,31 @@ impl Catalog {
         );
         let reply: SearchReply = http.get_json(&url).await?;
         Ok(reply.results)
+    }
+
+    /// Every file a project offers for one flavor, newest first.
+    ///
+    /// What a version picker is built on, and the one question `resolve`
+    /// cannot answer: resolve returns the *chosen* file, this returns the
+    /// choices. Asked for one project at a time, because that is when
+    /// somebody is looking at one.
+    pub async fn files(
+        &self,
+        http: &Http,
+        id: &str,
+        flavor: &str,
+        limit: usize,
+    ) -> Result<Vec<FileInfo>, CatalogError> {
+        match &self.origin {
+            Origin::Dir(_) => self.fixture(&format!("files-{id}.json")),
+            Origin::Http(_) => {
+                let url = format!(
+                    "{}?flavor={flavor}&limit={limit}",
+                    self.url(&format!("project/{id}/files")).expect("http origin")
+                );
+                Ok(http.get_json(&url).await?)
+            }
+        }
     }
 
     /// One project's metadata.
@@ -351,12 +403,10 @@ mod tests {
             file_id: Some("8866508".into()),
             file_name: Some("BigWigs-v424.8.zip".into()),
             file_length: Some(1_234_567),
-            md5: None,
             download_url: url.map(str::to_owned),
             folders: vec!["BigWigs".into()],
             website_url: Some("https://www.curseforge.com/wow/addons/big-wigs".into()),
-            note: None,
-            channel: None,
+            ..Resolved::default()
         }
     }
 

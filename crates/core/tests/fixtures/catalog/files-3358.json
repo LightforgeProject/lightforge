@@ -1,0 +1,18 @@
+[
+  {
+    "display_name": "v1.2.3",
+    "file_date": "2026-09-01T00:00:00Z",
+    "file_id": "800800",
+    "file_length": 1234567,
+    "file_name": "Addon-800800.zip",
+    "folders": [
+      "BigWigs",
+      "BigWigs_Core"
+    ],
+    "game_versions": [
+      "11.0.5"
+    ],
+    "md5": "0123456789abcdef0123456789abcdef",
+    "release_type": "release"
+  }
+]

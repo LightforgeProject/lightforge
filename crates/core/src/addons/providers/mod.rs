@@ -61,16 +61,8 @@ pub(crate) fn unsupported(requests: &[Request], reason: &str) -> Vec<Resolved> {
         .map(|request| Resolved {
             id: request.id.clone(),
             status: Status::NotFound,
-            name: None,
-            file_id: None,
-            file_name: None,
-            file_length: None,
-            md5: None,
-            download_url: None,
-            folders: Vec::new(),
-            website_url: None,
             note: Some(reason.to_owned()),
-            channel: None,
+            ..Resolved::default()
         })
         .collect()
 }
@@ -79,17 +71,7 @@ pub(crate) fn unsupported(requests: &[Request], reason: &str) -> Vec<Resolved> {
 pub(crate) fn blank(id: &str) -> Resolved {
     Resolved {
         id: id.to_owned(),
-        status: Status::Ok,
-        name: None,
-        file_id: None,
-        file_name: None,
-        file_length: None,
-        md5: None,
-        download_url: None,
-        folders: Vec::new(),
-        website_url: None,
-        note: None,
-        channel: None,
+        ..Resolved::default()
     }
 }
 

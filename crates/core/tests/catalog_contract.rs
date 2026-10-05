@@ -65,6 +65,11 @@ async fn resolve_parses_every_outcome() {
     assert_eq!(ok.status, Status::Ok);
     assert_eq!(ok.id, "3358");
     assert_eq!(
+        ok.file_date.as_deref(),
+        Some("2026-09-01T00:00:00Z"),
+        "the publish date rides along, so a list of thirty addons is still one request"
+    );
+    assert_eq!(
         ok.file_id.as_deref(),
         Some("800800"),
         "ids are strings on the wire, including the numeric ones"
@@ -158,4 +163,33 @@ fn a_numeric_file_id_is_rejected_rather_than_coerced() {
     let quoted = r#"{"id":"3358","status":"ok","file_id":"800800"}"#;
     let parsed: Resolved = serde_json::from_str(quoted).expect("the agreed shape");
     assert_eq!(parsed.file_id.as_deref(), Some("800800"));
+}
+
+/// The files endpoint is what a version picker is built on: resolve returns
+/// the file the proxy chose, this returns the ones it chose between.
+#[tokio::test]
+async fn files_parse_into_a_list_of_choices() {
+    let http = Http::new().expect("client");
+
+    let files = catalog()
+        .files(&http, "3358", "retail", 20)
+        .await
+        .expect("the proxy's own output must parse");
+
+    assert_eq!(files.len(), 1);
+    let file = &files[0];
+    assert_eq!(file.file_id, "800800", "a string here too, not the number upstream sends");
+    assert_eq!(
+        file.display_name.as_deref(),
+        Some("v1.2.3"),
+        "what the author calls the build, which is what a picker lists"
+    );
+    assert_eq!(
+        file.release_type.as_deref(),
+        Some("release"),
+        "the provider's own vocabulary, not the channel names we request with"
+    );
+    assert_eq!(file.file_date.as_deref(), Some("2026-09-01T00:00:00Z"));
+    assert_eq!(file.file_length, Some(1_234_567));
+    assert_eq!(file.folders, ["BigWigs", "BigWigs_Core"]);
 }

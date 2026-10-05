@@ -3,6 +3,7 @@
     {
       "channel": "stable",
       "download_url": "https://edge.forgecdn.example/BigWigs.zip",
+      "file_date": "2026-09-01T00:00:00Z",
       "file_id": "800800",
       "file_length": 1234567,
       "file_name": "Addon-800800.zip",
