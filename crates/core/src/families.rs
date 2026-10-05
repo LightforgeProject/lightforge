@@ -283,3 +283,17 @@ mod tests {
     }
 }
 
+
+#[cfg(test)]
+mod scratch_check {
+    use super::*;
+    #[test]
+    fn tmp_anbs() {
+        let layout = Layout::with_root("/home/kenny/Games/Blizzard");
+        let f = Families::read(&layout, "steamuser");
+        println!("len={}", f.len());
+        for c in ["anbs","ANBS","hs_beta","d3","diablo3"] {
+            println!("  {c:10} -> {:?}", f.family_of(c));
+        }
+    }
+}

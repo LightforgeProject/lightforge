@@ -395,6 +395,8 @@ enum Message {
     AddonPin(String, String, Option<String>),
     /// Whether the next import pins to the versions the token names.
     ImportPinned(bool),
+    /// Put Battle.net on this game's tile, so its Install button is reachable.
+    InstallViaBattleNet,
     /// The client's catalogue has been read.
     FamiliesRead(Box<lightforge_core::families::Families>),
     /// Fetch one addon again and replace what it wrote.
@@ -674,6 +676,76 @@ impl Download {
     }
 }
 
+/// What the hand-off panel's one button does, which depends on how much is
+/// known about the product.
+///
+/// Three states rather than a pair of booleans at the call site: the label,
+/// the colour and the message have to agree, and they only do that reliably
+/// when one value decides all three.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HandoffAct {
+    /// Installed, and the client knows which tile it is: start it.
+    Play,
+    /// Known tile, nothing installed: land on it so Install can be pressed.
+    Install,
+    /// No game family, so nothing can be named. Opens the client and stops.
+    OpenClient,
+}
+
+impl HandoffAct {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Play => "Play via Battle.net",
+            Self::Install => "Install via Battle.net",
+            Self::OpenClient => "Open Battle.net",
+        }
+    }
+
+    /// `None` draws outlined: opening the client is not an act on this game,
+    /// so it does not dress as one.
+    ///
+    /// Blue rather than PLAY's green, because it happens through Battle.net
+    /// and colour is the only thing that can say so without a second line of
+    /// text; INSTALL for an install, which is the colour that already means
+    /// that everywhere else in the app.
+    fn colour(self) -> Option<iced::Color> {
+        match self {
+            Self::Play => Some(theme::ACCENT),
+            Self::Install => Some(theme::INSTALL),
+            Self::OpenClient => None,
+        }
+    }
+
+    /// What the button will really do, for the hints mode.
+    fn hint(self) -> &'static str {
+        match self {
+            Self::Play => {
+                "Lightforge starts Battle.net, waits for it to sign in, tells it to launch \
+                 this game, and holds here until the game exits. Battle.net installs and \
+                 updates it; Lightforge never touches its files."
+            }
+            Self::Install => {
+                "Lightforge opens Battle.net on this game, where its Install button is. \
+                 The install is Battle.net's — it chooses the location and does the \
+                 downloading, and this panel shows Play once its registry lists the game."
+            }
+            Self::OpenClient => {
+                "No game family is known for this product, so the client cannot be told \
+                 which tile to open — naming the wrong one lands on somebody else's game. \
+                 This opens Battle.net and stops there."
+            }
+        }
+    }
+
+    fn message(self) -> Message {
+        match self {
+            Self::Play => Message::BattleNet,
+            Self::Install => Message::InstallViaBattleNet,
+            Self::OpenClient => Message::OpenBattleNet,
+        }
+    }
+}
+
 /// What a pre-flight pass is clearing the way for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Launch {
@@ -684,6 +756,13 @@ enum Launch {
     /// Open the Battle.net client itself, for everything outside the WoW
     /// family. A pass-through, not a managed install — see `SPEC.md`.
     Client,
+    /// Put the client on a game's tile so its Install button can be pressed.
+    ///
+    /// The same hand-off as [`Launch::BattleNet`] and deliberately a separate
+    /// intent: an install needs a visible window and a person, where a launch
+    /// needs neither and waits for a game that an install will not produce
+    /// for an hour.
+    Install,
 }
 
 struct Lightforge {
@@ -1201,7 +1280,9 @@ impl Lightforge {
                 // Cleared under whichever build is about to run in the prefix.
                 match what {
                     Launch::Game => tasks::Runs::Game,
-                    Launch::BattleNet | Launch::Client => tasks::Runs::BattleNet,
+                    Launch::BattleNet | Launch::Client | Launch::Install => {
+                        tasks::Runs::BattleNet
+                    }
                 },
             ),
             move |result| Message::PreflightDone(what, result),
@@ -1228,6 +1309,7 @@ impl Lightforge {
 
     /// The action panel for a game Battle.net installs and starts.
     ///
+    ///
     /// Deliberately bare: no Install, no Update, no Play, not even greyed out.
     /// Offering those disabled would say Lightforge could manage this game and
     /// merely will not.
@@ -1239,29 +1321,33 @@ impl Lightforge {
         });
 
         left = self.scan_progress(left);
-        if let Some(version) = self.installed_versions.get(self.selected.code.as_str()) {
-            left = left.push(
-                row![muted("installed".to_owned(), theme::LABEL), mono(version.clone())]
-                    .spacing(theme::SM)
-                    .align_y(Alignment::Center),
-            );
+        match self.installed_versions.get(self.selected.code.as_str()) {
+            Some(version) => {
+                left = left.push(
+                    row![muted("installed".to_owned(), theme::LABEL), mono(version.clone())]
+                        .spacing(theme::SM)
+                        .align_y(Alignment::Center),
+                );
+            }
+            // Said out loud, because the button changing word for word is
+            // easy to miss on a screen that is mostly key art.
+            None => left = left.push(muted("not installed".to_owned(), theme::LABEL)),
         }
-        left = left.extend(self.hint("Installed and updated through Battle.net. Lightforge opens it, nothing more.").map(Element::from));
 
-        // Labelled for what it will actually do. Without a known game family
-        // the client cannot be told which tile to open, so the button says so
-        // rather than promising a hand-off that lands on someone else's game.
+        // Three things the button can honestly be, in order of how much is
+        // known. Without a game family the client cannot be told which tile
+        // to open, and a guess lands on somebody else's game — so that case
+        // promises nothing beyond opening the client.
         let family = self.family_of(&self.selected.code);
-        let launches = family.is_some();
+        let installed = self.installed_versions.contains_key(self.selected.code.as_str());
+        let act = match (family.is_some(), installed) {
+            (false, _) => HandoffAct::OpenClient,
+            (true, true) => HandoffAct::Play,
+            (true, false) => HandoffAct::Install,
+        };
+        left = left.extend(self.hint(act.hint()).map(Element::from));
         let open = button(
-            container(
-                text(match launches {
-                    true => "Play via Battle.net",
-                    false => "Open Battle.net",
-                })
-                .size(theme::HEADING),
-            )
-            .center_x(Length::Fill),
+            container(text(act.label()).size(theme::HEADING)).center_x(Length::Fill),
         )
         // Dressed as the Play control on a game Lightforge runs itself —
         // same 240 by CONTROL_HEIGHT, same heading, same filled face — because
@@ -1272,18 +1358,15 @@ impl Lightforge {
         // the colour is the one thing that can say so without a second line
         // of text. When there is no game family to ask for, the button only
         // opens the client — not a launch, so it does not dress as one.
-        .style(move |base: &iced::Theme, status| match launches {
-            true => theme::filled(theme::ACCENT)(base, status),
-            false => theme::outlined(base, status),
+        .style(move |base: &iced::Theme, status| match act.colour() {
+            Some(colour) => theme::filled(colour)(base, status),
+            None => theme::outlined(base, status),
         })
         .padding([theme::MD, theme::LG])
         .width(Length::Fixed(240.0))
         .height(Length::Fixed(theme::CONTROL_HEIGHT));
 
-        let press = match launches {
-            true => Message::BattleNet,
-            false => Message::OpenBattleNet,
-        };
+        let press = act.message();
 
         container(
             row![
@@ -1778,6 +1861,13 @@ impl Lightforge {
                         ),
                         |families| Message::FamiliesRead(Box::new(families)),
                     ),
+                    // And what it has installed: an install handed over to
+                    // Battle.net finishes in Battle.net, so Agent's registry
+                    // is the only thing that knows it happened.
+                    Task::perform(
+                        tasks::installed_versions(self.layout.clone()),
+                        Message::InstalledVersions,
+                    ),
                 ])
             }
 
@@ -1812,6 +1902,8 @@ impl Lightforge {
             }
 
             Message::BattleNet => self.preflight(Launch::BattleNet),
+
+            Message::InstallViaBattleNet => self.preflight(Launch::Install),
 
             Message::OpenBattleNet => self.preflight(Launch::Client),
 
@@ -1974,6 +2066,19 @@ impl Lightforge {
                                 self.family_of(&self.selected.code),
                             ),
                             Message::HandoffStarted,
+                        )
+                    }
+                    Launch::Install => {
+                        self.status = "opening Battle.net…".to_owned();
+                        Task::perform(
+                            tasks::install_via_battle_net(
+                                self.layout.clone(),
+                                self.selected.code.clone(),
+                                self.config.prefix_user.clone(),
+                                self.family_of(&self.selected.code),
+                                self.selected.label.clone(),
+                            ),
+                            Message::Launched,
                         )
                     }
                     Launch::Client => {
@@ -7330,6 +7435,36 @@ mod tests {
 
     fn chord(text: &str, modifiers: iced::keyboard::Modifiers) -> bool {
         hints_chord(&iced::keyboard::Key::Character(text.into()), modifiers)
+    }
+
+    #[test]
+    fn the_handoff_button_only_promises_what_is_known() {
+        let act = |family: bool, installed: bool| match (family, installed) {
+            (false, _) => HandoffAct::OpenClient,
+            (true, true) => HandoffAct::Play,
+            (true, false) => HandoffAct::Install,
+        };
+
+        assert_eq!(act(true, true), HandoffAct::Play);
+        assert_eq!(act(true, false), HandoffAct::Install);
+        // No family means no tile can be named, installed or not: the client
+        // resolves an unknown one to Warcraft III, so neither Play nor
+        // Install would be true.
+        assert_eq!(act(false, true), HandoffAct::OpenClient);
+        assert_eq!(act(false, false), HandoffAct::OpenClient);
+
+        // Label, colour and message agree, which is the reason for the type.
+        assert_eq!(HandoffAct::Play.label(), "Play via Battle.net");
+        assert_eq!(HandoffAct::Install.label(), "Install via Battle.net");
+        assert_eq!(HandoffAct::OpenClient.label(), "Open Battle.net");
+        assert_eq!(HandoffAct::Play.colour(), Some(theme::ACCENT));
+        assert_eq!(HandoffAct::Install.colour(), Some(theme::INSTALL));
+        assert_eq!(
+            HandoffAct::OpenClient.colour(),
+            None,
+            "opening the client is not an act on this game, so it draws outlined"
+        );
+        assert!(matches!(HandoffAct::Install.message(), Message::InstallViaBattleNet));
     }
 
     #[test]

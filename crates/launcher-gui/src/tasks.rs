@@ -741,6 +741,61 @@ pub async fn launch_via_battle_net(
     .map_err(|e| e.to_string())?
 }
 
+/// Put the client on a game's tile, so its Install button can be pressed.
+///
+/// The same two phases as a launch, with two differences that both come from
+/// the same fact — an install needs a person:
+///
+/// - the window is left normal rather than minimized, because there is a
+///   location to choose and a download size to agree to;
+/// - nothing is waited for afterwards. A game that is not installed will not
+///   appear in minutes, and holding the launcher busy for an hour to find out
+///   would be claiming to do something Battle.net is doing.
+pub async fn install_via_battle_net(
+    layout: Layout,
+    code: ProductCode,
+    user: String,
+    family: Option<String>,
+    label: String,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        use lightforge_core::battlenet::{self, Launch, Readiness};
+        use lightforge_core::preflight;
+
+        let runner = runner_for(&layout, &code, Runs::BattleNet)?;
+
+        if !preflight::client_running(&layout) {
+            // Normal window, whatever the launch path would have chosen: the
+            // next thing that happens is a person pressing Install.
+            let _ = battlenet::configure_accounts(
+                &layout,
+                &user,
+                &battlenet::window_state_tweaks(false),
+            );
+
+            let started = std::time::SystemTime::now();
+            battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| e.to_string())?;
+
+            if battlenet::wait_until_signed_in(&layout, &user, started, SIGN_IN_TIMEOUT)
+                == Readiness::NeedsAttention
+            {
+                return Ok("Battle.net is open — sign in to install".to_owned());
+            }
+        }
+
+        // Selecting a tile is the same command as launching it. On a product
+        // that is not installed the client has nothing to launch, so it
+        // settles on the tile with its Install button — which is the screen
+        // this whole path exists to reach.
+        let launch = Launch::Product { code, exec: family };
+        battlenet::launch(&runner, &layout, &launch).map_err(|e| e.to_string())?;
+
+        Ok(format!("Battle.net is open on {label} — press Install there"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// What came of a hand-off.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Handoff {
