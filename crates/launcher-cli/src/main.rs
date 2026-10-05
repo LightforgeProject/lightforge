@@ -1620,8 +1620,8 @@ async fn main() -> Result<()> {
             );
             println!("\nby tag (what the selection is made of)");
             println!(
-                "{:<16} {:>4} {:>6}  {:>12} {:>9}  {:>12} {:>9}",
-                "tag", "kind", "named", "selected", "GiB", "missing", "GiB"
+                "{:<16} {:>4} {:>6}  {:>12} {:>9}  {:>12} {:>9}  {:>12}",
+                "tag", "kind", "named", "selected", "GiB", "missing", "GiB", "covers"
             );
             // Normally only the tags doing work are worth printing. When
             // *nothing* is selected the interesting question is the opposite
@@ -1631,7 +1631,7 @@ async fn main() -> Result<()> {
             let selects_nothing = by_tag.rows.iter().all(|r| r.selected.files == 0);
             for row in by_tag.rows.iter().filter(|r| selects_nothing || r.selected.files > 0) {
                 println!(
-                    "{:<16} {:>4} {:>6}  {:>12} {:>9.2}  {:>12} {:>9.2}",
+                    "{:<16} {:>4} {:>6}  {:>12} {:>9.2}  {:>12} {:>9.2}  {:>12}",
                     row.name,
                     row.kind,
                     match row.constrained {
@@ -1642,6 +1642,7 @@ async fn main() -> Result<()> {
                     gib(row.selected.bytes),
                     row.missing.files,
                     gib(row.missing.bytes),
+                    row.covered.files,
                 );
             }
             match by_tag.unconstrained_kinds.as_slice() {

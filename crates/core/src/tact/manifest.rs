@@ -155,7 +155,11 @@ impl TagSet {
     }
 
     /// Bind this expression to one manifest's tag table.
-    pub fn against<'a>(&self, tags: &'a [Tag]) -> Selection<'a> {
+    ///
+    /// `entries` is how many entries that manifest holds, which decides
+    /// whether a tag can be optional content at all — see the gate rule
+    /// below.
+    pub fn against<'a>(&self, tags: &'a [Tag], entries: usize) -> Selection<'a> {
         let groups = self
             .groups
             .iter()
@@ -173,7 +177,16 @@ impl TagSet {
         // so every value of it would otherwise pass — which is how a 37 GiB
         // texture pack ends up in a plan nobody asked for. Those become gates:
         // tags that must *not* cover an entry, unless opted in by name.
+        //
+        // Except for a tag that covers the *whole* manifest. Such a tag
+        // separates nothing, so gating on it removes everything, which is
+        // never what "this is optional content" can have meant. Warcraft I
+        // Remastered is the case that found this: its manifest tags all 746
+        // entries `Debug` *and* `Release`, and WoW's expression names neither,
+        // so the plan came out empty rather than complete. A category that
+        // carries no information cannot withhold anything either.
         let named = |name: &str| self.groups.iter().flatten().any(|n| n == name);
+        let covers_everything = |tag: &Tag| entries > 0 && (0..entries).all(|i| tag.covers(i));
         let gates = tags
             .iter()
             .enumerate()
@@ -181,6 +194,7 @@ impl TagSet {
                 !named(&tag.name)
                     && !self.allow.iter().any(|a| a == &tag.name)
                     && !tags.iter().any(|t| t.kind == tag.kind && named(&t.name))
+                    && !covers_everything(tag)
             })
             .map(|(i, _)| i)
             .collect();
@@ -190,9 +204,9 @@ impl TagSet {
 
     /// The optional content a manifest offers that this expression is silent
     /// about — the names a user could opt in to.
-    pub fn optional_names(&self, tags: &[Tag]) -> Vec<String> {
+    pub fn optional_names(&self, tags: &[Tag], entries: usize) -> Vec<String> {
         let mut names: Vec<String> = self
-            .against(tags)
+            .against(tags, entries)
             .gates
             .iter()
             .map(|&i| tags[i].name.clone())
@@ -319,7 +333,7 @@ impl InstallManifest {
 
     /// The entries `tags` selects, in manifest order.
     pub fn select(&self, tags: &TagSet) -> Vec<&InstallEntry> {
-        let selection = tags.against(&self.tags);
+        let selection = tags.against(&self.tags, self.entries.len());
         self.entries
             .iter()
             .enumerate()
@@ -417,7 +431,7 @@ impl DownloadManifest {
     /// [`Self::select`] sorts its result, which loses the index a tag's mask
     /// is addressed by; attribution needs the positions themselves.
     pub fn selected_indices(&self, tags: &TagSet) -> Vec<usize> {
-        let selection = tags.against(&self.tags);
+        let selection = tags.against(&self.tags, self.entries.len());
         (0..self.entries.len()).filter(|i| selection.selects(*i)).collect()
     }
 
@@ -427,7 +441,7 @@ impl DownloadManifest {
     /// be playable before the download finishes. Ties break on the key so the
     /// result is deterministic across runs, which matters for resume.
     pub fn select(&self, tags: &TagSet) -> Vec<DownloadEntry> {
-        let selection = tags.against(&self.tags);
+        let selection = tags.against(&self.tags, self.entries.len());
         let mut selected: Vec<DownloadEntry> = self
             .entries
             .iter()
@@ -441,7 +455,7 @@ impl DownloadManifest {
 
     /// Total encoded bytes `tags` selects, without materialising the list.
     pub fn selected_size(&self, tags: &TagSet) -> u64 {
-        let selection = tags.against(&self.tags);
+        let selection = tags.against(&self.tags, self.entries.len());
         self.entries
             .iter()
             .enumerate()
@@ -452,7 +466,7 @@ impl DownloadManifest {
 
     /// Optional content this build offers that `tags` does not ask for.
     pub fn optional_names(&self, tags: &TagSet) -> Vec<String> {
-        tags.optional_names(&self.tags)
+        tags.optional_names(&self.tags, self.entries.len())
     }
 }
 
@@ -732,6 +746,39 @@ mod tests {
             selected.iter().map(|e| e.size).sum::<u64>()
         );
         assert_eq!(m.selected_size(&tags), 4000);
+    }
+
+    #[test]
+    fn a_category_that_separates_nothing_cannot_withhold_anything() {
+        // Warcraft I Remastered, reduced: its download manifest tags *every*
+        // entry `Debug` and *every* entry `Release`, and a WoW-shaped tag
+        // expression names neither. Gating on an unnamed category then
+        // removed all 746 files and the plan came out empty — a complete
+        // install reported as nothing to do.
+        //
+        // The rule that fixes it is the one that keeps `HighRes` gated in the
+        // test below: a tag covering the whole manifest separates nothing, so
+        // it cannot be the optional half of anything.
+        let bytes = download(
+            &[
+                ("Windows", 2, &[0, 1, 2]),
+                ("enUS", 1, &[0, 1, 2]),
+                ("Debug", 3, &[0, 1, 2]),
+                ("Release", 3, &[0, 1, 2]),
+            ],
+            &[(1, 100, 0), (2, 200, 0), (3, 300, 0)],
+        );
+        let manifest = DownloadManifest::parse(&bytes).unwrap();
+
+        // Nothing names Debug or Release, exactly as `.build.info` would not.
+        let tags = TagSet::parse("Windows x86_64 EU? enUS speech?:Windows x86_64 EU? enUS text?");
+        assert_eq!(manifest.select(&tags).len(), 3, "the whole manifest, not none of it");
+        assert_eq!(manifest.selected_size(&tags), 600);
+        assert!(
+            manifest.optional_names(&tags).is_empty(),
+            "a category that covers everything is not on offer either — there is \
+             nothing to offer, and listing it invites opting in to the install itself"
+        );
     }
 
     #[test]

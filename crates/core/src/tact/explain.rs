@@ -152,6 +152,13 @@ pub struct TagRow {
     /// Whether this tag now excludes the entries it covers: optional content
     /// the expression is silent about and nobody opted in to.
     pub gated: bool,
+    /// What this tag covers in the manifest at all, selection aside.
+    ///
+    /// The only number that is still meaningful when nothing is selected,
+    /// and the one that says whether a name means anything here: a manifest
+    /// that tags no entry `enUS` and one that tags every entry `enUS` look
+    /// identical in [`TagRow::selected`] when the plan comes out empty.
+    pub covered: Tally,
     pub selected: Tally,
     pub missing: Tally,
 }
@@ -180,7 +187,7 @@ pub fn by_tag(
 ) -> TagReport {
     let named: Vec<&str> = tags.groups().flatten().map(String::as_str).collect();
     let defined: Vec<&Tag> = manifest.tags().iter().collect();
-    let selection = tags.against(manifest.tags());
+    let selection = tags.against(manifest.tags(), manifest.entries().len());
     let gated = selection.gated();
 
     let mut rows: Vec<TagRow> = defined
@@ -190,10 +197,19 @@ pub fn by_tag(
             kind: tag.kind,
             constrained: named.contains(&tag.name.as_str()),
             gated: gated.contains(&tag.name.as_str()),
+            covered: Tally::default(),
             selected: Tally::default(),
             missing: Tally::default(),
         })
         .collect();
+
+    for (index, entry) in manifest.entries().iter().enumerate() {
+        for (row, tag) in rows.iter_mut().zip(&defined) {
+            if tag.covers(index) {
+                row.covered.add(entry.size);
+            }
+        }
+    }
 
     // Walked by index, because a tag's mask addresses manifest positions —
     // the selected list has been sorted by then and cannot be indexed back.
