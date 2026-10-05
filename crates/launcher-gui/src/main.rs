@@ -393,6 +393,14 @@ enum Message {
     AddonAutoUpdate(String, String, Option<bool>),
     /// Hold one addon at a file id, or `None` to let it track its channel.
     AddonPin(String, String, Option<String>),
+    /// Open the version picker for one addon.
+    PickVersion(String, String, String, Option<String>),
+    /// The catalogue answered with the builds on offer.
+    VersionsListed(Box<Result<Vec<lightforge_core::addons::catalog::FileInfo>, String>>),
+    /// Install one exact build and pin the addon to it.
+    InstallVersion(String, String, String),
+    /// Close the picker without choosing.
+    CancelVersionPicker,
     /// Whether the next import pins to the versions the token names.
     ImportPinned(bool),
     /// Put Battle.net on this game's tile, so its Install button is reachable.
@@ -676,6 +684,19 @@ impl Download {
     }
 }
 
+/// One addon's builds, while the user chooses between them.
+#[derive(Debug, Clone)]
+struct VersionPicker {
+    provider: String,
+    id: String,
+    name: String,
+    /// The build installed now, so the list can say which one that is.
+    installed: Option<String>,
+    /// `None` while the catalogue is still answering.
+    builds: Option<Vec<lightforge_core::addons::catalog::FileInfo>>,
+    problem: Option<String>,
+}
+
 /// What the hand-off panel's one button does, which depends on how much is
 /// known about the product.
 ///
@@ -919,6 +940,9 @@ struct Lightforge {
     /// default: most tokens are someone saying which addons they use, not
     /// which builds of them.
     import_pinned: bool,
+    /// The version picker, when it is open: which addon, and the builds the
+    /// catalogue offers. `None` in the list means the fetch is still out.
+    version_picker: Option<VersionPicker>,
     /// Game families, as Blizzard's own catalogue names them, read out of the
     /// client's cache at startup. Empty on a prefix whose client has never
     /// run, which falls the hand-off back to the compiled-in families.
@@ -1071,6 +1095,7 @@ impl Lightforge {
             addon_filter: String::new(),
             addon_remove_armed: None,
             addon_menu_open: None,
+            version_picker: None,
             families: lightforge_core::families::Families::default(),
             import_pinned: false,
             addon_auto_done: Vec::new(),
@@ -2380,6 +2405,71 @@ impl Lightforge {
             Message::ImportPinned(on) => {
                 self.import_pinned = on;
                 Task::none()
+            }
+
+            Message::PickVersion(provider, id, name, installed) => {
+                self.addon_menu_open = None;
+                self.version_picker = Some(VersionPicker {
+                    provider: provider.clone(),
+                    id: id.clone(),
+                    name,
+                    installed,
+                    builds: None,
+                    problem: None,
+                });
+                Task::perform(
+                    addonwork::versions(
+                        self.http.clone(),
+                        self.selected.code.clone(),
+                        provider,
+                        id,
+                    ),
+                    |result| Message::VersionsListed(Box::new(result)),
+                )
+            }
+
+            Message::VersionsListed(result) => {
+                // Dropped on the floor if the picker was closed while the
+                // request was out: an answer to a question nobody is asking
+                // any more.
+                if let Some(picker) = self.version_picker.as_mut() {
+                    match *result {
+                        Ok(builds) => picker.builds = Some(builds),
+                        Err(e) => {
+                            picker.builds = Some(Vec::new());
+                            picker.problem = Some(e);
+                        }
+                    }
+                }
+                Task::none()
+            }
+
+            Message::CancelVersionPicker => {
+                self.version_picker = None;
+                Task::none()
+            }
+
+            Message::InstallVersion(provider, id, file_id) => {
+                self.version_picker = None;
+                let (tx, rx) = tokio::sync::watch::channel(addonwork::Progress::default());
+                self.addon_rx = Some(rx);
+                self.addons_busy = true;
+                self.addon_report = None;
+                self.addon_report_tab = AddonTab::Mine;
+                self.error = None;
+
+                Task::perform(
+                    addonwork::install_version(
+                        self.http.clone(),
+                        self.layout.clone(),
+                        self.selected.code.clone(),
+                        provider,
+                        id,
+                        file_id,
+                        tx,
+                    ),
+                    |result| Message::AddonsFinished(result.map(Box::new)),
+                )
             }
 
             Message::AddonPin(provider, id, file_id) => {
@@ -3732,9 +3822,10 @@ impl Lightforge {
         // every press that the card itself does not, and a `Stack` stops
         // delivering an event once a layer captures it, so nothing beneath
         // can be clicked while the dialog is up.
-        let card = match (&self.install_dialog, &self.uninstall_dialog) {
-            (Some(dialog), _) => Some(self.install_card(dialog)),
-            (_, Some(dialog)) => Some(self.uninstall_card(dialog)),
+        let card = match (&self.install_dialog, &self.uninstall_dialog, &self.version_picker) {
+            (Some(dialog), _, _) => Some(self.install_card(dialog)),
+            (_, Some(dialog), _) => Some(self.uninstall_card(dialog)),
+            (_, _, Some(picker)) => Some(self.version_card(picker)),
             _ => None,
         };
         let screen = match card {
@@ -4467,6 +4558,7 @@ impl Lightforge {
         &self,
         managed: &addonwork::Managed,
         version: &str,
+        name: &str,
     ) -> Element<'static, Message> {
         let (provider, id) = (managed.provider.clone(), managed.id.clone());
         let default_auto = self.config.addon_auto_update;
@@ -4508,6 +4600,22 @@ impl Lightforge {
                     false => "Follow the default (off)".to_owned(),
                 },
                 Message::AddonAutoUpdate(provider.clone(), id.clone(), None),
+            ));
+        }
+
+        // Choosing an older build on purpose, which is the other half of
+        // pinning: "Pin to <version>" holds what is here, this goes and gets
+        // something else. Only CurseForge publishes a build list, so this is
+        // the only provider it is offered for.
+        if managed.provider.eq_ignore_ascii_case("curse") {
+            rows = rows.push(entry(
+                "Choose a version…".to_owned(),
+                Message::PickVersion(
+                    provider.clone(),
+                    id.clone(),
+                    name.to_owned(),
+                    managed.file_id.clone(),
+                ),
             ));
         }
 
@@ -5769,7 +5877,7 @@ impl Lightforge {
                         true => None,
                         false => Some(key.clone()),
                     })),
-                    open.then(|| self.addon_row_menu(managed, &addon.version)),
+                    open.then(|| self.addon_row_menu(managed, &addon.version, &addon.title)),
                 ));
             }
             body = body.push(container(line).padding(theme::MD).style(theme::row));
@@ -6675,6 +6783,116 @@ impl Lightforge {
     }
 
     /// The uninstall confirmation's card.
+    /// The builds one addon offers, for choosing an older one on purpose.
+    ///
+    /// Choosing here always pins. Installing an older build without pinning
+    /// would be undone by the next pass within the minute, which is not a
+    /// choice so much as a delay.
+    fn version_card<'a>(&'a self, picker: &'a VersionPicker) -> Element<'a, Message> {
+        let mut body = column![
+            text(format!("Choose a build of {}", picker.name)).size(theme::TITLE),
+        ]
+        .spacing(theme::SM)
+        .width(Length::Fixed(560.0));
+
+        body = body.extend(
+            self.hint(
+                "Installing a build from here pins the addon to it, so nothing moves it \
+                 again until you unpin. Only CurseForge publishes a build list.",
+            )
+            .map(Element::from),
+        );
+
+        match picker.builds.as_deref() {
+            None => body = body.push(muted("asking the catalogue…".to_owned(), theme::BODY)),
+            Some([]) => {
+                body = body.push(empty(
+                    match &picker.problem {
+                        Some(e) => e.as_str(),
+                        None => "This provider publishes no build list.",
+                    },
+                    "Only CurseForge offers older builds; the others ship one.",
+                ));
+            }
+            Some(builds) => {
+                let mut list = column![].spacing(theme::XS);
+                for build in builds {
+                    let installed = picker.installed.as_deref() == Some(build.file_id.as_str());
+                    let mut head = row![text(
+                        build
+                            .display_name
+                            .clone()
+                            .or_else(|| build.file_name.clone())
+                            .unwrap_or_else(|| build.file_id.clone()),
+                    )
+                    .size(theme::BODY)]
+                    .spacing(theme::SM)
+                    .align_y(Alignment::Center);
+
+                    // The release type in the provider's own words, because
+                    // that is what the author labelled the build with.
+                    if let Some(kind) = &build.release_type {
+                        if kind != "release" {
+                            head = head.push(pill(kind.clone(), theme::UPDATE));
+                        }
+                    }
+                    if installed {
+                        head = head.push(pill("installed".to_owned(), theme::MUTED));
+                    }
+
+                    let mut line = row![column![
+                        head,
+                        muted(
+                            match (&build.file_date, build.file_length) {
+                                (Some(date), Some(size)) =>
+                                    format!("{} · {:.1} MB", day_of(date), size as f64 / 1e6),
+                                (Some(date), None) => day_of(date),
+                                (None, Some(size)) => format!("{:.1} MB", size as f64 / 1e6),
+                                (None, None) => String::new(),
+                            },
+                            theme::CAPTION,
+                        ),
+                    ]
+                    .spacing(theme::XS)]
+                    .spacing(theme::SM)
+                    .align_y(Alignment::Center);
+
+                    line = line.push(Space::new().width(Length::Fill));
+                    line = line.push(
+                        secondary(
+                            "Pin to this",
+                            Message::InstallVersion(
+                                picker.provider.clone(),
+                                picker.id.clone(),
+                                build.file_id.clone(),
+                            ),
+                        )
+                        .enabled(!self.addons_busy),
+                    );
+                    list = list.push(container(line).padding(theme::MD).style(theme::row));
+                }
+                body = body.push(
+                    scrollable(list)
+                        .height(Length::Fixed(340.0))
+                        .style(theme::scrollbar),
+                );
+            }
+        }
+
+        body = body.push(
+            row![
+                Space::new().width(Length::Fill),
+                secondary("Cancel", Message::CancelVersionPicker).enabled(true),
+            ]
+            .spacing(theme::SM),
+        );
+
+        container(container(body).padding(theme::LG).style(theme::floating))
+            .center(Length::Fill)
+            .padding(theme::XL)
+            .into()
+    }
+
     fn uninstall_card<'a>(&'a self, dialog: &'a UninstallDialog) -> Element<'a, Message> {
         let mut body = column![].spacing(theme::MD);
         let mut ready = false;
@@ -7204,6 +7422,15 @@ fn section<'a>(title: impl Into<String>, body: Element<'a, Message>) -> Element<
 
 /// A fixed-width label beside its control, so every control in a section
 /// starts on the same line.
+/// The day out of an RFC 3339 timestamp, which is all a build list needs.
+///
+/// Not parsed into a date type: the string is the provider's, the only part
+/// anyone reads is the day, and a malformed one should show as itself rather
+/// than disappear behind an error.
+fn day_of(timestamp: &str) -> String {
+    timestamp.split('T').next().unwrap_or(timestamp).to_owned()
+}
+
 /// A channel as a `pick_list` option; the widget needs `Display`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ChannelChoice(Channel);

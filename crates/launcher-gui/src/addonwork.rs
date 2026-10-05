@@ -565,6 +565,64 @@ pub async fn install_one(
     .await
 }
 
+/// Every build the catalogue offers for one addon, newest first.
+///
+/// Only CurseForge publishes a file list, so this is the one provider a
+/// version picker can offer choices for. An empty list is the honest answer
+/// for the others rather than an error: they have one build, and that build
+/// is what is already installed.
+pub async fn versions(
+    http: Option<Http>,
+    code: ProductCode,
+    provider: String,
+    id: String,
+) -> Result<Vec<lightforge_core::addons::catalog::FileInfo>, String> {
+    if addons::Provider::parse(&provider) != addons::Provider::Curse {
+        return Ok(Vec::new());
+    }
+    let (Some(http), Some(catalog)) = (http, catalog()) else {
+        return Err("no addon catalog is configured".to_owned());
+    };
+    catalog
+        .files(&http, &id, addons::flavor_of(&code), VERSION_CHOICES)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// How many builds back a picker offers.
+///
+/// The proxy caps it at fifty. Twenty is a year of releases for an addon
+/// that ships monthly and a fortnight for one that ships nightly, and past
+/// that nobody is choosing a version, they are archaeology.
+const VERSION_CHOICES: usize = 20;
+
+/// Install one exact build and hold the addon at it.
+///
+/// Both halves matter: naming the file is what makes a downgrade possible,
+/// and pinning is what stops the next pass undoing it a minute later.
+pub async fn install_version(
+    http: Option<Http>,
+    layout: Layout,
+    code: ProductCode,
+    provider: String,
+    id: String,
+    file_id: String,
+    tx: tokio::sync::watch::Sender<Progress>,
+) -> Result<Report, String> {
+    run(
+        http,
+        layout,
+        code,
+        vec![Request { provider, id, version_id: Some(file_id), channel: None }],
+        Mode { pinned: true, reinstall: false },
+        // No channel is consulted: naming the file *is* the choice, and the
+        // channel only ever decides which file to pick when nobody has.
+        Channel::default(),
+        tx,
+    )
+    .await
+}
+
 /// Fetch one addon again and replace the folders it wrote.
 ///
 /// A pin is read from the ledger here rather than passed in: repairing a
