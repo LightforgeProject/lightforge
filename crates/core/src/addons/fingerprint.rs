@@ -23,6 +23,9 @@
 
 use std::path::Path;
 
+/// The one file WoW loads from an addon folder without being told to.
+const IMPLICITLY_LOADED: &str = "Bindings.xml";
+
 /// Seed CurseForge hashes with. Not a choice of ours.
 const SEED: u32 = 1;
 
@@ -91,53 +94,106 @@ pub fn of_file(path: &Path) -> Option<u32> {
     std::fs::read(path).ok().map(|bytes| of_bytes(&bytes))
 }
 
-/// The fingerprint of an addon folder.
+/// The fingerprint of an addon folder, as CurseForge computes it.
 ///
-/// **Unverified against the authority.** CurseForge publishes a fingerprint
-/// per module and this is our attempt to reproduce it; until a computed value
-/// has been matched against a published one for an addon we installed from
-/// CurseForge, treat a non-match as "we hash the wrong thing" rather than
-/// "this addon is unknown". [`crate::addons::catalog::FileInfo::fingerprints`]
-/// carries the published numbers for exactly that comparison.
+/// Reverse-engineered against 34 folders from two unrelated addons whose
+/// published fingerprints the catalog states, and it reproduces all 34. The
+/// parts that are not guessable from the outside, in the order they bite:
 ///
-/// The working rule is the folder's own `.toc` — `BigWigs/BigWigs.toc` — which
-/// is the one file every addon folder has, is named after the folder, and is
-/// what the client reads to know the addon exists at all. A flavor suffix is
-/// accepted because a modern addon ships `BigWigs_Mainline.toc` beside or
-/// instead of the plain one.
+/// 1. **Not every file counts.** The set is the folder's `.toc` files, the
+///    paths those tocs *load*, and the files the client loads implicitly.
+///    Only unconditionally, though: a line carrying a `[...]` clause —
+///    `BossPrototype.lua [ExcludeLoadGameType vanilla]` — is out, and so is
+///    a file nothing references. BigWigs has 338 files on disk and a
+///    fingerprint over 19.
+/// 2. **Each file is hashed, then the hashes are hashed.** Per file it is
+///    [`of_bytes`]; the folder is those numbers written out as decimal,
+///    concatenated, and hashed again.
+/// 3. **Sorted by value, not by name.** Ascending numeric order of the file
+///    hashes themselves, which is why no filename ordering ever matched.
+///
+/// `None` when the folder declares nothing — no toc, or a toc that loads
+/// nothing that exists. An addon with no fingerprint cannot be adopted,
+/// which is the honest outcome rather than hashing an arbitrary subset.
 pub fn of_folder(dir: &Path) -> Option<u32> {
-    of_file(&toc_in(dir)?)
-}
-
-/// The `.toc` that names an addon folder, if one is there.
-///
-/// Exact name first, then a suffixed variant: an addon that ships only
-/// `BigWigs_Mainline.toc` is still BigWigs, and picking the first `.toc` in
-/// directory order would be picking at random.
-fn toc_in(dir: &Path) -> Option<std::path::PathBuf> {
-    let folder = dir.file_name()?.to_string_lossy().to_string();
-
-    let exact = dir.join(format!("{folder}.toc"));
-    if exact.is_file() {
-        return Some(exact);
+    let mut hashes: Vec<u32> = declared(dir)
+        .iter()
+        .filter_map(|path| of_file(path))
+        .collect();
+    if hashes.is_empty() {
+        return None;
     }
 
-    let mut suffixed: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
-        .ok()?
+    hashes.sort_unstable();
+    let joined: String = hashes.iter().map(u32::to_string).collect();
+    Some(murmur2(joined.as_bytes(), SEED))
+}
+
+/// The files a folder's tocs declare, plus the tocs themselves.
+///
+/// A `BTreeSet` so a file two tocs both load is counted once and the result
+/// does not depend on directory order. Paths are Windows-style in a toc and
+/// are read as relative to the addon folder; anything that escapes it, or
+/// that is not actually there, is dropped rather than followed.
+fn declared(dir: &Path) -> std::collections::BTreeSet<std::path::PathBuf> {
+    let mut out = std::collections::BTreeSet::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+
+    let tocs: Vec<std::path::PathBuf> = entries
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| {
-            let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_string()) else {
-                return false;
-            };
-            name.to_lowercase().ends_with(".toc")
-                && name.to_lowercase().starts_with(&format!("{}_", folder.to_lowercase()))
+            path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("toc"))
         })
         .collect();
-    // Sorted so the answer does not depend on the order the filesystem
-    // happened to hand them back.
-    suffixed.sort();
-    suffixed.into_iter().next()
+
+    // Loaded by the client from an addon folder whether a toc mentions it or
+    // not, so CurseForge counts it and a toc-only reading misses it. This
+    // was the difference between 32 of 34 folders matching and all 34.
+    let bindings = dir.join(IMPLICITLY_LOADED);
+    if bindings.is_file() {
+        out.insert(bindings);
+    }
+
+    for toc in tocs {
+        let Ok(text) = std::fs::read_to_string(&toc) else { continue };
+        out.insert(toc.clone());
+
+        for line in text.lines() {
+            let line = line.trim();
+            // Metadata, blanks, and anything load-conditional.
+            if line.is_empty() || line.starts_with('#') || line.contains('[') {
+                continue;
+            }
+            let Some(path) = under(dir, line) else { continue };
+            if path.is_file() {
+                out.insert(path);
+            }
+        }
+    }
+    out
+}
+
+/// A toc's `Libs\AceGUI-3.0\AceGUI-3.0.lua` as a path inside the folder.
+///
+/// Refuses anything that would leave it. A toc is a text file an addon ships,
+/// so it is input like any other, and `..\..\..\something` must resolve to
+/// nothing rather than to a file outside the addon.
+fn under(dir: &Path, line: &str) -> Option<std::path::PathBuf> {
+    let mut path = dir.to_path_buf();
+    for part in line.split(['\\', '/']) {
+        let part = part.trim();
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." || part.contains(':') {
+            return None;
+        }
+        path.push(part);
+    }
+    (path != dir).then_some(path)
 }
 
 #[cfg(test)]
@@ -182,30 +238,65 @@ mod tests {
     }
 
     #[test]
-    fn a_folders_toc_is_the_one_named_after_it() {
-        let dir = std::env::temp_dir().join("lightforge-fingerprint-toc/BigWigs");
+    fn only_what_the_toc_loads_unconditionally_is_fingerprinted() {
+        let dir = std::env::temp_dir().join("lightforge-fingerprint-declared/BigWigs_Core");
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(dir.join("Libs")).unwrap();
 
-        // A decoy that sorts first and is not this addon's.
-        std::fs::write(dir.join("AAA.toc"), b"wrong").unwrap();
-        std::fs::write(dir.join("BigWigs_Mainline.toc"), b"## Title: BigWigs").unwrap();
+        std::fs::write(
+            dir.join("BigWigs_Core.toc"),
+            "## Interface: 110005\n\
+             ## Title: Core\n\
+             \n\
+             Constants.lua\n\
+             BossPrototype.lua [ExcludeLoadGameType vanilla]\n\
+             Libs\\Ace.lua\n\
+             Missing.lua\n",
+        )
+        .unwrap();
+        for name in ["Constants.lua", "BossPrototype.lua", "Vestigial.xml"] {
+            std::fs::write(dir.join(name), format!("-- {name}")).unwrap();
+        }
+        std::fs::write(dir.join("Libs/Ace.lua"), b"-- ace").unwrap();
+
+        let declared = declared(&dir);
+        let names: Vec<String> = declared
+            .iter()
+            .map(|p| p.strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/"))
+            .collect();
         assert_eq!(
-            toc_in(&dir).unwrap().file_name().unwrap(),
-            "BigWigs_Mainline.toc",
-            "a suffixed toc belongs to the folder; an unrelated one does not"
+            names,
+            ["BigWigs_Core.toc", "Constants.lua", "Libs/Ace.lua"],
+            "the toc itself and what it loads without a condition — a \
+             conditional line, a file nothing references, and a line naming \
+             a file that is not there are all out"
         );
 
-        // The exact name wins when both are present.
-        std::fs::write(dir.join("BigWigs.toc"), b"## Title: BigWigs").unwrap();
-        assert_eq!(toc_in(&dir).unwrap().file_name().unwrap(), "BigWigs.toc");
-
-        // And a folder with no toc of its own has no fingerprint.
+        // A folder with nothing declared has no fingerprint rather than a
+        // hash of whatever happened to be lying in it.
         let bare = dir.parent().unwrap().join("Empty");
         std::fs::create_dir_all(&bare).unwrap();
         assert_eq!(of_folder(&bare), None);
 
         let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn a_toc_cannot_reach_outside_its_own_folder() {
+        let root = std::env::temp_dir().join("lightforge-fingerprint-escape");
+        let dir = root.join("Addon");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(root.join("secret.lua"), b"-- not yours").unwrap();
+
+        // A toc is a text file the addon ships, so it is untrusted input.
+        assert_eq!(under(&dir, r"..\secret.lua"), None);
+        assert_eq!(under(&dir, "../secret.lua"), None);
+        assert_eq!(under(&dir, r"C:\Windows\win.ini"), None);
+        assert_eq!(under(&dir, ""), None);
+        assert_eq!(under(&dir, r"Libs\Ace.lua"), Some(dir.join("Libs").join("Ace.lua")));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
