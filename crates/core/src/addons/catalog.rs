@@ -204,6 +204,14 @@ pub struct FileInfo {
     pub md5: Option<String>,
     #[serde(default)]
     pub folders: Vec<String>,
+    /// Folder name to the fingerprint the provider expects it to hash to.
+    ///
+    /// The authority's own statement of what a correct install looks like,
+    /// which is the only way to check our hashing is right: a fingerprint
+    /// that is wrong matches nothing, and matching nothing is also what a
+    /// genuinely unknown addon looks like.
+    #[serde(default)]
+    pub fingerprints: std::collections::BTreeMap<String, u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

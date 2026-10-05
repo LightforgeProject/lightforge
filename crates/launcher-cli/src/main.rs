@@ -263,6 +263,23 @@ enum Command {
         #[arg(long, default_value_t = 32)]
         concurrency: usize,
     },
+    /// Fingerprint each installed addon folder, and say what the catalog
+    /// expects for the ones Lightforge installed.
+    ///
+    /// The check that the hashing is right: a folder we installed from
+    /// CurseForge must hash to the number CurseForge publishes for it. A
+    /// mismatch means we hash the wrong bytes, which is indistinguishable
+    /// from "unknown addon" once matching starts.
+    AddonFingerprints {
+        #[arg(long, default_value = "wow")]
+        product: String,
+        /// Read this AddOns directory instead of the product's own.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Base URL of the addon catalog, or a fixture directory.
+        #[arg(long)]
+        catalog: Option<String>,
+    },
     /// List the addons installed for a product.
     Addons {
         #[arg(long, default_value = "wow")]
@@ -1665,6 +1682,74 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        Command::AddonFingerprints { product, path, catalog } => {
+            use lightforge_core::addons::catalog::Catalog;
+            use lightforge_core::addons::install::Ledger;
+            use lightforge_core::addons::manage;
+            use lightforge_core::addons::{self, fingerprint};
+            use lightforge_core::net::Http;
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let dir = path.unwrap_or_else(|| layout.addons_dir(&code));
+            let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &dir, &code))
+                .unwrap_or_default();
+
+            // What the catalog says each folder of each installed build
+            // should hash to, gathered per addon so the comparison below is
+            // a lookup rather than a guess.
+            let mut expected: std::collections::BTreeMap<String, u32> = Default::default();
+            if let Some(origin) = addon_origin(catalog.as_deref(), &dirs) {
+                let client = Catalog::new(origin);
+                let http = Http::new().context("http client")?;
+                for record in ledger.addons.iter().filter(|r| r.provider == "curse") {
+                    let files = client
+                        .files(&http, &record.id, addons::flavor_of(&code), 50)
+                        .await
+                        .unwrap_or_default();
+                    let Some(file) = files
+                        .iter()
+                        .find(|f| Some(&f.file_id) == record.file_id.as_ref())
+                    else {
+                        continue;
+                    };
+                    expected.extend(file.fingerprints.clone());
+                }
+            }
+
+            println!("{:<32} {:>12} {:>12}", "folder", "computed", "published");
+            let mut checked = 0;
+            let mut agreed = 0;
+            for addon in addons::scan(&dir).unwrap_or_default() {
+                let computed = fingerprint::of_folder(&dir.join(&addon.folder));
+                let published = expected.get(&addon.folder).copied();
+                let verdict = match (computed, published) {
+                    (Some(a), Some(b)) => {
+                        checked += 1;
+                        match a == b {
+                            true => {
+                                agreed += 1;
+                                "match"
+                            }
+                            false => "MISMATCH",
+                        }
+                    }
+                    (None, _) => "no toc",
+                    (_, None) => "",
+                };
+                println!(
+                    "{:<32} {:>12} {:>12}  {verdict}",
+                    addon.folder,
+                    computed.map(|v| v.to_string()).unwrap_or_else(|| "—".into()),
+                    published.map(|v| v.to_string()).unwrap_or_else(|| "—".into()),
+                );
+            }
+            match checked {
+                0 => println!("\nnothing to check against — no catalog, or no CurseForge addons"),
+                n => println!("\n{agreed}/{n} folders hash to what the catalog publishes"),
+            }
+        }
+
         Command::Addons { product, path, token } => {
             use lightforge_core::addons;
 

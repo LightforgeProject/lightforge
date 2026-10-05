@@ -21,6 +21,7 @@
 
 pub mod browse;
 pub mod catalog;
+pub mod fingerprint;
 pub mod install;
 pub mod manage;
 pub mod providers;

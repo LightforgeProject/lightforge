@@ -5,6 +5,10 @@
     "file_id": "800800",
     "file_length": 1234567,
     "file_name": "Addon-800800.zip",
+    "fingerprints": {
+      "BigWigs": 1234567890,
+      "BigWigs_Core": 987654321
+    },
     "folders": [
       "BigWigs",
       "BigWigs_Core"
