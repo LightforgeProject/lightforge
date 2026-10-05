@@ -19,6 +19,7 @@
 //! File bytes are fetched straight from CurseForge's CDN using the URL the
 //! proxy returns; they never transit Tuxcore.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -179,6 +180,34 @@ pub struct Project {
     /// [`crate::addons::browse`].
     #[serde(default)]
     pub download_count: u64,
+}
+
+/// A project the catalog recognised from a folder's fingerprint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Match {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub file_id: Option<String>,
+    /// Every folder of the file this fingerprint belongs to.
+    ///
+    /// A match on one folder identifies the whole package, and the package
+    /// is what a ledger entry has to record: adopting one folder of BigWigs
+    /// and leaving twelve unmanaged would be worse than adopting none.
+    #[serde(default)]
+    pub folders: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FingerprintRequest<'a> {
+    fingerprints: &'a [u32],
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct MatchReply {
+    #[serde(default)]
+    matches: BTreeMap<String, Match>,
 }
 
 /// One file a project offers, as the catalog describes it.
@@ -347,6 +376,34 @@ impl Catalog {
                     self.url(&format!("project/{id}/files")).expect("http origin")
                 );
                 Ok(http.get_json(&url).await?)
+            }
+        }
+    }
+
+    /// Which project each folder fingerprint belongs to.
+    ///
+    /// One call for a whole library: the answer is keyed by the fingerprints
+    /// *we* sent, so a caller holding folder-to-hash can turn it into
+    /// folder-to-project without a second lookup. Hashes the catalog does
+    /// not recognise are simply absent.
+    pub async fn match_fingerprints(
+        &self,
+        http: &Http,
+        fingerprints: &[u32],
+    ) -> Result<BTreeMap<String, Match>, CatalogError> {
+        if fingerprints.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        match &self.origin {
+            Origin::Dir(_) => {
+                let reply: MatchReply = self.fixture("fingerprints.json")?;
+                Ok(reply.matches)
+            }
+            Origin::Http(_) => {
+                let url = self.url("fingerprints").expect("http origin");
+                let body = FingerprintRequest { fingerprints };
+                let reply: MatchReply = http.post_json(&url, &body).await?;
+                Ok(reply.matches)
             }
         }
     }

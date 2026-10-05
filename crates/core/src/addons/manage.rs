@@ -517,6 +517,112 @@ pub fn set_ignored(
     Ok(())
 }
 
+/// One addon that was recognised and is now managed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Adopted {
+    pub name: String,
+    pub folders: Vec<String>,
+}
+
+/// Recognise hand-installed addons and take them into the ledger.
+///
+/// An addon Lightforge did not install has no provider and no id, so it can
+/// be listed and nothing else — no update, no channel, no removal. Hashing
+/// each unmanaged folder the way CurseForge does (see
+/// [`crate::addons::fingerprint`]) and asking the catalog whose it is turns
+/// it into an ordinary managed addon.
+///
+/// Conservative in both directions. A folder already owned by a record is
+/// left alone, so this cannot take an addon away from the entry that
+/// installed it. And a match is only written for folders that are *actually
+/// present*: the catalog answers with the whole package, and recording a
+/// folder that is not there would have removal promise to delete it.
+pub async fn adopt(
+    http: &Http,
+    catalog: Option<&Catalog>,
+    options: &Options,
+) -> Result<Vec<Adopted>, ManageError> {
+    use crate::addons::fingerprint;
+
+    let Some(catalog) = catalog else {
+        return Ok(Vec::new());
+    };
+    let mut ledger = Ledger::load(&options.ledger_path)?;
+
+    // Folders a record already claims. Not just the ones on disk: a record
+    // whose folders are missing is still that addon's, and adopting over it
+    // would leave two records fighting for one name.
+    let claimed: std::collections::BTreeSet<String> = ledger
+        .addons
+        .iter()
+        .flat_map(|record| record.folders.iter().cloned())
+        .collect();
+
+    let present: Vec<String> = super::scan(&options.addons_dir)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|addon| addon.folder)
+        .collect();
+
+    // Fingerprint to folder, so the catalog's answer — which is keyed by the
+    // hashes we sent — can be read back as "this folder is that addon".
+    let mut by_print: std::collections::BTreeMap<u32, String> = Default::default();
+    for folder in present.iter().filter(|f| !claimed.contains(*f)) {
+        if let Some(print) = fingerprint::of_folder(&options.addons_dir.join(folder)) {
+            by_print.insert(print, folder.clone());
+        }
+    }
+    if by_print.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let prints: Vec<u32> = by_print.keys().copied().collect();
+    let matches = catalog.match_fingerprints(http, &prints).await?;
+
+    let on_disk: std::collections::BTreeSet<&str> =
+        present.iter().map(String::as_str).collect();
+    let mut adopted = Vec::new();
+
+    for (print, found) in matches {
+        let Ok(print) = print.parse::<u32>() else { continue };
+        let Some(folder) = by_print.get(&print) else { continue };
+
+        // The package's folders, limited to what is here and not already
+        // somebody else's. The folder that matched is included even if the
+        // catalog's list somehow omits it.
+        let mut folders: Vec<String> = found
+            .folders
+            .iter()
+            .filter(|f| on_disk.contains(f.as_str()) && !claimed.contains(*f))
+            .cloned()
+            .collect();
+        if !folders.contains(folder) {
+            folders.push(folder.clone());
+        }
+        folders.sort();
+        folders.dedup();
+
+        let name = found.name.clone().unwrap_or_else(|| folder.clone());
+        ledger.record(Record {
+            provider: "curse".to_owned(),
+            id: found.id.clone(),
+            name: name.clone(),
+            file_id: found.file_id.clone(),
+            folders: folders.clone(),
+            // Adopted, not installed: the build on disk is whatever the user
+            // put there, and the day it arrived is not ours to claim.
+            ..Record::default()
+        });
+        adopted.push(Adopted { name, folders });
+    }
+
+    if !adopted.is_empty() {
+        ledger.save(&options.ledger_path)?;
+    }
+    adopted.sort_by_key(|a| a.name.to_lowercase());
+    Ok(adopted)
+}
+
 /// Set or clear one addon's auto-update choice.
 ///
 /// Clearing it (`None`) returns the addon to following the app-wide default,
@@ -772,6 +878,43 @@ mod tests {
         assert!(!record.updates_itself(false));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn adoption_only_claims_folders_that_are_free_and_present() {
+        // The decision adoption makes, without the network: given what the
+        // catalog recognised, which folders may a new record claim?
+        let claimed: std::collections::BTreeSet<String> =
+            ["BigWigs".to_owned(), "BigWigs_Core".to_owned()].into_iter().collect();
+        let on_disk: std::collections::BTreeSet<&str> =
+            ["BigWigs", "BigWigs_Core", "Details", "Details_Streamer"].into_iter().collect();
+
+        let claim = |matched: &str, package: &[&str]| -> Vec<String> {
+            let mut folders: Vec<String> = package
+                .iter()
+                .filter(|f| on_disk.contains(*f) && !claimed.contains(**f))
+                .map(|f| (*f).to_owned())
+                .collect();
+            if !folders.iter().any(|f| f == matched) {
+                folders.push(matched.to_owned());
+            }
+            folders.sort();
+            folders.dedup();
+            folders
+        };
+
+        // The whole package, because a match on one folder identifies all of
+        // it — adopting Details and leaving Details_Streamer unmanaged would
+        // be worse than adopting neither.
+        assert_eq!(claim("Details", &["Details", "Details_Streamer"]), ["Details", "Details_Streamer"]);
+
+        // A folder the catalog lists but that is not installed is not
+        // claimed: recording it would make Remove promise to delete it.
+        assert_eq!(claim("Details", &["Details", "Details_Nope"]), ["Details"]);
+
+        // And nothing is taken from a record that already owns it, which is
+        // what stops adoption competing with the entry that installed it.
+        assert_eq!(claim("Details", &["Details", "BigWigs_Core"]), ["Details"]);
     }
 
     #[test]

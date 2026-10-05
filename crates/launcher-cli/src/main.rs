@@ -280,6 +280,20 @@ enum Command {
         #[arg(long)]
         catalog: Option<String>,
     },
+    /// Recognise hand-installed addons by their contents and manage them.
+    AddonAdopt {
+        #[arg(long, default_value = "wow")]
+        product: String,
+        /// Read this AddOns directory instead of the product's own.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Write the ledger here instead of beside the product's.
+        #[arg(long)]
+        ledger: Option<PathBuf>,
+        /// Base URL of the addon catalog, or a fixture directory.
+        #[arg(long)]
+        catalog: Option<String>,
+    },
     /// List the addons installed for a product.
     Addons {
         #[arg(long, default_value = "wow")]
@@ -1682,6 +1696,44 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        Command::AddonAdopt { product, path, ledger, catalog } => {
+            use lightforge_core::addons::catalog::Catalog;
+            use lightforge_core::addons::manage;
+            use lightforge_core::addons::{self};
+            use lightforge_core::net::Http;
+
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let dir = path.unwrap_or_else(|| layout.addons_dir(&code));
+            let options = manage::Options {
+                flavor: addons::flavor_of(&code).to_owned(),
+                addons_dir: dir.clone(),
+                ledger_path: ledger
+                    .unwrap_or_else(|| manage::ledger_path(dirs.data_dir(), &dir, &code)),
+                pinned: false,
+                reinstall: false,
+                channel: addon_channel(&dirs),
+            };
+            let client = addon_origin(catalog.as_deref(), &dirs).map(Catalog::new);
+            let http = Http::new().context("http client")?;
+
+            println!("addons dir      {}", options.addons_dir.display());
+            println!("ledger          {}\n", options.ledger_path.display());
+
+            let adopted = manage::adopt(&http, client.as_ref(), &options)
+                .await
+                .context("adopting hand-installed addons")?;
+            match adopted.len() {
+                0 => println!("nothing recognised"),
+                n => {
+                    for item in &adopted {
+                        println!("{:<34} {}", item.name, item.folders.join(", "));
+                    }
+                    println!("\n{n} adopted");
+                }
+            }
+        }
+
         Command::AddonFingerprints { product, path, catalog } => {
             use lightforge_core::addons::catalog::Catalog;
             use lightforge_core::addons::install::Ledger;

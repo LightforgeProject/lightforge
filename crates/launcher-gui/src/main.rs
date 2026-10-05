@@ -393,6 +393,10 @@ enum Message {
     AddonAutoUpdate(String, String, Option<bool>),
     /// Hold one addon at a file id, or `None` to let it track its channel.
     AddonPin(String, String, Option<String>),
+    /// Recognise hand-installed addons and manage them from now on.
+    AdoptAddons,
+    /// What adoption found.
+    AdoptFinished(Box<Result<Vec<lightforge_core::addons::manage::Adopted>, String>>),
     /// Open the version picker for one addon.
     PickVersion(String, String, String, Option<String>),
     /// The catalogue answered with the builds on offer.
@@ -2405,6 +2409,44 @@ impl Lightforge {
             Message::ImportPinned(on) => {
                 self.import_pinned = on;
                 Task::none()
+            }
+
+            Message::AdoptAddons => {
+                self.addons_busy = true;
+                self.error = None;
+                self.addon_auto_note = Some("looking up what is installed…".to_owned());
+                Task::perform(
+                    addonwork::adopt(
+                        self.http.clone(),
+                        self.layout.clone(),
+                        self.selected.code.clone(),
+                        self.config.addon_channel,
+                    ),
+                    |result| Message::AdoptFinished(Box::new(result)),
+                )
+            }
+
+            Message::AdoptFinished(result) => {
+                self.addons_busy = false;
+                match *result {
+                    Ok(adopted) => {
+                        self.addon_auto_note = Some(match adopted.len() {
+                            0 => "nothing new recognised — every addon here is \
+                                  either already managed or not on CurseForge"
+                                .to_owned(),
+                            1 => format!("{} is now managed", adopted[0].name),
+                            n => format!("{n} addons are now managed"),
+                        });
+                        Task::perform(
+                            addonwork::list(self.layout.clone(), self.selected.code.clone()),
+                            |listing| Message::AddonsListed(Box::new(listing)),
+                        )
+                    }
+                    Err(e) => {
+                        self.error = Some(e);
+                        Task::none()
+                    }
+                }
             }
 
             Message::PickVersion(provider, id, name, installed) => {
@@ -5618,7 +5660,48 @@ impl Lightforge {
         .padding(theme::MD)
         .style(theme::card);
 
+        // Offered only when there is something to offer it for. A button
+        // that does nothing on every press teaches people to ignore it, and
+        // a library installed entirely through Lightforge has nothing to
+        // recognise.
+        let unmanaged = self
+            .addons
+            .rows
+            .iter()
+            .filter(|row| row.managed.is_none() && row.child_of.is_none())
+            .count();
+
         let mut body = column![toolbar].spacing(theme::SM);
+
+        if unmanaged > 0 {
+            body = body.push(
+                container(
+                    row![
+                        column![
+                            text(match unmanaged {
+                                1 => "1 addon was installed by hand".to_owned(),
+                                n => format!("{n} addons were installed by hand"),
+                            })
+                            .size(theme::BODY),
+                            muted(
+                                "Lightforge can recognise them by their contents and \
+                                 manage them from here — updates, channels and all."
+                                    .to_owned(),
+                                theme::CAPTION,
+                            ),
+                        ]
+                        .spacing(theme::XS)
+                        .width(Length::Fill),
+                        action_button("Recognise them", theme::ACCENT, Message::AdoptAddons)
+                            .enabled(!self.addons_busy),
+                    ]
+                    .spacing(theme::SM)
+                    .align_y(Alignment::Center),
+                )
+                .padding(theme::MD)
+                .style(theme::card),
+            );
+        }
 
         // A header, because four right-hand columns of bare dates are not
         // self-describing. Indented and spaced to match a row's own columns.

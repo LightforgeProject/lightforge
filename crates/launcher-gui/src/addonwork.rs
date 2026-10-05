@@ -569,6 +569,21 @@ pub async fn install_one(
     .await
 }
 
+/// Recognise hand-installed addons and take them into the ledger.
+pub async fn adopt(
+    http: Option<Http>,
+    layout: Layout,
+    code: ProductCode,
+    channel: Channel,
+) -> Result<Vec<manage::Adopted>, String> {
+    let options =
+        options(&layout, &code, false, channel).ok_or("no data directory available")?;
+    let http = http.ok_or(crate::tasks::NO_HTTP)?;
+    manage::adopt(&http, catalog().as_ref(), &options)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Every build the catalogue offers for one addon, newest first.
 ///
 /// Only CurseForge publishes a file list, so this is the one provider a
