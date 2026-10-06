@@ -31,12 +31,13 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use iced::widget::{
-    button, column, container, image, mouse_area, pick_list, progress_bar, responsive, row,
-    scrollable, stack, text, text_input, tooltip, Space,
+    button, column, container, image, mouse_area, pick_list, progress_bar, responsive, rich_text,
+    row, scrollable, span, stack, text, text_input, tooltip, Space,
 };
 use iced::{Alignment, ContentFit, Element, Length, Subscription, Task};
 
 use lightforge_core::addons::manage;
+use lightforge_core::addons::richtext;
 use lightforge_core::addons::Channel;
 use lightforge_core::assets::{Manifest, Pipeline, Store};
 use lightforge_core::config::Config;
@@ -438,6 +439,14 @@ enum Message {
     InstallVersion(String, String, String),
     /// Close the picker without choosing.
     CancelVersionPicker,
+    /// Open the detail view for one addon: provider, id, name.
+    ShowAddonDetail(String, String, String),
+    /// The catalogue answered with the project, description and changelog.
+    AddonDetailLoaded(Box<Result<addonwork::Detail, String>>),
+    /// Which half of the detail view is showing.
+    AddonDetailTab(DetailTab),
+    /// Close the detail view.
+    CloseAddonDetail,
     /// Whether the next import pins to the versions the token names.
     ImportPinned(bool),
     /// Put Battle.net on this game's tile, so its Install button is reachable.
@@ -719,6 +728,32 @@ impl Download {
             Stage::Paused(progress) => state::Transfer::Paused(*progress),
         }
     }
+}
+
+/// Which half of the detail view is on show.
+///
+/// Changelog first, deliberately: somebody who opens this from an installed
+/// addon is asking "what would change if I updated", and somebody browsing
+/// gets the description on the other tab one click away. The default is set
+/// at the call site for that reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DetailTab {
+    Changelog,
+    About,
+}
+
+/// One addon's project page, while it is open.
+struct AddonDetail {
+    provider: String,
+    id: String,
+    /// What to call it before the project answers. The search row and the
+    /// ledger both already know the name, and a card headed "…" while a
+    /// request is out reads like a failure.
+    name: String,
+    /// `None` while the catalogue is still answering.
+    loaded: Option<addonwork::Detail>,
+    problem: Option<String>,
+    tab: DetailTab,
 }
 
 /// One addon's builds, while the user chooses between them.
@@ -1003,6 +1038,7 @@ struct Lightforge {
     /// The version picker, when it is open: which addon, and the builds the
     /// catalogue offers. `None` in the list means the fetch is still out.
     version_picker: Option<VersionPicker>,
+    addon_detail: Option<AddonDetail>,
     /// Game families, as Blizzard's own catalogue names them, read out of the
     /// client's cache at startup. Empty on a prefix whose client has never
     /// run, which falls the hand-off back to the compiled-in families.
@@ -1161,6 +1197,7 @@ impl Lightforge {
             addon_remove_armed: None,
             addon_menu_open: None,
             version_picker: None,
+            addon_detail: None,
             families: lightforge_core::families::Families::default(),
             import_pinned: false,
             addon_auto_done: Vec::new(),
@@ -2586,6 +2623,54 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::ShowAddonDetail(provider, id, name) => {
+                self.addon_menu_open = None;
+                // Changelog first for something already installed, About for
+                // something being browsed: the question is different in each
+                // case, and the tab that answers it should not need a click.
+                let installed = self.addon_is_installed(&provider, &id);
+                self.addon_detail = Some(AddonDetail {
+                    provider: provider.clone(),
+                    id: id.clone(),
+                    name,
+                    loaded: None,
+                    problem: None,
+                    tab: match installed {
+                        true => DetailTab::Changelog,
+                        false => DetailTab::About,
+                    },
+                });
+                Task::perform(
+                    addonwork::detail(self.http.clone(), self.selected.code.clone(), provider, id),
+                    |result| Message::AddonDetailLoaded(Box::new(result)),
+                )
+            }
+
+            Message::AddonDetailLoaded(result) => {
+                // Dropped if the card was closed while the request was out,
+                // the same as the version picker: an answer to a question
+                // nobody is asking any more.
+                if let Some(detail) = self.addon_detail.as_mut() {
+                    match *result {
+                        Ok(loaded) => detail.loaded = Some(loaded),
+                        Err(e) => detail.problem = Some(e),
+                    }
+                }
+                Task::none()
+            }
+
+            Message::AddonDetailTab(tab) => {
+                if let Some(detail) = self.addon_detail.as_mut() {
+                    detail.tab = tab;
+                }
+                Task::none()
+            }
+
+            Message::CloseAddonDetail => {
+                self.addon_detail = None;
+                Task::none()
+            }
+
             Message::InstallVersion(provider, id, file_id) => {
                 self.version_picker = None;
                 let (tx, rx) = tokio::sync::watch::channel(addonwork::Progress::default());
@@ -3959,10 +4044,16 @@ impl Lightforge {
         // every press that the card itself does not, and a `Stack` stops
         // delivering an event once a layer captures it, so nothing beneath
         // can be clicked while the dialog is up.
-        let card = match (&self.install_dialog, &self.uninstall_dialog, &self.version_picker) {
-            (Some(dialog), _, _) => Some(self.install_card(dialog)),
-            (_, Some(dialog), _) => Some(self.uninstall_card(dialog)),
-            (_, _, Some(picker)) => Some(self.version_card(picker)),
+        let card = match (
+            &self.install_dialog,
+            &self.uninstall_dialog,
+            &self.version_picker,
+            &self.addon_detail,
+        ) {
+            (Some(dialog), ..) => Some(self.install_card(dialog)),
+            (_, Some(dialog), ..) => Some(self.uninstall_card(dialog)),
+            (_, _, Some(picker), _) => Some(self.version_card(picker)),
+            (.., Some(detail)) => Some(self.detail_card(detail)),
             _ => None,
         };
         let screen = match card {
@@ -4692,6 +4783,18 @@ impl Lightforge {
     /// everything in [`Message::Dismiss`]. Adding a panel and forgetting to
     /// name it here is what left the wordmark menu unable to be closed by
     /// clicking the page, so the two now read from the same place.
+    /// Whether this provider/id pair is in the ledger for the open game.
+    ///
+    /// Asked by the detail card twice over — once to pick the opening tab,
+    /// once to decide between Install and nothing — so it is one place.
+    fn addon_is_installed(&self, provider: &str, id: &str) -> bool {
+        self.addons
+            .rows
+            .iter()
+            .filter_map(|r| r.managed.as_ref())
+            .any(|m| m.provider == provider && m.id == id)
+    }
+
     fn panel_open(&self) -> bool {
         self.gear_open
             || self.manager_open
@@ -4840,6 +4943,10 @@ impl Lightforge {
         // something else. Only CurseForge publishes a build list, so this is
         // the only provider it is offered for.
         if managed.provider.eq_ignore_ascii_case("curse") {
+            rows = rows.push(entry(
+                "Details and changelog…".to_owned(),
+                Message::ShowAddonDetail(provider.clone(), id.clone(), name.to_owned()),
+            ));
             rows = rows.push(entry(
                 "Choose a version…".to_owned(),
                 Message::PickVersion(
@@ -6587,8 +6694,25 @@ impl Lightforge {
             .align_y(Alignment::Center);
 
             line = line.push(Space::new().width(Length::Fill));
-            if let Some(url) = &listing.website_url {
-                line = line.push(secondary("Page", Message::OpenUrl(url.clone())).enabled(true));
+            // "Details" where there is something to show and "Page" where
+            // there is not: only CurseForge publishes a description and a
+            // changelog, and the detail card offers the page anyway, so
+            // carrying both buttons would just crowd the row.
+            match provider.eq_ignore_ascii_case("curse") {
+                true => {
+                    let open = Message::ShowAddonDetail(
+                        provider.clone(),
+                        listing.id.clone(),
+                        listing.name.clone(),
+                    );
+                    line = line.push(secondary("Details", open).enabled(true));
+                }
+                false => {
+                    if let Some(url) = &listing.website_url {
+                        line = line
+                            .push(secondary("Page", Message::OpenUrl(url.clone())).enabled(true));
+                    }
+                }
             }
             line = line.push(match already {
                 true => pill("installed".to_owned(), theme::PLAY),
@@ -7358,6 +7482,173 @@ impl Lightforge {
             .into()
     }
 
+    /// One addon's project page: what it is, and what changed in the build
+    /// you would get.
+    ///
+    /// The two halves are tabs rather than one long scroll because they
+    /// answer different questions and a description can be thousands of words
+    /// — the changelog would never be found under it.
+    fn detail_card<'a>(&'a self, detail: &'a AddonDetail) -> Element<'a, Message> {
+        let title = detail
+            .loaded
+            .as_ref()
+            .map(|d| d.project.name.clone())
+            .unwrap_or_else(|| detail.name.clone());
+        let mut head = row![text(title).size(theme::TITLE)]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center);
+
+        if let Some(loaded) = &detail.loaded {
+            if loaded.project.download_count > 0 {
+                head = head.push(muted(
+                    format!("{} downloads", downloads_of(loaded.project.download_count)),
+                    theme::CAPTION,
+                ));
+            }
+        }
+
+        let mut body = column![head].spacing(theme::SM).width(Length::Fixed(620.0));
+
+        // The author line sits under the name rather than beside it: addons
+        // with four maintainers are common and the row would wrap badly.
+        if let Some(loaded) = &detail.loaded {
+            if !loaded.project.authors.is_empty() {
+                body = body.push(muted(
+                    format!("by {}", loaded.project.authors.join(", ")),
+                    theme::CAPTION,
+                ));
+            }
+            if let Some(summary) = &loaded.project.summary {
+                body = body.push(text(summary.clone()).size(theme::BODY));
+            }
+        }
+
+        match (&detail.loaded, &detail.problem) {
+            (None, None) => {
+                body = body.push(muted("asking the catalogue…".to_owned(), theme::BODY));
+            }
+            (_, Some(problem)) => {
+                body = body.push(empty(
+                    problem.as_str(),
+                    "Only CurseForge publishes a description and a changelog.",
+                ));
+            }
+            (Some(loaded), None) => {
+                body = body.push(self.detail_tabs(detail, loaded));
+                body = body.push(self.detail_body(detail, loaded));
+            }
+        }
+
+        // Reading the changelog and then having to find the row again to act
+        // on it is the whole reason this card is worth having, so the action
+        // is here. Which action depends on whether it is already installed.
+        let installed = self.addon_is_installed(&detail.provider, &detail.id);
+
+        let mut footer = row![Space::new().width(Length::Fill)].spacing(theme::SM);
+        if let Some(url) = detail.loaded.as_ref().and_then(|d| d.project.website_url.clone()) {
+            footer = footer.push(secondary("Open the page", Message::OpenUrl(url)).enabled(true));
+        }
+        if !installed {
+            let install: Element<'static, Message> = action_button(
+                "Install",
+                theme::INSTALL,
+                Message::InstallAddon(detail.provider.clone(), detail.id.clone()),
+            )
+            .enabled(!self.addons_busy)
+            .into();
+            footer = footer.push(install);
+        }
+        footer = footer.push(secondary("Close", Message::CloseAddonDetail).enabled(true));
+        body = body.push(footer);
+
+        container(container(body).padding(theme::LG).style(theme::floating))
+            .center(Length::Fill)
+            .padding(theme::XL)
+            .into()
+    }
+
+    /// The two tab buttons, each naming what it holds.
+    ///
+    /// A tab with nothing behind it is shown disabled rather than hidden:
+    /// hiding it would move the other one, and "this addon has no changelog"
+    /// is itself an answer worth being able to see.
+    fn detail_tabs<'a>(
+        &'a self,
+        detail: &'a AddonDetail,
+        loaded: &'a addonwork::Detail,
+    ) -> Element<'a, Message> {
+        let tab = |label: String, which: DetailTab, available: bool| {
+            let selected = detail.tab == which;
+            button(text(label).size(theme::BODY))
+                .padding([theme::XS, theme::MD])
+                .style(match selected {
+                    true => theme::selected,
+                    false => theme::ghost,
+                })
+                .on_press_maybe(match available && !selected {
+                    true => Some(Message::AddonDetailTab(which)),
+                    false => None,
+                })
+        };
+
+        let changelog_label = match &loaded.changelog_build {
+            Some(build) => format!("What changed in {build}"),
+            None => "What changed".to_owned(),
+        };
+        row![
+            tab(
+                changelog_label,
+                DetailTab::Changelog,
+                loaded.changelog.as_ref().is_some_and(|d| !d.is_empty()),
+            ),
+            tab(
+                "About".to_owned(),
+                DetailTab::About,
+                loaded.description.as_ref().is_some_and(|d| !d.is_empty()),
+            ),
+        ]
+        .spacing(theme::XS)
+        .into()
+    }
+
+    /// Whichever document the open tab names, scrolled.
+    fn detail_body<'a>(
+        &'a self,
+        detail: &'a AddonDetail,
+        loaded: &'a addonwork::Detail,
+    ) -> Element<'a, Message> {
+        let (document, missing) = match detail.tab {
+            DetailTab::Changelog => (
+                loaded.changelog.as_ref(),
+                "This build ships no changelog — plenty of authors never write one.",
+            ),
+            DetailTab::About => (
+                loaded.description.as_ref(),
+                "This addon has no description beyond its summary.",
+            ),
+        };
+
+        let Some(document) = document.filter(|d| !d.is_empty()) else {
+            return empty(missing, "The CurseForge page has whatever else there is.");
+        };
+
+        let mut content = column![].spacing(theme::SM);
+        for block in &document.blocks {
+            content = content.push(rich_block(block));
+        }
+        if document.truncated {
+            content = content.push(muted(
+                "This is longer than Lightforge shows — the rest is on the page.".to_owned(),
+                theme::CAPTION,
+            ));
+        }
+
+        scrollable(container(content).padding(theme::MD))
+            .height(Length::Fixed(320.0))
+            .style(theme::scrollbar)
+            .into()
+    }
+
     fn uninstall_card<'a>(&'a self, dialog: &'a UninstallDialog) -> Element<'a, Message> {
         let mut body = column![].spacing(theme::MD);
         let mut ready = false;
@@ -7827,6 +8118,102 @@ fn mono<'a>(content: String) -> iced::widget::Text<'a> {
 }
 
 /// A status pill.
+/// Draw one block of an addon's description or changelog.
+///
+/// The proxy has already reduced the HTML to these few shapes (see
+/// `lightforge_core::addons::richtext`), so this is the whole renderer. An
+/// unrecognised kind draws as a paragraph on purpose: the contract is that
+/// the proxy can add one without a client release.
+fn rich_block(block: &richtext::Block) -> Element<'_, Message> {
+    use richtext::Kind;
+
+    match &block.kind {
+        Kind::Heading => {
+            // Two sizes, not six. A changelog's h1 and h3 mean "version" and
+            // "section", and honouring all six levels on a 620px card just
+            // makes the deep ones indistinguishable from body text.
+            let size = match block.level {
+                0..=2 => theme::HEADING,
+                _ => theme::BODY,
+            };
+            container(text(block.text.clone()).size(size)).padding([theme::XS, 0.0]).into()
+        }
+
+        Kind::Bullet => row![
+            // The marker is its own text rather than part of the string so
+            // that a wrapped bullet hangs under its text and not under the
+            // dot.
+            muted("•".to_owned(), theme::BODY),
+            rich_paragraph(block),
+        ]
+        .spacing(theme::SM)
+        .padding(iced::Padding::default().left(theme::MD * f32::from(block.indent)))
+        .into(),
+
+        Kind::Code => container(
+            text(block.text.clone()).size(theme::CAPTION).font(iced::Font::MONOSPACE),
+        )
+        .padding(theme::SM)
+        .width(Length::Fill)
+        .style(theme::row)
+        .into(),
+
+        // Deliberately not drawn. Showing them means fetching and decoding
+        // remote images into handles, which is the News page's whole image
+        // cache over again for a card that is open for ten seconds; the
+        // description's words carry the meaning and the page has the pictures.
+        Kind::Image => Space::new().into(),
+
+        Kind::Para | Kind::Other(_) => rich_paragraph(block),
+    }
+}
+
+/// A block's text with its links clickable.
+///
+/// The link offsets come from the proxy precisely so this can cut the string
+/// without searching it — a search picks the wrong occurrence as soon as one
+/// block links the same words twice, which changelogs do constantly.
+fn rich_paragraph(block: &richtext::Block) -> Element<'_, Message> {
+    let inline = block.inline_links();
+    let trailing: Vec<_> = block.trailing_links().collect();
+
+    if inline.is_empty() && trailing.is_empty() {
+        return text(block.text.clone()).size(theme::BODY).into();
+    }
+
+    let mut spans = Vec::with_capacity(inline.len() * 2 + 1);
+    let mut cursor = 0;
+    for link in &inline {
+        if link.start > cursor {
+            spans.push(span(block.text[cursor..link.start].to_owned()));
+        }
+        spans.push(
+            span(block.text[link.start..link.end].to_owned())
+                .color(theme::ACCENT)
+                .underline(true)
+                .link(link.url.clone()),
+        );
+        cursor = link.end;
+    }
+    if cursor < block.text.len() {
+        spans.push(span(block.text[cursor..].to_owned()));
+    }
+
+    // A link the proxy could not seat inside the text keeps its destination
+    // as a reference after it, rather than being lost.
+    for link in trailing {
+        spans.push(span(" "));
+        spans.push(
+            span(link.text.clone())
+                .color(theme::ACCENT)
+                .underline(true)
+                .link(link.url.clone()),
+        );
+    }
+
+    rich_text(spans).size(theme::BODY).on_link_click(Message::OpenUrl).into()
+}
+
 fn pill<'a>(content: String, color: iced::Color) -> Element<'a, Message> {
     container(text(content).size(theme::CAPTION))
         .padding([2.0, theme::SM])

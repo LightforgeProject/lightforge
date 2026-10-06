@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use lightforge_core::addons::catalog::{Catalog, Request};
 use lightforge_core::addons::manage::{self, Event, Options, Report};
+use lightforge_core::addons::richtext;
 use lightforge_core::addons::{self, Channel, Collection, Installed, Ledger, Record};
 use lightforge_core::config::Config;
 use lightforge_core::net::Http;
@@ -606,6 +607,65 @@ pub async fn versions(
         .files(&http, &id, addons::flavor_of(&code), VERSION_CHOICES)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Everything the detail view shows about one addon: the project, its
+/// description and the changelog of its newest build.
+///
+/// Fetched as one unit because the view has nothing to show until all three
+/// are in, and three separate spinners on one card is worse than one. The two
+/// rich-text halves are each `Option`, though — a missing changelog is
+/// ordinary (plenty of authors never write one) and must not cost the rest of
+/// the card.
+#[derive(Debug, Clone)]
+pub struct Detail {
+    pub project: lightforge_core::addons::catalog::Project,
+    pub description: Option<richtext::Document>,
+    pub changelog: Option<richtext::Document>,
+    /// The build the changelog belongs to, for the heading above it.
+    pub changelog_build: Option<String>,
+}
+
+/// Reads one addon's project, description and newest changelog.
+///
+/// CurseForge only: the other providers publish no description endpoint, and
+/// the detail view falls back to the summary the search already returned.
+pub async fn detail(
+    http: Option<Http>,
+    code: ProductCode,
+    provider: String,
+    id: String,
+) -> Result<Detail, String> {
+    if addons::Provider::parse(&provider) != addons::Provider::Curse {
+        return Err("only CurseForge addons have a detail page".to_owned());
+    }
+    let (Some(http), Some(catalog)) = (http, catalog()) else {
+        return Err("no addon catalog is configured".to_owned());
+    };
+
+    // The project is the only part that must succeed — it carries the name,
+    // the author and the link out. The rest is enrichment.
+    let project = catalog.project(&http, &id).await.map_err(|e| e.to_string())?;
+
+    let description = catalog.description(&http, &id).await.ok();
+
+    // The changelog needs a file id, so the newest build has to be looked up
+    // first. One build, not the twenty a version picker asks for: this is
+    // "what changed in the version I would get".
+    let (changelog, changelog_build) = match catalog
+        .files(&http, &id, addons::flavor_of(&code), 1)
+        .await
+        .ok()
+        .and_then(|files| files.into_iter().next())
+    {
+        Some(newest) => {
+            let log = catalog.changelog(&http, &id, &newest.file_id).await.ok();
+            (log, newest.display_name)
+        }
+        None => (None, None),
+    };
+
+    Ok(Detail { project, description, changelog, changelog_build })
 }
 
 /// How many builds back a picker offers.

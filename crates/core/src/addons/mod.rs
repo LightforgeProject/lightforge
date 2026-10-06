@@ -25,8 +25,10 @@ pub mod fingerprint;
 pub mod install;
 pub mod manage;
 pub mod providers;
+pub mod richtext;
 
 pub use catalog::{Catalog, Origin, Resolved, Status};
+pub use richtext::Document as RichText;
 pub use install::{Ledger, Record};
 pub use manage::{Options as ManageOptions, Report, Unavailable};
 

@@ -24,6 +24,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::richtext;
+
 use crate::net::{Http, NetError};
 
 /// Path prefix of the proxy API, versioned so the server can move on.
@@ -414,6 +416,41 @@ impl Catalog {
             Origin::Dir(_) => self.fixture(&format!("project-{id}.json")),
             Origin::Http(_) => {
                 let url = self.url(&format!("project/{id}")).expect("http origin");
+                Ok(http.get_json(&url).await?)
+            }
+        }
+    }
+
+    /// A project's long description, already reduced to blocks by the proxy.
+    ///
+    /// See [`crate::addons::richtext`] for why no markup reaches us.
+    pub async fn description(&self, http: &Http, id: &str) -> Result<richtext::Document, CatalogError> {
+        match &self.origin {
+            Origin::Dir(_) => self.fixture(&format!("description-{id}.json")),
+            Origin::Http(_) => {
+                let url = self.url(&format!("project/{id}/description")).expect("http origin");
+                Ok(http.get_json(&url).await?)
+            }
+        }
+    }
+
+    /// One file's changelog.
+    ///
+    /// Keyed by the file as well as the project, because "what changed" is a
+    /// question about a build and not about an addon — which is also why the
+    /// proxy can cache it for a day: a published file's changelog is final.
+    pub async fn changelog(
+        &self,
+        http: &Http,
+        id: &str,
+        file_id: &str,
+    ) -> Result<richtext::Document, CatalogError> {
+        match &self.origin {
+            Origin::Dir(_) => self.fixture(&format!("changelog-{id}-{file_id}.json")),
+            Origin::Http(_) => {
+                let url = self
+                    .url(&format!("project/{id}/files/{file_id}/changelog"))
+                    .expect("http origin");
                 Ok(http.get_json(&url).await?)
             }
         }
