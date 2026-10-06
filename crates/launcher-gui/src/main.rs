@@ -282,6 +282,8 @@ enum Message {
     Tweak(Tweak, bool),
     /// A starting point was chosen, setting the frames-versus-scenery switches.
     TweakPreset(Preset),
+    /// "Custom": clear the managed switches and leave them to the user.
+    TweakCustom,
     /// Show or hide the environment-variable editor.
     TweakEnvToggle,
     /// The graphics API the client should ask for.
@@ -3389,6 +3391,11 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::TweakCustom => {
+                self.edit_tweaks(Tweaks::clear_managed);
+                Task::none()
+            }
+
             Message::TweakEnvToggle => {
                 self.env_open = !self.env_open;
                 Task::none()
@@ -5499,16 +5506,27 @@ impl Lightforge {
     /// lines, environment — so a card's height tracked how many cvars happened
     /// to share a plumbing detail. Six full-width cards of wildly different
     /// heights was the result. They are grouped by what somebody is trying to
-    /// do instead, which balances them, and the grid pins the rest: two cards
-    /// per row, both `Length::Fill` in each direction, so iced's flex stretches
-    /// the shorter one to its neighbour and every edge lines up.
+    /// do instead, which balances them, and the grid pins the rest: four cards
+    /// of one size, two to a row, so the page reads as a grid rather than as a
+    /// list of boxes that each happened to end somewhere.
     fn tweaks_screen(&self) -> Element<'_, Message> {
         let tweaks = self.tweaks();
 
+        // Four cards on one grid, every box the same size whatever is in it.
+        // The row carries the height and the cards fill it, which is the only
+        // arrangement that gives a uniform box: sized to their content they
+        // end at four different places, and iced cannot stretch two fluid
+        // siblings against each other with nothing to measure (see
+        // [`Lightforge::tweak_card`]).
+        let height = Length::Fixed(self.card_height());
         let body = column![
             self.preset_row(&tweaks),
-            row![self.performance_card(&tweaks), self.looks_card(&tweaks)].spacing(theme::MD),
-            row![self.input_card(&tweaks), self.advanced_card(&tweaks)].spacing(theme::MD),
+            row![self.performance_card(&tweaks), self.looks_card(&tweaks)]
+                .spacing(theme::MD)
+                .height(height),
+            row![self.input_card(&tweaks), self.advanced_card(&tweaks)]
+                .spacing(theme::MD)
+                .height(height),
             self.env_card(&tweaks),
         ]
         .spacing(theme::MD);
@@ -5550,13 +5568,40 @@ impl Lightforge {
             .text_size(theme::BODY)
     }
 
+    /// How tall every card on the grid is.
+    ///
+    /// A pinned number, which is the price of boxes that are the same size
+    /// whatever is in them — and it has to clear the *fullest* card on the
+    /// *busiest* machine, because a card is a fixed box and content past its
+    /// edge is content nobody can reach. The worst case is Advanced with the
+    /// graphics picker, the frame cap, MangoHud and Clear shader cache, or
+    /// Performance with both host tools present and a note about neither.
+    ///
+    /// Two values because hints are a line of prose under most switches: one
+    /// number tuned with them on wastes a third of the page with them off,
+    /// which is the state this was first built in.
+    ///
+    /// If a card ever outgrows this, raise it here — it is the one number the
+    /// layout depends on.
+    fn card_height(&self) -> f32 {
+        match self.hints {
+            true => 330.0,
+            false => 230.0,
+        }
+    }
+
     /// One card of the grid: a heading, its own one-line brief, and content.
     ///
-    /// `Length::Fill` in both directions is what makes the grid a grid. Two of
-    /// these in a `row` whose own height is Shrink hits iced's cross-compress
-    /// path: the shorter card is laid out again against the taller one's
-    /// height, so the pair match without either being pinned to a number that
-    /// would be wrong as soon as hints are turned off.
+    /// Both lengths are `Fill`: the width splits the row evenly, and the
+    /// height takes whatever [`Lightforge::card_height`] gave the row.
+    ///
+    /// **`height(Fill)` only works because the row is a fixed height.** iced's
+    /// flex sizes cross-axis-fluid children against their non-fluid siblings
+    /// (`layout/flex.rs`, the `cross_compress` path), so two fluid cards in a
+    /// Shrink-height row have nothing to measure against — inside a vertical
+    /// `scrollable`, where the height limit is unbounded, `cross` stays `0.0`
+    /// and both cards draw as nothing at all. That was a real bug, not a
+    /// hypothetical. Give the row a height or do not make the cards fluid.
     fn tweak_card<'a>(
         &self,
         title: &'a str,
@@ -5581,26 +5626,37 @@ impl Lightforge {
     fn preset_row(&self, tweaks: &Tweaks) -> Element<'_, Message> {
         let current = tweaks.preset();
 
-        let mut segments = row![].spacing(theme::XS);
+        let segment = |label: &'static str, chosen: bool, message: Message| {
+            button(text(label).size(theme::BODY))
+                .padding([theme::SM, theme::MD])
+                .style(match chosen {
+                    true => theme::selected,
+                    false => theme::ghost,
+                })
+                .on_press_maybe((!chosen).then_some(message))
+        };
+
+        // Custom first, and lit whenever nothing else is. It is not a fourth
+        // preset but the absence of one, which is what makes it stay lit while
+        // you tick boxes: setting a switch by hand matches no preset, so this
+        // is still the answer. Pressing it clears the managed switches, so the
+        // panel it describes really is empty.
+        let mut segments = row![segment("Custom", current.is_none(), Message::TweakCustom)]
+            .spacing(theme::XS);
         for preset in Preset::ALL {
-            let chosen = current == Some(preset);
-            segments = segments.push(
-                button(text(preset.label()).size(theme::BODY))
-                    .padding([theme::SM, theme::MD])
-                    .style(match chosen {
-                        true => theme::selected,
-                        false => theme::ghost,
-                    })
-                    .on_press_maybe((!chosen).then_some(Message::TweakPreset(preset))),
-            );
+            segments = segments.push(segment(
+                preset.label(),
+                current == Some(preset),
+                Message::TweakPreset(preset),
+            ));
         }
 
-        // Naming what is on now, including "Custom", is the whole value of the
-        // row: a segmented control with nothing lit says only that none of
-        // three things is true, which is not an answer.
+        // The pill repeats what is lit rather than naming a second state:
+        // Custom is a real position on the row now, so there is no "neither"
+        // left to give its own word.
         let brief = match current {
             Some(preset) => preset.summary().to_owned(),
-            None => "Your own mix of the switches below.".to_owned(),
+            None => "Your own mix. Nothing here is set for you.".to_owned(),
         };
         let mut label = column![
             row![
@@ -5672,8 +5728,8 @@ impl Lightforge {
             tweaks.faster_zone_loads,
         ));
 
-        // Pushes the footnote to the bottom of whichever card is shorter, so
-        // the two in a row end on the same line.
+        // The box is a fixed height now, so this sits on its floor rather
+        // than straight under the last switch.
         content = content.push(Space::new().height(Length::Fill));
         let missing: Vec<&str> = [
             self.tools.game_performance.is_none().then_some("game-performance"),
@@ -5694,11 +5750,14 @@ impl Lightforge {
 
     /// Everything that spends frames, including the optional downloads.
     ///
-    /// The glow switch reads the opposite way round from the stored field:
-    /// every other box here means *on, you get this*, and one box meaning *on,
-    /// you lose this* in the middle of a list is a misreading waiting to
-    /// happen. Inverted in the view only — `no_screen_effects` keeps its
-    /// meaning on disk, so no existing config changes.
+    /// The glow switch is phrased as "turn off", which reads oddly beside
+    /// "Maximum view distance" and was briefly inverted to match it. That was
+    /// wrong twice over: the handler kept writing the raw value, so the box
+    /// sprang back and looked dead; and once fixed, an empty box meant
+    /// `no_screen_effects = true`, which writes `ffxGlow 0`. Custom clears
+    /// every switch, so an inverted box would leave Custom visibly empty while
+    /// quietly turning the glow off. A box on this panel has to mean "unset"
+    /// when empty, and that settles the wording.
     fn looks_card(&self, tweaks: &Tweaks) -> Element<'_, Message> {
         let mut content = column![
             self.tweak_check(
@@ -5707,9 +5766,9 @@ impl Lightforge {
                 tweaks.max_draw_distance,
             ),
             self.tweak_check(
-                "Full-screen glow and death filter",
+                "Turn off the full-screen glow and death filter",
                 Tweak::NoScreenEffects,
-                !tweaks.no_screen_effects,
+                tweaks.no_screen_effects,
             ),
         ]
         .spacing(theme::SM);

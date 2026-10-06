@@ -354,9 +354,8 @@ impl Preset {
     /// Write this preset's switches into `tweaks`, leaving every ungoverned
     /// field exactly as it was.
     pub fn apply(self, tweaks: &mut Tweaks) {
-        // `skip_addon_profiling` is true in all three: it removes
-        // instrumentation, not detail, so there is no version of "I want it to
-        // look nice" that wants the profiler on.
+        // True in all three: it removes instrumentation, not detail, so there
+        // is no version of "I want it to look nice" that wants the profiler on.
         tweaks.skip_addon_profiling = true;
         match self {
             Self::Frames => {
@@ -385,6 +384,31 @@ impl Preset {
 }
 
 impl Tweaks {
+    /// Clear every switch a [`Preset`] governs.
+    ///
+    /// What the panel's "Custom" button does. Custom is not a fourth preset —
+    /// it is the *absence* of one, which is why it cannot be a [`Preset`]
+    /// variant: pressing it empties the managed switches, and setting any of
+    /// them afterwards still matches no preset, so the panel stays on Custom
+    /// rather than jumping off it the moment you tick a box.
+    ///
+    /// Ungoverned settings are left alone here for the same reason
+    /// [`Preset::apply`] leaves them: clearing somebody's environment
+    /// variables is data loss, not a reset.
+    /// Every switch it clears is one that *writes* something when set, so a
+    /// cleared profile is also a silent one: nothing in `Config.wtf`, no
+    /// wrapper, nothing. That equivalence is why no switch on this panel may
+    /// be drawn inverted — a box whose empty state wrote a cvar would make
+    /// "Custom" change the game while claiming to set nothing.
+    pub fn clear_managed(&mut self) {
+        self.gamemode = false;
+        self.skip_addon_profiling = false;
+        self.reduce_raid_effects = false;
+        self.faster_zone_loads = false;
+        self.no_screen_effects = false;
+        self.max_draw_distance = false;
+    }
+
     /// Which preset these settings are currently on, or `None` for "Custom".
     ///
     /// Compares only the governed switches, so changing the frame cap or
@@ -489,6 +513,22 @@ mod tests {
         }
     }
 
+    // Custom has to leave nothing behind — including the switches a previous
+    // preset turned on.
+    #[test]
+    fn clearing_empties_every_governed_switch() {
+        let mut tweaks = Tweaks::default();
+        Preset::Frames.apply(&mut tweaks);
+        tweaks.clear_managed();
+
+        assert!(!tweaks.gamemode);
+        assert!(!tweaks.skip_addon_profiling);
+        assert!(!tweaks.reduce_raid_effects);
+        assert!(!tweaks.faster_zone_loads);
+        assert!(!tweaks.no_screen_effects);
+        assert!(!tweaks.max_draw_distance);
+    }
+
     #[test]
     fn only_the_looks_preset_spends_frames_on_scenery() {
         for preset in Preset::ALL {
@@ -502,11 +542,47 @@ mod tests {
         }
     }
 
-    // A stock profile is not any preset: Balanced turns the profiler and raid
-    // effects off, and a fresh config has them on.
+    // A stock profile matches no preset, which is what the panel shows as
+    // "Custom".
     #[test]
-    fn a_default_profile_is_custom_rather_than_a_preset() {
+    fn a_default_profile_matches_no_preset() {
         assert_eq!(Tweaks::default().preset(), None);
+    }
+
+    // The behaviour he asked for: pressing Custom empties the switches, and
+    // setting one afterwards must NOT jump the panel onto a preset.
+    #[test]
+    fn setting_a_switch_after_clearing_stays_off_every_preset() {
+        let mut tweaks = Tweaks::default();
+        Preset::Looks.apply(&mut tweaks);
+
+        tweaks.clear_managed();
+        assert_eq!(tweaks.preset(), None, "a cleared profile is not a preset");
+
+        tweaks.raw_mouse = true;
+        tweaks.max_draw_distance = true;
+        tweaks.faster_zone_loads = true;
+        assert_eq!(tweaks.preset(), None, "ticking boxes by hand is still Custom");
+    }
+
+    // Clearing is not a factory reset: the fork and the escape hatch survive
+    // it, exactly as they survive a preset.
+    #[test]
+    fn clearing_preserves_the_escape_hatch_and_the_fork() {
+        let mut tweaks = Tweaks {
+            fps_cap: Some(120),
+            graphics_api: Some(GraphicsApi::D3d11),
+            raw_mouse: true,
+            ..Default::default()
+        };
+        tweaks.env.insert("DXVK_HUD".to_owned(), "fps".to_owned());
+
+        tweaks.clear_managed();
+
+        assert_eq!(tweaks.fps_cap, Some(120));
+        assert_eq!(tweaks.graphics_api, Some(GraphicsApi::D3d11));
+        assert!(tweaks.raw_mouse);
+        assert_eq!(tweaks.env.get("DXVK_HUD").map(String::as_str), Some("fps"));
     }
 
     #[test]
