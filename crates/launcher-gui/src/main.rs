@@ -134,6 +134,30 @@ bundled_icons! {
     x_icon => "x.png",
 }
 
+/// How far the News backdrop is darkened over the body of the page.
+///
+/// Higher than the dashboard's mid-page 0.35 because far more text sits over
+/// it: a hundred headline cards rather than a handful of controls. At 0.70
+/// the picture still reads as a picture between the cards while the muted
+/// summary text keeps the contrast it has on a plain page.
+const NEWS_SCRIM: f32 = 0.70;
+
+/// How far it is darkened across the header and the page title.
+///
+/// The navigation row has no backdrop of its own, and this artwork is pale
+/// sky across its top third — the one combination that leaves white text
+/// sitting on white. Held, not ramped, so the whole row is on even cover.
+const NEWS_SCRIM_TOP: f32 = 0.88;
+
+/// The News page's backdrop.
+///
+/// Bundled rather than fetched from the asset manifest, unlike every product
+/// background: that manifest is keyed by product, and this is chrome for one
+/// page that belongs to no game. Kept at [`art::BACKGROUND_MAX_WIDTH`]'s 2560,
+/// the same ceiling product art gets, which lands it at about half a megabyte
+/// — see `assets/README.md` for how it was prepared.
+const NEWS_BACKGROUND: &[u8] = include_bytes!("../assets/news-background.jpg");
+
 /// Opening size, and the floor for resizing — deliberately the same number.
 ///
 /// The header sets the width: the title, the product picker (whose longest
@@ -282,6 +306,7 @@ enum Message {
     OpenArticle(String),
     NewsLoaded(Option<Box<news::Headlines>>),
     NewsImages(Vec<(String, image::Handle)>),
+    NewsBackground(image::Handle),
     RefreshNews,
     /// Quit.
     Exit,
@@ -872,6 +897,9 @@ struct Lightforge {
     /// had, and a handle that does not change is a texture iced does not
     /// re-upload.
     news_images: HashMap<String, image::Handle>,
+    /// The page's backdrop, decoded once off the UI thread. Drawn when it
+    /// arrives; the page is perfectly readable in the instant before.
+    news_bg: Option<image::Handle>,
 
     /// Whether the cog menu beside the primary button is open.
     gear_open: bool,
@@ -1085,6 +1113,7 @@ impl Lightforge {
             news_pending: false,
             news_asked: false,
             news_images: HashMap::new(),
+            news_bg: None,
             gear_open: false,
             scan_rx: None,
             scan_sample: lightforge_core::tact::verify::Progress::default(),
@@ -2248,6 +2277,11 @@ impl Lightforge {
                     self.news = Some(*headlines);
                 }
                 self.fetch_news_images()
+            }
+
+            Message::NewsBackground(handle) => {
+                self.news_bg = Some(handle);
+                Task::none()
             }
 
             Message::NewsImages(images) => {
@@ -4538,7 +4572,19 @@ impl Lightforge {
     /// the runtime.
     fn arrived(&mut self) -> Task<Message> {
         match self.screen {
-            Screen::News => self.fetch_news(false),
+            Screen::News => {
+                // Decoded on first arrival rather than at startup: half a
+                // megabyte of JPEG is not work the first frame should do for
+                // a page nobody has opened.
+                let backdrop = match self.news_bg.is_none() {
+                    true => Task::perform(
+                        tasks::news_background(NEWS_BACKGROUND),
+                        Message::NewsBackground,
+                    ),
+                    false => Task::none(),
+                };
+                Task::batch([backdrop, self.fetch_news(false)])
+            }
             _ => Task::none(),
         }
     }
@@ -5793,12 +5839,54 @@ impl Lightforge {
             aside = aside.push(secondary("Refresh", Message::RefreshNews).enabled(true));
         }
 
-        self.page(
+        let page = self.page(
             "News",
             Some("Headlines from Wowhead".to_owned()),
             Some(aside.into()),
             content,
-        )
+        );
+
+        let Some(backdrop) = self.news_bg.clone() else {
+            return page;
+        };
+
+        // Same shape as the dashboard: art underneath, a scrim between, the
+        // header inside the stack rather than above it — hoisting it out
+        // would push the picture below the navigation row.
+        //
+        // The scrim holds dark across the top and settles lighter below, the
+        // same shape the dashboard arrived at and for the same reason: the
+        // navigation row hangs straight over the picture with no backdrop of
+        // its own, and this artwork is pale sky exactly where that row lands.
+        // A single flat value cannot serve both ends — strong enough for the
+        // nav row buries the art, weak enough to show the art leaves loose
+        // white text on a bright sky.
+        //
+        // Offsets run bottom (0.0) to top (1.0). The top pair holds rather
+        // than ramps so the whole of the header and the page title sit on
+        // even cover instead of in the middle of a fade; the body settles to
+        // [`NEWS_SCRIM`], where the cards are translucent and the picture
+        // reads through the gaps between them.
+        stack![
+            image(backdrop)
+                .content_fit(ContentFit::Cover)
+                .width(Length::Fill)
+                .height(Length::Fill),
+            container(Space::new().height(Length::Fill))
+                .width(Length::Fill)
+                .style(|_| container::Style {
+                    background: Some(iced::Background::Gradient(iced::Gradient::Linear(
+                        iced::gradient::Linear::new(0.0)
+                            .add_stop(0.0, iced::Color { a: NEWS_SCRIM, ..theme::BG })
+                            .add_stop(0.76, iced::Color { a: NEWS_SCRIM, ..theme::BG })
+                            .add_stop(0.86, iced::Color { a: NEWS_SCRIM_TOP, ..theme::BG })
+                            .add_stop(1.0, iced::Color { a: NEWS_SCRIM_TOP, ..theme::BG }),
+                    ))),
+                    ..container::Style::default()
+                }),
+            page,
+        ]
+        .into()
     }
 
     /// Lightforge's own release notes — nothing here yet either.

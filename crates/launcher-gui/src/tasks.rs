@@ -1263,6 +1263,16 @@ pub async fn news_images(
 /// How many headline pictures are fetched at once.
 const NEWS_IMAGE_BATCH: usize = 6;
 
+/// Decode the News page's bundled backdrop, once per session.
+///
+/// Off the UI thread: it is a 2560px JPEG, and decoding it on the render
+/// thread is a visible stall on the frame that first shows the page.
+pub async fn news_background(bytes: &'static [u8]) -> Handle {
+    tokio::task::spawn_blocking(move || crate::art::decode_bundled(bytes))
+        .await
+        .unwrap_or_else(|_| Handle::from_bytes(bytes))
+}
+
 /// Fetch the News page's headlines.
 ///
 /// Returns `None` only when there is genuinely nothing to show — no network

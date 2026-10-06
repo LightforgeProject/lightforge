@@ -449,21 +449,27 @@ pub fn ghost(_theme: &Theme, status: button::Status) -> button::Style {
 /// target, so the hover has to happen on the card itself. A row-sized hover
 /// highlight inside a static card would say the row is pressable and leave
 /// the rest of the card looking like it is not.
+///
+/// Translucent, and wearing [`BORDER_OVER_ART`], because these sit over the
+/// page's backdrop — the same pair [`floating`] uses and for the same reason.
+/// A hundred opaque cards would cover the picture entirely and leave it
+/// showing only in the margins, which is a background nobody can see.
 pub fn card_button(_theme: &Theme, status: button::Status) -> button::Style {
     let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
     button::Style {
         // [`RAISED`] on hover — the existing "a panel on a panel" step, so a
         // hovered card lifts by the same amount as every other surface in the
-        // app rather than by a brightness invented here.
+        // app rather than by a brightness invented here. Both carry PANEL's
+        // alpha, so hovering changes the colour and not the transparency.
         background: Some(Background::Color(match hovered {
-            true => RAISED,
-            false => SURFACE,
+            true => Color { a: PANEL.a, ..RAISED },
+            false => Color { a: PANEL.a, ..SURFACE },
         })),
         text_color: TEXT,
         border: Border {
             color: match hovered {
                 true => Color { a: 0.24, ..TEXT },
-                false => BORDER,
+                false => BORDER_OVER_ART,
             },
             width: 1.0,
             radius: RADIUS.into(),

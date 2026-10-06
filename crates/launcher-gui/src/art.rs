@@ -82,6 +82,27 @@ pub fn thumbnail(path: &Path) -> Handle {
     scale(path, (crate::theme::NEWS_THUMB_WIDTH * 2.0) as u32, FilterType::Lanczos3)
 }
 
+/// Decode a bundled image that is already at the size it is drawn.
+///
+/// Bundled art goes through here rather than `Handle::from_bytes` for the
+/// reason at the top of this file: a handle holding compressed bytes is
+/// decoded by the renderer, which keeps the result only while it is drawing
+/// and throws it away at the end of the frame. A 2560px JPEG re-decoded on
+/// every return to the page is exactly the pause this module exists to
+/// remove. Blocking and CPU-bound — call it off the UI thread.
+pub fn decode_bundled(bytes: &'static [u8]) -> Handle {
+    match image::load_from_memory(bytes) {
+        Ok(decoded) => {
+            let rgba = decoded.into_rgba8();
+            Handle::from_rgba(rgba.width(), rgba.height(), rgba.into_raw())
+        }
+        Err(e) => {
+            crate::trace::mark(format_args!("bundled image failed to decode: {e}"));
+            Handle::from_bytes(bytes)
+        }
+    }
+}
+
 /// Decode and downscale one image. An image this can't read falls back to
 /// its path, leaving iced to fail on it the way it did before.
 fn load(path: &Path, max_width: u32) -> Handle {
