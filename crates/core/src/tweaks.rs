@@ -301,11 +301,213 @@ pub fn wrapped(cmd: Command, wrappers: &[PathBuf]) -> Command {
     out
 }
 
+/// A starting point for the frames-versus-scenery trade.
+///
+/// The panel is a list of independent switches, which is honest but gives no
+/// answer to "just make it fast". A preset is that answer: one press sets the
+/// switches that sit on this axis, and every one of them stays individually
+/// reachable afterwards.
+///
+/// **What a preset governs is deliberately narrow** — only the switches that
+/// trade frames against scenery. It never touches [`Tweaks::raw_mouse`] or
+/// [`Tweaks::spell_queue_ms`] (personal feel, not speed), nor
+/// [`Tweaks::graphics_api`], [`Tweaks::fps_cap`], [`Tweaks::mangohud`] or
+/// [`Tweaks::env`] (a genuine fork, a ceiling, an overlay and an escape
+/// hatch — none of them a point on this axis). A preset that silently cleared
+/// somebody's environment variables would be a data-loss bug wearing the
+/// clothes of a convenience.
+///
+/// [`Tweaks::game_performance`] is left alone too, for a different reason: its
+/// default already means *on wherever the tool exists*, no preset has a reason
+/// to give that up, and overwriting it would turn "follow the default" into an
+/// explicit value behind the user's back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preset {
+    /// Everything that wins frames, nothing that spends them.
+    Frames,
+    /// The free wins only: no scenery given up, no extra wrapper.
+    Balanced,
+    /// Scenery at the engine's ceiling, frames second.
+    Looks,
+}
+
+impl Preset {
+    pub const ALL: [Preset; 3] = [Self::Frames, Self::Balanced, Self::Looks];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Frames => "Frames",
+            Self::Balanced => "Balanced",
+            Self::Looks => "Looks",
+        }
+    }
+
+    /// One line on what this choice gives up, for the hint beside the row.
+    pub fn summary(self) -> &'static str {
+        match self {
+            Self::Frames => "Raid effects and world preloading off, glow off, view distance normal.",
+            Self::Balanced => "Addon profiling and raid effects off. Nothing visual given up.",
+            Self::Looks => "View distance and clutter at the ceiling. Costs frames, by choice.",
+        }
+    }
+
+    /// Write this preset's switches into `tweaks`, leaving every ungoverned
+    /// field exactly as it was.
+    pub fn apply(self, tweaks: &mut Tweaks) {
+        // `skip_addon_profiling` is true in all three: it removes
+        // instrumentation, not detail, so there is no version of "I want it to
+        // look nice" that wants the profiler on.
+        tweaks.skip_addon_profiling = true;
+        match self {
+            Self::Frames => {
+                tweaks.gamemode = true;
+                tweaks.reduce_raid_effects = true;
+                tweaks.faster_zone_loads = true;
+                tweaks.no_screen_effects = true;
+                tweaks.max_draw_distance = false;
+            }
+            Self::Balanced => {
+                tweaks.gamemode = false;
+                tweaks.reduce_raid_effects = true;
+                tweaks.faster_zone_loads = false;
+                tweaks.no_screen_effects = false;
+                tweaks.max_draw_distance = false;
+            }
+            Self::Looks => {
+                tweaks.gamemode = false;
+                tweaks.reduce_raid_effects = false;
+                tweaks.faster_zone_loads = false;
+                tweaks.no_screen_effects = false;
+                tweaks.max_draw_distance = true;
+            }
+        }
+    }
+}
+
+impl Tweaks {
+    /// Which preset these settings are currently on, or `None` for "Custom".
+    ///
+    /// Compares only the governed switches, so changing the frame cap or
+    /// adding an environment variable does not move a profile off its preset —
+    /// those were never part of what the preset decided.
+    pub fn preset(&self) -> Option<Preset> {
+        Preset::ALL.into_iter().find(|preset| {
+            let mut probe = self.clone();
+            preset.apply(&mut probe);
+            probe.governed() == self.governed()
+        })
+    }
+
+    /// The switches a [`Preset`] decides, as a tuple for comparison. Kept
+    /// beside `Preset::apply` on purpose: a field added to one and forgotten
+    /// in the other would make `preset()` answer "Custom" forever.
+    fn governed(&self) -> (bool, bool, bool, bool, bool, bool) {
+        (
+            self.gamemode,
+            self.skip_addon_profiling,
+            self.reduce_raid_effects,
+            self.faster_zone_loads,
+            self.no_screen_effects,
+            self.max_draw_distance,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsStr;
 
     use super::*;
+
+    #[test]
+    fn each_preset_is_recognised_from_the_settings_it_writes() {
+        for preset in Preset::ALL {
+            let mut tweaks = Tweaks::default();
+            preset.apply(&mut tweaks);
+            assert_eq!(tweaks.preset(), Some(preset), "{preset:?} did not recognise itself");
+        }
+    }
+
+    #[test]
+    fn flipping_one_governed_switch_reads_as_custom() {
+        let mut tweaks = Tweaks::default();
+        Preset::Balanced.apply(&mut tweaks);
+        tweaks.max_draw_distance = true;
+        assert_eq!(tweaks.preset(), None);
+    }
+
+    // The whole point of the narrow definition: these are not on the
+    // frames-versus-scenery axis, so changing them must not move the profile
+    // off its preset.
+    #[test]
+    fn ungoverned_settings_do_not_move_a_profile_off_its_preset() {
+        let mut tweaks = Tweaks::default();
+        Preset::Frames.apply(&mut tweaks);
+
+        tweaks.fps_cap = Some(144);
+        tweaks.spell_queue_ms = Some(90);
+        tweaks.raw_mouse = true;
+        tweaks.mangohud = true;
+        tweaks.graphics_api = Some(GraphicsApi::D3d12);
+        tweaks.env.insert("DXVK_HUD".to_owned(), "fps".to_owned());
+
+        assert_eq!(tweaks.preset(), Some(Preset::Frames));
+    }
+
+    // A preset clearing somebody's environment variables would be data loss
+    // wearing the clothes of a convenience.
+    #[test]
+    fn applying_a_preset_preserves_the_escape_hatch_and_the_fork() {
+        let mut tweaks = Tweaks {
+            fps_cap: Some(120),
+            spell_queue_ms: Some(80),
+            raw_mouse: true,
+            graphics_api: Some(GraphicsApi::D3d11),
+            game_performance: Some(false),
+            ..Default::default()
+        };
+        tweaks.env.insert("MANGOHUD_CONFIG".to_owned(), "cpu_temp".to_owned());
+
+        Preset::Looks.apply(&mut tweaks);
+
+        assert_eq!(tweaks.fps_cap, Some(120));
+        assert_eq!(tweaks.spell_queue_ms, Some(80));
+        assert!(tweaks.raw_mouse);
+        assert_eq!(tweaks.graphics_api, Some(GraphicsApi::D3d11));
+        assert_eq!(tweaks.env.get("MANGOHUD_CONFIG").map(String::as_str), Some("cpu_temp"));
+        // Left alone on purpose: its default already means "on where it
+        // exists", so a preset overwriting it would be a silent change.
+        assert_eq!(tweaks.game_performance, Some(false));
+    }
+
+    #[test]
+    fn every_preset_stops_the_addon_profiler() {
+        for preset in Preset::ALL {
+            let mut tweaks = Tweaks::default();
+            preset.apply(&mut tweaks);
+            assert!(tweaks.skip_addon_profiling, "{preset:?} left the profiler on");
+        }
+    }
+
+    #[test]
+    fn only_the_looks_preset_spends_frames_on_scenery() {
+        for preset in Preset::ALL {
+            let mut tweaks = Tweaks::default();
+            preset.apply(&mut tweaks);
+            assert_eq!(
+                tweaks.max_draw_distance,
+                preset == Preset::Looks,
+                "{preset:?} got the draw distance wrong"
+            );
+        }
+    }
+
+    // A stock profile is not any preset: Balanced turns the profiler and raid
+    // effects off, and a fresh config has them on.
+    #[test]
+    fn a_default_profile_is_custom_rather_than_a_preset() {
+        assert_eq!(Tweaks::default().preset(), None);
+    }
 
     #[test]
     fn a_default_profile_writes_nothing_and_unsets_everything() {

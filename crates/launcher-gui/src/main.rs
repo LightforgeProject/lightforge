@@ -54,7 +54,7 @@ use lightforge_core::tact::install::Offerings;
 use lightforge_core::transfers::{self, Saved, Standing};
 use lightforge_core::tact::download::Cancel;
 use lightforge_core::tact::version::Region;
-use lightforge_core::tweaks::{GraphicsApi, HostTools, Tweaks};
+use lightforge_core::tweaks::{GraphicsApi, HostTools, Preset, Tweaks};
 
 use art::Art;
 use tasks::{Refreshed, SharedDownloads, TransferState};
@@ -280,6 +280,10 @@ enum Message {
     CopyDebug,
     /// A switch on the Game Optimizations panel was flipped.
     Tweak(Tweak, bool),
+    /// A starting point was chosen, setting the frames-versus-scenery switches.
+    TweakPreset(Preset),
+    /// Show or hide the environment-variable editor.
+    TweakEnvToggle,
     /// The graphics API the client should ask for.
     TweakApi(ApiChoice),
     TweakFpsCap(String),
@@ -1039,6 +1043,8 @@ struct Lightforge {
     /// catalogue offers. `None` in the list means the fetch is still out.
     version_picker: Option<VersionPicker>,
     addon_detail: Option<AddonDetail>,
+    /// Whether the environment-variable editor is expanded.
+    env_open: bool,
     /// Game families, as Blizzard's own catalogue names them, read out of the
     /// client's cache at startup. Empty on a prefix whose client has never
     /// run, which falls the hand-off back to the compiled-in families.
@@ -1198,6 +1204,7 @@ impl Lightforge {
             addon_menu_open: None,
             version_picker: None,
             addon_detail: None,
+            env_open: false,
             families: lightforge_core::families::Families::default(),
             import_pinned: false,
             addon_auto_done: Vec::new(),
@@ -3377,6 +3384,16 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::TweakPreset(preset) => {
+                self.edit_tweaks(|tweaks| preset.apply(tweaks));
+                Task::none()
+            }
+
+            Message::TweakEnvToggle => {
+                self.env_open = !self.env_open;
+                Task::none()
+            }
+
             Message::TweakApi(ApiChoice(api)) => {
                 self.edit_tweaks(|tweaks| tweaks.graphics_api = api);
                 Task::none()
@@ -5474,253 +5491,250 @@ impl Lightforge {
 
     /// Per-product performance settings: what this machine can do for the
     /// game, and what the client should be told to do for itself.
+    /// The Game Optimizations page.
+    ///
+    /// Laid out as a preset row over a two-column grid, which is a change of
+    /// shape rather than of content: the switches used to be grouped by the
+    /// *mechanism* that applies them — host binaries, DXVK, `Config.wtf`
+    /// lines, environment — so a card's height tracked how many cvars happened
+    /// to share a plumbing detail. Six full-width cards of wildly different
+    /// heights was the result. They are grouped by what somebody is trying to
+    /// do instead, which balances them, and the grid pins the rest: two cards
+    /// per row, both `Length::Fill` in each direction, so iced's flex stretches
+    /// the shorter one to its neighbour and every edge lines up.
     fn tweaks_screen(&self) -> Element<'_, Message> {
         let tweaks = self.tweaks();
 
-        let check = |label: &'static str, which: Tweak, on: bool| {
-            iced::widget::checkbox(on)
-                .label(label)
-                .on_toggle(move |on| Message::Tweak(which, on))
-                .text_size(theme::BODY)
-        };
-        let heading = |title: &'static str| text(title).size(theme::HEADING);
+        let body = column![
+            self.preset_row(&tweaks),
+            row![self.performance_card(&tweaks), self.looks_card(&tweaks)].spacing(theme::MD),
+            row![self.input_card(&tweaks), self.advanced_card(&tweaks)].spacing(theme::MD),
+            self.env_card(&tweaks),
+        ]
+        .spacing(theme::MD);
 
-        // Host tools. Detected, never assumed: the toggles that are missing
-        // are missing because the binary is, and saying so beats a switch that
-        // silently does nothing.
-        let mut host = column![heading("This machine")].spacing(theme::SM);
-        match self.tools.game_performance.is_some() {
-            true => {
-                host = host.push(check(
-                    "Hold the CPU on its performance profile while playing",
-                    Tweak::GamePerformance,
-                    tweaks.wants_game_performance(),
-                ));
-                host = host.extend(self.hint("Launches through CachyOS' game-performance, which also keeps the session \
-                     from idling. On by default where it exists; it stands aside on hardware \
-                     with no performance profile.").map(Element::from));
-            }
-            false => {
-                host = host.push(muted(
-                    "game-performance is not installed, so the CPU power profile is left \
-                     to the system."
-                        .to_owned(),
-                    theme::CAPTION,
-                ));
-            }
-        }
-        if self.tools.gamemode.is_some() {
-            host = host.push(check("Launch through GameMode", Tweak::GameMode, tweaks.gamemode));
-        }
-        if self.tools.mangohud.is_some() {
-            host = host.push(check("Show the MangoHud overlay", Tweak::MangoHud, tweaks.mangohud));
-        }
-        let host = container(host).padding(theme::MD).style(theme::card);
-
-        // Graphics. The API is a genuine fork rather than a best value, so it
-        // is a picker with the trade-off written next to it.
-        let apis = vec![
-            ApiChoice(None),
-            ApiChoice(Some(GraphicsApi::D3d11)),
-            ApiChoice(Some(GraphicsApi::D3d12)),
-        ];
-        let graphics = container(
-            column![
-                heading("Graphics"),
-                row![
-                    muted("Direct3D version".to_owned(), theme::LABEL)
-                        .width(Length::Fixed(150.0)),
-                    pick_list(apis, Some(ApiChoice(tweaks.graphics_api)), Message::TweakApi)
-                        .text_size(theme::BODY)
-                        .padding(theme::SM)
-                        .style(theme::picker)
-                        .menu_style(theme::picker_menu),
-                ]
-                .spacing(theme::MD)
-                .align_y(Alignment::Center),
-            ]
-            .extend(self.hint(
-                "Which translation layer the game runs on: D3D11 goes through DXVK, D3D12 \
-                 through VKD3D. Which is faster depends on the GPU — D3D12 is usually a \
-                 small win on AMD and often a loss on NVIDIA, so this is worth measuring \
-                 rather than assuming.",
-            ).map(Element::from))
-            .push(
-                row![
-                    muted("Frame cap".to_owned(), theme::LABEL).width(Length::Fixed(150.0)),
-                    text_input("uncapped", &self.fps_input)
-                        .on_input(Message::TweakFpsCap)
-                        .style(theme::field)
-                        .size(theme::BODY)
-                        .padding(theme::SM)
-                        .width(Length::Fixed(110.0)),
-                    muted("FPS".to_owned(), theme::LABEL),
-                ]
-                .spacing(theme::MD)
-                .align_y(Alignment::Center),
+        // The one sentence that used to be a paragraph inside the biggest
+        // card. It is true of every switch above, so it belongs under all of
+        // them rather than inside one.
+        let mut body = body.extend(
+            self.hint(
+                "The client settings here are written to this product's Config.wtf and \
+                 re-applied before every launch, because the client rewrites that file from \
+                 memory when it exits. Change one of them in-game and the setting here wins \
+                 next time.",
             )
-            .extend(self.hint(
-                "The client's own limit rather than the driver's, so it keeps working if \
-                 the Direct3D version above changes.",
-            ).map(Element::from))
-            .push(
-                row![secondary("Clear shader cache", Message::ClearShaderCache).enabled(true)]
-                    .extend(self.hint(
-                        "Shaders this product compiled under an older Proton build. Clearing \
-                         them costs one session of stutter and affects no other product.",
-                    ).map(Element::from))
-                    .spacing(theme::SM)
-                    .align_y(Alignment::Center),
-            )
-            .spacing(theme::SM),
-        )
-        .padding(theme::MD)
-        .style(theme::card);
+            .map(Element::from),
+        );
+        if let Some(e) = &self.error {
+            body = body.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
+        }
 
-        // Client settings. Everything here is a line in Config.wtf.
-        let client = container(
-            column![
-                heading("Client settings"),
-                check(
-                    "Stop profiling addon execution",
-                    Tweak::SkipAddonProfiling,
-                    tweaks.skip_addon_profiling,
-                ),
-                check(
-                    "Drop water and weather detail in raids and battlegrounds",
-                    Tweak::ReduceRaidEffects,
-                    tweaks.reduce_raid_effects,
-                ),
-                check(
-                    "Skip non-critical world preloading",
-                    Tweak::FasterZoneLoads,
-                    tweaks.faster_zone_loads,
-                ),
-                check("Raw mouse input", Tweak::RawMouse, tweaks.raw_mouse),
-            ]
-            .extend(self.hint(
-                "Also the fix for the cursor jumping back to the middle of the window \
-                 after a click, which is a Wine problem rather than a game one.",
-            ).map(Element::from))
-            .push(check(
-                "Turn off the full-screen glow and death filter",
-                Tweak::NoScreenEffects,
-                tweaks.no_screen_effects,
-            ))
-            .push(
-                row![
-                    muted("Spell queue".to_owned(), theme::LABEL).width(Length::Fixed(150.0)),
-                    text_input("client default", &self.spell_input)
-                        .on_input(Message::TweakSpellQueue)
-                        .style(theme::field)
-                        .size(theme::BODY)
-                        .padding(theme::SM)
-                        .width(Length::Fixed(110.0)),
-                    muted("ms".to_owned(), theme::LABEL),
-                ]
-                .spacing(theme::MD)
-                .align_y(Alignment::Center),
-            )
-            .extend(self.hint(
-                "How early the next ability may be queued. Your latency plus about 50ms \
-                 is the usual advice.",
-            ).map(Element::from))
-            .extend(self.hint(
-                "These are written to this product's Config.wtf and re-applied before \
-                 every launch, because the client rewrites that file from memory when it \
-                 exits. Change one of them in-game and the setting here wins next time.",
-            ).map(Element::from))
-            .spacing(theme::SM),
+        self.page(
+            "Game Optimizations",
+            Some(format!("{} · applied when this product launches", self.selected.label)),
+            None,
+            body.into(),
         )
-        .padding(theme::MD)
-        .style(theme::card);
+    }
 
-        // Deliberately its own card with its own warning: this one buys
-        // scenery with frames, which is the opposite of everything above.
-        let visuals = container(
-            column![
-                heading("Visuals"),
-                check(
-                    "Maximum view distance and ground clutter",
-                    Tweak::MaxDrawDistance,
-                    tweaks.max_draw_distance,
-                ),
-            ]
-            .extend(self.hint(
-                "This one costs frames rather than winning them. It is here because \
-                 people want it, not because it is an optimization.",
-            ).map(Element::from))
-            .spacing(theme::SM),
-        )
-        .padding(theme::MD)
-        .style(theme::card);
+    /// A checkbox in one of the cards below.
+    fn tweak_check<'a>(
+        &self,
+        label: &'a str,
+        which: Tweak,
+        on: bool,
+    ) -> iced::widget::Checkbox<'a, Message> {
+        iced::widget::checkbox(on)
+            .label(label)
+            .on_toggle(move |on| Message::Tweak(which, on))
+            .text_size(theme::BODY)
+    }
 
-        // The escape hatch. Everything above is a curated toggle; this is for
-        // the variable nobody anticipated.
-        let mut env = column![heading("Environment")].spacing(theme::SM);
-        for (key, value) in &tweaks.env {
-            env = env.push(
-                container(
-                    row![
-                        mono(format!("{key}={value}")).width(Length::Fill),
-                        button(text("Remove").size(theme::LABEL))
-                            .on_press(Message::TweakEnvRemove(key.clone()))
-                            .style(theme::ghost)
-                            .padding([theme::XS, theme::SM]),
-                    ]
-                    .spacing(theme::SM)
-                    .align_y(Alignment::Center),
-                )
-                .padding([theme::XS, theme::SM])
-                .style(theme::row),
+    /// One card of the grid: a heading, its own one-line brief, and content.
+    ///
+    /// `Length::Fill` in both directions is what makes the grid a grid. Two of
+    /// these in a `row` whose own height is Shrink hits iced's cross-compress
+    /// path: the shorter card is laid out again against the taller one's
+    /// height, so the pair match without either being pinned to a number that
+    /// would be wrong as soon as hints are turned off.
+    fn tweak_card<'a>(
+        &self,
+        title: &'a str,
+        brief: &'a str,
+        content: iced::widget::Column<'a, Message>,
+    ) -> Element<'a, Message> {
+        let mut inner = column![text(title).size(theme::HEADING)].spacing(theme::SM);
+        inner = inner.extend(self.hint(brief).map(Element::from));
+        container(inner.push(content).spacing(theme::SM))
+            .padding(theme::MD)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(theme::card)
+            .into()
+    }
+
+    /// The starting point: one press for the frames-versus-scenery trade.
+    ///
+    /// Full width and above the grid because it is one decision about
+    /// everything under it, and because a segmented control inside a column
+    /// would read as a fourth setting rather than the thing that sets them.
+    fn preset_row(&self, tweaks: &Tweaks) -> Element<'_, Message> {
+        let current = tweaks.preset();
+
+        let mut segments = row![].spacing(theme::XS);
+        for preset in Preset::ALL {
+            let chosen = current == Some(preset);
+            segments = segments.push(
+                button(text(preset.label()).size(theme::BODY))
+                    .padding([theme::SM, theme::MD])
+                    .style(match chosen {
+                        true => theme::selected,
+                        false => theme::ghost,
+                    })
+                    .on_press_maybe((!chosen).then_some(Message::TweakPreset(preset))),
             );
         }
-        env = env.push(
+
+        // Naming what is on now, including "Custom", is the whole value of the
+        // row: a segmented control with nothing lit says only that none of
+        // three things is true, which is not an answer.
+        let brief = match current {
+            Some(preset) => preset.summary().to_owned(),
+            None => "Your own mix of the switches below.".to_owned(),
+        };
+        let mut label = column![
             row![
-                text_input("VARIABLE", &self.env_key_input)
-                    .on_input(Message::TweakEnvKey)
-                    .on_submit(Message::TweakEnvAdd)
-                    .style(theme::field)
-                    .size(theme::BODY)
-                    .padding(theme::SM)
-                    .width(Length::Fixed(220.0)),
-                text_input("value", &self.env_value_input)
-                    .on_input(Message::TweakEnvValue)
-                    .on_submit(Message::TweakEnvAdd)
-                    .style(theme::field)
-                    .size(theme::BODY)
-                    .padding(theme::SM)
-                    .width(Length::Fill),
-                secondary("Add", Message::TweakEnvAdd).enabled(!self.env_key_input.is_empty()),
+                text("Starting point").size(theme::HEADING),
+                pill(
+                    match current {
+                        Some(preset) => preset.label().to_owned(),
+                        None => "Custom".to_owned(),
+                    },
+                    match current {
+                        Some(_) => theme::ACCENT,
+                        None => theme::MUTED,
+                    },
+                ),
             ]
             .spacing(theme::SM)
             .align_y(Alignment::Center),
-        );
-        env = env.extend(self.hint("Set for this product's launch only, after everything Lightforge assembles — so \
-             a variable here overrides the launcher's own.").map(Element::from));
-        let env = container(env).padding(theme::MD).style(theme::card);
+        ]
+        .spacing(theme::XS);
+        label = label.extend(self.hint(brief).map(Element::from));
 
-        // Optional downloads. Off by default, which is what Battle.net does:
-        // these are opt-in extras, and treating them as wanted is what put a
-        // 37 GiB texture pack in a plan nobody asked for.
+        container(
+            row![label.width(Length::Fill), segments]
+                .spacing(theme::LG)
+                .align_y(Alignment::Center),
+        )
+        .padding(theme::MD)
+        .width(Length::Fill)
+        .style(theme::card)
+        .into()
+    }
+
+    /// Everything that buys frames.
+    ///
+    /// The host tools are detected, never assumed, so a switch missing here
+    /// means the binary is — which is said at the foot of the card rather than
+    /// as a hint per switch, because three copies of the same caveat was a
+    /// large part of what made this page ragged.
+    fn performance_card(&self, tweaks: &Tweaks) -> Element<'_, Message> {
+        let mut content = column![].spacing(theme::SM);
+
+        if self.tools.game_performance.is_some() {
+            content = content.push(self.tweak_check(
+                "Hold the CPU on its performance profile",
+                Tweak::GamePerformance,
+                tweaks.wants_game_performance(),
+            ));
+        }
+        if self.tools.gamemode.is_some() {
+            content = content.push(self.tweak_check(
+                "Launch through GameMode",
+                Tweak::GameMode,
+                tweaks.gamemode,
+            ));
+        }
+        content = content.push(self.tweak_check(
+            "Stop profiling addon execution",
+            Tweak::SkipAddonProfiling,
+            tweaks.skip_addon_profiling,
+        ));
+        content = content.push(self.tweak_check(
+            "Drop water and weather detail in raids and battlegrounds",
+            Tweak::ReduceRaidEffects,
+            tweaks.reduce_raid_effects,
+        ));
+        content = content.push(self.tweak_check(
+            "Skip non-critical world preloading",
+            Tweak::FasterZoneLoads,
+            tweaks.faster_zone_loads,
+        ));
+
+        // Pushes the footnote to the bottom of whichever card is shorter, so
+        // the two in a row end on the same line.
+        content = content.push(Space::new().height(Length::Fill));
+        let missing: Vec<&str> = [
+            self.tools.game_performance.is_none().then_some("game-performance"),
+            self.tools.gamemode.is_none().then_some("GameMode"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if !missing.is_empty() {
+            content = content.push(muted(
+                format!("{} is not installed, so it is not offered.", missing.join(" and ")),
+                theme::CAPTION,
+            ));
+        }
+
+        self.tweak_card("Performance", "Everything here buys frames.", content)
+    }
+
+    /// Everything that spends frames, including the optional downloads.
+    ///
+    /// The glow switch reads the opposite way round from the stored field:
+    /// every other box here means *on, you get this*, and one box meaning *on,
+    /// you lose this* in the middle of a list is a misreading waiting to
+    /// happen. Inverted in the view only — `no_screen_effects` keeps its
+    /// meaning on disk, so no existing config changes.
+    fn looks_card(&self, tweaks: &Tweaks) -> Element<'_, Message> {
+        let mut content = column![
+            self.tweak_check(
+                "Maximum view distance and ground clutter",
+                Tweak::MaxDrawDistance,
+                tweaks.max_draw_distance,
+            ),
+            self.tweak_check(
+                "Full-screen glow and death filter",
+                Tweak::NoScreenEffects,
+                !tweaks.no_screen_effects,
+            ),
+        ]
+        .spacing(theme::SM);
+
+        // Optional downloads used to be a card of its own, which put a storage
+        // decision on an optimization page and left a 70px box next to a 300px
+        // one. It is the same trade as the two above — scenery for something
+        // else — so it sits with them, and says what it costs.
         let profile = self.config.product(&self.selected.code).map(|p| &p.profile);
         let known = profile.is_some_and(|p| !p.optional_available.is_empty());
         let available =
             offered_only(profile.map(|p| p.optional_available.as_slice()).unwrap_or(&[]));
         let opted = self.opted_optional(&self.selected.code);
 
-        let mut content = column![heading("Optional downloads")].spacing(theme::SM);
         match (known, available.is_empty()) {
             (false, _) => {
-                content = content.extend(self.hint("What a build offers is only known once its manifest has been read. \
-                     Use Check for Updates, under the cog beside PLAY, to fill this in.").map(Element::from));
+                content = content.extend(
+                    self.hint(
+                        "What else a build offers is only known once its manifest has been \
+                         read — use Check for Updates, under the cog beside PLAY.",
+                    )
+                    .map(Element::from),
+                );
             }
-            (true, true) => {
-                content = content.push(muted(
-                    "This build offers no optional downloads.".to_owned(),
-                    theme::CAPTION,
-                ));
-            }
+            (true, true) => {}
             (true, false) => {
                 for name in &available {
                     let on = opted.iter().any(|n| n == name);
@@ -5732,23 +5746,210 @@ impl Lightforge {
                             .text_size(theme::BODY),
                     );
                 }
-                content = content.extend(self.hint("Extra content this build offers, off unless asked for — the same \
-                     default Battle.net uses. Turning one on adds it to the next download.").map(Element::from));
+                content = content.extend(
+                    self.hint(
+                        "Off unless asked for, the same default Battle.net uses. Turning one \
+                         on adds it to the next download.",
+                    )
+                    .map(Element::from),
+                );
             }
         }
-        let content = container(content).padding(theme::MD).style(theme::card);
 
-        let mut body = column![host, graphics, client, content, visuals, env].spacing(theme::MD);
-        if let Some(e) = &self.error {
-            body = body.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
+        content = content.push(Space::new().height(Length::Fill));
+        self.tweak_card(
+            "Looks",
+            "Everything here spends frames. Same trade, stated once.",
+            content,
+        )
+    }
+
+    /// How it feels to play, which is not how fast it runs.
+    fn input_card(&self, tweaks: &Tweaks) -> Element<'_, Message> {
+        let mut content = column![self.tweak_check(
+            "Raw mouse input",
+            Tweak::RawMouse,
+            tweaks.raw_mouse,
+        )]
+        .spacing(theme::SM);
+        content = content.extend(
+            self.hint(
+                "Also the fix for the cursor jumping back to the middle of the window after \
+                 a click, which is a Wine problem rather than a game one.",
+            )
+            .map(Element::from),
+        );
+        content = content.push(
+            row![
+                muted("Spell queue".to_owned(), theme::LABEL).width(Length::Fixed(110.0)),
+                text_input("client default", &self.spell_input)
+                    .on_input(Message::TweakSpellQueue)
+                    .style(theme::field)
+                    .size(theme::BODY)
+                    .padding(theme::SM)
+                    .width(Length::Fixed(110.0)),
+                muted("ms".to_owned(), theme::LABEL),
+            ]
+            .spacing(theme::MD)
+            .align_y(Alignment::Center),
+        );
+        content = content.extend(
+            self.hint("Your latency plus about 50ms is the usual advice.").map(Element::from),
+        );
+
+        content = content.push(Space::new().height(Length::Fill));
+        self.tweak_card("Input and feel", "Nothing here changes how fast it runs.", content)
+    }
+
+    /// The fork and the ceiling: choices with no better default.
+    fn advanced_card(&self, tweaks: &Tweaks) -> Element<'_, Message> {
+        let apis = vec![
+            ApiChoice(None),
+            ApiChoice(Some(GraphicsApi::D3d11)),
+            ApiChoice(Some(GraphicsApi::D3d12)),
+        ];
+        let mut content = column![row![
+            muted("Graphics API".to_owned(), theme::LABEL).width(Length::Fixed(110.0)),
+            pick_list(apis, Some(ApiChoice(tweaks.graphics_api)), Message::TweakApi)
+                .style(theme::picker)
+                .text_size(theme::BODY)
+                .padding(theme::SM)
+                .width(Length::Fill),
+        ]
+        .spacing(theme::MD)
+        .align_y(Alignment::Center)]
+        .spacing(theme::SM);
+        content = content.extend(
+            self.hint(
+                "A genuine fork rather than a best value: D3D12 runs on VKD3D, D3D11 on \
+                 DXVK, and which is faster depends on the card.",
+            )
+            .map(Element::from),
+        );
+        content = content.push(
+            row![
+                muted("Frame cap".to_owned(), theme::LABEL).width(Length::Fixed(110.0)),
+                text_input("uncapped", &self.fps_input)
+                    .on_input(Message::TweakFpsCap)
+                    .style(theme::field)
+                    .size(theme::BODY)
+                    .padding(theme::SM)
+                    .width(Length::Fixed(110.0)),
+                muted("fps".to_owned(), theme::LABEL),
+            ]
+            .spacing(theme::MD)
+            .align_y(Alignment::Center),
+        );
+        content = content.extend(
+            self.hint(
+                "The client's own limit rather than the driver's, so it keeps working if the                  Direct3D version above changes.",
+            )
+            .map(Element::from),
+        );
+        if self.tools.mangohud.is_some() {
+            content = content.push(self.tweak_check(
+                "Show the MangoHud overlay",
+                Tweak::MangoHud,
+                tweaks.mangohud,
+            ));
         }
 
-        self.page(
-            "Game Optimizations",
-            Some(format!("{} · applied when this product launches", self.selected.label)),
-            None,
-            body.into(),
-        )
+        // An action rather than a setting, so it sits at the foot of the card
+        // under the switches — and it belongs with the graphics fork above it,
+        // because changing the Direct3D version is the usual reason to want it.
+        content = content.push(Space::new().height(Length::Fill));
+        content = content
+            .push(secondary("Clear shader cache", Message::ClearShaderCache).enabled(true));
+        content = content.extend(
+            self.hint(
+                "Shaders this product compiled under an older Proton build. Clearing them                  costs one session of stutter and affects no other product.",
+            )
+            .map(Element::from),
+        );
+
+        self.tweak_card("Advanced", "Choices with no better default.", content)
+    }
+
+    /// The escape hatch, full width and folded away.
+    ///
+    /// Out of the grid and collapsed by default because it is the only thing
+    /// on the page with no bound on its height: a profile with a dozen
+    /// variables in it would make its column twice its neighbour's, which is
+    /// the exact problem the grid is here to fix.
+    fn env_card(&self, tweaks: &Tweaks) -> Element<'_, Message> {
+        let count = tweaks.env.len();
+        let summary = row![
+            button(
+                text(match self.env_open {
+                    true => "Hide",
+                    false => "Show",
+                })
+                .size(theme::LABEL)
+            )
+            .on_press(Message::TweakEnvToggle)
+            .style(theme::ghost)
+            .padding([theme::XS, theme::SM]),
+        ];
+        let mut head = row![text("Environment variables").size(theme::HEADING)]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center);
+        if count > 0 {
+            head = head.push(pill(count.to_string(), theme::ACCENT));
+        }
+        let mut inner = column![row![head.width(Length::Fill), summary]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center)]
+        .spacing(theme::SM);
+
+        if self.env_open {
+            for (key, value) in &tweaks.env {
+                inner = inner.push(
+                    container(
+                        row![
+                            mono(format!("{key}={value}")).width(Length::Fill),
+                            button(text("Remove").size(theme::LABEL))
+                                .on_press(Message::TweakEnvRemove(key.clone()))
+                                .style(theme::ghost)
+                                .padding([theme::XS, theme::SM]),
+                        ]
+                        .spacing(theme::SM)
+                        .align_y(Alignment::Center),
+                    )
+                    .padding([theme::XS, theme::SM])
+                    .style(theme::row),
+                );
+            }
+            inner = inner.push(
+                row![
+                    text_input("VARIABLE", &self.env_key_input)
+                        .on_input(Message::TweakEnvKey)
+                        .on_submit(Message::TweakEnvAdd)
+                        .style(theme::field)
+                        .size(theme::BODY)
+                        .padding(theme::SM)
+                        .width(Length::Fixed(220.0)),
+                    text_input("value", &self.env_value_input)
+                        .on_input(Message::TweakEnvValue)
+                        .on_submit(Message::TweakEnvAdd)
+                        .style(theme::field)
+                        .size(theme::BODY)
+                        .padding(theme::SM)
+                        .width(Length::Fill),
+                    secondary("Add", Message::TweakEnvAdd).enabled(!self.env_key_input.is_empty()),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
+            );
+            inner = inner.extend(
+                self.hint(
+                    "Set for this product's launch only, after everything Lightforge \
+                     assembles — so a variable here overrides the launcher's own.",
+                )
+                .map(Element::from),
+            );
+        }
+
+        container(inner).padding(theme::MD).width(Length::Fill).style(theme::card).into()
     }
 
     /// The cog menu: what you do *about* a game rather than to play it.
