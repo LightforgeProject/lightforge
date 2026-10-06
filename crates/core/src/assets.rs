@@ -174,7 +174,27 @@ impl Manifest {
         self.default.as_deref().and_then(|code| self.products.get(code))
     }
 
-    /// One art slot for a product: its own, else the default theme's.
+    /// The theme of this product's *line* — Classic's for Classic PTR.
+    ///
+    /// The step between a product's own entry and `default`. A PTR is the
+    /// same game as the branch it tracks, so when the manifest does not name
+    /// it, the game it belongs to is a far better answer than whatever
+    /// `default` happens to be: without this, Era PTR and Classic PTR both
+    /// wore retail's logo and backdrop, because retail is what `default`
+    /// points at.
+    ///
+    /// `None` for a line whose head *is* this product, so the live branch
+    /// still falls through to `default` rather than resolving to itself.
+    fn head_theme(&self, code: &ProductCode) -> Option<&Theme> {
+        let head = code.line().head();
+        match head == *code {
+            true => None,
+            false => self.products.get(head.as_str()),
+        }
+    }
+
+    /// One art slot for a product: its own, else its line's, else the default
+    /// theme's.
     ///
     /// Per *slot* rather than per theme, because since schema 2 an entry can
     /// carry a mark and nothing else. Falling back a whole theme at a time
@@ -189,15 +209,15 @@ impl Manifest {
     ) -> Option<&AssetRef> {
         self.own_theme(code)
             .and_then(pick)
+            .or_else(|| self.head_theme(code).and_then(pick))
             .or_else(|| self.default_theme().and_then(pick))
     }
 
+    /// A product's theme, down the same chain [`Manifest::slot`] walks.
     pub fn theme(&self, code: &ProductCode) -> Option<&Theme> {
-        self.products.get(code.as_str()).or_else(|| {
-            self.default
-                .as_deref()
-                .and_then(|fallback| self.products.get(fallback))
-        })
+        self.own_theme(code)
+            .or_else(|| self.head_theme(code))
+            .or_else(|| self.default_theme())
     }
 }
 
@@ -761,17 +781,45 @@ mod tests {
     #[test]
     fn unnamed_products_fall_back_to_the_default() {
         let m = manifest();
-        // PTR and a user-added custom product both theme as Retail.
+        // Retail's PTR and a user-added custom product both theme as Retail —
+        // the PTR because retail *is* its line's head, the custom code because
+        // nothing is known about what it is a branch of.
         assert_eq!(m.theme(&ProductCode::Ptr).unwrap().label, "Retail");
         let custom = ProductCode::Custom("turtle_wow".into());
         assert_eq!(m.theme(&custom).unwrap().label, "Retail");
+    }
+
+    /// The bug this prevents: Era PTR and Classic PTR wearing retail's logo
+    /// and backdrop because `default` is what they fell through to.
+    #[test]
+    fn a_ptr_the_manifest_does_not_name_wears_its_own_lines_art() {
+        let m = manifest();
+        assert_eq!(m.theme(&ProductCode::EraPtr).unwrap().label, "Classic Era");
+        assert_eq!(
+            m.slot(&ProductCode::EraPtr, |t| t.logo.as_ref()).map(|a| a.url.as_str()),
+            Some("era-logo.png"),
+        );
+        assert_eq!(
+            m.slot(&ProductCode::EraPtr, |t| t.background.as_ref()).map(|a| a.url.as_str()),
+            Some("era-bg.jpg"),
+        );
+    }
+
+    /// A line whose head the manifest does not name either still reaches
+    /// `default` — the head must not resolve to itself and dead-end.
+    #[test]
+    fn a_line_with_no_art_of_its_own_still_reaches_the_default() {
+        let m = manifest();
+        assert_eq!(m.theme(&ProductCode::ClassicPtr).unwrap().label, "Retail");
     }
 
     #[test]
     fn a_default_naming_a_missing_product_is_not_a_theme() {
         let mut m = manifest();
         m.default = Some("nonexistent".into());
-        assert!(m.theme(&ProductCode::Beta).is_none());
+        // A custom code, not a WoW branch: a branch would reach its line's
+        // head and be themed after all, which is the point of `head_theme`.
+        assert!(m.theme(&ProductCode::Custom("turtle_wow".into())).is_none());
     }
 
     #[test]

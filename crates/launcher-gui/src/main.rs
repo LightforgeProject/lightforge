@@ -87,6 +87,37 @@ fn chevron_icon() -> image::Handle {
     CHEVRON.get_or_init(|| image::Handle::from_bytes(CHEVRON_ICON)).clone()
 }
 
+/// Manage Addons. A box of parts, which is what an addon set is.
+const PACKAGE_ICON: &[u8] = include_bytes!("../assets/package.png");
+
+/// The package's one handle — see [`gear_icon`] for why it is cached.
+fn package_icon() -> image::Handle {
+    static PACKAGE: OnceLock<image::Handle> = OnceLock::new();
+    PACKAGE.get_or_init(|| image::Handle::from_bytes(PACKAGE_ICON)).clone()
+}
+
+/// Game Optimizations. Sliders rather than the cog: the cog is already the
+/// split button's own mark for Lightforge's settings, and these are the
+/// game's.
+const SLIDERS_ICON: &[u8] = include_bytes!("../assets/sliders-horizontal.png");
+
+/// The sliders' one handle — see [`gear_icon`] for why it is cached.
+fn sliders_icon() -> image::Handle {
+    static SLIDERS: OnceLock<image::Handle> = OnceLock::new();
+    SLIDERS.get_or_init(|| image::Handle::from_bytes(SLIDERS_ICON)).clone()
+}
+
+/// Manage Subscription. The bill, not the browser: every one of the three
+/// links goes somewhere, so an outbound arrow said nothing about which one
+/// this is — and game time is a card on file.
+const CARD_ICON: &[u8] = include_bytes!("../assets/credit-card.png");
+
+/// The card's one handle — see [`gear_icon`] for why it is cached.
+fn card_icon() -> image::Handle {
+    static CARD: OnceLock<image::Handle> = OnceLock::new();
+    CARD.get_or_init(|| image::Handle::from_bytes(CARD_ICON)).clone()
+}
+
 /// Lightforge's own wordmark, which stands where the app's name used to be
 /// set in type. It is drawn art — the letterforms are outlines, not the UI
 /// font — so it is bundled as a picture rather than composed at run time.
@@ -4629,7 +4660,7 @@ impl Lightforge {
 
         // Add a game sits at the end of the band whatever happens, so its
         // width is not the band's to spend.
-        let (shown, hidden) = divide_strip(&widths, selected, room - BAND_BUTTON - theme::SM);
+        let (shown, hidden) = divide_strip(&widths, selected, room - BAND_BUTTON);
 
         // Fills the height it is given, rather than shrinking to the tiles.
         // `responsive` lays its content out at the top of the box, so a band
@@ -4665,7 +4696,6 @@ impl Lightforge {
             ));
         }
 
-        band = band.push(Space::new().width(Length::Fixed(theme::SM)));
         // Under the `+` itself, not in the corner: the button moves along the
         // band as games are added and removed, and the panel is the button's
         // own answer. Pinned by its left edge, since the `+` has the rest of
@@ -5428,32 +5458,62 @@ impl Lightforge {
             ));
         }
 
+        // Three words in a row with nothing on them read as a caption, not as
+        // somewhere to go. A mark in front of each says "this is a control"
+        // before the word is read at all.
+        //
+        // No horizontal padding: the air between them is the row's spacing, so
+        // the group starts on the same left edge as "version" and "installed"
+        // above it rather than inset by its own padding.
+        let link = |mark: image::Handle, label: &'static str, message: Option<Message>| {
+            button(
+                row![
+                    image(mark)
+                        .width(Length::Fixed(LINK_GLYPH))
+                        .height(Length::Fixed(LINK_GLYPH))
+                        .opacity(match message.is_some() {
+                            true => 1.0_f32,
+                            false => DIMMED,
+                        }),
+                    text(label).size(theme::LABEL),
+                ]
+                .spacing(theme::XS)
+                .align_y(Alignment::Center),
+            )
+            .on_press_maybe(message)
+            .style(theme::ghost)
+            .padding([theme::XS, 0.0])
+        };
+
         left = left.push(
             row![
                 // Addons are already per-product — the screen titles itself
                 // with the selection and every task takes its code — so this
                 // is navigation, not a second copy of it. Disabled until
                 // there is an install to put an addon into.
-                button(text("Manage Addons").size(theme::LABEL))
-                    .on_press_maybe(
-                        self.local.version.is_some().then_some(Message::Show(Screen::Addons))
-                    )
-                    .style(theme::ghost)
-                    .padding([theme::XS, theme::SM]),
-                button(text("Game Optimizations").size(theme::LABEL))
-                    .on_press(Message::Show(Screen::Tweaks))
-                    .style(theme::ghost)
-                    .padding([theme::XS, theme::SM]),
-                button(text("Manage Subscription").size(theme::LABEL))
-                    .on_press(Message::ManageSubscription)
-                    .style(theme::ghost)
-                    .padding([theme::XS, theme::SM]),
+                link(
+                    package_icon(),
+                    "Manage Addons",
+                    self.local.version.is_some().then_some(Message::Show(Screen::Addons)),
+                ),
+                link(
+                    sliders_icon(),
+                    "Game Optimizations",
+                    Some(Message::Show(Screen::Tweaks)),
+                ),
+                link(
+                    card_icon(),
+                    "Manage Subscription",
+                    Some(Message::ManageSubscription),
+                ),
             ]
-            .spacing(theme::XS),
+            .spacing(theme::MD)
+            .align_y(Alignment::Center),
         );
 
         let primary = button(
-            container(text(action.label()).size(theme::HEADING)).center_x(Length::Fill),
+            container(text(action.label()).size(theme::HEADING).color(iced::Color::WHITE))
+                .center_x(Length::Fill),
         )
         .style(theme::filled_left(color))
         .padding([theme::MD, theme::LG])
@@ -8266,6 +8326,11 @@ const BAND_BUTTON: f32 = 48.0;
 /// row of games. Half a tile is the size that makes the button a peer of what
 /// it stands next to without becoming a tile itself.
 const BNET_GLYPH: f32 = BAND_BUTTON / 2.0;
+
+/// Mark in front of one of the three links under the action panel's status
+/// lines. A shade over the 12pt word it introduces, so the pair sits on one
+/// optical line rather than the mark hanging below the text.
+const LINK_GLYPH: f32 = 14.0;
 
 /// Mark beside a label in the app menu, and the social squares' mark.
 const MENU_GLYPH: f32 = 16.0;
