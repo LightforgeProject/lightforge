@@ -5273,10 +5273,36 @@ impl Lightforge {
         // and a product logo reads as branding when it sits with Lightforge's
         // own rather than competing with the background for the middle.
         let logo: Element<Message> = match branding {
-            Some(b) => image(b.logo.clone())
-                .content_fit(ContentFit::Contain)
-                .height(Length::Fixed(theme::logo_height(b.branding.logo.height)))
-                .into(),
+            // Drawn at the size [`theme::logo_size`] gives it — equal area
+            // for every mark, however differently shaped — inside a box that
+            // never moves.
+            //
+            // Near the box's left edge and centred down it. The marks are
+            // trimmed to their own ink and no two are the same shape, so
+            // something has to stay still as you move along the band: the
+            // middle line does, and so does the left edge for everything but
+            // the narrowest few, which [`theme::logo_offset`] nudges in so
+            // they do not read as hanging further out than the rest. Centring
+            // horizontally instead would hold them steadier still, but it
+            // pushes a narrow mark most of a hundred points in from the page,
+            // and the page edge is where a wordmark under the band belongs.
+            Some(b) => {
+                let (width, height) = theme::logo_size(b.logo_aspect, b.logo_ink);
+                container(
+                    image(b.logo.clone())
+                        .content_fit(ContentFit::Contain)
+                        .width(Length::Fixed(width))
+                        .height(Length::Fixed(height)),
+                )
+                .align_x(Alignment::Start)
+                .center_y(Length::Fixed(theme::LOGO_BOX_HEIGHT))
+                .width(Length::Fixed(theme::LOGO_BOX_WIDTH))
+                .padding(iced::Padding {
+                    left: theme::logo_offset(width),
+                    ..iced::Padding::ZERO
+                })
+                .into()
+            }
             None => column![
                 text(self.selected.label.clone()).size(theme::DISPLAY),
                 muted("no artwork configured".to_owned(), theme::LABEL),
@@ -5298,7 +5324,7 @@ impl Lightforge {
                 // panel below it. Each logo is trimmed to its own artwork, so
                 // flush meant *touching* the page edge with no margin of its
                 // own — alignment the eye reads as a mistake rather than as a
-                // column.
+                // column. How far in is [`theme::LOGO_INSET`].
                 container(logo)
                     .align_x(Alignment::Start)
                     .width(Length::Fill)
@@ -5306,7 +5332,7 @@ impl Lightforge {
                         top: 0.0,
                         right: 0.0,
                         bottom: theme::MD,
-                        left: theme::XL,
+                        left: theme::LOGO_INSET,
                     }),
                 Space::new().height(Length::Fill),
                 // A product Battle.net owns gets a panel that offers only what
@@ -5320,12 +5346,14 @@ impl Lightforge {
                 },
             ]
             .spacing(theme::MD)
-            // Tighter at the top than the other three sides: the page's
-            // inset is right for the action panel against the window edge,
-            // and too much for a wordmark that should read as hanging from
-            // the band directly above it.
+            // No inset at all at the top, where the other three sides take
+            // the page's: that inset is right for the action panel against
+            // the window edge and wrong for a wordmark, which should read as
+            // hanging from the band directly above it. The logo box carries
+            // its own slack anyway — the mark is centred in it — so the gap
+            // under the band is real without being spent here.
             .padding(iced::Padding {
-                top: theme::MD,
+                top: 0.0,
                 right: theme::LG,
                 bottom: theme::LG,
                 left: theme::LG,

@@ -100,15 +100,102 @@ pub const BODY: f32 = 14.0;
 pub const LABEL: f32 = 12.0;
 pub const CAPTION: f32 = 11.0;
 
-/// Product wordmark on the dashboard, sitting under the app title.
+/// The box a product's wordmark is drawn in, on the dashboard under the app
+/// title.
 ///
-/// Large on purpose: the artwork behind it is the product's identity and the
-/// wordmark is the label on it, so it is a headline rather than a footnote.
+/// This is a *limit*, not the size anything is drawn at — [`logo_size`] does
+/// the sizing, and in the present catalogue nothing reaches either edge. The
+/// box is here for the mark this catalogue does not contain yet: art so
+/// extreme in shape that giving it the same area as everything else would run
+/// it off the page.
 ///
-/// A manifest may override this per art set — a wide wordmark and a squarish
-/// one drawn to the same height read as different sizes. [`logo_height`]
-/// decides what an override is allowed to be.
-pub const LOGO: f32 = 170.0;
+/// The width is deliberately narrower than equal area alone would ask for.
+/// The two StarCraft marks are so much wider than they are tall that the same
+/// area makes them span the page — StarCraft's would be 601pt across against
+/// 349 for Retail — and however equal the two are by the arithmetic, the long
+/// one reads as the louder. The box cuts those two back and reaches nothing
+/// else; the next widest, Classic Era's, comes to 407.
+///
+/// The height reaches nothing at all: the tallest mark in the catalogue,
+/// Retail's with its halo, is 270.
+pub const LOGO_BOX_WIDTH: f32 = 450.0;
+pub const LOGO_BOX_HEIGHT: f32 = 280.0;
+
+/// The width a wordmark is centred against before it is left-aligned.
+///
+/// Left-aligned alone, every mark starts on the same line but the narrow ones
+/// read as *further* left than the wide ones, because what the eye places is
+/// the middle of the block and not its edge: Forever, the narrowest in the
+/// catalogue at 263, sits its centre a good 90pt left of StarCraft's. So a
+/// mark narrower than this is nudged in by half the difference, and one at
+/// least this wide simply starts at the edge. Roughly the median drawn width,
+/// which is what leaves most marks untouched.
+pub const LOGO_ANCHOR_WIDTH: f32 = 350.0;
+
+/// How far a mark of `width` is nudged in from the box's left edge.
+pub fn logo_offset(width: f32) -> f32 {
+    ((LOGO_ANCHOR_WIDTH - width) / 2.0).max(0.0)
+}
+
+/// How far in from the page's own inset the wordmark sits.
+///
+/// Small: the marks are trimmed to their own ink, so flush with the page edge
+/// meant *touching* it, and this is the margin that stops that — not a place
+/// the wordmark was moved to. The box is centred on what this leaves, so a
+/// narrow mark still sits further in than a wide one starts.
+pub const LOGO_INSET: f32 = XL;
+
+/// How much of the page one product wordmark covers, in square points.
+///
+/// *Area*, because area is what the eye reads as size and a bounding box is
+/// not. The marks are trimmed to their own ink, so their shapes have nothing
+/// in common: StarCraft's is five and a half times wider than it is tall,
+/// Forever's barely wider than tall. Fitted into a shared rectangle, the
+/// strip spends the whole width and the square one spends only the height,
+/// and the second looks half the size of the first although both "fit". Given
+/// the same area instead, a wide mark is long and low, a square one is
+/// shorter and deep, and the two carry the same weight on the page — which is
+/// what "the same size" means for logos that are not the same shape.
+///
+/// The number is the largest that keeps every mark in the catalogue inside
+/// [`LOGO_BOX_WIDTH`] by [`LOGO_BOX_HEIGHT`], StarCraft's being the one that
+/// sets it.
+const LOGO_AREA: f32 = 56_000.0;
+
+/// The least of a logo [`logo_size`] will believe is the mark rather than its
+/// glow.
+///
+/// Dividing by the ink fraction is dividing by a number below one, so a
+/// mistaken reading — art that is genuinely almost all soft edge — would ask
+/// for a wordmark several times the size of every other. A floor costs
+/// nothing on the art we have, where the lowest is Retail's 0.59.
+const LOGO_MIN_INK: f32 = 0.4;
+
+/// How wide and tall to draw one wordmark, from the shape of its trimmed ink.
+///
+/// [`LOGO_AREA`] decides the size; `aspect` decides how that area is spent;
+/// `ink` is the share of the image that is the mark rather than its halo (see
+/// [`crate::art::Art::logo_ink`]), and the box is grown by the inverse of it
+/// so that the *mark* ends up at the standard area with its glow spilling
+/// past.
+///
+/// The result is then scaled down — never up — if it would leave the box, so
+/// a mark of some shape nobody has published yet is made smaller rather than
+/// allowed off the page.
+pub fn logo_size(aspect: f32, ink: f32) -> (f32, f32) {
+    let aspect = match aspect.is_finite() && aspect > 0.0 {
+        true => aspect,
+        false => 1.0,
+    };
+    let ink = match ink.is_finite() {
+        true => ink.clamp(LOGO_MIN_INK, 1.0),
+        false => 1.0,
+    };
+    let area = LOGO_AREA / ink;
+    let (width, height) = ((area * aspect).sqrt(), (area / aspect).sqrt());
+    let fit = (LOGO_BOX_WIDTH / width).min(LOGO_BOX_HEIGHT / height).min(1.0);
+    (width * fit, height * fit)
+}
 
 /// Edge of a product tile in the header's product bar. Square, so this is
 /// both dimensions; the art inside is drawn to fit.
@@ -129,26 +216,16 @@ pub const TILE: f32 = 40.0;
 pub const NEWS_THUMB_WIDTH: f32 = 160.0;
 pub const NEWS_THUMB_HEIGHT: f32 = NEWS_THUMB_WIDTH * 9.0 / 16.0;
 
-/// What a manifest's logo height hint is allowed to ask for.
-///
-/// The manifest is fetched over the network, so a typo or a bad publish must
-/// not be able to push the wordmark off screen or shrink it to nothing. Below
-/// the floor it stops being legible; above the ceiling it crowds the action
-/// panel at [`crate::WINDOW_MIN`]'s height, which is where the room runs out.
-const LOGO_RANGE: std::ops::RangeInclusive<f32> = 60.0..=440.0;
-
-/// The height to draw a product's logo at: its hint, clamped, else [`LOGO`].
-///
-/// A hint that isn't a usable number at all — negative, zero, NaN — is treated
-/// as absent rather than clamped, since there is no reading of it to honour.
-pub fn logo_height(hint: Option<f32>) -> f32 {
-    match hint {
-        Some(height) if height.is_finite() && height > 0.0 => {
-            height.clamp(*LOGO_RANGE.start(), *LOGO_RANGE.end())
-        }
-        _ => LOGO,
-    }
-}
+// A manifest may still carry a `height` per art set. Nothing reads it any
+// more, and the field is kept only so older manifests still parse.
+//
+// It meant "draw this art set's logo at this many pixels tall", from when
+// every logo was drawn on its publisher's own canvas and a height was the
+// only lever there was for making two of them look alike. It never worked —
+// a height is not a size when the shapes differ, which is why every row in
+// the published table carries the same number — and against [`logo_size`] it
+// does active harm: capping Retail at the table's 210 undoes most of what
+// measuring its mark rather than its halo just bought it.
 
 /// Corner radius. One value for panels, one for controls.
 pub const RADIUS: f32 = 10.0;
@@ -189,7 +266,7 @@ pub const BOLD: Font = Font {
 const _: () = assert!(XS < SM && SM < MD && MD < LG && LG < XL);
 const _: () = assert!(CAPTION < LABEL && LABEL < BODY && BODY < HEADING);
 const _: () = assert!(HEADING < TITLE && TITLE < DISPLAY);
-const _: () = assert!(*LOGO_RANGE.start() <= LOGO && LOGO <= *LOGO_RANGE.end());
+
 
 const fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::from_rgb(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0)
@@ -610,27 +687,86 @@ mod tests {
         assert_eq!(on(OK), Color::WHITE);
     }
 
+    /// The point of the whole exercise: marks of wildly different shape come
+    /// out covering the same amount of page.
     #[test]
-    fn a_missing_hint_is_the_default() {
-        assert_eq!(logo_height(None), LOGO);
-    }
-
-    #[test]
-    fn a_sane_hint_is_honoured() {
-        assert_eq!(logo_height(Some(150.0)), 150.0);
-    }
-
-    #[test]
-    fn a_wild_hint_is_clamped_rather_than_obeyed() {
-        assert_eq!(logo_height(Some(5_000.0)), *LOGO_RANGE.end());
-        assert_eq!(logo_height(Some(3.0)), *LOGO_RANGE.start());
-    }
-
-    #[test]
-    fn a_hint_that_is_not_a_height_falls_back() {
-        for nonsense in [0.0, -120.0, f32::NAN, f32::INFINITY] {
-            assert_eq!(logo_height(Some(nonsense)), LOGO, "{nonsense}");
+    fn marks_of_any_shape_are_given_the_same_area() {
+        // Mists' trimmed ink against Forever's: 2.0:1 and 1.2:1, the widest
+        // and the narrowest the box does not cut back.
+        let (mw, mh) = logo_size(704.0 / 353.0, 1.0);
+        let (fw, fh) = logo_size(538.0 / 440.0, 1.0);
+        let (wide, square) = (mw * mh, fw * fh);
+        assert!((wide - square).abs() / square < 0.01, "{wide} vs {square}");
+        for (w, h) in [(mw, mh), (fw, fh)] {
+            assert!(w <= LOGO_BOX_WIDTH && h <= LOGO_BOX_HEIGHT, "{w}x{h}");
         }
+    }
+
+    /// Equal area is the rule; the box is the exception to it, and StarCraft
+    /// is the one mark that meets the exception — see [`LOGO_BOX_WIDTH`].
+    #[test]
+    fn the_one_mark_too_wide_for_the_page_is_cut_back() {
+        let (sw, sh) = logo_size(704.0 / 127.0, 1.0);
+        assert_eq!(sw, LOGO_BOX_WIDTH);
+        assert!(sw * sh < LOGO_AREA * 0.8, "{}", sw * sh);
+        // The next widest is not touched: cutting a second mark back would
+        // make this a rule about wide marks rather than about this one.
+        let (w2, h2) = logo_size(704.0 / 202.0, 1.0);
+        assert!(w2 < LOGO_BOX_WIDTH);
+        assert!((w2 * h2 - LOGO_AREA).abs() / LOGO_AREA < 0.01);
+    }
+
+    /// Shape nobody has published: made smaller, never pushed off the page.
+    #[test]
+    fn an_extreme_shape_is_clamped_into_the_box() {
+        let (w, h) = logo_size(20.0, 1.0);
+        assert!(w <= LOGO_BOX_WIDTH && h <= LOGO_BOX_HEIGHT, "{w}x{h}");
+        assert!(w * h < LOGO_AREA, "a clamped mark is smaller, not larger");
+    }
+
+    /// An aspect that is not a number at all is a square, not a panic.
+    #[test]
+    fn a_nonsense_aspect_is_treated_as_square() {
+        for nonsense in [f32::NAN, 0.0, -3.0, f32::INFINITY] {
+            let (w, h) = logo_size(nonsense, 1.0);
+            assert!((w - h).abs() < 0.5, "{nonsense}: {w}x{h}");
+        }
+    }
+
+    /// Retail's mark sits in a halo a third as wide again as itself. Measured
+    /// by its outer bounds it comes out visibly smaller than the rest; measured
+    /// by the mark, it matches them.
+    #[test]
+    fn a_mark_inside_a_halo_is_sized_by_the_mark() {
+        // Retail: 570x440 trimmed, 431x346 of it solid.
+        let ink = (431.0 * 346.0) / (570.0 * 440.0);
+        let (haloed, _) = logo_size(570.0 / 440.0, ink);
+        let (plain, _) = logo_size(570.0 / 440.0, 1.0);
+        assert!(haloed > plain * 1.2, "{haloed} vs {plain}");
+
+        // And what is left once the halo is discounted is the standard area.
+        let (w, h) = logo_size(570.0 / 440.0, ink);
+        let mark = (w * h) * ink;
+        assert!((mark - LOGO_AREA).abs() / LOGO_AREA < 0.01, "{mark}");
+    }
+
+    /// A narrow mark is nudged in; a wide one is left where it is.
+    #[test]
+    fn only_the_narrow_marks_are_nudged_off_the_edge() {
+        assert_eq!(logo_offset(LOGO_BOX_WIDTH), 0.0);
+        assert_eq!(logo_offset(LOGO_ANCHOR_WIDTH), 0.0);
+        // Forever, the narrowest, by half what it is short of the anchor.
+        assert_eq!(logo_offset(263.0), (LOGO_ANCHOR_WIDTH - 263.0) / 2.0);
+    }
+
+    /// A reading of almost-all-halo would ask for a wordmark several times
+    /// everyone else's. The floor is what stops that.
+    #[test]
+    fn an_impossible_ink_reading_is_floored() {
+        let (w, h) = logo_size(2.0, 0.01);
+        let (floored, _) = logo_size(2.0, LOGO_MIN_INK);
+        assert_eq!(w, floored);
+        assert!(w <= LOGO_BOX_WIDTH && h <= LOGO_BOX_HEIGHT);
     }
 }
 
