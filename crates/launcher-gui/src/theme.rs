@@ -47,8 +47,27 @@ pub const WOWHEAD: Color = rgb(0xC2, 0x21, 0x26);
 
 pub const ACCENT: Color = rgb(0x00, 0xB4, 0xFF);
 pub const INSTALL: Color = rgb(0x4F, 0xC3, 0xF7);
-pub const UPDATE: Color = rgb(0xFF, 0x98, 0x00);
-pub const PLAY: Color = rgb(0x4C, 0xAF, 0x50);
+
+/// An update waiting. Violet rather than the orange it used to be: orange and
+/// [`PLAY`]'s gold are the same hue to the eye at a glance, and Update and Play
+/// are the two buttons that occupy the same spot on the panel — a player who
+/// reads the colour before the word has to be able to tell them apart. Violet
+/// is the one strong hue the palette had not already spent.
+pub const UPDATE: Color = rgb(0xA7, 0x8B, 0xFA);
+
+/// The launch button, and nothing else.
+///
+/// Taken from the wordmark: it is the midpoint of the two golds the mark is
+/// drawn in (`#FABD2F` and `#D79921`), so the one button the eye goes to first
+/// is wearing the app's own colour. It replaced a green that read as a traffic
+/// light next to a gold mark.
+pub const PLAY: Color = rgb(0xE9, 0xAB, 0x28);
+
+/// Done, healthy, present — a status, never an action. This is the green
+/// [`PLAY`] used to be, kept for the things that only report: the "installed"
+/// pill, a finished setup step, the dot that says the install is shared.
+pub const OK: Color = rgb(0x4C, 0xAF, 0x50);
+
 pub const PAUSE: Color = rgb(0x78, 0x86, 0x96);
 pub const ERROR: Color = rgb(0xE5, 0x73, 0x73);
 
@@ -185,7 +204,7 @@ pub fn base() -> Theme {
             background: BG,
             text: TEXT,
             primary: ACCENT,
-            success: PLAY,
+            success: OK,
             // 0.14 added a warning slot. Ours is the update colour: an update
             // waiting is the only thing in Lightforge that warns.
             warning: UPDATE,
@@ -582,11 +601,13 @@ mod tests {
 
     #[test]
     fn text_on_a_state_colour_stays_readable() {
-        // Light blue install needs dark text; green play needs white. Getting
-        // this backwards makes the one button that matters unreadable.
+        // Install, Play and Update are all light enough to need dark text;
+        // green OK is the one that needs white. Getting this backwards makes
+        // the one button that matters unreadable.
         assert!(on(INSTALL).r < 0.5, "light backgrounds need dark text");
-        assert_eq!(on(PLAY), Color::WHITE);
-        assert!(on(UPDATE).r < 0.5, "orange is light enough for dark text");
+        assert!(on(PLAY).r < 0.5, "the wordmark's gold needs dark text");
+        assert!(on(UPDATE).r < 0.5, "violet is light enough for dark text");
+        assert_eq!(on(OK), Color::WHITE);
     }
 
     #[test]

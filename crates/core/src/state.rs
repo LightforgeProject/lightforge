@@ -35,7 +35,7 @@ pub enum ActionState {
     Unknown,
     /// Game is missing — `[ INSTALL ]`, light blue.
     Install,
-    /// Ribbit reports newer CDN hashes than local `.build.info` — `[ UPDATE ]`, orange.
+    /// Ribbit reports newer CDN hashes than local `.build.info` — `[ UPDATE ]`, violet.
     Update {
         local_build: String,
         remote_build: String,
@@ -50,7 +50,7 @@ pub enum ActionState {
     /// Download is paused, either by the user or by pre-flight before launching
     /// Battle.net (concurrent CASC writes are a real corruption risk).
     Paused(Progress),
-    /// Ready to launch — `[ PLAY ]`, green.
+    /// Ready to launch — `[ PLAY ]`, the wordmark's gold.
     Play,
     /// Something went wrong; the message is user-facing.
     Error { message: String },

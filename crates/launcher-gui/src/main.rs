@@ -1512,7 +1512,7 @@ impl Lightforge {
         // it is the same act. The hand-off drives Battle.net end to end now,
         // so a quiet outlined button would be understating what it does.
         //
-        // Blue rather than PLAY's green: it starts through Battle.net, and
+        // Blue rather than PLAY's gold: it starts through Battle.net, and
         // the colour is the one thing that can say so without a second line
         // of text. When there is no game family to ask for, the button only
         // opens the client — not a launch, so it does not dress as one.
@@ -4801,13 +4801,15 @@ impl Lightforge {
             face = face.push(
                 image(image::Handle::from_path(path))
                     .content_fit(ContentFit::Contain)
-                    .width(Length::Fixed(BAND_GLYPH))
-                    .height(Length::Fixed(BAND_GLYPH)),
+                    .width(Length::Fixed(BNET_GLYPH))
+                    .height(Length::Fixed(BNET_GLYPH)),
             );
         }
         // Same optical correction as the band's label — the word has no
-        // descenders either, and it sits beside a 16pt mark that fills its box.
-        let face = face.push(optically_centred(text("Battle.net").size(theme::LABEL)));
+        // descenders either, and it sits beside a mark that fills its box.
+        let face = face.push(optically_centred(
+            text("Battle.net").size(theme::LABEL).font(theme::BOLD),
+        ));
 
         tooltip(
             button(face)
@@ -6998,7 +7000,7 @@ impl Lightforge {
                 }
             }
             line = line.push(match already {
-                true => pill("installed".to_owned(), theme::PLAY),
+                true => pill("installed".to_owned(), theme::OK),
                 false => action_button(
                     "Install",
                     theme::INSTALL,
@@ -7100,7 +7102,7 @@ impl Lightforge {
 
         let step = |done: bool, label: &'static str, detail: String| {
             let color = match done {
-                true => theme::PLAY,
+                true => theme::OK,
                 false => theme::MUTED,
             };
             container(
@@ -7530,8 +7532,8 @@ impl Lightforge {
                 tooltip(
                     row![
                         container(Space::new().width(Length::Fixed(8.0)).height(Length::Fixed(8.0)))
-                            .style(theme::dot(theme::PLAY)),
-                        text("Sharing data").size(theme::LABEL).color(theme::PLAY),
+                            .style(theme::dot(theme::OK)),
+                        text("Sharing data").size(theme::LABEL).color(theme::OK),
                     ]
                     .spacing(theme::SM)
                     .align_y(Alignment::Center),
@@ -8255,6 +8257,15 @@ const STRIP_HEIGHT: f32 = theme::TILE + theme::LG;
 /// Width of a band button, pinned so the band's arithmetic is exact rather
 /// than an estimate of how wide a glyph renders.
 const BAND_BUTTON: f32 = 48.0;
+
+/// Battle.net's own mark on the button at the end of the band.
+///
+/// Larger than [`BAND_GLYPH`], which sizes marks that sit *inside* a band
+/// control: this one sits beside a word at the end of the row of 48pt tiles,
+/// and a 16pt mark there reads as a favicon rather than the last entry in a
+/// row of games. Half a tile is the size that makes the button a peer of what
+/// it stands next to without becoming a tile itself.
+const BNET_GLYPH: f32 = BAND_BUTTON / 2.0;
 
 /// Mark beside a label in the app menu, and the social squares' mark.
 const MENU_GLYPH: f32 = 16.0;
