@@ -87,6 +87,17 @@ fn chevron_icon() -> image::Handle {
     CHEVRON.get_or_init(|| image::Handle::from_bytes(CHEVRON_ICON)).clone()
 }
 
+/// Lightforge's own wordmark, which stands where the app's name used to be
+/// set in type. It is drawn art — the letterforms are outlines, not the UI
+/// font — so it is bundled as a picture rather than composed at run time.
+const WORDMARK: &[u8] = include_bytes!("../assets/wordmark.png");
+
+/// The wordmark's one handle — see [`gear_icon`] for why it is cached.
+fn wordmark_image() -> image::Handle {
+    static WORDMARK_HANDLE: OnceLock<image::Handle> = OnceLock::new();
+    WORDMARK_HANDLE.get_or_init(|| image::Handle::from_bytes(WORDMARK)).clone()
+}
+
 /// Add a game. A typed `+` does exist in every font, but it is a *character*:
 /// it sits on the text baseline at the weight of the UI font, which reads as
 /// a letter next to the drawn chevron beside it. Both marks are strokes of the
@@ -4106,8 +4117,8 @@ impl Lightforge {
     /// Title, product picker, and navigation.
     fn header(&self) -> Element<'_, Message> {
         let nav = |label: &'static str, screen: Screen| {
-            let entry = button(text(label).size(theme::LABEL).font(theme::BOLD))
-                .padding([theme::SM, theme::MD]);
+            let entry = button(text(label).size(TAB_LABEL).font(theme::BOLD))
+                .padding([theme::SM, theme::SM]);
             // Addons and Game Optimizations are a game's own pages, opened
             // from its panel, so Play stays lit on them — and stays clickable,
             // since it is the way back.
@@ -4130,7 +4141,7 @@ impl Lightforge {
         let outbound = |label: &'static str, url: &'static str| {
             button(
                 row![
-                    text(label).size(theme::LABEL).font(theme::BOLD),
+                    text(label).size(TAB_LABEL).font(theme::BOLD),
                     image(outbound_icon())
                         .width(Length::Fixed(OUTBOUND_GLYPH))
                         .height(Length::Fixed(OUTBOUND_GLYPH)),
@@ -4138,7 +4149,7 @@ impl Lightforge {
                 .spacing(OUTBOUND_GAP)
                 .align_y(Alignment::Center),
             )
-            .padding([theme::SM, theme::MD])
+            .padding([theme::SM, theme::SM])
             .style(theme::ghost)
             .on_press(Message::OpenLink(url))
         };
@@ -4147,7 +4158,9 @@ impl Lightforge {
         // way every other menu in the app does.
         let wordmark = button(
             row![
-                text("LIGHTFORGE").size(theme::TITLE),
+                image(wordmark_image())
+                    .width(Length::Fixed(WORDMARK_HEIGHT * WORDMARK_ASPECT))
+                    .height(Length::Fixed(WORDMARK_HEIGHT)),
                 image(chevron_icon())
                     .width(Length::Fixed(BAND_GLYPH * 0.75))
                     .height(Length::Fixed(BAND_GLYPH * 0.75)),
@@ -4197,14 +4210,24 @@ impl Lightforge {
             .on_press_maybe(enabled.then_some(message))
         };
 
-        bar = bar.push(Space::new().width(Length::Fixed(theme::SM)));
+        bar = bar.push(Space::new().width(Length::Fixed(GROUP_GAP)));
         bar = bar.push(step(back_icon(), Message::GoBack, !self.visited.is_empty()));
         bar = bar.push(step(forward_icon(), Message::GoForward, !self.forward.is_empty()));
 
-        bar = bar.push(Space::new().width(Length::Fixed(theme::SM)));
-        bar = bar.push(nav("Play", Screen::Dashboard));
-        bar = bar.push(nav("News", Screen::News));
-        bar = bar.push(outbound("Battle.net Shop", SHOP_URL));
+        // The pages in a row of their own rather than loose in `bar`, so
+        // [`TAB_GAP`] sets the air between tabs and nothing else: the row above
+        // separates groups — wordmark, arrows, pages — and those two distances
+        // are not the same distance.
+        bar = bar.push(Space::new().width(Length::Fixed(GROUP_GAP)));
+        bar = bar.push(
+            row![
+                nav("Play", Screen::Dashboard),
+                nav("News", Screen::News),
+                outbound("Battle.net Shop", SHOP_URL),
+            ]
+            .spacing(TAB_GAP)
+            .align_y(Alignment::Center),
+        );
         bar = bar.push(Space::new().width(Length::Fill));
 
         // Only while something is in flight. An idle launcher has no
@@ -4218,9 +4241,9 @@ impl Lightforge {
                         1 => "↓ 1".to_owned(),
                         n => format!("↓ {n}"),
                     })
-                    .size(theme::LABEL),
+                    .size(TAB_LABEL),
                 )
-                .padding([theme::SM, theme::MD])
+                .padding([theme::SM, theme::SM])
                 .style(match self.manager_open {
                     true => theme::selected,
                     false => theme::ghost,
@@ -8240,15 +8263,50 @@ const MENU_GLYPH: f32 = 16.0;
 /// because this one is trimmed to its own ink, the way the band's marks are:
 /// it is read beside a word rather than down a column, so the box is the mark
 /// and the number is the size it actually draws. 8 sits just under the cap
-/// height of 12pt bold: a mark on a word, not a second word.
+/// height of [`TAB_LABEL`] bold: a mark on a word, not a second word.
 const OUTBOUND_GLYPH: f32 = 8.0;
+
+/// How tall the wordmark is drawn in the top bar. Above [`theme::TITLE`]:
+/// the mark is artwork rather than a line of type, and the hammer between the
+/// two words carries detail that a headline's cap height loses.
+const WORDMARK_HEIGHT: f32 = 28.0;
+
+/// The navigation tabs' type. Deliberately small beside a wordmark of
+/// [`WORDMARK_HEIGHT`]: the mark is the row's voice and the tabs are its
+/// index, and setting them anywhere near the mark's size gives the row two
+/// things shouting at once. The air around them, not their size, is what
+/// keeps them readable — see [`TAB_GAP`].
+const TAB_LABEL: f32 = theme::LABEL;
+
+/// The air between two tabs in the navigation row.
+///
+/// All of it lives here rather than in the tabs' own padding, and that is the
+/// point. A tab's padding is what the selected pill is drawn around, so air
+/// spent there is air you see on three sides of "Play" and nowhere beside
+/// "News" — which is why the gap to "Battle.net Shop" used to look wider than
+/// the gap back to "Play" although both measured the same. Keeping the tabs'
+/// padding at the minimum a pill needs leaves the two gaps within a few
+/// pixels of each other.
+const TAB_GAP: f32 = theme::LG;
+
+/// Extra air on top of the row's own spacing where one group of controls in
+/// the navigation row ends and the next begins — wordmark, then the arrows,
+/// then the pages. It only has to say "different kind of thing"; the groups
+/// are already told apart by what they look like, so a gap wide enough to
+/// read as a break is wider than the job needs.
+const GROUP_GAP: f32 = theme::XS;
+
+/// The wordmark's width over its height. The picture is trimmed to its own
+/// ink, so the ratio is fixed by the art: scaling by it is what keeps the
+/// hammer round instead of squeezed.
+const WORDMARK_ASPECT: f32 = 563.0 / 72.0;
 
 /// Air between that label and its arrow.
 ///
 /// Tighter than [`theme::XS`] on purpose. Every tab in the navigation row is
-/// separated by the same `SM`, but only this one carries anything after its
-/// label, and that padding is *inside* the button — so air there widens the
-/// space between "News" and "Battle.net Shop" without the row's spacing
+/// separated by the same [`TAB_GAP`], but only this one carries anything after
+/// its label, and that padding is *inside* the button — so air there widens
+/// the space between "News" and "Battle.net Shop" without the row's spacing
 /// changing at all. Keeping the arrow against its word is what makes the two
 /// gaps match by eye as well as in the arithmetic.
 const OUTBOUND_GAP: f32 = 2.0;
