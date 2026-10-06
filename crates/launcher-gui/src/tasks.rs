@@ -14,6 +14,7 @@ use iced::widget::image::Handle;
 use lightforge_core::assets::{Manifest, Pipeline};
 use lightforge_core::config::Config;
 use lightforge_core::net::Http;
+use lightforge_core::news;
 use lightforge_core::families::Families;
 use lightforge_core::paths::{AppDirs, Layout};
 use lightforge_core::preflight::{DownloadGuard, GameProcess, Preflight, PreflightError};
@@ -1205,4 +1206,19 @@ mod mark_tests {
         assert!(!same_marks(&a, &b));
         assert!(!same_marks(&b, &a));
     }
+}
+
+/// Fetch the News page's headlines.
+///
+/// Returns `None` only when there is genuinely nothing to show — no network
+/// and nothing cached. Anything else, including a proxy that is down while a
+/// cached copy exists, comes back as headlines that know whether they are
+/// stale.
+pub async fn headlines(
+    http: Option<Http>,
+    origin: news::Origin,
+    cache_file: PathBuf,
+) -> Option<news::Headlines> {
+    let http = http?;
+    news::headlines(&http, &origin, &cache_file).await
 }

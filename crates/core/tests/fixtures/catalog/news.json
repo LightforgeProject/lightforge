@@ -1,0 +1,17 @@
+{
+  "degraded": [
+    "Wowhead Classic"
+  ],
+  "items": [
+    {
+      "category": "Live",
+      "id": "news=383257",
+      "image": "https://example.invalid/news=383257.jpg",
+      "published": "2026-10-05T21:10:19Z",
+      "source": "Wowhead",
+      "summary": "A short blurb.",
+      "title": "Stitches Is Hostile Again",
+      "url": "https://example.invalid/news=383257"
+    }
+  ]
+}

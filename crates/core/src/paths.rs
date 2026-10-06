@@ -374,6 +374,12 @@ impl AppDirs {
         self.cache.join("assets")
     }
 
+    /// The merged news feed and its ETag, so the News page draws something
+    /// on a cold start and keeps reading after the proxy goes away.
+    pub fn news_cache_file(&self) -> PathBuf {
+        self.cache.join("news.json")
+    }
+
     /// The download queue as it stood, restored on the next start.
     pub fn queue_file(&self) -> PathBuf {
         self.data.join("queue.toml")

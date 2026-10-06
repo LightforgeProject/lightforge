@@ -42,6 +42,7 @@ use lightforge_core::assets::{Manifest, Pipeline, Store};
 use lightforge_core::config::Config;
 use lightforge_core::debug::DebugInfo;
 use lightforge_core::net::Http;
+use lightforge_core::news;
 use lightforge_core::paths::{AppDirs, Layout};
 use lightforge_core::product::{Branch, Catalog, Kind, Product, ProductCode, ProductLine};
 use lightforge_core::state::{self, ActionState, Local};
@@ -276,6 +277,11 @@ enum Message {
     GoForward,
     /// Open one of the project's own links in the browser.
     OpenLink(&'static str),
+    /// A headline's own link. Owned, unlike [`Message::OpenLink`]'s static
+    /// chrome URLs: these come off the wire.
+    OpenArticle(String),
+    NewsLoaded(Option<Box<news::Headlines>>),
+    RefreshNews,
     /// Quit.
     Exit,
     /// A click that no widget consumed — close whatever is open, the way
@@ -846,6 +852,19 @@ struct Lightforge {
     /// [`Layout::battle_net_icon`]. Held as a path, not a handle: iced keys an
     /// image by its path, so rebuilding the header does not decode it again.
     bnet_icon: Option<PathBuf>,
+    /// The headlines, once the News page has asked for them.
+    ///
+    /// Fetched when that page is first opened rather than at startup: a
+    /// launcher's job on the first frame is to show the Play button, and a
+    /// feed nobody has looked at yet is not worth a request in front of it.
+    news: Option<news::Headlines>,
+    /// Whether a fetch is in flight, so the page says "loading" once and the
+    /// tab cannot start a second one by being clicked twice.
+    news_pending: bool,
+    /// Set once the first attempt has finished, so an empty result reads as
+    /// "nothing came back" rather than as "not asked yet".
+    news_asked: bool,
+
     /// Whether the cog menu beside the primary button is open.
     gear_open: bool,
     /// Live progress of a store scan, and whether one is running.
@@ -1054,6 +1073,9 @@ impl Lightforge {
             forward: Vec::new(),
             hints: false,
             bnet_icon,
+            news: None,
+            news_pending: false,
+            news_asked: false,
             gear_open: false,
             scan_rx: None,
             scan_sample: lightforge_core::tact::verify::Progress::default(),
@@ -2165,7 +2187,7 @@ impl Lightforge {
                 // still a click, and it has had its answer.
                 self.close_panels();
                 self.error = None;
-                Task::none()
+                self.arrived()
             }
 
             Message::GoBack => {
@@ -2174,7 +2196,7 @@ impl Lightforge {
                     self.screen = screen;
                     self.error = None;
                 }
-                Task::none()
+                self.arrived()
             }
 
             Message::GoForward => {
@@ -2183,7 +2205,7 @@ impl Lightforge {
                     self.screen = screen;
                     self.error = None;
                 }
-                Task::none()
+                self.arrived()
             }
 
             Message::ToggleAppMenu => {
@@ -2196,6 +2218,26 @@ impl Lightforge {
                     self.error = Some(e);
                 }
                 self.close_panels();
+                Task::none()
+            }
+
+            Message::OpenArticle(url) => {
+                if let Err(e) = tasks::open_url(&url) {
+                    self.error = Some(e);
+                }
+                Task::none()
+            }
+
+            Message::RefreshNews => self.fetch_news(true),
+
+            Message::NewsLoaded(headlines) => {
+                self.news_pending = false;
+                self.news_asked = true;
+                // A failed refresh keeps what is already on screen: headlines
+                // from ten minutes ago are worth more than an empty page.
+                if let Some(headlines) = headlines {
+                    self.news = Some(*headlines);
+                }
                 Task::none()
             }
 
@@ -4469,6 +4511,44 @@ impl Lightforge {
         }
     }
 
+    /// Work a page needs on the way in.
+    ///
+    /// Called from all three ways of getting somewhere — a tab, back, and
+    /// forward — because a page reached by the back button is just as opened
+    /// as one reached by clicking it. Doing this in `go_to` instead is not
+    /// possible: that returns nothing, and this has to hand a `Task` back to
+    /// the runtime.
+    fn arrived(&mut self) -> Task<Message> {
+        match self.screen {
+            Screen::News => self.fetch_news(false),
+            _ => Task::none(),
+        }
+    }
+
+    /// Ask for the headlines.
+    ///
+    /// `force` is the Refresh button. Without it this is a once-per-session
+    /// fetch: revalidation is the proxy's job and its answer is cached on
+    /// disk, so re-asking on every visit to the tab would buy nothing but
+    /// requests.
+    fn fetch_news(&mut self, force: bool) -> Task<Message> {
+        if self.news_pending || (!force && self.news_asked) {
+            return Task::none();
+        }
+        let Some(dirs) = self.dirs.clone() else {
+            return Task::none();
+        };
+        self.news_pending = true;
+        Task::perform(
+            tasks::headlines(
+                self.http.clone(),
+                self.config.news_origin(),
+                dirs.news_cache_file(),
+            ),
+            |headlines| Message::NewsLoaded(headlines.map(Box::new)),
+        )
+    }
+
     /// Which screens wear the game band under the tabs.
     ///
     /// The pages you move between freely — the dashboard and News — keep the
@@ -5543,28 +5623,104 @@ impl Lightforge {
         column![self.header(), content].into()
     }
 
-    /// News — nothing to report yet.
+    /// One headline as a card that is entirely a link.
     ///
-    /// A placeholder on purpose. The tab earns its place in the ribbon now so
-    /// the app's shape is settled, and it says plainly that it is empty rather
-    /// than pretending to load something: an empty page that looks broken is
-    /// worse than one that explains itself.
+    /// The whole card presses rather than a "read more" inside it: there is
+    /// one thing to do with a headline, and a card with a single small target
+    /// in it makes the reader hunt for what the card already is.
+    fn news_card<'a>(&self, item: &'a news::Item) -> Element<'a, Message> {
+        let mut byline = row![muted(item.source.clone(), theme::LABEL)]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center);
+        if let Some(category) = item.category.as_deref().filter(|c| !c.is_empty()) {
+            byline = byline
+                .push(muted("·".to_owned(), theme::LABEL))
+                .push(muted(category.to_owned(), theme::LABEL));
+        }
+        byline = byline
+            .push(Space::new().width(Length::Fill))
+            .push(muted(short_day(&item.published), theme::LABEL));
+
+        let mut card = column![byline, text(item.title.clone()).size(theme::BODY).font(theme::BOLD)]
+            .spacing(theme::XS)
+            .width(Length::Fill);
+        if !item.summary.is_empty() {
+            card = card.push(muted(item.summary.clone(), theme::LABEL));
+        }
+
+        button(card)
+            .padding(theme::MD)
+            .width(Length::Fill)
+            .style(theme::card_button)
+            .on_press(Message::OpenArticle(item.url.clone()))
+            .into()
+    }
+
+    /// News — headlines from the feeds the proxy merges.
+    ///
+    /// Every state of the fetch says which one it is. An empty page that
+    /// looks broken is worse than one that explains itself, which was true of
+    /// the placeholder this replaced and is still the rule here.
     fn news_screen(&self) -> Element<'_, Message> {
-        self.framed(
-            container(
-                column![
-                    text("News").size(theme::DISPLAY),
-                    muted(
-                        "Patch notes, sales and Wowhead headlines will land here.".to_owned(),
-                        theme::BODY,
-                    ),
-                ]
-                .spacing(theme::SM)
-                .align_x(Alignment::Center),
-            )
-            .center(Length::Fill)
-            .into(),
-        )
+        fn centred<'a>(lines: Vec<Element<'a, Message>>) -> Element<'a, Message> {
+            container(column(lines).spacing(theme::SM).align_x(Alignment::Center))
+                .center(Length::Fill)
+                .into()
+        }
+
+        let content: Element<'_, Message> = match &self.news {
+            Some(headlines) if !headlines.feed.items.is_empty() => {
+                let mut list = column![].spacing(theme::SM);
+
+                // Said once, above the headlines, rather than on each card:
+                // it is a fact about the page, not about any one article.
+                if !headlines.feed.degraded.is_empty() {
+                    list = list.push(muted(
+                        format!(
+                            "{} could not be reached, so some headlines may be missing.",
+                            headlines.feed.degraded.join(" and "),
+                        ),
+                        theme::LABEL,
+                    ));
+                }
+                if headlines.stale {
+                    list = list.push(muted(
+                        "Showing the last headlines Lightforge fetched — the feed could not be \
+                         reached just now."
+                            .to_owned(),
+                        theme::LABEL,
+                    ));
+                }
+
+                for item in &headlines.feed.items {
+                    list = list.push(self.news_card(item));
+                }
+                list.into()
+            }
+            // Asked, answered, and there was nothing in it.
+            Some(_) => centred(vec![muted("No headlines right now.".to_owned(), theme::BODY).into()]),
+            None if self.news_pending => {
+                centred(vec![muted("Fetching headlines…".to_owned(), theme::BODY).into()])
+            }
+            None if self.news_asked => centred(vec![
+                text("No headlines").size(theme::TITLE).into(),
+                muted(
+                    "The news service could not be reached, and nothing is cached yet.".to_owned(),
+                    theme::BODY,
+                )
+                .into(),
+            ]),
+            // Before `dirs` exists there is nowhere to cache and nothing has
+            // been asked for — the setup screen is what the user is looking at.
+            None => centred(vec![muted("Nothing to show yet.".to_owned(), theme::BODY).into()]),
+        };
+
+        let refresh = match self.news_pending {
+            true => None,
+            false => Some(secondary("Refresh", Message::RefreshNews).enabled(true).into()),
+        };
+
+        self.page("News", Some("Headlines from Wowhead".to_owned()), refresh, content)
     }
 
     /// Lightforge's own release notes — nothing here yet either.

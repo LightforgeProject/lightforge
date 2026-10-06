@@ -244,6 +244,20 @@ impl Config {
         }
     }
 
+    /// Where the News page reads its headlines from.
+    ///
+    /// The same base as [`Config::catalog_origin`], with no knob of its own:
+    /// one proxy serves both namespaces, and a second URL to keep in step
+    /// would only be a second thing to point somewhere wrong. A fixture
+    /// directory works here too — it reads `news.json` beside the catalog's
+    /// fixtures.
+    pub fn news_origin(&self) -> crate::news::Origin {
+        match self.catalog_origin() {
+            crate::addons::catalog::Origin::Http(base) => crate::news::Origin::Http(base),
+            crate::addons::catalog::Origin::Dir(dir) => crate::news::Origin::Dir(dir),
+        }
+    }
+
     /// The Proton build a product should launch under: its own pin, else the
     /// app-wide default, else `None` (meaning "auto-provision on first run").
     pub fn effective_proton(&self, code: &ProductCode) -> Option<&str> {

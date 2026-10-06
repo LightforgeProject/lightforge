@@ -427,6 +427,35 @@ pub fn ghost(_theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
+/// A whole card that is also a link — the News page's headlines.
+///
+/// [`card`] as a button rather than a container: the card *is* the click
+/// target, so the hover has to happen on the card itself. A row-sized hover
+/// highlight inside a static card would say the row is pressable and leave
+/// the rest of the card looking like it is not.
+pub fn card_button(_theme: &Theme, status: button::Status) -> button::Style {
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    button::Style {
+        // [`RAISED`] on hover — the existing "a panel on a panel" step, so a
+        // hovered card lifts by the same amount as every other surface in the
+        // app rather than by a brightness invented here.
+        background: Some(Background::Color(match hovered {
+            true => RAISED,
+            false => SURFACE,
+        })),
+        text_color: TEXT,
+        border: Border {
+            color: match hovered {
+                true => Color { a: 0.24, ..TEXT },
+                false => BORDER,
+            },
+            width: 1.0,
+            radius: RADIUS.into(),
+        },
+        ..button::Style::default()
+    }
+}
+
 /// The selected tab or nav entry: filled quietly, never with the accent, so it
 /// does not compete with the primary action.
 pub fn selected(_theme: &Theme, status: button::Status) -> button::Style {
