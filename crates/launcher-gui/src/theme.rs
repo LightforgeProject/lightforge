@@ -39,6 +39,12 @@ pub const TEXT: Color = rgb(0xE8, 0xED, 0xF2);
 pub const MUTED: Color = rgb(0x8A, 0x94, 0xA3);
 
 /// Blizzard blue — the single accent, and the Battle.net hand-off colour.
+/// Wowhead's own red, sampled from their mark (831 px of its 180x180, by a
+/// wide margin the dominant colour). Used for the one button that goes to
+/// Wowhead and nowhere else in the app: a brand colour borrowed for anything
+/// but a link to that brand is a colour pretending to mean something.
+pub const WOWHEAD: Color = rgb(0xC2, 0x21, 0x26);
+
 pub const ACCENT: Color = rgb(0x00, 0xB4, 0xFF);
 pub const INSTALL: Color = rgb(0x4F, 0xC3, 0xF7);
 pub const UPDATE: Color = rgb(0xFF, 0x98, 0x00);
@@ -93,6 +99,16 @@ pub const LOGO: f32 = 170.0;
 /// it no longer does. Not as large as that freedom allows, though — the band
 /// is a card over the artwork now, and a card is sized by what it holds.
 pub const TILE: f32 = 40.0;
+
+/// A headline's picture on the News page, and the 16:9 box it sits in.
+///
+/// Wowhead publishes these at whatever shape the article wanted — 802x624 is
+/// typical — so the box is fixed and the picture is cropped to fill it. A row
+/// of thumbnails that each kept their own aspect ratio would leave the titles
+/// beside them starting at different places, which is the thing the eye
+/// notices first in a list.
+pub const NEWS_THUMB_WIDTH: f32 = 160.0;
+pub const NEWS_THUMB_HEIGHT: f32 = NEWS_THUMB_WIDTH * 9.0 / 16.0;
 
 /// What a manifest's logo height hint is allowed to ask for.
 ///

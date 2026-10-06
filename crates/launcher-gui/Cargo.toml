@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 lightforge-core.workspace = true
+futures-util.workspace = true
 anyhow.workspace = true
 iced.workspace = true
 image.workspace = true

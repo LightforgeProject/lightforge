@@ -281,6 +281,7 @@ enum Message {
     /// chrome URLs: these come off the wire.
     OpenArticle(String),
     NewsLoaded(Option<Box<news::Headlines>>),
+    NewsImages(Vec<(String, image::Handle)>),
     RefreshNews,
     /// Quit.
     Exit,
@@ -864,6 +865,13 @@ struct Lightforge {
     /// Set once the first attempt has finished, so an empty result reads as
     /// "nothing came back" rather than as "not asked yet".
     news_asked: bool,
+    /// Headline pictures by their URL, decoded once.
+    ///
+    /// Keyed by URL rather than by index because the list is re-fetched: a
+    /// picture whose article is still in the feed keeps the handle it already
+    /// had, and a handle that does not change is a texture iced does not
+    /// re-upload.
+    news_images: HashMap<String, image::Handle>,
 
     /// Whether the cog menu beside the primary button is open.
     gear_open: bool,
@@ -1076,6 +1084,7 @@ impl Lightforge {
             news: None,
             news_pending: false,
             news_asked: false,
+            news_images: HashMap::new(),
             gear_open: false,
             scan_rx: None,
             scan_sample: lightforge_core::tact::verify::Progress::default(),
@@ -2238,6 +2247,15 @@ impl Lightforge {
                 if let Some(headlines) = headlines {
                     self.news = Some(*headlines);
                 }
+                self.fetch_news_images()
+            }
+
+            Message::NewsImages(images) => {
+                // Only pictures the fetch found are in here, and only ones
+                // not already held — so this adds, never replaces. Replacing
+                // would hand the view a new handle for an identical picture
+                // and re-upload every texture on the page.
+                self.news_images.extend(images);
                 Task::none()
             }
 
@@ -4549,6 +4567,29 @@ impl Lightforge {
         )
     }
 
+    /// Ask for the pictures of whatever headlines are now on the page.
+    fn fetch_news_images(&self) -> Task<Message> {
+        let (Some(dirs), Some(headlines)) = (self.dirs.clone(), self.news.as_ref()) else {
+            return Task::none();
+        };
+        let urls: Vec<String> = headlines
+            .feed
+            .items
+            .iter()
+            .filter_map(|item| item.image.clone())
+            .filter(|url| !url.is_empty())
+            .collect();
+        if urls.is_empty() {
+            return Task::none();
+        }
+
+        let have = self.news_images.keys().cloned().collect();
+        Task::perform(
+            tasks::news_images(self.http.clone(), dirs.news_image_dir(), urls, have),
+            Message::NewsImages,
+        )
+    }
+
     /// Which screens wear the game band under the tabs.
     ///
     /// The pages you move between freely — the dashboard and News — keep the
@@ -5641,12 +5682,38 @@ impl Lightforge {
             .push(Space::new().width(Length::Fill))
             .push(muted(short_day(&item.published), theme::LABEL));
 
-        let mut card = column![byline, text(item.title.clone()).size(theme::BODY).font(theme::BOLD)]
+        let mut words = column![byline, text(item.title.clone()).size(theme::BODY).font(theme::BOLD)]
             .spacing(theme::XS)
             .width(Length::Fill);
         if !item.summary.is_empty() {
-            card = card.push(muted(item.summary.clone(), theme::LABEL));
+            words = words.push(muted(item.summary.clone(), theme::LABEL));
         }
+
+        // The box is drawn whether or not the picture has arrived, so a card
+        // does not resize under the reader when it does. An article with no
+        // picture at all gets no box: that is a fact about the article, not a
+        // load still in flight.
+        let card: Element<'_, Message> = match item.image.as_deref() {
+            Some(url) if !url.is_empty() => {
+                let slot: Element<'_, Message> = match self.news_images.get(url) {
+                    Some(handle) => image(handle.clone())
+                        .width(Length::Fixed(theme::NEWS_THUMB_WIDTH))
+                        .height(Length::Fixed(theme::NEWS_THUMB_HEIGHT))
+                        // Cover, not Contain: the box is one shape and these
+                        // pictures are not, so the alternative is letterboxing
+                        // every card differently.
+                        .content_fit(ContentFit::Cover)
+                        .into(),
+                    None => container(Space::new())
+                        .width(Length::Fixed(theme::NEWS_THUMB_WIDTH))
+                        .height(Length::Fixed(theme::NEWS_THUMB_HEIGHT))
+                        .style(theme::row)
+                        .into(),
+                };
+                row![slot, words].spacing(theme::MD).align_y(Alignment::Center).into()
+            }
+            _ => words.into(),
+        };
 
         button(card)
             .padding(theme::MD)
@@ -5715,12 +5782,23 @@ impl Lightforge {
             None => centred(vec![muted("Nothing to show yet.".to_owned(), theme::BODY).into()]),
         };
 
-        let refresh = match self.news_pending {
-            true => None,
-            false => Some(secondary("Refresh", Message::RefreshNews).enabled(true).into()),
-        };
+        // Wowhead's own red, and only here: the headlines are theirs, and the
+        // button that goes to them is the one place in the app where another
+        // brand's colour means something.
+        let mut aside = row![action_button("Wowhead", theme::WOWHEAD, Message::OpenLink(WOWHEAD_URL))
+            .enabled(true)]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center);
+        if !self.news_pending {
+            aside = aside.push(secondary("Refresh", Message::RefreshNews).enabled(true));
+        }
 
-        self.page("News", Some("Headlines from Wowhead".to_owned()), refresh, content)
+        self.page(
+            "News",
+            Some("Headlines from Wowhead".to_owned()),
+            Some(aside.into()),
+            content,
+        )
     }
 
     /// Lightforge's own release notes — nothing here yet either.
@@ -7551,6 +7629,9 @@ const DIMMED: f32 = 0.35;
 /// Unlike the four constants below this is a plain `&str`: it has a
 /// destination today, so the tab is never the dimmed placeholder those are.
 const SHOP_URL: &str = "https://shop.battle.net";
+
+/// Where the News page's headlines come from, and where its button goes.
+const WOWHEAD_URL: &str = "https://www.wowhead.com";
 
 const BUG_URL: Option<&str> = None;
 const FEEDBACK_URL: Option<&str> = None;

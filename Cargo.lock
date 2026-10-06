@@ -2502,6 +2502,7 @@ name = "lightforge-gui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "futures-util",
  "iced",
  "image 0.24.9",
  "lightforge-core",

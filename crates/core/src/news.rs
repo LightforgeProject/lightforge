@@ -14,6 +14,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::net::{ETagCache, Http};
 
@@ -109,6 +110,82 @@ pub async fn headlines(http: &Http, origin: &Origin, cache_file: &Path) -> Optio
     }
 }
 
+/// Fetch one headline's picture into `dir`, returning the file.
+///
+/// Content-addressed by its URL rather than by its own bytes: the file name
+/// has to be known *before* anything is downloaded, so that an image already
+/// on disk costs a `stat` and a `304` at most. Wowhead's own paths carry a
+/// numeric id and a slug, which are neither unique across hosts nor safe as
+/// file names, so the hash is what makes them both.
+///
+/// A failure is `None`, never an error. A card with no picture is a card; a
+/// news page that refuses to draw because a CDN hiccuped is not.
+pub async fn image(http: &Http, dir: &Path, url: &str) -> Option<PathBuf> {
+    let path = dir.join(image_name(url));
+    let cache = ETagCache::new(&path);
+
+    match http.get_bytes_cached(url, &cache).await {
+        // Downloaded, and already written to `path` by the cache.
+        Ok(Some(_)) => Some(path),
+        // 304 — what is on disk is current.
+        Ok(None) => path.is_file().then_some(path),
+        // Unreachable: a copy from an earlier run is still worth drawing.
+        Err(_) => path.is_file().then_some(path),
+    }
+}
+
+/// Delete cached pictures no current headline names.
+///
+/// Called after a fetch, so the directory holds one feed's worth — about
+/// forty files — rather than growing for the life of the install. Wowhead
+/// publishes these at full article size (250-800 KB each), which is the
+/// difference between a bounded cache and a slow leak nobody notices.
+///
+/// Errors are ignored throughout: failing to tidy up is not a reason to fail
+/// a page that has already drawn.
+pub fn prune_images(dir: &Path, keep: &[String]) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    let mut wanted: Vec<String> = keep.iter().map(|url| image_name(url)).collect();
+    // The ETag sidecar belongs to its body: dropping one and keeping the
+    // other would send `If-None-Match` with nothing to fall back on.
+    wanted.extend(wanted.clone().iter().map(|name| format!("{name}.etag")));
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !wanted.iter().any(|w| w == name) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// The cache file name for an image URL.
+///
+/// The extension is taken from the URL rather than sniffed, because the only
+/// thing reading it back is the `image` crate, which guesses from content
+/// anyway. It exists so the directory is browsable by a human debugging it.
+fn image_name(url: &str) -> String {
+    let digest = Sha256::digest(url.as_bytes());
+    let stem: String = format!("{digest:x}").chars().take(32).collect();
+
+    let extension = url
+        .rsplit('/')
+        .next()
+        .and_then(|file| file.rsplit_once('.'))
+        .map(|(_, ext)| ext)
+        // Strip a query string, and refuse anything that is not a plain
+        // extension: this ends up in a path.
+        .map(|ext| ext.split(['?', '#']).next().unwrap_or_default())
+        .filter(|ext| !ext.is_empty() && ext.len() <= 5)
+        .filter(|ext| ext.chars().all(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or("img");
+
+    format!("{stem}.{extension}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +226,73 @@ mod tests {
         // The fixture is generated with one feed deliberately missing, so a
         // partial answer is exercised rather than only the happy path.
         assert!(!feed.degraded.is_empty(), "the fixture should carry a degraded feed");
+    }
+
+    #[test]
+    fn an_image_name_is_derived_from_the_whole_url() {
+        let a = image_name("https://wow.zamimg.com/uploads/blog/images/55602-stitches.jpg");
+        let b = image_name("https://wow.zamimg.com/uploads/blog/images/55603-stitches.jpg");
+        assert_ne!(a, b);
+        assert!(a.ends_with(".jpg"), "{a}");
+        // Stable across calls, or every run would re-download everything.
+        assert_eq!(a, image_name("https://wow.zamimg.com/uploads/blog/images/55602-stitches.jpg"));
+    }
+
+    /// The name ends up in a path, so nothing from the URL may travel in it.
+    #[test]
+    fn an_image_name_is_never_a_path() {
+        for url in [
+            "https://x.test/a/../../etc/passwd",
+            "https://x.test/image.jpg?size=/../../nope",
+            "https://x.test/image.a/b",
+            "https://x.test/",
+            "https://x.test/no-extension",
+        ] {
+            let name = image_name(url);
+            assert!(!name.contains('/'), "{url} -> {name}");
+            assert!(!name.contains(".."), "{url} -> {name}");
+        }
+    }
+
+    /// A query string is not part of the extension.
+    #[test]
+    fn a_query_string_does_not_become_the_extension() {
+        assert!(image_name("https://x.test/a.jpg?v=2").ends_with(".jpg"));
+    }
+
+    #[test]
+    fn pruning_keeps_the_current_feed_and_its_etags_and_nothing_else() {
+        let dir = std::env::temp_dir().join(format!("lf-news-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let keep = "https://x.test/keep.jpg".to_owned();
+        let drop = "https://x.test/drop.jpg".to_owned();
+        for url in [&keep, &drop] {
+            let name = image_name(url);
+            std::fs::write(dir.join(&name), b"body").unwrap();
+            std::fs::write(dir.join(format!("{name}.etag")), b"\"abc\"").unwrap();
+        }
+        // Something that was never ours.
+        std::fs::write(dir.join("stray.tmp"), b"x").unwrap();
+
+        prune_images(&dir, std::slice::from_ref(&keep));
+
+        assert!(dir.join(image_name(&keep)).is_file(), "the live picture was deleted");
+        assert!(
+            dir.join(format!("{}.etag", image_name(&keep))).is_file(),
+            "its ETag was deleted, so the next request cannot revalidate",
+        );
+        assert!(!dir.join(image_name(&drop)).exists(), "a stale picture survived");
+        assert!(!dir.join("stray.tmp").exists(), "an unrelated file survived");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A directory that does not exist yet is the normal first run.
+    #[test]
+    fn pruning_a_missing_directory_is_not_an_error() {
+        prune_images(Path::new("/nonexistent/lightforge/news"), &[]);
     }
 
     /// An item the server has gained a field for must still parse here: the

@@ -69,6 +69,19 @@ pub fn mark(path: &Path) -> Handle {
     scale(path, MARK_MAX_WIDTH, FilterType::Lanczos3)
 }
 
+/// A headline's picture, at the size the News card draws it.
+///
+/// A large reduction — Wowhead publishes these around 800px wide and the card
+/// shows them at [`crate::theme::NEWS_THUMB_WIDTH`] — so it takes the sharper
+/// filter for the same reason [`mark`] does: handing the renderer eight times
+/// the pixels and letting it reduce them is what reads as "pixelated".
+///
+/// Twice the drawn width, so a 2x display maps one texel to one device pixel
+/// and a 1x display gets the clean 2:1 reduction.
+pub fn thumbnail(path: &Path) -> Handle {
+    scale(path, (crate::theme::NEWS_THUMB_WIDTH * 2.0) as u32, FilterType::Lanczos3)
+}
+
 /// Decode and downscale one image. An image this can't read falls back to
 /// its path, leaving iced to fail on it the way it did before.
 fn load(path: &Path, max_width: u32) -> Handle {
