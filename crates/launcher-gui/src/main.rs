@@ -1166,6 +1166,11 @@ struct Lightforge {
     partitions: Vec<library::Partition>,
     /// What clearing one drive last freed, by library id.
     drive_notice: Option<(String, String)>,
+    /// Whether nothing is installed yet, as last checked.
+    ///
+    /// Cached beside `drive_states` and for the same reason: it is two
+    /// `read_dir` calls, and the view asks it on every frame.
+    library_empty: bool,
     /// Each library's state as last checked, by id.
     ///
     /// Cached rather than asked in the view: `action()` runs on every frame,
@@ -1365,6 +1370,7 @@ impl Lightforge {
             downgrade_ok: HashSet::new(),
             partitions: Vec::new(),
             drive_notice: None,
+            library_empty: false,
             drive_states: HashMap::new(),
             tools: HostTools::detect(),
             fps_input: String::new(),
@@ -1801,7 +1807,8 @@ impl Lightforge {
         }
     }
 
-    /// Re-read every library's marker. One small file per drive.
+    /// Re-read every library's marker, and whether anything is installed yet.
+    /// One small file per drive, plus two directory reads.
     fn check_drives(&mut self) {
         self.drive_states = self
             .config
@@ -1809,6 +1816,13 @@ impl Lightforge {
             .iter()
             .map(|library| (library.id.clone(), library.state()))
             .collect();
+        self.library_empty = storage::library_is_empty(&self.layout);
+        // Seeded here rather than when Storage is first measured: the field
+        // lives on Setup now, which is the page a first run opens on, before
+        // anything has been measured.
+        if self.location_input.is_empty() {
+            self.location_input = self.layout.root().display().to_string();
+        }
     }
 
     /// Progress against the whole product, not against this run.
@@ -3407,9 +3421,6 @@ impl Lightforge {
 
             Message::StorageMeasured(report) => {
                 self.storage_measuring = false;
-                if self.location_input.is_empty() {
-                    self.location_input = self.layout.root().display().to_string();
-                }
                 self.storage = Some(*report);
                 Task::none()
             }
@@ -4555,6 +4566,7 @@ impl Lightforge {
         }
         self.save_config();
         self.rebuild_layout();
+        self.check_drives();
         self.location_input = path.display().to_string();
         self.error = None;
         Ok(())
@@ -4765,8 +4777,8 @@ impl Lightforge {
                     .width(Length::Fixed(WORDMARK_HEIGHT * WORDMARK_ASPECT))
                     .height(Length::Fixed(WORDMARK_HEIGHT)),
                 image(chevron_icon())
-                    .width(Length::Fixed(BAND_GLYPH * 0.75))
-                    .height(Length::Fixed(BAND_GLYPH * 0.75)),
+                    .width(Length::Fixed(APP_MENU_CHEVRON))
+                    .height(Length::Fixed(APP_MENU_CHEVRON)),
             ]
             .spacing(theme::SM)
             .align_y(Alignment::Center),
@@ -7825,6 +7837,33 @@ impl Lightforge {
             ).map(Element::from))
             .spacing(theme::SM);
 
+        // Where all three steps below install to. Only offered while nothing
+        // is installed: after that, moving it is a data migration rather than
+        // a setting — see `relocate`. Once the prefix is built, the Wine
+        // prefix step below says where it is, so nothing is lost by hiding it.
+        if self.library_empty {
+            body = body.push(field_row(
+                "Install to".to_owned(),
+                row![
+                    text_input("~/Games/Blizzard", &self.location_input)
+                        .on_input(Message::LocationChanged)
+                        .on_submit(Message::UseLocation)
+                        .style(theme::field)
+                        .size(theme::BODY)
+                        .padding(theme::SM),
+                    secondary("Use this location", Message::UseLocation).enabled(true),
+                    secondary("Open folder", Message::OpenLibrary).enabled(true),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center)
+                .into(),
+            ));
+            body = body.extend(self.hint(
+                "Battle.net and the Wine prefix are installed here, and stay here whatever \
+                 drives you add later. Games can go on any drive — see Storage.",
+            ).map(Element::from));
+        }
+
         let step = |done: bool, label: &'static str, detail: String| {
             let color = match done {
                 true => theme::OK,
@@ -8013,7 +8052,7 @@ impl Lightforge {
     /// rows at one shared width rather than a stack of boxes that each size
     /// themselves.
     fn settings(&self) -> Element<'_, Message> {
-        let mut nav = column![].spacing(theme::XS).width(Length::Fixed(180.0));
+        let mut nav = column![].spacing(theme::XS).width(Length::Fixed(SETTINGS_NAV_WIDTH));
         for tab in SettingsTab::ALL {
             let entry = button(text(tab.label()).size(theme::BODY))
                 .width(Length::Fill)
@@ -8037,22 +8076,23 @@ impl Lightforge {
         // The error leads rather than trails: a failed setup run is reported
         // here, and at the foot of a scrolled section it would go unseen.
         //
-        // Storage is given more room than the rest. Every other section is a
-        // form, and a form reads worse the wider it gets; Storage is a table —
-        // drive, bar, sizes, actions — and at a form's width its figures are
-        // crammed into the left third with the rest of the window empty. It is
-        // still capped, because a row the full width of a 4K display is no
-        // more readable than a cramped one.
-        let measure = match self.settings_tab {
-            SettingsTab::Storage => STORAGE_WIDTH,
-            _ => SETTINGS_WIDTH,
-        };
-        let mut content = column![].spacing(theme::MD).max_width(measure);
+        // Every section takes the width it is given. The column used to be
+        // capped at a form's measure, which left two thirds of the window
+        // empty on a wide monitor and crammed every figure into the left of
+        // it; the rows inside already right-align their controls, so the space
+        // goes where it is useful rather than being thrown away.
+        let mut content = column![].spacing(theme::MD).width(Length::Fill);
         if let Some(e) = &self.error {
             content =
                 content.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
         }
-        content = content.push(section(title, body));
+        // Storage names each of its own groups — Drives, Add a drive,
+        // Lightforge's own files — so an outer "Storage" heading above the
+        // first of them is a title for a title.
+        content = content.push(match self.settings_tab {
+            SettingsTab::Storage => body,
+            _ => section(title, body),
+        });
 
         column![
             self.header(),
@@ -8457,7 +8497,7 @@ impl Lightforge {
             ],
         ]
         .spacing(theme::MD)
-        .max_width(SETTINGS_WIDTH);
+        .max_width(MESSAGE_WIDTH);
 
         container(body).center(Length::Fill).padding(theme::XL).style(theme::scrim).into()
     }
@@ -9076,46 +9116,6 @@ impl Lightforge {
     fn storage_section(&self) -> Element<'_, Message> {
         let report = self.storage.as_ref();
 
-        // ---- Where the prefix lives. Separate from the drives below on
-        // purpose: games move between libraries, the prefix does not. It is
-        // one Wine prefix for everything, on the home drive where a prefix
-        // belongs, and every library reaches into it by drive letter.
-        let mut location = column![row![
-            // The path takes the slack rather than the button: a long one
-            // used to wrap and squeeze the button into two clipped lines.
-            container(mono(self.layout.root().display().to_string())).width(Length::Fill),
-            secondary("Open folder", Message::OpenLibrary).enabled(true),
-        ]
-        .spacing(theme::MD)
-        .align_y(Alignment::Center)]
-        .spacing(theme::SM);
-
-        // Editable only while it is a config change — see `relocate`.
-        let movable = report.is_some() && storage::library_is_empty(&self.layout);
-        location = location.push(Space::new().height(Length::Fixed(theme::XS)));
-        location = match movable {
-            true => location
-                .push(
-                    row![
-                        text_input("~/Games/Blizzard", &self.location_input)
-                            .on_input(Message::LocationChanged)
-                            .on_submit(Message::UseLocation)
-                            .style(theme::field)
-                            .size(theme::BODY)
-                            .padding(theme::SM),
-                        secondary("Use this location", Message::UseLocation).enabled(true),
-                    ]
-                    .spacing(theme::SM)
-                    .align_y(Alignment::Center),
-                )
-                .extend(self.hint("Battle.net and the Wine prefix are installed here, and stay here \
-                     whatever drives you add later. It can be changed while nothing is \
-                     installed yet.").map(Element::from)),
-            false => location.extend(self.hint("Battle.net and the Wine prefix are installed here, and stay here \
-                 whatever drives you add and whichever one is the default — only games move. \
-                 Changing this once something is installed is not supported yet.").map(Element::from)),
-        };
-
         // ---- One card per drive.
         let mut drives = column![].spacing(theme::MD);
         match report {
@@ -9239,8 +9239,6 @@ impl Lightforge {
         }
 
         column![
-            location,
-            Space::new().height(Length::Fixed(theme::MD)),
             section("Drives", drives.into()),
             Space::new().height(Length::Fixed(theme::MD)),
             section("Add a drive", add.into()),
@@ -9397,6 +9395,11 @@ impl Lightforge {
         body.into()
     }
 }
+
+/// How wide a centred message card gets — the broken-config screen. A measure
+/// rather than the full window: this one is prose, and prose set across a wide
+/// monitor is unreadable.
+const MESSAGE_WIDTH: f32 = 720.0;
 
 /// Width of the size column on the Storage page.
 ///
@@ -9582,6 +9585,29 @@ const GROUP_GAP: f32 = theme::XS;
 /// ink, so the ratio is fixed by the art: scaling by it is what keeps the
 /// hammer round instead of squeezed.
 const WORDMARK_ASPECT: f32 = 563.0 / 72.0;
+
+/// The wordmark as drawn, from its height and the artwork's aspect.
+const WORDMARK_WIDTH: f32 = WORDMARK_HEIGHT * WORDMARK_ASPECT;
+
+/// The chevron beside the wordmark — the app menu's own arrow.
+const APP_MENU_CHEVRON: f32 = BAND_GLYPH * 0.75;
+
+/// Width of the Settings sidebar.
+///
+/// Derived rather than picked: it is whatever puts the rule beside it directly
+/// under the chevron on the wordmark above. That chevron is the only vertical
+/// mark in the header, so a rule a few pixels off it reads as a mistake where
+/// one exactly under it reads as intent.
+///
+/// ```text
+/// chevron centre = LG (header padding) + SM (button padding)
+///                + wordmark + SM (gap) + half the chevron
+/// rule           = LG (row padding)    + this + LG (row spacing)
+/// ```
+///
+/// The leading `LG`s cancel, which leaves the rest.
+const SETTINGS_NAV_WIDTH: f32 =
+    theme::SM + WORDMARK_WIDTH + theme::SM + APP_MENU_CHEVRON / 2.0 - theme::LG;
 
 /// Air between that label and its arrow.
 ///
@@ -9900,14 +9926,6 @@ fn secondary(label: &str, message: Message) -> Action<'static> {
         message,
     }
 }
-
-/// Settings content stops growing here: rows read as one column at any
-/// window width, and a label and its control never drift apart.
-const SETTINGS_WIDTH: f32 = 720.0;
-
-/// How wide the Storage section is allowed to get. Wider than a form, because
-/// it is a table of drives and figures rather than fields to fill in.
-const STORAGE_WIDTH: f32 = 1140.0;
 
 /// A heading over a hairline, then its body — Settings' unit of grouping.
 fn section<'a>(title: impl Into<String>, body: Element<'a, Message>) -> Element<'a, Message> {
