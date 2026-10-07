@@ -311,6 +311,31 @@ pub fn same_marks(a: &HashMap<ProductCode, Mark>, b: &HashMap<ProductCode, Mark>
 /// hold them all in memory would cost more than it saves, and [`cached_theme`]
 /// reads them off disk per product in tens of milliseconds. Returns how many
 /// products now have art cached.
+/// Nothing, after a wait. The one thing a `Task` cannot express on its own.
+pub async fn after(delay: std::time::Duration) {
+    tokio::time::sleep(delay).await;
+}
+
+/// [`prefetch`] under a deadline.
+///
+/// A start must not be hostage to a network that never answers. Whatever
+/// landed inside the budget stays cached; the rest is fetched on demand, which
+/// is what every start did before the splash existed.
+pub async fn prefetch_within(
+    budget: std::time::Duration,
+    http: Option<Http>,
+    pipeline: Option<Pipeline>,
+    codes: Vec<ProductCode>,
+) -> usize {
+    match tokio::time::timeout(budget, prefetch(http, pipeline, codes)).await {
+        Ok(cached) => cached,
+        Err(_) => {
+            crate::trace::mark("prefetch: out of time, opening anyway");
+            0
+        }
+    }
+}
+
 pub async fn prefetch(
     http: Option<Http>,
     pipeline: Option<Pipeline>,

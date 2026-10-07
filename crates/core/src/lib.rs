@@ -24,6 +24,7 @@ pub mod prefix;
 pub mod preflight;
 pub mod product;
 pub mod proton;
+pub mod releases;
 pub mod runtime;
 pub mod setup;
 pub mod state;

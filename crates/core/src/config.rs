@@ -121,6 +121,21 @@ pub struct Config {
     /// wizard says so when it is set.
     #[serde(default)]
     pub battle_net_declined: bool,
+    /// Whether the release-notes popup has been switched off for good.
+    ///
+    /// The checkbox on it says "never show this again", and that is what it
+    /// means: no future release opens it either. Settings › General turns it
+    /// back on, and Lightforge Updates shows the notes whatever this says.
+    #[serde(default)]
+    pub patch_notes_muted: bool,
+    /// The version whose notes have already been shown.
+    ///
+    /// Without this the popup would open on every start rather than once per
+    /// update. `None` on a machine that has never seen it — which includes
+    /// every install from before the popup existed, and those *should* see the
+    /// notes for what they just updated to.
+    #[serde(default)]
+    pub patch_notes_seen: Option<String>,
     /// Every product Lightforge manages, official and custom alike.
     pub products: Vec<Product>,
 }
@@ -175,6 +190,8 @@ impl Default for Config {
             locale: default_locale(),
             setup_complete: false,
             battle_net_declined: false,
+            patch_notes_muted: false,
+            patch_notes_seen: None,
             products: Vec::new(),
         }
     }

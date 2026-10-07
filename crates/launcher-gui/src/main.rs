@@ -228,6 +228,34 @@ const NEWS_BACKGROUND: &[u8] = include_bytes!("../assets/news-background.jpg");
 const WINDOW: iced::Size = iced::Size::new(1280.0, 820.0);
 const WINDOW_MIN: iced::Size = WINDOW;
 
+/// The window the app opens in while a start's artwork is fetched.
+///
+/// Small enough to read as a loading screen rather than as a launcher that
+/// has come up broken — which is the complaint it answers: a cold start used
+/// to show the full window with an empty card for a second or two per game,
+/// while that game's background and wordmark came down.
+const SPLASH: iced::Size = iced::Size::new(460.0, 280.0);
+
+/// How long the splash is kept on screen at the very least.
+///
+/// A warm cache answers in milliseconds, and a window that flashes open at
+/// one size and jumps to another reads as a glitch rather than as a start.
+/// Short enough that "nothing to fetch" still feels instant — a start is
+/// never *slower* than it was, only less ugly.
+const SPLASH_FLOOR: Duration = Duration::from_millis(350);
+
+/// A ceiling on the fetch, so a machine with no network — or one behind a
+/// captive portal that never answers — still reaches its launcher. Whatever
+/// landed inside the budget is kept; the rest is fetched on demand as it
+/// always was.
+const SPLASH_BUDGET: Duration = Duration::from_secs(12);
+
+/// How long the compositor is given to answer between the steps of growing
+/// the window — see [`Lightforge::grow_window`]. It is paid twice, once per
+/// run, and a window that stays the wrong size is worse than one that reaches
+/// the right size a quarter of a second late.
+const RECONFIGURE: Duration = Duration::from_millis(120);
+
 // We used to force the software renderer here. Through iced 0.13, `wgpu`
 // lagged badly when resizing a window on native Wayland: the client kept up
 // (a resize was serviced in well under a millisecond) but the buffer reached
@@ -261,15 +289,48 @@ fn main() -> iced::Result {
     // Annotated: without the type the closure is inferred for one
     // lifetime, and 0.14's `theme` wants it for any.
     .theme(|_state: &Lightforge| theme::base())
+    // Opens as the splash and grows into the launcher — see [`SPLASH`] and
+    // [`Lightforge::grow_window`]. `min_size` starts at the splash's own size
+    // or the compositor refuses to make it that small, and the frame is off
+    // because a loading screen with a title bar and a close button is a
+    // window, not a splash.
+    //
+    // Deliberately still resizable, although nothing should resize a splash:
+    // winit implements "not resizable" on Wayland by pinning the maximum size
+    // to the current one, and a `min_size` beside that is a minimum above a
+    // maximum — which is not a clamp but `xdg_toplevel error 2`, and the
+    // window dies on the spot. It cost a run to find. Undecorated, there is no
+    // handle to drag anyway.
     .window(iced::window::Settings {
-        size: WINDOW,
-        min_size: Some(WINDOW_MIN),
+        size: SPLASH,
+        min_size: Some(SPLASH),
+        decorations: false,
+        position: iced::window::Position::Centered,
         ..iced::window::Settings::default()
     })
     // Closing is handled by the app, so a transfer can checkpoint first.
     // Set after `window`, which replaces the settings wholesale.
     .exit_on_close_request(false)
     .run()
+}
+
+/// The release-notes popup, while it is up.
+#[derive(Debug, Clone)]
+struct PatchNotes {
+    release: lightforge_core::releases::Release,
+    /// Whether the checkbox is ticked. Written to the config on dismissal
+    /// rather than on each click, so a tick someone changes their mind about
+    /// before closing the card costs nothing.
+    mute: bool,
+}
+
+/// What the splash window is waiting on.
+#[derive(Debug, Clone)]
+struct Splash {
+    /// How many products the prefetch was given, for the line under the mark.
+    products: usize,
+    /// When the window opened, so [`SPLASH_FLOOR`] can be honoured.
+    opened: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -288,6 +349,22 @@ enum Message {
     InstalledVersions(HashMap<String, String>),
     /// The product codes Battle.net's own config uses.
     KnownCodes(Vec<String>),
+    /// Tick or untick "never show this again" on the release-notes popup.
+    MutePatchNotes(bool),
+    /// The same preference from Settings › General, read the other way round.
+    ShowReleaseNotes(bool),
+    /// Close the release-notes popup, recording what it was told.
+    DismissPatchNotes,
+    /// The start-up artwork fetch finished, with the number of products whose
+    /// art is now cached.
+    SplashDone(usize),
+    /// Grow the splash into the launcher. Separate from `SplashDone` only so
+    /// the floor can be waited out between the two.
+    GrowWindow,
+    /// The second step of that, once the frame has settled.
+    SizeWindow,
+    /// The third: let the window be resized freely again.
+    ReleaseWindow,
     /// Track a product from the catalog, putting it in the header.
     AddProduct(ProductCode),
     /// Stop tracking one, taking it out of the header.
@@ -1139,6 +1216,13 @@ struct Lightforge {
     /// The first run, while it is happening. `None` the rest of the time, and
     /// on every start after the one that finished or dismissed it.
     wizard: Option<wizard::Wizard>,
+    /// The release notes for the version that has just started, while they
+    /// are on screen. `None` once dismissed, or when this start is not the
+    /// first one after an update — see [`Lightforge::patch_notes_due`].
+    patch_notes: Option<PatchNotes>,
+    /// The small window the app opens in. `None` once it has grown into the
+    /// launcher, which happens exactly once per run.
+    splash: Option<Splash>,
     /// Live setup progress, sampled off the same tick as a download.
     setup_rx: Option<tokio::sync::watch::Receiver<provision::Progress>>,
     setup_sample: provision::Progress,
@@ -1361,6 +1445,8 @@ impl Lightforge {
             screen: Screen::Dashboard,
             setup: None,
             wizard: None,
+            patch_notes: None,
+            splash: None,
             setup_rx: None,
             setup_sample: provision::Progress::default(),
             setup_running: false,
@@ -1419,7 +1505,10 @@ impl Lightforge {
         // Nothing starts on a config that did not load: no probes against a
         // library it may not describe, and above all no restored download.
         if app.config_error.is_some() {
-            return (app, Task::none());
+            // Still grown: the broken-config screen is prose someone has to
+            // read, and the splash is too small to hold it and cannot be
+            // resized.
+            return (app, Self::grow_window());
         }
         app.load_tweak_inputs();
         // Before anything resolves a path: a drive that came back at a
@@ -1464,16 +1553,15 @@ impl Lightforge {
         // finished or dismissed, so a machine that has seen it never sees it
         // again by itself. Nothing is written here — starting the app is not a
         // reason to touch someone's config.
-        let artwork = match app.config.setup_complete {
-            true => Task::none(),
-            false => {
-                app.wizard = Some(wizard::Wizard::default());
-                // Every product's art into the cache while the user reads the
-                // first slide, so the first visit to a panel is not two seconds
-                // of empty card.
-                wizard::prefetch(&app)
-            }
-        };
+        if !app.config.setup_complete {
+            app.wizard = Some(wizard::Wizard::default());
+        }
+        // Every tracked product's art into the cache before the launcher is
+        // worth looking at, so the first visit to a panel is not two seconds
+        // of empty card. The splash *is* this fetch, made visible — and the
+        // wizard's first slide reads its count off the same run rather than
+        // starting a second one.
+        let artwork = app.open_splash();
         let task = Task::batch([
             app.reload(selected.code),
             addons,
@@ -1486,6 +1574,106 @@ impl Lightforge {
             artwork,
         ]);
         (app, task)
+    }
+
+    /// Open the splash and start the fetch it is waiting on.
+    fn open_splash(&mut self) -> Task<Message> {
+        let codes: Vec<ProductCode> = self.choices.iter().map(|c| c.code.clone()).collect();
+        self.splash = Some(Splash { products: codes.len(), opened: Instant::now() });
+        Task::perform(
+            tasks::prefetch_within(
+                SPLASH_BUDGET,
+                self.http.clone(),
+                self.pipeline.clone(),
+                codes,
+            ),
+            Message::SplashDone,
+        )
+    }
+
+    /// Put the release notes up, if this start is the first one on this
+    /// version.
+    ///
+    /// Four conditions, and each one is a case that should not see a popup:
+    /// setup must be finished (a first run has the wizard to get through, and
+    /// notes for a version nothing has been done with yet say nothing); the
+    /// checkbox must not have been ticked; the notes must not already have
+    /// been seen for this version; and the shipped file must actually describe
+    /// this version, which a development build between releases does not.
+    fn open_patch_notes(&mut self) {
+        let version = env!("CARGO_PKG_VERSION");
+        if !self.config.setup_complete
+            || self.config.patch_notes_muted
+            || self.config.patch_notes_seen.as_deref() == Some(version)
+        {
+            return;
+        }
+        if let Some(release) = lightforge_core::releases::notes_for(version) {
+            self.patch_notes = Some(PatchNotes { release, mute: false });
+        }
+    }
+
+    /// Turn the splash window into the launcher's own.
+    ///
+    /// Grow the splash into the launcher: put the frame back, then hand the
+    /// resize to the compositor.
+    ///
+    /// Three steps, each one paid for by a run that got it wrong:
+    ///
+    /// 1. **The frame, alone.** Changing it makes the compositor reconfigure
+    ///    the window, and a resize asked for in the same turn of the loop is
+    ///    overwritten by that reconfigure — the window keeps the splash's
+    ///    size while reporting the launcher's minimum.
+    /// 2. **A minimum, then maximize** ([`Lightforge::size_window`]).
+    /// 3. **Unmaximize** ([`Lightforge::release_window`]), which the
+    ///    compositor must do no smaller than the minimum just set — so the
+    ///    window lands at exactly the launcher's size.
+    ///
+    /// The maximize pair is what makes it stick, and it is not a flourish.
+    /// `window::resize` does move the window: winit applies it on the spot,
+    /// and *because* it applied immediately it deliberately emits no
+    /// `Resized` event — so iced never hears, keeps laying the window out at
+    /// 460x280, and the compositor stretches that over 1280x820. Maximizing
+    /// is a resize the compositor performs, which does send a configure, and
+    /// that iced does hear.
+    ///
+    /// iced reads the frame's live state and inverts it, so given a splash
+    /// that asked for none, step 1 is "put it back".
+    fn grow_window() -> Task<Message> {
+        iced::window::oldest()
+            .and_then(iced::window::toggle_decorations)
+            .chain(Task::perform(tasks::after(RECONFIGURE), |()| Message::SizeWindow))
+    }
+
+    /// Step 2: the launcher's minimum size, and out to the screen.
+    fn size_window() -> Task<Message> {
+        use iced::window;
+        window::oldest()
+            .and_then(|id| {
+                window::set_min_size(id, Some(WINDOW_MIN)).chain(window::maximize(id, true))
+            })
+            .chain(Task::perform(tasks::after(RECONFIGURE), |()| Message::ReleaseWindow))
+    }
+
+    /// Step 3: back off the screen, no smaller than the minimum, and centred.
+    fn release_window() -> Task<Message> {
+        use iced::window;
+        window::oldest().and_then(|id| {
+            window::maximize(id, false)
+                // A window restored to where the splash stood hangs off the
+                // right and bottom of a 1080p screen. Wayland may ignore a
+                // client placing itself, and that is fine — the compositor
+                // then places it, which is what this asks for.
+                .chain(window::monitor_size(id).and_then(move |monitor| {
+                    window::move_to(
+                        id,
+                        iced::Point::new(
+                            ((monitor.width - WINDOW.width) / 2.0).max(0.0),
+                            ((monitor.height - WINDOW.height) / 2.0).max(0.0),
+                        ),
+                    )
+                }))
+        })
     }
 
     /// Re-read the disk, the version service, and the theme for one product.
@@ -2460,28 +2648,45 @@ impl Lightforge {
             }
 
             Message::RemoveProduct(code) => {
+                // A tile is a *line*, and its PTR and beta are branches behind
+                // its version picker rather than games of their own — so
+                // Remove takes the line with it. Dropping the head alone left
+                // the tile on screen wearing whichever branch survived, which
+                // is what someone removing the game has just said they do not
+                // want.
+                let line = self.catalog.line_of(&code);
+                let going: Vec<ProductCode> = self
+                    .choices
+                    .iter()
+                    .filter(|c| self.catalog.line_of(&c.code) == line)
+                    .map(|c| c.code.clone())
+                    .collect();
+
                 // The header cannot be empty: with nothing tracked there is no
                 // product to show and no way back to this panel.
-                if self.choices.len() <= 1 {
+                if going.len() >= self.choices.len() {
                     self.error =
                         Some("that is the only game left — add another first".to_owned());
                     return Task::none();
                 }
 
-                // A transfer for a product nobody is tracking has nowhere to
-                // report to, so it stops here rather than running on unseen.
-                self.pause(&code);
-                self.queue.retain(|d| d.code != code);
-                self.downloads.finished(&code);
+                for code in &going {
+                    // A transfer for a product nobody is tracking has nowhere
+                    // to report to, so it stops here rather than running on
+                    // unseen.
+                    self.pause(code);
+                    self.queue.retain(|d| &d.code != code);
+                    self.downloads.finished(code);
+                }
 
-                self.config.products.retain(|p| p.code != code);
+                self.config.products.retain(|p| !going.contains(&p.code));
                 self.save_config();
-                self.choices.retain(|c| c.code != code);
-                self.last_branch.retain(|_, branch| branch != &code);
+                self.choices.retain(|c| !going.contains(&c.code));
+                self.last_branch.remove(&line);
 
-                match self.selected.code == code {
-                    // Standing on the one just removed: move to whatever the
-                    // header now starts with.
+                match going.contains(&self.selected.code) {
+                    // Standing on one of the ones just removed: move to
+                    // whatever the header now starts with.
                     true => {
                         let next = self.choices[0].clone();
                         self.select(next)
@@ -2489,6 +2694,61 @@ impl Lightforge {
                     false => Task::none(),
                 }
             }
+
+            Message::MutePatchNotes(mute) => {
+                if let Some(notes) = self.patch_notes.as_mut() {
+                    notes.mute = mute;
+                }
+                Task::none()
+            }
+
+            Message::ShowReleaseNotes(show) => {
+                self.config.patch_notes_muted = !show;
+                self.save_config();
+                Task::none()
+            }
+
+            Message::DismissPatchNotes => {
+                if let Some(notes) = self.patch_notes.take() {
+                    // Recorded on the way out, so a start that was killed
+                    // before anyone read them shows them again.
+                    self.config.patch_notes_seen = Some(notes.release.version.clone());
+                    self.config.patch_notes_muted = notes.mute;
+                    self.save_config();
+                }
+                Task::none()
+            }
+
+            Message::SplashDone(count) => {
+                // The wizard's own count comes off this run: it is the same
+                // fetch, and starting a second one on the first slide would
+                // revalidate everything the splash just revalidated.
+                if let Some(wizard) = self.wizard.as_mut() {
+                    wizard.prefetched = Some(count);
+                }
+                let waited =
+                    self.splash.as_ref().map(|s| s.opened.elapsed()).unwrap_or_default();
+                match SPLASH_FLOOR.checked_sub(waited) {
+                    Some(left) if !left.is_zero() => {
+                        Task::perform(tasks::after(left), |()| Message::GrowWindow)
+                    }
+                    _ => {
+                        self.splash = None;
+                        self.open_patch_notes();
+                        Self::grow_window()
+                    }
+                }
+            }
+
+            Message::GrowWindow => {
+                self.splash = None;
+                self.open_patch_notes();
+                Self::grow_window()
+            }
+
+            Message::SizeWindow => Self::size_window(),
+
+            Message::ReleaseWindow => Self::release_window(),
 
             Message::AddProduct(code) => {
                 if self.choices.iter().any(|c| c.code == code) {
@@ -3544,7 +3804,15 @@ impl Lightforge {
 
             Message::RemoveDrive(id) => {
                 match self.remove_drive(&id) {
-                    Ok(()) => self.measure_storage(),
+                    // `refresh_drives` as well as the measurement: a drive
+                    // that is no longer ours goes back to being a partition
+                    // the page can offer, and that list is only rebuilt here.
+                    // Without it the row stays gone until you leave Settings
+                    // and come back.
+                    Ok(()) => {
+                        self.refresh_drives();
+                        self.measure_storage()
+                    }
                     Err(e) => {
                         self.error = Some(e);
                         Task::none()
@@ -4679,7 +4947,14 @@ impl Lightforge {
             false => Subscription::none(),
         };
 
-        match self.running().is_some() || self.setup_running || self.addons_busy || self.scanning {
+        // The splash's bar sweeps off the clock, so it needs the tick as much
+        // as a live transfer does.
+        match self.splash.is_some()
+            || self.running().is_some()
+            || self.setup_running
+            || self.addons_busy
+            || self.scanning
+        {
             true => Subscription::batch([
                 closing,
                 hints,
@@ -4702,6 +4977,11 @@ impl Lightforge {
         let started = Instant::now();
         if let Some(error) = &self.config_error {
             return self.broken_config_screen(error);
+        }
+        // Before the wizard: the window is still the small one, and the
+        // wizard's card does not fit in it.
+        if let Some(splash) = &self.splash {
+            return self.splash_screen(splash);
         }
         // The first run is a layer over the app rather than a `Screen`: there
         // is no way out of it except the two buttons in its footer, so nothing
@@ -4767,12 +5047,16 @@ impl Lightforge {
             &self.downgrade_dialog,
             &self.version_picker,
             &self.addon_detail,
+            &self.patch_notes,
         ) {
             (Some(dialog), ..) => Some(self.install_card(dialog)),
             (_, Some(dialog), ..) => Some(self.uninstall_card(dialog)),
             (_, _, Some(dialog), ..) => Some(self.downgrade_card(dialog)),
-            (_, _, _, Some(picker), _) => Some(self.version_card(picker)),
-            (.., Some(detail)) => Some(self.detail_card(detail)),
+            (_, _, _, Some(picker), ..) => Some(self.version_card(picker)),
+            (_, _, _, _, Some(detail), _) => Some(self.detail_card(detail)),
+            // Last, so a dialog someone opened themselves is never buried
+            // under the one the app opened for them.
+            (.., Some(notes)) => Some(self.patch_notes_card(notes)),
             _ => None,
         };
         let screen = match card {
@@ -5072,9 +5356,15 @@ impl Lightforge {
             if self.installed_versions.contains_key(entry.code.as_str()) {
                 facts = facts.push(muted("installed".to_owned(), theme::CAPTION));
             }
+            // Remove takes the whole line, so it is held only when nothing
+            // outside that line is left to fall back to.
+            let elsewhere = |code: &ProductCode| {
+                let line = self.catalog.line_of(code);
+                self.choices.iter().any(|c| self.catalog.line_of(&c.code) != line)
+            };
             let action: Element<Message> = match tracked(&entry.code) {
                 true => secondary("Remove", Message::RemoveProduct(entry.code.clone()))
-                    .enabled(self.choices.len() > 1)
+                    .enabled(elsewhere(&entry.code))
                     .into(),
                 false => secondary("Add", Message::AddProduct(entry.code.clone()))
                     .enabled(true)
@@ -7102,24 +7392,79 @@ impl Lightforge {
 
     /// Lightforge's own release notes — nothing here yet either.
     fn updates_screen(&self) -> Element<'_, Message> {
-        self.framed(
-            container(
-                column![
-                    text("Lightforge Updates").size(theme::DISPLAY),
-                    muted(
-                        format!(
-                            "You are running {}. Release notes will appear here.",
-                            env!("CARGO_PKG_VERSION"),
-                        ),
-                        theme::BODY,
-                    ),
-                ]
-                .spacing(theme::SM)
-                .align_x(Alignment::Center),
+        let version = env!("CARGO_PKG_VERSION");
+        let releases = lightforge_core::releases::all();
+
+        let mut body = column![
+            text("Lightforge Updates").size(theme::DISPLAY),
+            muted(format!("You are running {version}."), theme::BODY),
+        ]
+        .spacing(theme::SM);
+
+        if releases.is_empty() {
+            // Only reachable in a build whose notes file was emptied; a test
+            // in `core::releases` keeps the shipped one honest.
+            body = body.push(muted("No release notes in this build.".to_owned(), theme::BODY));
+        }
+
+        for release in &releases {
+            let heading = match release.version == version {
+                true => format!("{} — this version", release.version),
+                false => release.version.clone(),
+            };
+            body = body.push(
+                container(
+                    column![text(heading).size(theme::TITLE), release_notes(release)]
+                        .spacing(theme::SM),
+                )
+                .padding(theme::MD)
+                .width(Length::Fill)
+                .style(theme::row),
+            );
+        }
+
+        // The notes stay readable here whatever the popup has been told, which
+        // is what makes "never show this again" a safe thing to tick.
+        body = body.extend(
+            self.hint(
+                "These are the notes the launcher shows after an update. Settings › General                  decides whether that popup appears.",
             )
-            .center(Length::Fill)
-            .into(),
+            .map(Element::from),
+        );
+
+        self.framed(
+            scrollable(body.spacing(theme::MD))
+                .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
+                .style(theme::scrollbar)
+                .into(),
         )
+    }
+
+    /// The splash: the wordmark, what is being fetched, and a bar that says
+    /// something is happening without pretending to know for how long.
+    fn splash_screen(&self, splash: &Splash) -> Element<'_, Message> {
+        const MARK: f32 = 40.0;
+        let note = match splash.products {
+            // No tracked products at all is a machine that has never been set
+            // up, which is a wizard away rather than an artwork fetch.
+            0 => "Getting ready…".to_owned(),
+            1 => "Fetching artwork for 1 game…".to_owned(),
+            n => format!("Fetching artwork for {n} games…"),
+        };
+        container(
+            column![
+                image(wordmark_image())
+                    .width(Length::Fixed(MARK * WORDMARK_ASPECT))
+                    .height(Length::Fixed(MARK)),
+                muted(note, theme::CAPTION),
+                progress_bar(0.0..=1.0, sweep()).girth(4).length(Length::Fixed(220.0)),
+            ]
+            .spacing(theme::MD)
+            .align_x(Alignment::Center),
+        )
+        .center(Length::Fill)
+        .style(theme::backdrop)
+        .into()
     }
 
     /// Addon management: what is installed, and what could be.
@@ -8574,6 +8919,15 @@ impl Lightforge {
              window whatever this says, because a sign-in nobody can see is a launch that \
              never happens. Opening Battle.net from the game panel always shows its window.",
         ).map(Element::from))
+        .push(toggle(
+            !self.config.patch_notes_muted,
+            "Show what's new after an update",
+            Message::ShowReleaseNotes,
+        ))
+        .extend(self.hint(
+            "Once per version, and only after an update. The notes are always on the \
+             Lightforge Updates page whether or not this is on.",
+        ).map(Element::from))
         .spacing(theme::SM)
         .into()
     }
@@ -9144,6 +9498,45 @@ impl Lightforge {
             .height(Length::Fixed(320.0))
             .style(theme::scrollbar)
             .into()
+    }
+
+    /// What changed in the version that has just started.
+    ///
+    /// A dialog rather than a page, because it is the one thing in the app
+    /// that opens itself: it has to be read and closed, and every other
+    /// screen stays reachable afterwards from the navigation. The same notes
+    /// live on the Lightforge Updates page for anyone who wants them again —
+    /// including after the checkbox has been ticked.
+    fn patch_notes_card<'a>(&'a self, notes: &'a PatchNotes) -> Element<'a, Message> {
+        let body = column![
+            muted(format!("Version {}", notes.release.version), theme::LABEL),
+            release_notes(&notes.release),
+        ]
+        .spacing(theme::SM);
+
+        let actions = row![
+            iced::widget::checkbox(notes.mute)
+                .label("Never show this again")
+                .on_toggle(Message::MutePatchNotes)
+                .text_size(theme::BODY),
+            Space::new().width(Length::Fill),
+            button(text("Got it").size(theme::LABEL).width(Length::Fill).center())
+                .width(Length::Fixed(150.0))
+                .padding([theme::SM, theme::MD])
+                .style(theme::filled(theme::ACCENT))
+                .on_press(Message::DismissPatchNotes),
+        ]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center);
+
+        container(
+            column![section("What's new in Lightforge".to_owned(), body.into()), actions]
+                .spacing(theme::LG),
+        )
+        .width(Length::Fixed(560.0))
+        .padding(theme::LG)
+        .style(theme::dialog)
+        .into()
     }
 
     fn uninstall_card<'a>(&'a self, dialog: &'a UninstallDialog) -> Element<'a, Message> {
@@ -10236,6 +10629,24 @@ fn job_progress(job: Job, sample: &TransferState, bytes_per_second: u64) -> stat
 /// how long. Driven straight off the clock rather than off a counter in the
 /// model because the 100 ms tick already redraws the window whenever a
 /// transfer is live, which is exactly when this is on screen.
+/// One release's notes as a bulleted list.
+///
+/// Shared by the popup and the Lightforge Updates page so the two cannot
+/// drift. The bullet is a character rather than a drawn mark: these are lines
+/// of prose, not controls.
+fn release_notes(release: &lightforge_core::releases::Release) -> Element<'static, Message> {
+    column(release.notes.iter().map(|note| {
+        row![
+            text("·").size(theme::BODY).color(theme::MUTED),
+            text(note.clone()).size(theme::BODY).width(Length::Fill),
+        ]
+        .spacing(theme::SM)
+        .into()
+    }))
+    .spacing(theme::XS)
+    .into()
+}
+
 fn sweep() -> f32 {
     const PERIOD: f32 = 1.4;
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
@@ -10661,6 +11072,120 @@ mod tests {
         let _ = app.enqueue();
         assert!(app.queue.is_empty(), "a download was queued onto a drive that is not there");
         assert_eq!(app.error.as_deref(), Some("nvme2 is not mounted"));
+    }
+
+    /// A tile is a line. Removing Classic Era with its PTR tracked used to
+    /// leave the PTR behind, so the game stayed in the band under a branch
+    /// name — the bug Gabriel reported as "it will still be here but only the
+    /// ptr".
+    #[test]
+    fn removing_a_game_takes_its_ptr_and_beta_with_it() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+
+        let keep = Choice { code: ProductCode::Retail, label: "Retail".to_owned() };
+        app.choices = vec![
+            keep.clone(),
+            Choice { code: ProductCode::ClassicEra, label: "Classic Era".to_owned() },
+            Choice { code: ProductCode::EraPtr, label: "Era PTR".to_owned() },
+        ];
+        app.config.products = app
+            .choices
+            .iter()
+            .map(|c| Product::new(c.code.clone(), c.label.clone()))
+            .collect();
+        app.selected = keep;
+        app.error = None;
+
+        let _ = app.update(Message::RemoveProduct(ProductCode::ClassicEra));
+
+        let left: Vec<&ProductCode> = app.choices.iter().map(|c| &c.code).collect();
+        assert_eq!(left, vec![&ProductCode::Retail], "the PTR stayed behind");
+        assert!(
+            app.config.products.iter().all(|p| p.code == ProductCode::Retail),
+            "the config still tracks a branch of the removed line",
+        );
+        // Only the save complains, and only because this harness has no
+        // config directory — the removal itself was not refused.
+        assert_ne!(app.error.as_deref(), Some("that is the only game left — add another first"));
+    }
+
+    /// The header cannot be emptied, and a line is now the unit — so the last
+    /// *line* is held even when it has branches that would keep `choices`
+    /// from going to zero.
+    #[test]
+    fn the_last_line_cannot_be_removed_even_with_its_branches_tracked() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+
+        app.choices = vec![
+            Choice { code: ProductCode::ClassicEra, label: "Classic Era".to_owned() },
+            Choice { code: ProductCode::EraPtr, label: "Era PTR".to_owned() },
+        ];
+        app.config.products = app
+            .choices
+            .iter()
+            .map(|c| Product::new(c.code.clone(), c.label.clone()))
+            .collect();
+        app.selected = app.choices[0].clone();
+        app.error = None;
+
+        let _ = app.update(Message::RemoveProduct(ProductCode::ClassicEra));
+
+        assert_eq!(app.choices.len(), 2, "the only line was removed");
+        assert_eq!(app.error.as_deref(), Some("that is the only game left — add another first"));
+    }
+
+    /// The popup opens once per version and then not again, and every way of
+    /// saying "not now" is honoured. Each `return` in `open_patch_notes` is a
+    /// case that should see nothing.
+    #[test]
+    fn the_release_notes_open_once_after_an_update_and_never_uninvited() {
+        let version = env!("CARGO_PKG_VERSION");
+        let fresh = || {
+            let (mut app, _) = Lightforge::new();
+            app.dirs = None;
+            app.queue.clear();
+            app.config.setup_complete = true;
+            app.config.patch_notes_muted = false;
+            app.config.patch_notes_seen = Some("0.0.1".to_owned());
+            app
+        };
+
+        // Updated from an older version: this is the one start that shows them.
+        let mut app = fresh();
+        app.open_patch_notes();
+        assert_eq!(
+            app.patch_notes.as_ref().map(|n| n.release.version.clone()),
+            Some(version.to_owned()),
+        );
+
+        // Dismissed, and the version recorded — so a second start is quiet.
+        let _ = app.update(Message::DismissPatchNotes);
+        assert!(app.patch_notes.is_none());
+        assert_eq!(app.config.patch_notes_seen.as_deref(), Some(version));
+        assert!(!app.config.patch_notes_muted, "closing it is not muting it");
+        app.open_patch_notes();
+        assert!(app.patch_notes.is_none(), "shown twice for one version");
+
+        // The checkbox means every future release, not just this one.
+        let mut app = fresh();
+        app.open_patch_notes();
+        let _ = app.update(Message::MutePatchNotes(true));
+        let _ = app.update(Message::DismissPatchNotes);
+        assert!(app.config.patch_notes_muted);
+        app.config.patch_notes_seen = Some("0.0.1".to_owned());
+        app.open_patch_notes();
+        assert!(app.patch_notes.is_none(), "muted and still opened");
+
+        // A machine still in the wizard has a first run to get through, and
+        // notes about a build nothing has been done with yet say nothing.
+        let mut app = fresh();
+        app.config.setup_complete = false;
+        app.open_patch_notes();
+        assert!(app.patch_notes.is_none());
     }
 
     #[test]

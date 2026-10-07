@@ -121,6 +121,9 @@ pub struct Wizard {
     /// A folder the user typed in themselves.
     pub pointed: String,
     pub point_error: Option<String>,
+    /// Why the last add or remove on the drive step was refused. The step is a
+    /// layer over the app, so `Lightforge::error` is not on screen here.
+    pub drive_error: Option<String>,
     /// Whether Battle.net is wanted. Off means WoW only.
     pub battle_net: bool,
     /// What adoption did, one line each, shown on the way out of the step.
@@ -139,6 +142,7 @@ impl Default for Wizard {
             rows: Vec::new(),
             pointed: String::new(),
             point_error: None,
+            drive_error: None,
             battle_net: true,
             adopted: Vec::new(),
             pending: Vec::new(),
@@ -165,6 +169,10 @@ pub enum Msg {
     PointInput(String),
     /// Inspect the folder that was typed.
     Point,
+    /// Add the partition at this index as a drive for games.
+    AddDrive(usize),
+    /// Take a drive back off the list. Nothing on it is deleted.
+    RemoveDrive(String),
     WantBattleNet(bool),
     /// Done — write the config and get out of the way.
     Finish,
@@ -215,6 +223,11 @@ pub fn update(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
             // the wizard has seen it, and meeting it again on the next start
             // would be nagging. Settings keeps the button.
             app.config.setup_complete = true;
+            // A fresh install has nothing to be told what is new about: the
+            // notes describe the version it has just been set up with. Marked
+            // seen here so the *second* start does not open a popup about the
+            // build the wizard was running.
+            app.config.patch_notes_seen = Some(env!("CARGO_PKG_VERSION").to_owned());
             app.save_config();
             if finishing && !pending.is_empty() {
                 link_hand_offs(app, &pending);
@@ -319,6 +332,30 @@ pub fn update(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
                             .to_owned(),
                     )
                 }
+            }
+            iced::Task::none()
+        }
+
+        Msg::AddDrive(index) => {
+            let outcome = app.add_drive(index);
+            if outcome.is_ok() {
+                app.refresh_drives();
+            }
+            if let Some(wizard) = app.wizard.as_mut() {
+                wizard.drive_error = outcome.err();
+            }
+            iced::Task::none()
+        }
+
+        Msg::RemoveDrive(id) => {
+            // `refresh_drives` puts the partition back in the list below, so
+            // a drive added by mistake can be added again straight away.
+            let outcome = app.remove_drive(&id);
+            if outcome.is_ok() {
+                app.refresh_drives();
+            }
+            if let Some(wizard) = app.wizard.as_mut() {
+                wizard.drive_error = outcome.err();
             }
             iced::Task::none()
         }
@@ -515,7 +552,7 @@ pub fn prefetch(app: &Lightforge) -> iced::Task<Message> {
 pub fn view<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     let body = match wizard.step {
         Step::Welcome => welcome(app),
-        Step::Place => place(app),
+        Step::Place => place(app, wizard),
         Step::Found => found(app, wizard),
         Step::Install => install(app, wizard),
         Step::Games => games(app),
@@ -662,7 +699,7 @@ fn welcome(app: &Lightforge) -> Element<'_, Message> {
     body.into()
 }
 
-fn place<'a>(app: &'a Lightforge) -> Element<'a, Message> {
+fn place<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     let mut body = column![text(
         "The Wine prefix and Battle.net live in one place, on your home drive. Games can go \
          on any drive you add."
@@ -704,6 +741,13 @@ fn place<'a>(app: &'a Lightforge) -> Element<'a, Message> {
                 )
             }
         }
+        // Same two refusals as the Storage page: the default drive goes only
+        // after another one is made default, and the last one never goes at
+        // all, since every path resolves through it.
+        actions = actions.push(
+            secondary("Remove", Message::Wizard(Msg::RemoveDrive(library.id.clone())))
+                .enabled(!library.is_default && app.config.libraries.len() > 1),
+        );
         drives = drives.push(
             container(
                 row![facts.width(Length::Fill), actions].spacing(theme::MD).align_y(Alignment::Center),
@@ -730,7 +774,7 @@ fn place<'a>(app: &'a Lightforge) -> Element<'a, Message> {
                     ]
                     .spacing(theme::XS)
                     .width(Length::Fill),
-                    secondary("Add", Message::AddDrive(index)).enabled(true),
+                    secondary("Add", Message::Wizard(Msg::AddDrive(index))).enabled(true),
                 ]
                 .spacing(theme::MD)
                 .align_y(Alignment::Center),
@@ -745,9 +789,14 @@ fn place<'a>(app: &'a Lightforge) -> Element<'a, Message> {
             .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
             .style(theme::scrollbar),
     );
+    if let Some(error) = &wizard.drive_error {
+        body = body.push(muted(error.clone(), theme::CAPTION));
+    }
     body = body.extend(
-        app.hint("Adding a drive creates a Lightforge folder on it. Nothing is moved.")
-            .map(Element::from),
+        app.hint(
+            "Adding a drive creates a Lightforge folder on it. Nothing is moved, and removing              a drive again deletes nothing.",
+        )
+        .map(Element::from),
     );
     body.into()
 }
