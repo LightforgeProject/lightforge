@@ -393,7 +393,19 @@ impl Tweak {
 ///
 /// Every value is a JSON *string*: Battle.net writes booleans and numbers that
 /// way itself, and a real boolean here is silently ignored by the client.
-pub fn default_tweaks() -> Vec<Tweak> {
+pub fn default_tweaks(layout: &Layout) -> Vec<Tweak> {
+    // The default library's `games/` drive, so a title Battle.net installs
+    // itself lands beside WoW on the drive the user chose, rather than inside
+    // the prefix on the system disk, which is where `Program Files (x86)`
+    // used to put it.
+    //
+    // This moves the *games*, never the client: Battle.net itself is
+    // installed into the prefix, and the prefix is at the Blizzard root
+    // whatever the default drive is.
+    let install_path = layout
+        .default_library()
+        .map(|library| library.windows_games_path())
+        .unwrap_or_else(|| WINDOWS_PROGRAM_FILES.to_owned());
     vec![
         Tweak::new(
             "Client.GameLaunchWindowBehavior",
@@ -407,8 +419,8 @@ pub fn default_tweaks() -> Vec<Tweak> {
         ),
         Tweak::new(
             "Client.Install.DefaultInstallPath",
-            json!(WINDOWS_PROGRAM_FILES),
-            "propose installs next to the WoW symlink, so they land in games/",
+            json!(install_path),
+            "propose installs in the default drive's games folder, not inside the prefix",
         ),
         Tweak::new(
             "Client.GameSearch.BackgroundSearch",
@@ -1188,7 +1200,7 @@ pub fn provision(
 
     // Last, and only with nothing running: the client rewrites this file when
     // it exits, so an injection before the teardown above would be lost.
-    let mut tweaks = default_tweaks();
+    let mut tweaks = default_tweaks(layout);
     tweaks.extend(product_tweaks(managed));
     let config_path = configure(layout, user, &tweaks)?;
     let account_configs = configure_accounts(layout, user, &account_tweaks())?;
@@ -1542,14 +1554,14 @@ mod tests {
             "Client": { "Sound": { "Enabled": "true" } },
             "Games": { "wow": { "LastPlayed": "1" } }
         });
-        apply_tweaks(&mut config, &default_tweaks());
+        apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard")));
 
         assert_eq!(config["Client"]["GameLaunchWindowBehavior"], json!("2"));
         assert_eq!(config["Client"]["HardwareAcceleration"], json!("false"));
-        assert_eq!(
-            config["Client"]["Install"]["DefaultInstallPath"],
-            json!(r"C:\Program Files (x86)")
-        );
+        // The default library's `games/` drive, so a title Battle.net installs
+        // itself lands on the drive the user picked rather than inside the
+        // prefix.
+        assert_eq!(config["Client"]["Install"]["DefaultInstallPath"], json!(r"E:\"));
         // Login state and per-game settings share this file; losing them would
         // log the user out.
         assert_eq!(config["Client"]["Sound"]["Enabled"], json!("true"));
@@ -1559,7 +1571,7 @@ mod tests {
     #[test]
     fn an_existing_value_is_overwritten_not_appended() {
         let mut config = json!({ "Client": { "GameLaunchWindowBehavior": "0" } });
-        apply_tweaks(&mut config, &default_tweaks());
+        apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard")));
         assert_eq!(config["Client"]["GameLaunchWindowBehavior"], json!("2"));
     }
 
@@ -1568,11 +1580,8 @@ mod tests {
         // Battle.net has shipped schema changes before; a stale scalar must not
         // abort setup.
         let mut config = json!({ "Client": { "Install": "C:\\somewhere" } });
-        apply_tweaks(&mut config, &default_tweaks());
-        assert_eq!(
-            config["Client"]["Install"]["DefaultInstallPath"],
-            json!(r"C:\Program Files (x86)")
-        );
+        apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard")));
+        assert_eq!(config["Client"]["Install"]["DefaultInstallPath"], json!(r"E:\"));
     }
 
     #[test]
@@ -1585,7 +1594,7 @@ mod tests {
             .unwrap();
         std::fs::write(bnet.join("beef0001.config"), "{}").unwrap();
 
-        configure(&layout, "steamuser", &default_tweaks()).unwrap();
+        configure(&layout, "steamuser", &default_tweaks(&layout)).unwrap();
         let changed = configure_accounts(&layout, "steamuser", &account_tweaks()).unwrap();
         assert_eq!(changed.len(), 2);
 
@@ -1609,7 +1618,7 @@ mod tests {
     fn a_prefix_with_no_account_yet_is_a_no_op() {
         let dir = scratch("noaccount");
         let layout = Layout::with_root(&dir);
-        configure(&layout, "steamuser", &default_tweaks()).unwrap();
+        configure(&layout, "steamuser", &default_tweaks(&layout)).unwrap();
 
         // Only Battle.net.config exists before the first login.
         assert!(configure_accounts(&layout, "steamuser", &account_tweaks()).unwrap().is_empty());
@@ -1620,7 +1629,7 @@ mod tests {
         let dir = scratch("seed");
         let layout = Layout::with_root(&dir);
 
-        let path = configure(&layout, "steamuser", &default_tweaks()).unwrap();
+        let path = configure(&layout, "steamuser", &default_tweaks(&layout)).unwrap();
         assert_eq!(path, layout.battle_net_config("steamuser"));
 
         let written: Value =
@@ -1633,9 +1642,9 @@ mod tests {
         let dir = scratch("idempotent");
         let layout = Layout::with_root(&dir);
 
-        let path = configure(&layout, "steamuser", &default_tweaks()).unwrap();
+        let path = configure(&layout, "steamuser", &default_tweaks(&layout)).unwrap();
         let first = std::fs::read_to_string(&path).unwrap();
-        configure(&layout, "steamuser", &default_tweaks()).unwrap();
+        configure(&layout, "steamuser", &default_tweaks(&layout)).unwrap();
         assert_eq!(first, std::fs::read_to_string(&path).unwrap());
 
         let leftovers = std::fs::read_dir(path.parent().unwrap()).unwrap().count();
@@ -1651,7 +1660,7 @@ mod tests {
         std::fs::write(&path, "{ not json").unwrap();
 
         assert!(matches!(
-            configure(&layout, "steamuser", &default_tweaks()),
+            configure(&layout, "steamuser", &default_tweaks(&layout)),
             Err(BattleNetError::MalformedConfig { .. })
         ));
     }

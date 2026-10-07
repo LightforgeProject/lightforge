@@ -128,6 +128,7 @@ pub struct Scanned {
 /// download go through.
 pub async fn scan_and_repair(
     layout: Layout,
+    code: ProductCode,
     tx: tokio::sync::watch::Sender<lightforge_core::tact::verify::Progress>,
 ) -> Result<Scanned, String> {
     tokio::task::spawn_blocking(move || {
@@ -142,7 +143,7 @@ pub async fn scan_and_repair(
             ));
         }
 
-        let install = layout.wow_install();
+        let install = layout.wow_install(&code);
         let store = Storage::open(install.join("Data")).map_err(|e| e.to_string())?;
         let report = verify::scan(&store, |progress| {
             let _ = tx.send(progress);
@@ -170,11 +171,12 @@ pub async fn scan_and_repair(
 /// the core refuses a result from a store that changed underneath it anyway.
 pub async fn deep_scan(
     layout: Layout,
+    code: ProductCode,
     cancel: Cancel,
     tx: tokio::sync::watch::Sender<lightforge_core::tact::verify::Progress>,
 ) -> Result<lightforge_core::tact::verify::Report, String> {
     tokio::task::spawn_blocking(move || {
-        lightforge_core::tact::verify::deep_scan(layout.wow_install(), &cancel, |progress| {
+        lightforge_core::tact::verify::deep_scan(layout.wow_install(&code), &cancel, |progress| {
             let _ = tx.send(progress);
         })
         .map_err(|e| e.to_string())
@@ -197,13 +199,14 @@ pub enum Unrepaired {
 /// is still the store that was scanned.
 pub async fn repair(
     layout: Layout,
+    code: ProductCode,
     report: lightforge_core::tact::verify::Report,
 ) -> Result<usize, Unrepaired> {
     tokio::task::spawn_blocking(move || {
         if !lightforge_core::preflight::scan(&layout).is_empty() {
             return Err(Unrepaired::InUse);
         }
-        let data_dir = layout.wow_install().join("Data").join("data");
+        let data_dir = layout.wow_install(&code).join("Data").join("data");
         lightforge_core::tact::verify::repair_unchanged(&data_dir, &report)
             .map_err(|e| Unrepaired::Failed(e.to_string()))
     })
@@ -434,7 +437,7 @@ pub async fn download(
                 // built here and torn down with the thread, and a reqwest
                 // client's connections belong to the runtime that opened them.
                 let http = Http::new().map_err(|e| e.to_string())?;
-                let dest = layout.wow_install();
+                let dest = layout.wow_install(&code);
                 let options = InstallOptions {
                     region,
                     flavor: code.install_dir().into_owned(),
@@ -641,7 +644,7 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
         // `C:` and the shop's browser would lose its GPU child process the way
         // it always did. Verified end to end 2026-10-02: a full checkout, from
         // a direct launch, with no Battle.net session.
-        let flavor = layout.wow_install().join(&*code.install_dir());
+        let flavor = layout.wow_install(&code).join(&*code.install_dir());
         let exe = lightforge_core::paths::game_executable(&flavor, &code);
         if !exe.is_file() {
             return Err(format!("no game at {}", exe.display()));
@@ -1017,7 +1020,8 @@ fn runner_for(
     let build = proton::select(&builds, runs.pin(&config, code))
         .ok_or_else(|| "no supported Proton-GE build installed".to_owned())?;
 
-    let target = std::fs::read_link(layout.wow_symlink()).unwrap_or_else(|_| layout.wow_install());
+    let target =
+        std::fs::read_link(layout.wow_symlink()).unwrap_or_else(|_| layout.wow_install(code));
     let mut runner =
         ProtonRunner::new(build, layout, ProtonRunner::steam_client_path(steam.as_ref(), &dirs))
             .with_compat_mount(&target)
@@ -1100,7 +1104,7 @@ pub async fn uninstall_plan(
     layout: Layout,
     code: ProductCode,
 ) -> Result<UninstallPreview, String> {
-    let install = layout.wow_install();
+    let install = layout.wow_install(&code);
     let plan = {
         let (install, code) = (install.clone(), code.clone());
         tokio::task::spawn_blocking(move || {
@@ -1143,7 +1147,11 @@ pub async fn uninstall(
         return Err(format!("close {} first — the game files are in use", process.name));
     }
 
-    let install = layout.wow_install();
+    let install = layout.wow_install(&code);
+    let windows_path = layout
+        .library(&code)
+        .map(|library| library.windows_wow_path())
+        .unwrap_or_else(|| lightforge_core::paths::WINDOWS_WOW_PATH.to_owned());
     let plan = uninstall::plan(&install, &code).map_err(|e| e.to_string())?;
     // A reclaim that cannot be planned is skipped, not fatal: the uninstall
     // itself is still exactly what was asked for.
@@ -1153,7 +1161,8 @@ pub async fn uninstall(
     };
 
     tokio::task::spawn_blocking(move || {
-        let removed = uninstall::execute(&install, &code, &plan).map_err(|e| e.to_string())?;
+        let removed = uninstall::execute(&install, &code, &plan, &windows_path)
+            .map_err(|e| e.to_string())?;
         let reclaimed = match &reclaim {
             Some(reclaim) => reclaim::execute(&install, reclaim).map_err(|e| e.to_string())?,
             None => 0,
@@ -1168,13 +1177,26 @@ pub async fn uninstall(
 /// Measure Settings > Storage. Walks the whole game install.
 pub async fn storage(layout: Layout, dirs: AppDirs) -> lightforge_core::storage::Report {
     let fallback = lightforge_core::storage::Report {
-        root: layout.root().to_path_buf(),
-        disk: None,
-        usage: Vec::new(),
+        libraries: Vec::new(),
+        app: Vec::new(),
+        app_root: dirs.data_dir().to_path_buf(),
+        app_disk: None,
     };
     tokio::task::spawn_blocking(move || lightforge_core::storage::report(&layout, &dirs))
         .await
         .unwrap_or(fallback)
+}
+
+/// Clear what one library holds that is only a cache; returns bytes freed.
+pub async fn clear_library(
+    layout: Layout,
+    library: lightforge_core::library::Library,
+) -> Result<u64, String> {
+    tokio::task::spawn_blocking(move || {
+        lightforge_core::storage::clear_library(&layout, &library).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Clear Lightforge's own cache, shader caches aside; returns bytes freed.
@@ -1204,7 +1226,7 @@ mod uninstall_tests {
         let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
         let real = Layout::with_root(home.join("Games/Blizzard"));
         let (Ok(info), Ok(registry)) = (
-            std::fs::read(real.build_info()),
+            std::fs::read(real.build_info(&ProductCode::ClassicEra)),
             std::fs::read(real.agent_dir().join("product.db")),
         ) else {
             return;
@@ -1217,8 +1239,8 @@ mod uninstall_tests {
         let era = layout.product_dir(&ProductCode::ClassicEra);
         std::fs::create_dir_all(era.join("WTF")).unwrap();
         std::fs::write(era.join("WowClassic.exe"), [0u8; 64]).unwrap();
-        std::fs::create_dir_all(layout.wow_install().join("Data/data")).unwrap();
-        std::fs::write(layout.build_info(), &info).unwrap();
+        std::fs::create_dir_all(layout.wow_install(&ProductCode::ClassicEra).join("Data/data")).unwrap();
+        std::fs::write(layout.build_info(&ProductCode::ClassicEra), &info).unwrap();
         std::fs::create_dir_all(layout.agent_dir()).unwrap();
         std::fs::write(layout.agent_dir().join("product.db"), &registry).unwrap();
 
@@ -1227,9 +1249,12 @@ mod uninstall_tests {
         runtime.block_on(uninstall(None, layout.clone(), ProductCode::ClassicEra)).unwrap();
 
         assert!(!era.exists());
-        assert!(layout.wow_install().join("Data").exists(), "the shared store stays");
-        let left = lightforge_core::buildinfo::BuildInfo::load(layout.build_info()).unwrap();
-        let before = lightforge_core::buildinfo::BuildInfo::load(real.build_info()).unwrap();
+        assert!(
+            layout.wow_install(&ProductCode::ClassicEra).join("Data").exists(),
+            "the shared store stays",
+        );
+        let left = lightforge_core::buildinfo::BuildInfo::load(layout.build_info(&ProductCode::ClassicEra)).unwrap();
+        let before = lightforge_core::buildinfo::BuildInfo::load(real.build_info(&ProductCode::ClassicEra)).unwrap();
         assert_eq!(left.products().count(), before.products().count() - 1);
         assert!(left.products().all(|p| p != ProductCode::ClassicEra));
 

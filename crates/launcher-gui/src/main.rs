@@ -42,6 +42,7 @@ use lightforge_core::addons::Channel;
 use lightforge_core::assets::{Manifest, Pipeline, Store};
 use lightforge_core::config::Config;
 use lightforge_core::debug::DebugInfo;
+use lightforge_core::library;
 use lightforge_core::net::Http;
 use lightforge_core::news;
 use lightforge_core::paths::{AppDirs, Layout};
@@ -427,7 +428,7 @@ enum Message {
     StorageMeasured(Box<storage::Report>),
     InstallOffered(ProductCode, Box<Result<Offerings, String>>),
     InstallHighRes(bool),
-    GamesFolderChanged(String),
+    InstallTarget(usize),
     InstallCancel,
     InstallStart,
     AskUninstall,
@@ -441,6 +442,20 @@ enum Message {
     ClearCache,
     CacheCleared(Result<u64, String>),
     OpenLibrary,
+    /// Re-scan the mount table: which partitions could be added, and whether
+    /// an absent library has come back somewhere else.
+    RefreshDrives,
+    /// Add `self.partitions[i]` as a library.
+    AddDrive(usize),
+    /// Make this library the default install target, and Battle.net's.
+    SetDefaultDrive(String),
+    /// Take a drive off the list. Nothing on it is deleted.
+    RemoveDrive(String),
+    /// Clear what this library holds that is only a cache.
+    ClearDrive(String),
+    DriveCleared(String, Result<u64, String>),
+    /// Open a library's folder in the file manager.
+    OpenDrive(String),
     OpenConfigFolder,
     LocationChanged(String),
     UseLocation,
@@ -536,10 +551,31 @@ struct InstallDialog {
     label: String,
     stage: DialogStage,
     high_res: bool,
-    /// Whether the game folder can still be chosen: no WoW version is in it.
-    movable: bool,
-    /// Space on the disk the typed game folder would land on.
+    /// Every drive this game could go on, main first.
+    targets: Vec<InstallTarget>,
+    /// Index into `targets`.
+    chosen: usize,
+}
+
+impl InstallDialog {
+    fn target(&self) -> Option<&InstallTarget> {
+        self.targets.get(self.chosen)
+    }
+}
+
+/// One drive offered by the install dialog.
+#[derive(Debug, Clone)]
+struct InstallTarget {
+    id: String,
+    label: String,
+    /// Where the game would actually land.
+    install: PathBuf,
+    /// Space on that drive, or `None` when it could not be read.
     disk: Option<storage::Disk>,
+    state: library::State,
+    /// A WoW install is already there, so this version joins it and shares
+    /// its data store rather than starting a second one.
+    shares: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1124,8 +1160,19 @@ struct Lightforge {
     /// agreeing to the next one. Not persisted — a new run of the launcher is
     /// a fair moment to ask again, and the prefix may have moved since.
     downgrade_ok: HashSet<String>,
-    /// Editable game folder, applied when the install dialog starts.
-    games_input: String,
+    /// Partitions that could become a library, as last scanned. Refreshed
+    /// when the Storage section opens rather than polled — a drive appearing
+    /// while the page is shut is not news.
+    partitions: Vec<library::Partition>,
+    /// What clearing one drive last freed, by library id.
+    drive_notice: Option<(String, String)>,
+    /// Each library's state as last checked, by id.
+    ///
+    /// Cached rather than asked in the view: `action()` runs on every frame,
+    /// and a marker file read per frame would put a filesystem call in the
+    /// render path. Refreshed when drives are rescanned and when a product is
+    /// reloaded, which is also when a drive going away would matter.
+    drive_states: HashMap<String, library::State>,
 
     /// Optional performance tools this machine has, detected once at startup.
     /// A toggle for a binary that is not installed is a launch failure waiting
@@ -1215,10 +1262,18 @@ impl Lightforge {
             (Some(Err(e)), Some(dirs)) => Some(broken_config(e, &dirs.config_file())),
             _ => None,
         };
-        let config = match loaded {
+        let mut config = match loaded {
             Some(Ok(config)) => config,
             _ => Config::with_default_products(),
         };
+        // A config written before multi-drive storage has no libraries in it.
+        // Seeded here rather than lazily, because every path below this line
+        // resolves through one. Deliberately *not* saved: starting the app is
+        // not a reason to write to someone's config, and the seed does not
+        // need writing to be stable — see `Config::ensure_libraries`. It goes
+        // to disk with the first change the user makes.
+        let _ = config.ensure_libraries();
+        let config = config;
         // Honours `blizzard_root`, the same way the CLI does.
         let layout = config.layout().unwrap_or_else(|_| Layout::with_root("."));
         let bnet_icon = layout.battle_net_icon();
@@ -1308,7 +1363,9 @@ impl Lightforge {
             uninstall_dialog: None,
             downgrade_dialog: None,
             downgrade_ok: HashSet::new(),
-            games_input: String::new(),
+            partitions: Vec::new(),
+            drive_notice: None,
+            drive_states: HashMap::new(),
             tools: HostTools::detect(),
             fps_input: String::new(),
             spell_input: String::new(),
@@ -1349,6 +1406,11 @@ impl Lightforge {
             return (app, Task::none());
         }
         app.load_tweak_inputs();
+        // Before anything resolves a path: a drive that came back at a
+        // different mount point is found again here, so a game on it reads as
+        // installed rather than as missing. Cheap — one pass over
+        // `/proc/self/mounts` and one marker file per absent library.
+        app.refresh_drives();
         app.restore_queue();
 
         // What is provisioned decides which screen opens: a machine that has
@@ -1514,6 +1576,17 @@ impl Lightforge {
         if let Some(dialog) = self.downgrade_ahead(what) {
             self.downgrade_dialog = Some(dialog);
             return Task::none();
+        }
+        // Checked again here, not just on the button: pre-flight relinks the
+        // prefix, and relinking a library that is not there is what would
+        // leave an empty install behind for the client to offer a repair on.
+        // A Battle.net hand-off is held too — the game it would start is on
+        // the same drive.
+        if !matches!(what, Launch::Client) {
+            if let Some(drive) = self.offline_drive(&self.selected.code) {
+                self.error = Some(format!("{drive} is not mounted"));
+                return Task::none();
+            }
         }
 
         self.busy = true;
@@ -1703,11 +1776,39 @@ impl Lightforge {
     }
 
     /// The button state, which is core's decision and not the GUI's.
+    ///
+    /// The one thing decided here is the drive being away. That is a fact
+    /// about the filesystem rather than about a build, and it outranks every
+    /// other state: a product whose library is not mounted has nothing to
+    /// launch, nothing worth downloading, and must not be repaired — the
+    /// files are intact somewhere else.
     fn action(&self) -> ActionState {
+        if let Some(drive) = self.offline_drive(&self.selected.code) {
+            return ActionState::Offline { drive };
+        }
         // Only this product's own transfer. Anything else is another game's
         // business, however loudly it is downloading.
         let transfer = self.download_for(&self.selected.code).map(Download::transfer);
         state::decide(&self.local, self.remote.as_ref(), transfer)
+    }
+
+    /// The name of this product's drive, when it is one that has gone away.
+    fn offline_drive(&self, code: &ProductCode) -> Option<String> {
+        let library = self.config.library_of(code)?;
+        match self.drive_states.get(&library.id) {
+            Some(library::State::Missing) => Some(library.label.clone()),
+            _ => None,
+        }
+    }
+
+    /// Re-read every library's marker. One small file per drive.
+    fn check_drives(&mut self) {
+        self.drive_states = self
+            .config
+            .libraries
+            .iter()
+            .map(|library| (library.id.clone(), library.state()))
+            .collect();
     }
 
     /// Progress against the whole product, not against this run.
@@ -1738,6 +1839,13 @@ impl Lightforge {
         // the one that writes to disk, so it checks for itself.
         if self.kind_of(&code) == Kind::HandOff {
             self.error = Some(format!("{} is installed through Battle.net", self.selected.label));
+            return Task::none();
+        }
+        // The panel holds this product when its drive is away, but the queue
+        // is also restored from disk and resumed without anyone pressing
+        // anything — so the check that actually protects the files is here.
+        if let Some(drive) = self.offline_drive(&code) {
+            self.error = Some(format!("{drive} is not mounted"));
             return Task::none();
         }
         let label = self.selected.label.clone();
@@ -1887,6 +1995,9 @@ impl Lightforge {
                 if code != self.selected.code {
                     return Task::none();
                 }
+                // A drive can go away between two refreshes, and this is the
+                // moment the panel is being rebuilt anyway.
+                self.check_drives();
                 self.local = refreshed.local.clone();
                 self.remote = refreshed.remote.clone();
                 self.status = match &refreshed.offline {
@@ -1995,6 +2106,21 @@ impl Lightforge {
                 }
                 ActionState::Play => self.preflight(Launch::Game),
                 ActionState::Unknown => Task::none(),
+                // Nothing to download and nothing to repair: look for the
+                // drive again, and reload the product if it came back.
+                ActionState::Offline { .. } => {
+                    self.refresh_drives();
+                    match self.offline_drive(&self.selected.code) {
+                        Some(drive) => {
+                            self.status = format!("{drive} is still not mounted");
+                            Task::none()
+                        }
+                        None => {
+                            self.error = None;
+                            self.reload(self.selected.code.clone())
+                        }
+                    }
+                }
             },
 
             Message::Tick => {
@@ -3266,7 +3392,15 @@ impl Lightforge {
                 self.settings_tab = tab;
                 self.error = None;
                 match tab {
-                    SettingsTab::Storage => self.measure_storage(),
+                    SettingsTab::Storage => {
+                        // Scanned when the page opens rather than polled: a
+                        // drive appearing while the page is shut is not news,
+                        // and this is also where a library that moved gets
+                        // found again.
+                        self.refresh_drives();
+                        self.drive_notice = None;
+                        self.measure_storage()
+                    }
                     _ => Task::none(),
                 }
             }
@@ -3274,7 +3408,7 @@ impl Lightforge {
             Message::StorageMeasured(report) => {
                 self.storage_measuring = false;
                 if self.location_input.is_empty() {
-                    self.location_input = report.root.display().to_string();
+                    self.location_input = self.layout.root().display().to_string();
                 }
                 self.storage = Some(*report);
                 Task::none()
@@ -3300,12 +3434,108 @@ impl Lightforge {
                 Task::none()
             }
 
-            Message::GamesFolderChanged(value) => {
-                let disk = parse_path(&value).ok().and_then(|p| storage::disk(&p).ok());
+            Message::InstallTarget(index) => {
                 if let Some(dialog) = self.install_dialog.as_mut() {
-                    dialog.disk = disk;
+                    if index < dialog.targets.len() {
+                        dialog.chosen = index;
+                    }
                 }
-                self.games_input = value;
+                Task::none()
+            }
+
+            Message::RefreshDrives => {
+                self.refresh_drives();
+                self.measure_storage()
+            }
+
+            Message::AddDrive(index) => {
+                match self.add_drive(index) {
+                    Ok(()) => {
+                        self.refresh_drives();
+                        self.measure_storage()
+                    }
+                    Err(e) => {
+                        self.error = Some(e);
+                        Task::none()
+                    }
+                }
+            }
+
+            Message::SetDefaultDrive(id) => {
+                // The button is held for a drive that is away, but this also
+                // decides where the *next* install goes and what Battle.net is
+                // told — neither is worth pointing at a drive that is not here.
+                if let Some(drive) = self
+                    .config
+                    .libraries
+                    .iter()
+                    .find(|l| l.id == id)
+                    .filter(|l| self.drive_states.get(&l.id) == Some(&library::State::Missing))
+                    .map(|l| l.label.clone())
+                {
+                    self.error = Some(format!("{drive} is not mounted"));
+                    return Task::none();
+                }
+                for library in &mut self.config.libraries {
+                    library.is_default = library.id == id;
+                }
+                self.save_config();
+                self.rebuild_layout();
+                // Battle.net's `DefaultInstallPath` follows the default drive,
+                // and it is only written where nothing in the prefix is running
+                // — so it is re-asserted by the next pre-flight, not here. The
+                // client itself does not move: it lives in the prefix.
+                self.status = "new installs will go to this drive".to_owned();
+                self.measure_storage()
+            }
+
+            Message::RemoveDrive(id) => {
+                match self.remove_drive(&id) {
+                    Ok(()) => self.measure_storage(),
+                    Err(e) => {
+                        self.error = Some(e);
+                        Task::none()
+                    }
+                }
+            }
+
+            Message::ClearDrive(id) => {
+                let Some(library) = self.config.libraries.iter().find(|l| l.id == id).cloned()
+                else {
+                    return Task::none();
+                };
+                self.drive_notice = Some((id.clone(), "clearing…".to_owned()));
+                let layout = self.layout.clone();
+                Task::perform(
+                    tasks::clear_library(layout, library),
+                    move |result| Message::DriveCleared(id.clone(), result),
+                )
+            }
+
+            Message::DriveCleared(id, result) => {
+                self.drive_notice = Some(match result {
+                    Ok(0) => (id, "nothing to clear".to_owned()),
+                    Ok(bytes) => (id, format!("freed {}", size_of(bytes))),
+                    Err(e) => (id, e),
+                });
+                self.measure_storage()
+            }
+
+            Message::OpenDrive(id) => {
+                if let Some(library) = self.config.libraries.iter().find(|l| l.id == id) {
+                    // A drive with nothing installed on it yet has no `games/`
+                    // folder, so this opens the nearest thing that does exist
+                    // — the place the folder would appear.
+                    let path = library
+                        .games()
+                        .ancestors()
+                        .find(|p| p.is_dir())
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(|| library.games().to_path_buf());
+                    if let Err(e) = tasks::open_path(path) {
+                        self.error = Some(e);
+                    }
+                }
                 Task::none()
             }
 
@@ -3752,7 +3982,7 @@ impl Lightforge {
                 let (tx, rx) = tokio::sync::watch::channel(Default::default());
                 self.scan_rx = Some(rx);
                 Task::perform(
-                    tasks::scan_and_repair(self.layout.clone(), tx),
+                    tasks::scan_and_repair(self.layout.clone(), self.selected.code.clone(), tx),
                     |result| Message::Scanned(Box::new(result)),
                 )
             }
@@ -3788,7 +4018,7 @@ impl Lightforge {
                 self.deep_cancel = Some(cancel.clone());
                 let (tx, rx) = tokio::sync::watch::channel(Default::default());
                 self.scan_rx = Some(rx);
-                Task::perform(tasks::deep_scan(self.layout.clone(), cancel, tx), |result| {
+                Task::perform(tasks::deep_scan(self.layout.clone(), self.selected.code.clone(), cancel, tx), |result| {
                     Message::DeepScanned(Box::new(result))
                 })
             }
@@ -3836,7 +4066,7 @@ impl Lightforge {
                 // Held only for the index rewrite — milliseconds — since that
                 // is the one step a launching client must not overlap.
                 self.busy = true;
-                Task::perform(tasks::repair(self.layout.clone(), *report), Message::Repaired)
+                Task::perform(tasks::repair(self.layout.clone(), self.selected.code.clone(), *report), Message::Repaired)
             }
 
             Message::Repaired(result) => {
@@ -4053,14 +4283,24 @@ impl Lightforge {
     /// Open the install dialog and start pricing the build.
     fn open_install(&mut self) -> Task<Message> {
         let code = self.selected.code.clone();
-        self.games_input = self.layout.games_root().display().to_string();
+        let targets = self.install_targets(&code);
+        // Opens on the drive this product is already assigned to, else the
+        // default one — not on the first row, which would silently re-target a
+        // product whose files are elsewhere.
+        let assigned = self
+            .config
+            .product(&code)
+            .and_then(|p| p.profile.library.clone());
+        let chosen = assigned
+            .and_then(|id| targets.iter().position(|t| t.id == id))
+            .unwrap_or(0);
         self.install_dialog = Some(InstallDialog {
             code: code.clone(),
             label: self.selected.label.clone(),
             stage: DialogStage::Calculating,
             high_res: self.opted_optional(&code).iter().any(|t| t == HIGH_RES),
-            movable: storage::game_folder_is_empty(&self.layout),
-            disk: storage::disk(&self.layout.games_root()).ok(),
+            targets,
+            chosen,
         });
         // Priced with no opt-ins, since the dialog adds each extra's own size,
         // and against the store already there, so files another WoW version
@@ -4071,7 +4311,7 @@ impl Lightforge {
                 code.clone(),
                 self.region,
                 Vec::new(),
-                Some(self.layout.wow_install()),
+                Some(self.layout.wow_install(&code)),
             ),
             move |result| Message::InstallOffered(code.clone(), Box::new(result)),
         )
@@ -4086,9 +4326,10 @@ impl Lightforge {
             self.install_dialog = None;
             return Task::none();
         }
-        // Re-checked rather than trusted from when the dialog opened.
-        if dialog.movable && storage::game_folder_is_empty(&self.layout) {
-            if let Err(e) = self.move_game_folder() {
+        // Re-checked rather than trusted from when the dialog opened: the
+        // drive may have gone away while the user read the size.
+        if let Some(target) = dialog.target() {
+            if let Err(e) = self.target_install(&dialog.code, &target.id) {
                 self.error = Some(e);
                 return Task::none();
             }
@@ -4103,31 +4344,151 @@ impl Lightforge {
         self.enqueue()
     }
 
-    /// Point the game folder at what the dialog holds.
-    ///
-    /// Only while no WoW version is installed: then moving it is a config
-    /// change plus re-pointing the prefix's link, which is how Wine — and
-    /// Battle.net and Agent through it — find the game at its usual Windows
-    /// path wherever it really is.
-    fn move_game_folder(&mut self) -> Result<(), String> {
-        let path = parse_path(&self.games_input)?;
-        if path == self.layout.games_root() {
-            return Ok(());
+    /// Every drive this product could be installed to, main first.
+    fn install_targets(&self, code: &ProductCode) -> Vec<InstallTarget> {
+        let mut targets: Vec<InstallTarget> = self
+            .config
+            .libraries
+            .iter()
+            .map(|library| InstallTarget {
+                id: library.id.clone(),
+                label: library.label.clone(),
+                install: self.layout.wow_install_in(library),
+                disk: library.disk(),
+                state: library.state(),
+                shares: storage::holds_wow(&self.layout, library),
+            })
+            .collect();
+        let main = self.config.libraries.iter().position(|l| l.is_default).unwrap_or(0);
+        if main < targets.len() {
+            let first = targets.remove(main);
+            targets.insert(0, first);
         }
-        let default = self.layout.clone().with_games(None).games_root();
-        self.config.games_dir = (path != default).then(|| path.clone());
-        self.save_config();
-        self.layout = self.layout.clone().with_games(self.config.games_dir.clone());
+        let _ = code;
+        targets
+    }
 
-        // Before setup there is no prefix to link from, and setup makes the
-        // link itself; creating `drive_c` early would get in wineboot's way.
-        if lightforge_core::prefix::PrefixStatus::inspect(&self.layout).initialized {
-            lightforge_core::prefix::ensure_link(
-                &self.layout.wow_symlink(),
-                &self.layout.wow_install(),
-            )
-            .map_err(|e| e.to_string())?;
+    /// Assign a product to a library and make the prefix able to see it.
+    ///
+    /// Writing the assignment is the cheap half. The other half is that the
+    /// library has to be set up — its folder and marker written — and linked
+    /// into the prefix under its own drive letters, or the download would land
+    /// somewhere Wine cannot address and the in-game shop would have no drive
+    /// root to start on.
+    fn target_install(&mut self, code: &ProductCode, id: &str) -> Result<(), String> {
+        let Some(library) = self.config.libraries.iter_mut().find(|l| l.id == id) else {
+            return Err("that drive is no longer configured".to_owned());
+        };
+        if library.state() == library::State::Missing {
+            return Err(format!("{} is not mounted", library.label));
         }
+        library.claim().map_err(|e| e.to_string())?;
+        if let Some(product) = self.config.product_mut(code) {
+            product.profile.library = Some(id.to_owned());
+        }
+        self.save_config();
+        self.rebuild_layout();
+
+        // Before setup there is no prefix to link into, and setup makes the
+        // links itself; creating `drive_c` early would get in wineboot's way.
+        if lightforge_core::prefix::PrefixStatus::inspect(&self.layout).initialized {
+            lightforge_core::prefix::link_libraries(&self.layout).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Rebuild the layout from the config — after a library is added, removed,
+    /// made main, or assigned to a product.
+    fn rebuild_layout(&mut self) {
+        if let Ok(layout) = self.config.layout() {
+            self.layout = layout;
+        }
+    }
+
+    /// Re-read the mount table: which partitions could be added, and whether a
+    /// library that was absent has come back somewhere else.
+    ///
+    /// The relocation is the half worth having. A drive that was mounted at
+    /// `/run/media/user/games` and comes back at `/run/media/user/games1` is
+    /// still the same volume, and its marker says so — so the recorded path is
+    /// corrected rather than the library being declared lost.
+    fn refresh_drives(&mut self) {
+        let mut moved = false;
+        for library in &mut self.config.libraries {
+            if library.state() != library::State::Missing {
+                continue;
+            }
+            if let Some(found) = library::relocate(library) {
+                library.games = found;
+                library.probe();
+                moved = true;
+            }
+        }
+        if moved {
+            self.save_config();
+            self.rebuild_layout();
+        }
+        self.partitions = library::partitions(&self.config.libraries);
+        self.check_drives();
+    }
+
+    /// Add the partition at `index` as a library.
+    fn add_drive(&mut self, index: usize) -> Result<(), String> {
+        let Some(partition) = self.partitions.get(index).cloned() else {
+            return Err("that drive is no longer there".to_owned());
+        };
+        let (games_letter, wow_letter) = library::allocate_letters(&self.config.libraries)
+            .ok_or_else(|| library::LibraryError::NoLettersLeft.to_string())?;
+        let mut library = library::Library::on_partition(
+            &partition.point,
+            partition.label.clone(),
+            partition.uuid.clone(),
+        );
+        library.games_letter = games_letter;
+        library.wow_letter = wow_letter;
+        library.claim().map_err(|e| e.to_string())?;
+        if self.config.libraries.iter().any(|l| l.id == library.id) {
+            return Err(format!("{} is already a Lightforge drive", partition.label));
+        }
+        self.config.libraries.push(library);
+        self.save_config();
+        self.rebuild_layout();
+        if lightforge_core::prefix::PrefixStatus::inspect(&self.layout).initialized {
+            lightforge_core::prefix::link_libraries(&self.layout).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Take a drive off Lightforge's list. Nothing on it is deleted — the
+    /// games are still there, and re-adding the drive picks them back up by
+    /// its marker.
+    fn remove_drive(&mut self, id: &str) -> Result<(), String> {
+        let Some(library) = self.config.libraries.iter().find(|l| l.id == id).cloned() else {
+            return Ok(());
+        };
+        if library.is_default && self.config.libraries.len() > 1 {
+            return Err("make another drive the default one first".to_owned());
+        }
+        if self.config.libraries.len() == 1 {
+            return Err("this is the only drive Lightforge has".to_owned());
+        }
+        if storage::holds_wow(&self.layout, &library) {
+            return Err(format!(
+                "{} holds a World of Warcraft install — uninstall it first",
+                library.label
+            ));
+        }
+        // The letters go with it, and the prefix keeps the links until the
+        // next provision tidies them: a dangling `dosdevices` entry is inert,
+        // and removing one while the client is up is not worth the race.
+        self.config.libraries.retain(|l| l.id != id);
+        for product in &mut self.config.products {
+            if product.profile.library.as_deref() == Some(id) {
+                product.profile.library = None;
+            }
+        }
+        self.save_config();
+        self.rebuild_layout();
         Ok(())
     }
 
@@ -4181,8 +4542,19 @@ impl Lightforge {
             Some(root) if root == path => None,
             _ => Some(path.clone()),
         };
+        // The first library moves with the root when it was under it — which
+        // it is unless the user pointed `games_dir` somewhere else. Nothing is
+        // installed (checked above), so this is a path change, not a move.
+        let old = self.layout.games_root();
+        if let Some(main) = self.config.libraries.iter_mut().find(|l| l.is_default) {
+            if main.games == old {
+                main.games = path.join("games");
+                main.claimed = false;
+                main.probe();
+            }
+        }
         self.save_config();
-        self.layout = Layout::with_root(&path).with_games(self.config.games_dir.clone());
+        self.rebuild_layout();
         self.location_input = path.display().to_string();
         self.error = None;
         Ok(())
@@ -5646,7 +6018,7 @@ impl Lightforge {
                 theme::PAUSE
             }
             ActionState::Error { .. } => theme::ERROR,
-            ActionState::Unknown => theme::PAUSE,
+            ActionState::Unknown | ActionState::Offline { .. } => theme::PAUSE,
         };
 
         let mut left = column![].spacing(theme::SM).width(Length::Fill);
@@ -5670,9 +6042,17 @@ impl Lightforge {
             );
         }
 
-        left = left.push(match &self.error {
-            Some(e) => text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR),
-            None => text(self.status.clone()).size(theme::LABEL).color(theme::MUTED),
+        left = left.push(match (&self.error, action) {
+            (Some(e), _) => text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR),
+            // The drive outranks whatever the last refresh had to say: a
+            // "latest 11.2.7" under a game that cannot be started is the
+            // wrong fact to be reading.
+            (None, ActionState::Offline { drive }) => text(format!(
+                "{drive} is not mounted — the game is still on it, untouched"
+            ))
+            .size(theme::LABEL)
+            .color(theme::ERROR),
+            (None, _) => text(self.status.clone()).size(theme::LABEL).color(theme::MUTED),
         });
 
         left = self.scan_progress(left);
@@ -7656,7 +8036,18 @@ impl Lightforge {
 
         // The error leads rather than trails: a failed setup run is reported
         // here, and at the foot of a scrolled section it would go unseen.
-        let mut content = column![].spacing(theme::MD).max_width(SETTINGS_WIDTH);
+        //
+        // Storage is given more room than the rest. Every other section is a
+        // form, and a form reads worse the wider it gets; Storage is a table —
+        // drive, bar, sizes, actions — and at a form's width its figures are
+        // crammed into the left third with the rest of the window empty. It is
+        // still capped, because a row the full width of a 4K display is no
+        // more readable than a cramped one.
+        let measure = match self.settings_tab {
+            SettingsTab::Storage => STORAGE_WIDTH,
+            _ => SETTINGS_WIDTH,
+        };
+        let mut content = column![].spacing(theme::MD).max_width(measure);
         if let Some(e) = &self.error {
             content =
                 content.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
@@ -8073,49 +8464,61 @@ impl Lightforge {
 
     /// The install dialog's card.
     fn install_card<'a>(&'a self, dialog: &'a InstallDialog) -> Element<'a, Message> {
-        let location: Element<Message> = match dialog.movable {
-            true => column![text_input("~/Games/Blizzard/games", &self.games_input)
-                .on_input(Message::GamesFolderChanged)
-                .style(theme::field)
-                .size(theme::BODY)
-                .padding(theme::SM)]
-            .extend(self.hint(
-                "World of Warcraft is installed in a folder of its own inside this one. \
-                 Every WoW version you add later shares it.",
-            ).map(Element::from))
-            .spacing(theme::XS)
-            .into(),
-            // Battle.net's own wording and colour for the same fact. A drawn
-            // dot rather than a check mark: the UI font has no U+2713.
-            false => column![
-                mono(self.layout.wow_install().display().to_string()),
-                tooltip(
-                    row![
-                        container(Space::new().width(Length::Fixed(8.0)).height(Length::Fixed(8.0)))
-                            .style(theme::dot(theme::OK)),
-                        text("Sharing data").size(theme::LABEL).color(theme::OK),
-                    ]
-                    .spacing(theme::SM)
-                    .align_y(Alignment::Center),
-                    container(
-                        text(
-                            "Every WoW version in this folder shares one game data store, \
-                             so files already downloaded for another version are not \
-                             fetched again."
-                        )
-                        .size(theme::LABEL),
-                    )
-                    .max_width(320)
-                    .padding([theme::XS, theme::SM])
-                    .style(theme::floating),
-                    tooltip::Position::Bottom,
-                ),
-            ]
-            .spacing(theme::XS)
-            .into(),
-        };
+        let mut drives = column![].spacing(theme::SM);
+        for (index, target) in dialog.targets.iter().enumerate() {
+            let chosen = index == dialog.chosen;
+            let mut right = column![].spacing(2).align_x(Alignment::End);
+            right = match target.disk {
+                Some(disk) => right.push(mono(format!("{} free", size_of(disk.free)))),
+                None => right.push(muted("—".to_owned(), theme::LABEL)),
+            };
+            // Battle.net's own wording and colour for the same fact: a second
+            // WoW version in a folder that already has one shares its data
+            // store, so what is already downloaded is not fetched twice.
+            if target.shares {
+                right = right.push(text("Sharing data").size(theme::CAPTION).color(theme::OK));
+            }
 
-        let mut body = column![field_row("Location".to_owned(), location)].spacing(theme::MD);
+            let mut left = column![row![
+                text(target.label.clone()).size(theme::BODY),
+                Space::new().width(Length::Fixed(theme::SM)),
+            ]
+            .align_y(Alignment::Center)]
+            .spacing(2);
+            left = left.push(muted(target.install.display().to_string(), theme::CAPTION));
+            if let Some(reason) = target.state.reason(&target.label) {
+                left = left.push(text(reason).size(theme::CAPTION).color(theme::ERROR));
+            }
+
+            let usable = target.state != library::State::Missing;
+            drives = drives.push(
+                button(
+                    row![left, Space::new().width(Length::Fill), right]
+                        .spacing(theme::MD)
+                        .align_y(Alignment::Center),
+                )
+                .width(Length::Fill)
+                .padding([theme::SM, theme::MD])
+                .style(match chosen {
+                    true => theme::selected,
+                    false => theme::card_button,
+                })
+                .on_press_maybe(usable.then_some(Message::InstallTarget(index))),
+            );
+        }
+        let location: Element<Message> = column![drives]
+            .extend(
+                self.hint(
+                    "World of Warcraft is installed in a folder of its own on the drive you \
+                     pick. Every WoW version you later put on the same drive shares its game \
+                     data; one on another drive is a separate install.",
+                )
+                .map(Element::from),
+            )
+            .spacing(theme::XS)
+            .into();
+
+        let mut body = column![field_row("Install to".to_owned(), location)].spacing(theme::MD);
 
         let mut ready = false;
         match &dialog.stage {
@@ -8166,7 +8569,7 @@ impl Lightforge {
                     "Download".to_owned(),
                     mono(format!("{} to download", size_of(need))).into(),
                 ));
-                match dialog.disk {
+                match dialog.target().and_then(|t| t.disk) {
                     Some(disk) => {
                         body = body.push(field_row(
                             "Free space".to_owned(),
@@ -8673,28 +9076,19 @@ impl Lightforge {
     fn storage_section(&self) -> Element<'_, Message> {
         let report = self.storage.as_ref();
 
+        // ---- Where the prefix lives. Separate from the drives below on
+        // purpose: games move between libraries, the prefix does not. It is
+        // one Wine prefix for everything, on the home drive where a prefix
+        // belongs, and every library reaches into it by drive letter.
         let mut location = column![row![
-            mono(self.layout.root().display().to_string()),
-            Space::new().width(Length::Fill),
+            // The path takes the slack rather than the button: a long one
+            // used to wrap and squeeze the button into two clipped lines.
+            container(mono(self.layout.root().display().to_string())).width(Length::Fill),
             secondary("Open folder", Message::OpenLibrary).enabled(true),
         ]
         .spacing(theme::MD)
         .align_y(Alignment::Center)]
         .spacing(theme::SM);
-
-        if let Some(disk) = report.and_then(|r| r.disk) {
-            let used = disk.total.saturating_sub(disk.free);
-            let fraction = match disk.total {
-                0 => 0.0,
-                total => used as f32 / total as f32,
-            };
-            location = location
-                .push(progress_bar(0.0..=1.0, fraction).girth(6))
-                .push(muted(
-                    format!("{} free of {}", size_of(disk.free), size_of(disk.total)),
-                    theme::CAPTION,
-                ));
-        }
 
         // Editable only while it is a config change — see `relocate`.
         let movable = report.is_some() && storage::library_is_empty(&self.layout);
@@ -8714,38 +9108,123 @@ impl Lightforge {
                     .spacing(theme::SM)
                     .align_y(Alignment::Center),
                 )
-                .extend(self.hint("Games and the Wine prefix are installed here. It can be changed while \
-                     nothing is installed yet.").map(Element::from)),
-            false => location.extend(self.hint("Games and the Wine prefix are installed here. Moving an installed library \
-                 is not supported yet.").map(Element::from)),
+                .extend(self.hint("Battle.net and the Wine prefix are installed here, and stay here \
+                     whatever drives you add later. It can be changed while nothing is \
+                     installed yet.").map(Element::from)),
+            false => location.extend(self.hint("Battle.net and the Wine prefix are installed here, and stay here \
+                 whatever drives you add and whichever one is the default — only games move. \
+                 Changing this once something is installed is not supported yet.").map(Element::from)),
         };
 
-        let mut usage = column![].spacing(theme::SM);
+        // ---- One card per drive.
+        let mut drives = column![].spacing(theme::MD);
         match report {
-            None => usage = usage.push(muted("measuring…".to_owned(), theme::LABEL)),
+            None => drives = drives.push(muted("measuring…".to_owned(), theme::LABEL)),
             Some(report) => {
-                for item in &report.usage {
-                    let clearing = self.cache_notice.as_deref() == Some("clearing…");
-                    let action: Element<Message> = match item.clearable {
-                        true => secondary("Clear", Message::ClearCache)
-                            .enabled(item.bytes > 0 && !clearing)
-                            .into(),
-                        false => Space::new().width(Length::Shrink).into(),
+                for library in &report.libraries {
+                    drives = drives.push(self.drive_card(library));
+                }
+                drives = drives.extend(self.hint("The default drive is where a game goes unless you pick another one, and \
+                     the folder Battle.net proposes for its own titles. It is only that: \
+                     Battle.net itself and the Wine prefix stay where they were installed, \
+                     above. Removing a drive takes it off this list and deletes nothing — \
+                     add it again and Lightforge finds the games on it.").map(Element::from));
+            }
+        }
+
+        // ---- Partitions that could become one.
+        let mut add = column![].spacing(theme::SM);
+        let offered: Vec<(usize, &library::Partition)> = self
+            .partitions
+            .iter()
+            .enumerate()
+            .filter(|(_, partition)| !partition.in_use)
+            .collect();
+        match offered.is_empty() {
+            true => {
+                add = add.push(muted(
+                    "No other mounted partition Lightforge could write to.".to_owned(),
+                    theme::LABEL,
+                ))
+            }
+            false => {
+                for (index, partition) in offered {
+                    let free = match partition.disk {
+                        Some(disk) => format!(
+                            "{} free of {}",
+                            size_of(disk.free),
+                            size_of(disk.total)
+                        ),
+                        None => "size unknown".to_owned(),
                     };
-                    usage = usage.push(
+                    add = add.push(
                         row![
-                            column![
-                                text(item.label).size(theme::BODY),
-                                muted(item.path.display().to_string(), theme::CAPTION),
-                            ]
-                            .spacing(2),
-                            Space::new().width(Length::Fill),
-                            mono(size_of(item.bytes)),
-                            action,
+                            container(
+                                column![
+                                    row![
+                                        text(partition.label.clone()).size(theme::BODY),
+                                        muted(partition.fstype.clone(), theme::CAPTION),
+                                    ]
+                                    .spacing(theme::SM)
+                                    .align_y(Alignment::Center),
+                                    muted(
+                                        format!(
+                                            "{} at {}",
+                                            partition.device.display(),
+                                            partition.point.display()
+                                        ),
+                                        theme::CAPTION,
+                                    ),
+                                ]
+                                .spacing(2)
+                            )
+                            .width(Length::Fill),
+                            muted(free, theme::LABEL),
+                            container(secondary("Add", Message::AddDrive(index)).enabled(true))
+                                .width(Length::Fixed(ACTION_COLUMN))
+                                .align_x(Alignment::End),
                         ]
                         .spacing(theme::MD)
                         .align_y(Alignment::Center),
                     );
+                }
+            }
+        }
+        add = add.push(
+            row![
+                Space::new().width(Length::Fill),
+                secondary("Rescan drives", Message::RefreshDrives).enabled(true),
+            ]
+            .align_y(Alignment::Center),
+        );
+        add = add.extend(self.hint("Lightforge creates a \"Lightforge\" folder on the partition and installs \
+             games under it. Only mounted partitions you can write to are listed — mount the \
+             drive the way you normally do and rescan. A partition is added, not a disk: a \
+             drive with two partitions can hold two drives here.").map(Element::from));
+
+        // ---- Lightforge's own directories, which follow XDG rather than the
+        // drives, so they are listed apart rather than attributed to one.
+        let mut usage = column![].spacing(theme::SM);
+        match report {
+            None => usage = usage.push(muted("measuring…".to_owned(), theme::LABEL)),
+            Some(report) => {
+                for item in &report.app {
+                    let clearing = self.cache_notice.as_deref() == Some("clearing…");
+                    let action = item.clearable.then(|| {
+                        secondary("Clear", Message::ClearCache)
+                            .enabled(item.bytes > 0 && !clearing)
+                            .into()
+                    });
+                    usage = usage.push(usage_row(
+                        column![
+                            text(item.label.clone()).size(theme::BODY),
+                            muted(item.path.display().to_string(), theme::CAPTION),
+                        ]
+                        .spacing(2)
+                        .into(),
+                        item.bytes,
+                        action,
+                    ));
                 }
                 usage = usage.extend(self.hint("Clearing the cache removes downloaded art, installers and lists; each is \
                      fetched again when needed. Shader caches are kept — rebuilding them is \
@@ -8762,10 +9241,144 @@ impl Lightforge {
         column![
             location,
             Space::new().height(Length::Fixed(theme::MD)),
-            section("What's using space", usage.into()),
+            section("Drives", drives.into()),
+            Space::new().height(Length::Fixed(theme::MD)),
+            section("Add a drive", add.into()),
+            Space::new().height(Length::Fixed(theme::MD)),
+            section("Lightforge's own files", usage.into()),
         ]
         .spacing(theme::SM)
         .into()
+    }
+
+    /// One drive's card: how full it is, what Lightforge put there, and the
+    /// three things you can do to it.
+    fn drive_card<'a>(&'a self, library: &'a storage::LibraryUsage) -> Element<'a, Message> {
+        let id = library.id.clone();
+        let mut card = column![].spacing(theme::SM);
+
+        let mut title = row![text(library.label.clone()).size(theme::HEADING)]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center);
+        if library.is_default {
+            title = title.push(
+                container(text("Default").size(theme::CAPTION).color(theme::ACCENT))
+                    .padding([2.0, theme::SM])
+                    .style(theme::tag(theme::ACCENT)),
+            );
+        }
+        if let Some(reason) = library.state.reason(&library.label) {
+            title = title.push(
+                container(text(reason).size(theme::CAPTION).color(theme::ERROR))
+                    .padding([2.0, theme::SM])
+                    .style(theme::tag(theme::ERROR)),
+            );
+        }
+        title = title.push(Space::new().width(Length::Fill));
+        title = title.push(mono(format!(
+            "{} → games   {} → wow",
+            library.letters.0.to_uppercase(),
+            library.letters.1.to_uppercase(),
+        )));
+        card = card.push(title);
+        card = card.push(muted(library.path.display().to_string(), theme::CAPTION));
+
+        match library.disk {
+            Some(disk) => {
+                let used = disk.total.saturating_sub(disk.free);
+                let fraction = match disk.total {
+                    0 => 0.0,
+                    total => used as f32 / total as f32,
+                };
+                card = card
+                    .push(progress_bar(0.0..=1.0, fraction).girth(6))
+                    .push(muted(
+                        format!(
+                            "{} free of {} — {} is Lightforge's",
+                            size_of(disk.free),
+                            size_of(disk.total),
+                            size_of(library.total()),
+                        ),
+                        theme::CAPTION,
+                    ));
+            }
+            // A drive that is not here is not measured at all: walking its
+            // mount point would report whatever filesystem is *under* it as
+            // if the library's games were on it.
+            None => {
+                card = card.push(muted(
+                    "Nothing is measured while the drive is away. The games on it are \
+                     untouched, and come back with it."
+                        .to_owned(),
+                    theme::CAPTION,
+                ))
+            }
+        }
+        // Only where it is actually true: a library can be unclaimed and still
+        // hold games, which is every install from before multi-drive storage,
+        // and the drive holding the prefix always has Battle.net's own titles
+        // on it.
+        if library.state == library::State::New && library.total() == 0 {
+            card = card.push(muted(
+                "Nothing installed here yet. The folder is created with the first game.".to_owned(),
+                theme::CAPTION,
+            ));
+        }
+
+        for item in &library.usage {
+            // Nothing is a fact better told by absence than by a row of
+            // zeroes with a dead button beside it.
+            if item.bytes == 0 {
+                continue;
+            }
+            let notice = self
+                .drive_notice
+                .as_ref()
+                .filter(|(which, _)| *which == library.id)
+                .map(|(_, note)| note.clone());
+            let clearing = notice.as_deref() == Some("clearing…");
+            let action = item.clearable.then(|| {
+                secondary("Clear", Message::ClearDrive(id.clone()))
+                    .enabled(item.bytes > 0 && !clearing)
+                    .into()
+            });
+            card = card.push(usage_row(
+                text(item.label.clone()).size(theme::BODY).into(),
+                item.bytes,
+                action,
+            ));
+        }
+        if let Some((which, note)) = &self.drive_notice {
+            if *which == library.id {
+                card = card.push(muted(note.clone(), theme::LABEL));
+            }
+        }
+
+        let mut actions = row![Space::new().width(Length::Fill)]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center);
+        // `is_present` rather than `is_ready`: a drive with nothing of ours on
+        // it yet can still be opened and can still be made the default — it is
+        // set up by the first install, not before. Only a drive that is *away*
+        // can do neither.
+        actions = actions.push(
+            secondary("Open folder", Message::OpenDrive(id.clone()))
+                .enabled(library.state.is_present()),
+        );
+        actions = actions.push(
+            secondary("Make default", Message::SetDefaultDrive(id.clone()))
+                .enabled(!library.is_default && library.state.is_present()),
+        );
+        // The default drive cannot be removed while another exists — make a
+        // different one the default first — and the last one cannot be
+        // removed at all, since every path resolves through it.
+        actions = actions.push(
+            secondary("Remove", Message::RemoveDrive(id.clone()))
+                .enabled(!library.is_default && self.config.libraries.len() > 1),
+        );
+        card = card.push(actions);
+
+        container(card).padding(theme::MD).width(Length::Fill).style(theme::row).into()
     }
 
     /// The version, and where its configuration lives.
@@ -8783,6 +9396,35 @@ impl Lightforge {
         }
         body.into()
     }
+}
+
+/// Width of the size column on the Storage page.
+///
+/// Fixed so every figure right-aligns to the same edge. Left to shrink, a row
+/// with a Clear button would push its size left of the rows without one, and a
+/// column of numbers that does not line up is the thing that makes a table
+/// look unfinished.
+const SIZE_COLUMN: f32 = 96.0;
+
+/// Width of the action slot beside a size, kept even where there is no button.
+const ACTION_COLUMN: f32 = 76.0;
+
+/// One "name — size — maybe a button" line, as the Storage page draws them.
+fn usage_row<'a>(
+    name: Element<'a, Message>,
+    bytes: u64,
+    action: Option<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    row![
+        container(name).width(Length::Fill),
+        container(mono(size_of(bytes)).align_x(Alignment::End)).width(Length::Fixed(SIZE_COLUMN)),
+        container(action.unwrap_or_else(|| Space::new().width(Length::Shrink).into()))
+            .width(Length::Fixed(ACTION_COLUMN))
+            .align_x(Alignment::End),
+    ]
+    .spacing(theme::MD)
+    .align_y(Alignment::Center)
+    .into()
 }
 
 /// The optional downloads Lightforge offers to switch on.
@@ -9262,6 +9904,10 @@ fn secondary(label: &str, message: Message) -> Action<'static> {
 /// Settings content stops growing here: rows read as one column at any
 /// window width, and a label and its control never drift apart.
 const SETTINGS_WIDTH: f32 = 720.0;
+
+/// How wide the Storage section is allowed to get. Wider than a form, because
+/// it is a table of drives and figures rather than fields to fill in.
+const STORAGE_WIDTH: f32 = 1140.0;
 
 /// A heading over a hairline, then its body — Settings' unit of grouping.
 fn section<'a>(title: impl Into<String>, body: Element<'a, Message>) -> Element<'a, Message> {
@@ -9786,6 +10432,48 @@ mod tests {
         };
         let p = job_progress(Job::default(), &sample, 0);
         assert_eq!((p.downloaded_bytes, p.total_bytes), (500, 1000));
+    }
+
+    /// A game whose drive is away is held, whatever the last refresh thought
+    /// of it — and held in a way that cannot turn into a download. Resolving
+    /// a missing drive by re-fetching 150 GB onto the system disk is the one
+    /// outcome this whole mechanism exists to prevent.
+    #[test]
+    fn a_game_on_an_absent_drive_is_held_rather_than_played_or_downloaded() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+        let code = app.selected.code.clone();
+
+        // An install that is complete and current, so core would say Play.
+        app.local = Local {
+            build_key: Some("abc".to_owned()),
+            version: Some("11.2.7.65000".to_owned()),
+            executable: Some(PathBuf::from("/nowhere/Wow.exe")),
+            store_files: 12,
+        };
+        assert!(matches!(app.action(), ActionState::Play));
+
+        // The same product, on a library that was set up once and is not here.
+        let mut away =
+            library::Library::on_partition(std::path::Path::new("/nowhere"), "nvme2", None);
+        away.claimed = true;
+        let id = away.id.clone();
+        app.config.libraries = vec![away];
+        if let Some(product) = app.config.product_mut(&code) {
+            product.profile.library = Some(id);
+        }
+        app.check_drives();
+
+        match app.action() {
+            ActionState::Offline { drive } => assert_eq!(drive, "nvme2"),
+            other => panic!("expected the drive to hold the game, got {other:?}"),
+        }
+        // And the download path refuses on its own, because the queue is
+        // restored and resumed without anyone pressing the button.
+        let _ = app.enqueue();
+        assert!(app.queue.is_empty(), "a download was queued onto a drive that is not there");
+        assert_eq!(app.error.as_deref(), Some("nvme2 is not mounted"));
     }
 
     #[test]

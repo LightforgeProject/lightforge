@@ -87,10 +87,16 @@ pub struct Removed {
 /// Every path is checked to be inside `install` before it is deleted — a plan
 /// is data, and data that escaped the install root would be a very expensive
 /// bug.
+///
+/// `windows_path` is how Battle.net addresses this install, which differs per
+/// library — see [`crate::library::Library::windows_wow_path`]. It is only
+/// used to rewrite `.product.db` for the products that remain, and getting it
+/// wrong there is what makes the client reject an install it was happy with.
 pub fn execute(
     install: &Path,
     code: &ProductCode,
     plan: &Plan,
+    windows_path: &str,
 ) -> Result<Removed, UninstallError> {
     let mut removed = Removed { bytes: plan.bytes, ..Removed::default() };
 
@@ -145,11 +151,7 @@ pub fn execute(
                         .remaining
                         .iter()
                         .filter_map(|code| {
-                            productdb::ProductInstall::from_build_info(
-                                &info,
-                                code,
-                                crate::paths::WINDOWS_WOW_PATH,
-                            )
+                            productdb::ProductInstall::from_build_info(&info, code, windows_path)
                             .ok()
                         })
                         .collect();
@@ -234,7 +236,7 @@ mod tests {
         assert!(!plan.remove_build_info);
         assert_eq!(plan.remaining, vec![ProductCode::Retail]);
 
-        execute(&dir, &ProductCode::ClassicEra, &plan).unwrap();
+        execute(&dir, &ProductCode::ClassicEra, &plan, crate::paths::WINDOWS_WOW_PATH).unwrap();
         assert!(!dir.join("_classic_era_").exists());
         assert!(dir.join("_retail_/game.exe").is_file());
         assert!(dir.join("Data/data/data.000").is_file());
@@ -253,7 +255,7 @@ mod tests {
         assert!(plan.is_whole_install());
         assert!(plan.bytes >= 3072, "counts the flavor dir and the store");
 
-        execute(&dir, &ProductCode::ClassicEra, &plan).unwrap();
+        execute(&dir, &ProductCode::ClassicEra, &plan, crate::paths::WINDOWS_WOW_PATH).unwrap();
         assert!(!dir.join("Data").exists());
         assert!(!dir.join(".build.info").exists());
         assert!(!dir.join("_classic_era_").exists());
@@ -283,7 +285,7 @@ mod tests {
             bytes: 0,
         };
         assert!(matches!(
-            execute(&dir, &ProductCode::Retail, &escaped),
+            execute(&dir, &ProductCode::Retail, &escaped, crate::paths::WINDOWS_WOW_PATH),
             Err(UninstallError::Outside(_))
         ));
         assert!(Path::new("/etc").is_dir(), "nothing was deleted");

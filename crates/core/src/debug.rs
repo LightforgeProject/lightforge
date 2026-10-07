@@ -58,7 +58,7 @@ impl DebugInfo {
         proton: Option<&ProtonRelease>,
     ) -> Self {
         let install = layout.product_dir(code);
-        let info = crate::buildinfo::BuildInfo::load(layout.build_info()).ok();
+        let info = crate::buildinfo::BuildInfo::load(layout.build_info(code)).ok();
         let cell = |column: &str| {
             info.as_ref()
                 .and_then(|i| i.get(code, column).ok())

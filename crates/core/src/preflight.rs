@@ -509,7 +509,7 @@ impl Preflight {
         // on every launch.
         let mut configs = Vec::new();
         if self.reapply_config {
-            let mut tweaks = battlenet::default_tweaks();
+            let mut tweaks = battlenet::default_tweaks(layout);
             tweaks.extend(battlenet::product_tweaks(&self.managed));
             configs.push(battlenet::configure(layout, &self.user, &tweaks)?);
             configs.extend(battlenet::configure_accounts(

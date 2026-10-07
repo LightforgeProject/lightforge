@@ -21,10 +21,11 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::library::{Libraries, Library};
 use crate::product::ProductCode;
 
 /// Directory name used for the WoW install on both sides of the symlink.
-const WOW_DIR: &str = "World of Warcraft";
+pub const WOW_DIR: &str = "World of Warcraft";
 
 /// The install root as Windows sees it inside the prefix.
 ///
@@ -34,31 +35,60 @@ pub const WINDOWS_WOW_PATH: &str = "C:/Program Files (x86)/World of Warcraft";
 /// Windows-side parent the install is presented under, for Battle.net's sake.
 const WINDOWS_PROGRAM_FILES: &str = "Program Files (x86)";
 
-/// `dosdevices` entry giving the WoW install a drive of its own — see
-/// [`Layout::wow_drive`]. Lowercase because that is the spelling Wine reads;
-/// it presents the drive as `D:`.
-const WOW_DRIVE_LETTER: &str = "d:";
-
-/// Resolved filesystem layout, rooted at the Blizzard directory.
+/// Resolved filesystem layout: one Wine prefix, and the storage libraries
+/// games are installed into.
+///
+/// The prefix is always at `root` — on the user's home drive, where a Wine
+/// prefix belongs — whatever drives the games are spread over. Each library
+/// reaches into the prefix through its own `dosdevices` entries rather than
+/// moving anything about; see [`crate::library`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layout {
     root: PathBuf,
-    /// Where games live when not under `root` — another drive, say. The
-    /// prefix stays at `root` either way and reaches them through its link.
-    games: Option<PathBuf>,
+    libraries: Libraries,
 }
 
 impl Layout {
-    /// Layout rooted at an explicit directory.
+    /// Layout rooted at an explicit directory, with one library under it.
     pub fn with_root(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into(), games: None }
+        let root = root.into();
+        let games = root.join("games");
+        Self {
+            libraries: Libraries::new(vec![Library::main_at(games, "home")]),
+            root,
+        }
     }
 
     /// The same layout with its games somewhere else; `None` keeps them at
     /// `root/games`.
-    pub fn with_games(mut self, games: Option<PathBuf>) -> Self {
-        self.games = games;
+    ///
+    /// Shorthand for a single-library layout, which is what the CLI and the
+    /// tests mostly want. [`Layout::with_libraries`] is the general form.
+    pub fn with_games(self, games: Option<PathBuf>) -> Self {
+        let games = games.unwrap_or_else(|| self.root.join("games"));
+        self.with_libraries(Libraries::new(vec![Library::main_at(games, "home")]))
+    }
+
+    /// The same layout over a given set of libraries.
+    pub fn with_libraries(mut self, libraries: Libraries) -> Self {
+        self.libraries = libraries;
         self
+    }
+
+    /// Every library this layout knows about, and which product is in which.
+    pub fn libraries(&self) -> &Libraries {
+        &self.libraries
+    }
+
+    /// The library a product is installed in, or would be. `None` only when
+    /// no library is configured at all.
+    pub fn library(&self, code: &ProductCode) -> Option<&Library> {
+        self.libraries.of(code)
+    }
+
+    /// The default install target.
+    pub fn default_library(&self) -> Option<&Library> {
+        self.libraries.default()
     }
 
     /// The default layout at `~/Games/Blizzard`.
@@ -105,8 +135,65 @@ impl Layout {
     /// catch-all `Z:`, that child dies three times and Chromium gives up,
     /// which is the grey box the shop had instead of a page. Measured
     /// 2026-10-02 against `Logs/BlizzardBrowser/CEF-*.log`.
-    pub fn wow_drive(&self) -> PathBuf {
-        self.prefix().join("dosdevices").join(WOW_DRIVE_LETTER)
+    ///
+    /// One per library, which is what keeps the shop working for a game on a
+    /// second drive. The letter is recorded in the library and never moves: a
+    /// letter that moves is a recorded install path that stops resolving.
+    pub fn wow_drive(&self, library: &Library) -> PathBuf {
+        self.dosdevices().join(&library.wow_letter)
+    }
+
+    /// A library's `games/` directory as a Windows drive — the directory
+    /// Battle.net is told to install other titles into.
+    ///
+    /// Separate from [`Layout::wow_drive`] because the two want opposite
+    /// things: the shop needs the WoW install to *be* a drive root, while
+    /// Battle.net needs a drive it can create a game folder *inside*. Wine
+    /// resolves a Unix path to the most specific drive mapped over it, so both
+    /// hold at once — the install is on its own letter even though its parent
+    /// is on another.
+    pub fn games_drive(&self, library: &Library) -> PathBuf {
+        self.dosdevices().join(&library.games_letter)
+    }
+
+    /// `prefix/dosdevices`
+    pub fn dosdevices(&self) -> PathBuf {
+        self.prefix().join("dosdevices")
+    }
+
+    /// Resolve a Windows path the way Wine would, into a real one.
+    ///
+    /// Reads `dosdevices` rather than assuming anything, so it answers for
+    /// every letter the prefix has — `C:` for the prefix's own `drive_c`, and
+    /// each library's two letters — without this needing to know which is
+    /// which. `None` for a letter the prefix does not map.
+    ///
+    /// Used to turn the install paths in Battle.net's `product.db` back into
+    /// directories that can be measured. Those are the client's own strings,
+    /// in its own spelling, and this is the only place that has to care.
+    pub fn resolve_windows(&self, windows: &str) -> Option<PathBuf> {
+        let windows = windows.replace('\\', "/");
+        let (letter, rest) = windows.split_once(':')?;
+        let letter = letter.trim();
+        if letter.len() != 1 {
+            return None;
+        }
+        let link = self.dosdevices().join(format!("{}:", letter.to_ascii_lowercase()));
+        // The entry is a symlink, and Wine writes `c:` as a *relative* one
+        // (`../drive_c`), so it is resolved against the directory it lives in.
+        let target = std::fs::read_link(&link).ok()?;
+        let target = match target.is_absolute() {
+            true => target,
+            false => self.dosdevices().join(target),
+        };
+        let relative = rest.trim_start_matches('/');
+        let resolved = match relative.is_empty() {
+            true => target,
+            false => target.join(relative),
+        };
+        // `..` components from a relative `dosdevices` entry would otherwise
+        // survive into every comparison made against this path.
+        Some(normalize(&resolved))
     }
 
     /// `drive_c/Program Files (x86)`
@@ -229,32 +316,57 @@ impl Layout {
             .join("Agent")
     }
 
-    /// Real game assets root: `~/Games/Blizzard/games`, unless the games
-    /// were put somewhere else.
+    /// The default library's game assets root: `~/Games/Blizzard/games` unless
+    /// the games were put somewhere else.
+    ///
+    /// The default install target, and what a product with no library of its
+    /// own resolves to. Anything addressing a *particular* product's files
+    /// goes through [`Layout::wow_install`] instead, because two libraries can
+    /// each hold a WoW install.
     pub fn games_root(&self) -> PathBuf {
-        self.games.clone().unwrap_or_else(|| self.root.join("games"))
+        self.libraries
+            .default()
+            .map(|l| l.games().to_path_buf())
+            .unwrap_or_else(|| self.root.join("games"))
     }
 
-    /// Symlink *target*: where WoW actually lives on the native filesystem.
-    pub fn wow_install(&self) -> PathBuf {
-        self.games_root().join(WOW_DIR)
+    /// Where a product's WoW install lives on the native filesystem.
+    ///
+    /// Per product rather than per layout: each library holds its own
+    /// `World of Warcraft/`, with its own `.build.info` and its own CASC
+    /// store, so Retail can be on one drive and Classic Era on another.
+    pub fn wow_install(&self, code: &ProductCode) -> PathBuf {
+        self.library(code)
+            .map(|l| l.games().join(WOW_DIR))
+            .unwrap_or_else(|| self.games_root().join(WOW_DIR))
     }
 
-    /// Symlink *source*: the Windows-visible path inside the prefix that must
-    /// point at [`Layout::wow_install`].
+    /// The WoW install in a given library, whatever is in it.
+    pub fn wow_install_in(&self, library: &Library) -> PathBuf {
+        library.games().join(WOW_DIR)
+    }
+
+    /// Symlink *source*: the Windows-visible `C:` path inside the prefix.
+    ///
+    /// There is exactly one of these and it points at the **main** library,
+    /// because `C:\Program Files (x86)\World of Warcraft` is a single path
+    /// and an install Battle.net has already adopted has that string recorded
+    /// on disk. Every other library presents its install under its own
+    /// `games/` drive instead — see [`Library::windows_wow_path`].
     pub fn wow_symlink(&self) -> PathBuf {
         self.program_files_x86().join(WOW_DIR)
     }
 
-    /// The shared `.build.info` at the WoW install root. One file holds a row
-    /// per product, which is why mutation must isolate a single row.
-    pub fn build_info(&self) -> PathBuf {
-        self.wow_install().join(".build.info")
+    /// The `.build.info` at a product's install root. One file holds a row
+    /// per product sharing that install, which is why mutation must isolate a
+    /// single row.
+    pub fn build_info(&self, code: &ProductCode) -> PathBuf {
+        self.wow_install(code).join(".build.info")
     }
 
     /// A product's install directory, e.g. `.../World of Warcraft/_retail_`.
     pub fn product_dir(&self, code: &ProductCode) -> PathBuf {
-        self.wow_install().join(&*code.install_dir())
+        self.wow_install(code).join(&*code.install_dir())
     }
 
     /// A product's addon directory.
@@ -280,6 +392,25 @@ impl Layout {
     pub fn wow_exe(&self, code: &ProductCode) -> PathBuf {
         game_executable(&self.product_dir(code), code)
     }
+}
+
+/// Flatten `.` and `..` out of a path without touching the filesystem.
+///
+/// Not `canonicalize`: that resolves symlinks, and the whole point of the
+/// paths this is used on is that one of them *is* the symlink putting a game
+/// where Windows expects it.
+fn normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// The game binary inside a flavor directory, resolved by probing it.
@@ -426,7 +557,7 @@ mod tests {
     #[test]
     fn game_data_lives_outside_the_prefix() {
         let l = layout();
-        assert!(!l.wow_install().starts_with(l.prefix()));
+        assert!(!l.wow_install(&ProductCode::Retail).starts_with(l.prefix()));
         assert!(l.wow_symlink().starts_with(l.prefix()));
     }
 
@@ -482,10 +613,14 @@ mod tests {
     }
 
     #[test]
-    fn products_share_one_build_info_but_separate_dirs() {
+    fn products_in_one_library_share_its_build_info_but_keep_separate_dirs() {
         let l = layout();
         assert_eq!(
-            l.build_info(),
+            l.build_info(&ProductCode::Retail),
+            l.build_info(&ProductCode::Classic),
+        );
+        assert_eq!(
+            l.build_info(&ProductCode::Retail),
             PathBuf::from("/games/Blizzard/games/World of Warcraft/.build.info")
         );
         assert_ne!(

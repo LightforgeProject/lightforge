@@ -576,6 +576,10 @@ pub struct ProductProfile {
     /// Which Proton-GE build this product launches under. `None` means the
     /// app-wide default applies.
     pub proton_ge_version: Option<String>,
+    /// Id of the storage library this product is installed in. `None` means
+    /// the default one, which is also what a fresh product gets — the
+    /// assignment is written when the install is queued, not before.
+    pub library: Option<String>,
     /// Contents written to the product's `realmlist`/portal config, if set.
     pub realmlist_override: Option<String>,
     /// CDN/patch endpoint override used by the downloader, if set.

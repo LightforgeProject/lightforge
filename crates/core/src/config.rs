@@ -20,10 +20,18 @@ const DEFAULT_PREFIX_USER: &str = "steamuser";
 pub struct Config {
     /// Root of the dual-directory layout. Defaults to `~/Games/Blizzard`.
     pub blizzard_root: Option<PathBuf>,
-    /// Where games are installed, when not under `blizzard_root`. Changeable
-    /// only while no WoW version is installed — every version shares one
-    /// data store in the one folder.
+    /// Where games are installed, when not under `blizzard_root`.
+    ///
+    /// Superseded by `libraries`, and kept only so a config written before
+    /// them still points at the right drive: [`Config::ensure_libraries`]
+    /// turns it into the first library once, and nothing reads it afterwards.
     pub games_dir: Option<PathBuf>,
+    /// Every drive Lightforge may install games to, the default one first.
+    ///
+    /// Empty in a config written before multi-drive storage, and seeded from
+    /// `blizzard_root`/`games_dir` by [`Config::ensure_libraries`].
+    #[serde(default)]
+    pub libraries: Vec<crate::library::Library>,
     /// Windows user name within the prefix.
     pub prefix_user: String,
     /// Proton build used for the Battle.net/Agent prefix specifically.
@@ -113,6 +121,7 @@ impl Default for Config {
         Self {
             blizzard_root: None,
             games_dir: None,
+            libraries: Vec::new(),
             prefix_user: DEFAULT_PREFIX_USER.to_owned(),
             battle_net_proton: ProtonPin::default(),
             default_proton: ProtonPin::default(),
@@ -226,7 +235,60 @@ impl Config {
             Some(root) => crate::paths::Layout::with_root(root),
             None => crate::paths::Layout::default_for_user()?,
         };
-        Ok(layout.with_games(self.games_dir.clone()))
+        if self.libraries.is_empty() {
+            return Ok(layout.with_games(self.games_dir.clone()));
+        }
+        let mut libraries = crate::library::Libraries::new(self.libraries.clone());
+        for product in &self.products {
+            if let Some(id) = &product.profile.library {
+                libraries.assign(product.code.clone(), id);
+            }
+        }
+        Ok(layout.with_libraries(libraries))
+    }
+
+    /// Seed the library list from a config written before multi-drive storage,
+    /// returning whether anything changed and the config needs saving.
+    ///
+    /// The first library keeps the games directory the install already used and
+    /// the drive letters it already had, so a 150 GB install Battle.net has
+    /// adopted stays recognised. It is *not* claimed here — writing a marker
+    /// file is a side effect on the user's disk, and this runs on every start;
+    /// [`crate::library::Library::claim`] happens where a library is set up.
+    ///
+    /// Nor does it need to be saved to be correct: the seeded library's id is
+    /// [`crate::library::DEFAULT_ID`], a constant, so the same seed comes back on
+    /// the next start whether or not it was written down.
+    pub fn ensure_libraries(&mut self) -> Result<bool, crate::paths::PathError> {
+        if !self.libraries.is_empty() {
+            return Ok(false);
+        }
+        let games = self.layout()?.games_root();
+        // "Home" where it is, which is where the prefix lives and where a
+        // first run puts the games; otherwise the directory it is under, which
+        // is the only name we have for a hand-pointed `games_dir`.
+        let home = directories::UserDirs::new().map(|d| d.home_dir().to_path_buf());
+        let label = match home.filter(|home| games.starts_with(home)) {
+            Some(_) => "Home".to_owned(),
+            None => games
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Games".to_owned()),
+        };
+        let mut main = crate::library::Library::main_at(games, label);
+        main.probe();
+        self.libraries = vec![main];
+        Ok(true)
+    }
+
+    /// The library a product is in, or would be installed into.
+    pub fn library_of(&self, code: &ProductCode) -> Option<&crate::library::Library> {
+        let assigned = self
+            .product(code)
+            .and_then(|p| p.profile.library.as_deref())
+            .and_then(|id| self.libraries.iter().find(|l| l.id == id));
+        assigned.or_else(|| self.libraries.iter().find(|l| l.is_default).or(self.libraries.first()))
     }
 
     /// Where the asset pipeline should read from, if configured.
@@ -491,8 +553,106 @@ mod tests {
         // Games elsewhere; the prefix stays put and links across.
         config.games_dir = Some(PathBuf::from("/mnt/ssd/games"));
         let layout = config.layout().unwrap();
-        assert_eq!(layout.wow_install(), PathBuf::from("/mnt/ssd/games/World of Warcraft"));
+        assert_eq!(
+            layout.wow_install(&ProductCode::Retail),
+            PathBuf::from("/mnt/ssd/games/World of Warcraft")
+        );
         assert!(layout.wow_symlink().starts_with("/mnt/games/blizzard/prefix"));
+    }
+
+    /// A config written before multi-drive storage keeps pointing at the same
+    /// games folder, on the same drive letters. Anything else would make an
+    /// install Battle.net has already adopted stop being recognised.
+    #[test]
+    fn migrating_a_config_keeps_the_games_folder_and_the_letters() {
+        let mut config = Config::with_default_products();
+        config.blizzard_root = Some(PathBuf::from("/mnt/games/blizzard"));
+        config.games_dir = Some(PathBuf::from("/mnt/ssd/games"));
+        let before = config.layout().unwrap().games_root();
+
+        assert!(config.ensure_libraries().unwrap(), "a migration happened");
+        assert_eq!(config.libraries.len(), 1);
+        let main = &config.libraries[0];
+        assert!(main.is_default);
+        assert_eq!(main.games(), before);
+        assert_eq!(main.wow_letter, crate::library::DEFAULT_WOW_LETTER);
+        assert_eq!(main.games_letter, crate::library::DEFAULT_GAMES_LETTER);
+        assert_eq!(config.layout().unwrap().games_root(), before);
+
+        // Idempotent: it runs on every start.
+        assert!(!config.ensure_libraries().unwrap());
+    }
+
+    /// Two libraries, and a product assigned to the second one: every path for
+    /// that product resolves there, and every other product stays on main.
+    #[test]
+    fn a_product_resolves_to_the_library_it_was_installed_in() {
+        let mut config = Config::with_default_products();
+        config.blizzard_root = Some(PathBuf::from("/home/u/Games/Blizzard"));
+        config.ensure_libraries().unwrap();
+        let mut second =
+            crate::library::Library::on_partition(std::path::Path::new("/mnt/games"), "nvme2", None);
+        second.games_letter = "f:".to_owned();
+        second.wow_letter = "g:".to_owned();
+        let id = second.id.clone();
+        config.libraries.push(second);
+        config.product_mut(&ProductCode::ClassicEra).unwrap().profile.library = Some(id.clone());
+
+        let layout = config.layout().unwrap();
+        assert_eq!(
+            layout.wow_install(&ProductCode::ClassicEra),
+            PathBuf::from("/mnt/games/Lightforge/games/World of Warcraft"),
+        );
+        assert_eq!(
+            layout.wow_install(&ProductCode::Retail),
+            PathBuf::from("/home/u/Games/Blizzard/games/World of Warcraft"),
+        );
+        // Two installs means two `.build.info` files, each holding only the
+        // rows of the products that share it.
+        assert_ne!(
+            layout.build_info(&ProductCode::ClassicEra),
+            layout.build_info(&ProductCode::Retail),
+        );
+        assert_eq!(config.library_of(&ProductCode::ClassicEra).unwrap().id, id);
+        // The prefix does not move with the games.
+        assert_eq!(layout.prefix(), PathBuf::from("/home/u/Games/Blizzard/prefix/pfx"));
+    }
+
+    /// The default drive decides where *games* go. Battle.net, the Wine
+    /// prefix and everything inside it stay at the Blizzard root chosen during
+    /// setup, however many drives are added and whichever one is default.
+    #[test]
+    fn making_another_drive_the_default_does_not_move_battle_net() {
+        let mut config = Config::with_default_products();
+        config.blizzard_root = Some(PathBuf::from("/home/u/Games/Blizzard"));
+        config.ensure_libraries().unwrap();
+        let before = config.layout().unwrap();
+
+        let mut second =
+            crate::library::Library::on_partition(std::path::Path::new("/mnt/games"), "nvme2", None);
+        second.games_letter = "f:".to_owned();
+        second.wow_letter = "g:".to_owned();
+        let id = second.id.clone();
+        config.libraries.push(second);
+        for library in &mut config.libraries {
+            library.is_default = library.id == id;
+        }
+        let after = config.layout().unwrap();
+
+        assert_eq!(after.prefix(), before.prefix());
+        assert_eq!(after.battle_net_dir(), before.battle_net_dir());
+        assert_eq!(after.agent_dir(), before.agent_dir());
+        assert_eq!(after.battle_net_config("steamuser"), before.battle_net_config("steamuser"));
+        assert!(after.battle_net_dir().starts_with("/home/u/Games/Blizzard"));
+
+        // What *does* move: where a new game lands, and the folder Battle.net
+        // proposes for its own titles.
+        assert_eq!(after.games_root(), PathBuf::from("/mnt/games/Lightforge/games"));
+        let install_path = crate::battlenet::default_tweaks(&after)
+            .into_iter()
+            .find(|t| t.key() == "Client.Install.DefaultInstallPath")
+            .map(|t| t.value);
+        assert_eq!(install_path, Some(serde_json::json!(r"F:\")));
     }
 
     #[test]

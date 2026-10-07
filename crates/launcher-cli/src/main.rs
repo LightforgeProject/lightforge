@@ -558,6 +558,29 @@ enum Command {
 ///
 /// Safe to call here and nowhere else: it runs before any thread is spawned,
 /// and it only resets a signal to what the kernel would have done anyway.
+/// The install a store-level command works on when `--path` was not given:
+/// the default library's.
+///
+/// Store-level commands — `verify`, `reindex`, `product-db` — address a whole
+/// `World of Warcraft/` folder rather than one product, and with libraries
+/// there can be more than one. The default library is the useful answer, and
+/// `--path` is how you name another.
+fn default_install(layout: &Layout) -> std::path::PathBuf {
+    layout
+        .default_library()
+        .map(|library| layout.wow_install_in(library))
+        .unwrap_or_else(|| layout.games_root().join(lightforge_core::paths::WOW_DIR))
+}
+
+/// How Battle.net addresses a product's install, which depends on the library
+/// it is in — see [`lightforge_core::library::Library::windows_wow_path`].
+fn windows_wow_path(layout: &Layout, code: &ProductCode) -> String {
+    layout
+        .library(code)
+        .map(|library| library.windows_wow_path())
+        .unwrap_or_else(|| lightforge_core::paths::WINDOWS_WOW_PATH.to_owned())
+}
+
 fn restore_sigpipe() {
     // SAFETY: `signal` with `SIG_DFL` is async-signal-safe and this is the
     // first thing main does, before any output or threads exist.
@@ -590,13 +613,31 @@ async fn main() -> Result<()> {
             println!("compat data     {}", layout.compat_data().display());
             println!("prefix          {}", layout.prefix().display());
             println!("battle.net      {}", layout.battle_net_dir().display());
-            println!("games root      {}", layout.games_root().display());
-            println!("wow install     {}", layout.wow_install().display());
             println!("wow symlink     {}", layout.wow_symlink().display());
-            println!(".build.info     {}", layout.build_info().display());
             println!("config file     {}", dirs.config_file().display());
             println!("asset cache     {}", dirs.asset_cache_dir().display());
             println!("proton dir      {}", dirs.proton_dir().display());
+
+            for library in layout.libraries().all() {
+                let state = match library.state() {
+                    lightforge_core::library::State::Ready => "ready",
+                    lightforge_core::library::State::New => "not set up",
+                    lightforge_core::library::State::Missing => "not mounted",
+                    lightforge_core::library::State::Foreign => "foreign marker",
+                };
+                println!(
+                    "\nlibrary         {} ({state}){}",
+                    library.label,
+                    if library.is_default { ", default" } else { "" },
+                );
+                println!("  games         {}", library.games().display());
+                println!("  wow install   {}", layout.wow_install_in(library).display());
+                println!(
+                    "  drives        {} -> games, {} -> wow",
+                    library.games_letter, library.wow_letter,
+                );
+                println!("  windows path  {}", library.windows_wow_path());
+            }
         }
         Command::Config => {
             // Milestone 1 has no loader yet; show what a fresh install writes.
@@ -768,7 +809,10 @@ async fn main() -> Result<()> {
             );
         }
         Command::PrefixLink => {
-            let (link, target) = (layout.wow_symlink(), layout.wow_install());
+            let main = layout
+                .default_library()
+                .context("no storage library is configured")?;
+            let (link, target) = (layout.wow_symlink(), layout.wow_install_in(main));
             let before = lightforge_core::prefix::ensure_link(&link, &target)
                 .with_context(|| format!("linking {} -> {}", link.display(), target.display()))?;
             println!("was             {}", describe_link(&before));
@@ -853,7 +897,7 @@ async fn main() -> Result<()> {
 
             // The same set setup and pre-flight write, so running this by
             // hand cannot leave a config the next launch disagrees with.
-            let mut tweaks = battlenet::default_tweaks();
+            let mut tweaks = battlenet::default_tweaks(&layout);
             tweaks.extend(battlenet::product_tweaks(&managed_products()));
             let path = battlenet::configure(&layout, &user, &tweaks)
                 .context("writing Battle.net.config")?;
@@ -959,7 +1003,7 @@ async fn main() -> Result<()> {
             // Whatever the symlink resolves to has to be visible inside the
             // prefix, and it is not necessarily under the games root.
             let target = std::fs::read_link(layout.wow_symlink())
-                .unwrap_or_else(|_| layout.wow_install());
+                .unwrap_or_else(|_| layout.wow_install(&code));
 
             let dirs = AppDirs::discover().context("resolving XDG directories")?;
             let (runner, build) = proton_runner(&layout, proton.as_deref())?;
@@ -2092,7 +2136,7 @@ async fn main() -> Result<()> {
             use std::time::{Duration, Instant};
             const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
-            let install = path.unwrap_or_else(|| layout.wow_install());
+            let install = path.unwrap_or_else(|| default_install(&layout));
             let data_dir = install.join("Data").join("data");
 
             // Repair rewrites the indices a running client memory-maps. The
@@ -2229,7 +2273,7 @@ async fn main() -> Result<()> {
                 anyhow::bail!("close the game and Battle.net first — the store is in use");
             }
 
-            let install = path.unwrap_or_else(|| layout.wow_install());
+            let install = path.unwrap_or_else(|| default_install(&layout));
             let data_dir = install.join("Data").join("data");
 
             let before: Vec<(String, u64)> = std::fs::read_dir(&data_dir)?
@@ -2259,7 +2303,7 @@ async fn main() -> Result<()> {
             use lightforge_core::tact::uninstall;
 
             let code: ProductCode = product.parse().expect("product codes are infallible");
-            let install = path.unwrap_or_else(|| layout.wow_install());
+            let install = path.unwrap_or_else(|| layout.wow_install(&code));
             let plan = uninstall::plan(&install, &code)?;
 
             let gib = |b: u64| b as f64 / 1024f64.powi(3);
@@ -2298,7 +2342,7 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let removed = uninstall::execute(&install, &code, &plan)?;
+            let removed = uninstall::execute(&install, &code, &plan, &windows_wow_path(&layout, &code))?;
             println!("\ndeleted         {} paths, {:.2} GiB", removed.paths.len(), gib(removed.bytes));
         }
         Command::Reclaim { product, build_key, region, path, yes } => {
@@ -2308,7 +2352,7 @@ async fn main() -> Result<()> {
             use lightforge_core::tact::reclaim;
 
             let code: ProductCode = product.parse().expect("product codes are infallible");
-            let install = path.unwrap_or_else(|| layout.wow_install());
+            let install = path.unwrap_or_else(|| layout.wow_install(&code));
             let http = Http::new()?;
             let departing = match build_key {
                 Some(build_key) => {
@@ -2351,10 +2395,9 @@ async fn main() -> Result<()> {
             println!("\nfreed           {:.2} GiB", gib(freed));
         }
         Command::ProductDb { path, products, account_country, geo_country, agent_tags, dry_run } => {
-            use lightforge_core::paths::WINDOWS_WOW_PATH;
             use lightforge_core::tact::productdb::{self, ProductInstall};
 
-            let install = path.unwrap_or_else(|| layout.wow_install());
+            let install = path.unwrap_or_else(|| default_install(&layout));
             let info = BuildInfo::load(install.join(".build.info"))
                 .with_context(|| format!("reading {}/.build.info", install.display()))?;
 
@@ -2372,7 +2415,8 @@ async fn main() -> Result<()> {
             let mut records = Vec::new();
             let mut info = info;
             for code in &codes {
-                let mut record = ProductInstall::from_build_info(&info, code, WINDOWS_WOW_PATH)?
+                let windows_path = windows_wow_path(&layout, code);
+                let mut record = ProductInstall::from_build_info(&info, code, &windows_path)?
                     .with_countries(&account_country, &geo_country);
                 if agent_tags {
                     record = record.with_agent_tags();
@@ -2398,7 +2442,9 @@ async fn main() -> Result<()> {
                     }
                     let written = productdb::write(&install, &records)?;
                     println!("\nwrote           {} ({} bytes)", written.display(), std::fs::metadata(&written)?.len());
-                    println!("install path    {WINDOWS_WOW_PATH}");
+                    if let Some(first) = codes.first() {
+                        println!("install path    {}", windows_wow_path(&layout, first));
+                    }
                 }
             }
         }
@@ -2633,7 +2679,7 @@ async fn main() -> Result<()> {
 
             let code: ProductCode = product.parse().expect("product codes are infallible");
             let region: Region = region.parse().context("parsing --region")?;
-            let install = path.unwrap_or_else(|| layout.wow_install());
+            let install = path.unwrap_or_else(|| layout.wow_install(&code));
 
             // Local side: whatever .build.info records, if the product is
             // installed at all. A missing file is "not installed", not a fault.
@@ -2869,7 +2915,7 @@ async fn main() -> Result<()> {
             use lightforge_core::buildinfo::BuildInfoError;
 
             let code: ProductCode = product.parse().expect("product codes are infallible");
-            let path = layout.build_info();
+            let path = layout.build_info(&code);
 
             // Read-modify-write, atomically. The caller is responsible for
             // having run pre-flight first — this is the file Agent watches.
@@ -2884,7 +2930,7 @@ async fn main() -> Result<()> {
         }
         Command::BuildInfo { product } => {
             let code: ProductCode = product.parse().expect("product codes are infallible");
-            let path = layout.build_info();
+            let path = layout.build_info(&code);
             let contents = std::fs::read_to_string(&path)
                 .with_context(|| format!("reading {}", path.display()))?;
             let info = BuildInfo::parse(&contents)

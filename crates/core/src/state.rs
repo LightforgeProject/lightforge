@@ -54,6 +54,14 @@ pub enum ActionState {
     Play,
     /// Something went wrong; the message is user-facing.
     Error { message: String },
+    /// The drive this product lives on is not mounted.
+    ///
+    /// Not an error, and never resolved by downloading: the files are intact
+    /// on a volume that is simply not here. Everything that writes — launch,
+    /// update, repair — is held, and the only action offered is to look
+    /// again. Decided outside [`decide`], because it is a fact about the
+    /// filesystem rather than about a build.
+    Offline { drive: String },
 }
 
 impl ActionState {
@@ -68,6 +76,7 @@ impl ActionState {
             Self::Paused(_) => "RESUME",
             Self::Play => "PLAY",
             Self::Error { .. } => "RETRY",
+            Self::Offline { .. } => "RETRY",
         }
     }
 
@@ -136,7 +145,7 @@ pub struct Local {
 impl Local {
     /// Inspect `code`'s install under `layout`.
     pub fn inspect(layout: &Layout, code: &ProductCode) -> Self {
-        let info = crate::buildinfo::BuildInfo::load(layout.build_info()).ok();
+        let info = crate::buildinfo::BuildInfo::load(layout.build_info(code)).ok();
         let cell = |column: &str| {
             info.as_ref()
                 .and_then(|i| i.get(code, column).ok())
@@ -145,7 +154,7 @@ impl Local {
         };
 
         let exe = layout.wow_exe(code);
-        let store_files = crate::tact::storage::Storage::open(layout.wow_install())
+        let store_files = crate::tact::storage::Storage::open(layout.wow_install(code))
             .map(|store| store.stats().files)
             .unwrap_or(0);
 

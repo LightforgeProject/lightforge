@@ -366,7 +366,12 @@ impl PrefixStatus {
             built_by: crate::proton::prefix_build(&layout.compat_data()),
             compat_data: layout.compat_data(),
             prefix,
-            link: inspect_link(&layout.wow_symlink(), &layout.wow_install()),
+            link: match layout.default_library() {
+                Some(main) => {
+                    inspect_link(&layout.wow_symlink(), &layout.wow_install_in(main))
+                }
+                None => LinkState::Missing,
+            },
         }
     }
 
@@ -384,12 +389,60 @@ impl PrefixStatus {
 pub fn provision(runner: &ProtonRunner, layout: &Layout) -> Result<PrefixStatus, PrefixError> {
     runner.wineboot_update()?;
     runner.wineserver_kill()?;
-    ensure_link(&layout.wow_symlink(), &layout.wow_install())?;
-    // Both, and for different reasons: Battle.net finds the install by the
-    // `C:` path it recorded, while the game's in-game shop only renders when
-    // the install is a drive of its own — see [`Layout::wow_drive`].
-    ensure_link(&layout.wow_drive(), &layout.wow_install())?;
+    link_libraries(layout)?;
     Ok(PrefixStatus::inspect(layout))
+}
+
+/// Give every library that is actually here its place inside the prefix.
+///
+/// Three links per library, and each for its own reason:
+///
+/// * the `games/` drive letter, so Battle.net has a Windows directory it can
+///   install a title *into* — this is what `DefaultInstallPath` names;
+/// * the WoW drive letter, because the in-game shop's browser only starts when
+///   the install is a drive *root* (see [`Layout::wow_drive`]);
+/// * for the default library only, the `C:\Program Files (x86)` symlink, which is
+///   the path an install Battle.net has already adopted has recorded on disk.
+///
+/// A library that is [`library::State::Missing`] is skipped entirely, links and
+/// all. This is the whole reason the function exists rather than being three
+/// lines in [`provision`]: `ensure_link` creates its target, so relinking an
+/// unmounted drive would conjure an empty games directory on whatever
+/// filesystem holds the mount point — and an empty install is what makes the
+/// client offer a repair and Battle.net offer a reinstall.
+pub fn link_libraries(layout: &Layout) -> Result<(), PrefixError> {
+    for library in layout.libraries().all() {
+        // A library that has never been set up is set up here, which is what
+        // makes a first run work: the first library comes out of the config
+        // migration unclaimed, and setup is the moment it becomes real. Only
+        // ever from `New`, which means there is no marker to adopt — so the
+        // id stays the one the config holds, and the `claimed` flag the clone
+        // gains is redundant rather than lost: a marker that matches reads as
+        // `Ready` whatever the flag says.
+        let mut library = library.clone();
+        if library.state() == crate::library::State::New {
+            library.claim().map_err(|e| match e {
+                crate::library::LibraryError::Io { path, source } => {
+                    PrefixError::Io { path, source }
+                }
+                other => PrefixError::Io {
+                    path: library.games().to_path_buf(),
+                    source: std::io::Error::other(other.to_string()),
+                },
+            })?;
+        }
+        if !library.online() {
+            continue;
+        }
+        let library = &library;
+        let install = layout.wow_install_in(library);
+        ensure_link(&layout.games_drive(library), library.games())?;
+        ensure_link(&layout.wow_drive(library), &install)?;
+        if library.is_default {
+            ensure_link(&layout.wow_symlink(), &install)?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -572,19 +625,108 @@ mod tests {
     fn the_wow_drive_is_a_dosdevices_link_to_the_install() {
         let dir = scratch("wow-drive");
         let layout = Layout::with_root(&dir);
+        let main = layout.default_library().unwrap().clone();
+        let install = layout.wow_install_in(&main);
 
-        ensure_link(&layout.wow_drive(), &layout.wow_install()).unwrap();
+        ensure_link(&layout.wow_drive(&main), &install).unwrap();
 
-        let link = layout.wow_drive();
+        let link = layout.wow_drive(&main);
         assert_eq!(link.file_name().unwrap(), "d:", "Wine reads the letter in lowercase");
         assert_eq!(link.parent().unwrap().file_name().unwrap(), "dosdevices");
-        assert_eq!(std::fs::read_link(&link).unwrap(), layout.wow_install());
+        assert_eq!(std::fs::read_link(&link).unwrap(), install);
 
         // Idempotent: provisioning runs on every launch.
         assert_eq!(
-            ensure_link(&layout.wow_drive(), &layout.wow_install()).unwrap(),
+            ensure_link(&layout.wow_drive(&main), &install).unwrap(),
             LinkState::Correct,
         );
+
+        // The `games/` letter is a second, separate mapping — Battle.net needs
+        // a directory it can install *into*, the shop needs a drive root.
+        ensure_link(&layout.games_drive(&main), main.games()).unwrap();
+        assert_eq!(layout.games_drive(&main).file_name().unwrap(), "e:");
+        assert_eq!(std::fs::read_link(layout.games_drive(&main)).unwrap(), main.games());
+    }
+
+    /// The reason [`link_libraries`] exists: a drive that is not mounted must
+    /// not have anything created under it. `ensure_link` creates its target,
+    /// so a relink of an absent library would leave an empty games directory
+    /// on whatever filesystem holds the mount point — and an empty install is
+    /// what makes the client offer a repair.
+    #[test]
+    fn a_missing_library_is_not_linked_or_created() {
+        use crate::library::{Libraries, Library};
+
+        let dir = scratch("missing-library");
+        let away = dir.join("not-mounted").join("Lightforge").join("games");
+        let mut missing = Library::on_partition(&dir.join("not-mounted"), "nvme2", None);
+        missing.games_letter = "f:".to_owned();
+        missing.wow_letter = "g:".to_owned();
+        // Claimed once, and the marker is not there now.
+        missing.claimed = true;
+        let layout = Layout::with_root(&dir)
+            .with_libraries(Libraries::new(vec![missing.clone()]));
+
+        link_libraries(&layout).unwrap();
+
+        assert!(!away.exists(), "a missing library's games directory was created");
+        assert!(!layout.wow_drive(&missing).exists());
+        assert!(!layout.games_drive(&missing).exists());
+    }
+
+    /// A first run: the first library comes out of the config migration
+    /// unclaimed, and setup is the moment it becomes real.
+    #[test]
+    fn a_new_library_is_set_up_and_linked_in_one_pass() {
+        let dir = scratch("new-library");
+        let layout = Layout::with_root(&dir);
+        let main = layout.default_library().unwrap().clone();
+        assert_eq!(main.state(), crate::library::State::New);
+
+        link_libraries(&layout).unwrap();
+
+        assert!(main.online(), "the marker was not written");
+        assert_eq!(
+            std::fs::read_link(layout.wow_drive(&main)).unwrap(),
+            layout.wow_install_in(&main),
+        );
+        assert_eq!(
+            std::fs::read_link(layout.games_drive(&main)).unwrap(),
+            main.games(),
+        );
+        assert_eq!(std::fs::read_link(layout.wow_symlink()).unwrap(), layout.wow_install_in(&main));
+
+        // Idempotent: this runs on every provision.
+        link_libraries(&layout).unwrap();
+    }
+
+    /// Two libraries, each with its own install, its own letters, and only one
+    /// of them on `C:`.
+    #[test]
+    fn a_second_library_gets_its_own_letters_and_stays_off_the_c_symlink() {
+        use crate::library::{Libraries, Library};
+
+        let dir = scratch("two-libraries");
+        let main = Library::main_at(dir.join("games"), "home");
+        let mut second = Library::on_partition(&dir.join("ssd"), "nvme2", None);
+        let (games_letter, wow_letter) = crate::library::allocate_letters(std::slice::from_ref(&main)).unwrap();
+        second.games_letter = games_letter;
+        second.wow_letter = wow_letter;
+        let layout = Layout::with_root(&dir)
+            .with_libraries(Libraries::new(vec![main.clone(), second.clone()]));
+
+        link_libraries(&layout).unwrap();
+
+        assert_eq!(
+            std::fs::read_link(layout.wow_drive(&second)).unwrap(),
+            layout.wow_install_in(&second),
+        );
+        // One `C:` path, and it is the default library's — the string an install
+        // Battle.net has already adopted has recorded on disk.
+        assert_eq!(std::fs::read_link(layout.wow_symlink()).unwrap(), layout.wow_install_in(&main));
+        assert_ne!(second.wow_letter, main.wow_letter);
+        assert_ne!(second.games_letter, main.games_letter);
+        assert_eq!(second.windows_wow_path(), "F:/World of Warcraft");
     }
 
     #[test]
@@ -598,7 +740,7 @@ mod tests {
 
         std::fs::create_dir_all(layout.drive_c()).unwrap();
         std::fs::write(layout.prefix().join("system.reg"), "WINE REGISTRY Version 2").unwrap();
-        ensure_link(&layout.wow_symlink(), &layout.wow_install()).unwrap();
+        ensure_link(&layout.wow_symlink(), &layout.wow_install(&crate::product::ProductCode::Retail)).unwrap();
 
         assert!(PrefixStatus::inspect(&layout).is_ready());
     }

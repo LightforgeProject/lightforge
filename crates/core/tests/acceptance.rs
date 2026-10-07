@@ -198,6 +198,6 @@ async fn a_complete_install_produces_every_artifact() {
     // 6. Removing it again leaves nothing behind.
     let plan = uninstall::plan(&root, &code).expect("an uninstall plan");
     assert!(!plan.is_empty(), "nothing to remove after a complete install");
-    uninstall::execute(&root, &code, &plan).expect("uninstall must succeed");
+    uninstall::execute(&root, &code, &plan, lightforge_core::paths::WINDOWS_WOW_PATH).expect("uninstall must succeed");
     assert!(!exe.exists(), "the flavor directory survived uninstall");
 }
