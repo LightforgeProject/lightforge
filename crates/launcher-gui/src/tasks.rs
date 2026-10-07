@@ -300,6 +300,46 @@ pub fn same_marks(a: &HashMap<ProductCode, Mark>, b: &HashMap<ProductCode, Mark>
             .all(|(code, mark)| b.get(code).is_some_and(|other| other.path == mark.path))
 }
 
+/// Fetch every product's artwork into the cache, without decoding any of it.
+///
+/// The first run's "it looks weird for the first second or two on every game"
+/// fix: a panel's background and wordmark are revalidated the first time it is
+/// opened, and until they land the card is empty. Pulling them all down while
+/// the wizard's first slide is on screen means every panel opens from disk.
+///
+/// Deliberately not decoded and not kept: decoding thirteen 4K backgrounds to
+/// hold them all in memory would cost more than it saves, and [`cached_theme`]
+/// reads them off disk per product in tens of milliseconds. Returns how many
+/// products now have art cached.
+pub async fn prefetch(
+    http: Option<Http>,
+    pipeline: Option<Pipeline>,
+    codes: Vec<ProductCode>,
+) -> usize {
+    let (Some(http), Some(pipeline)) = (http, pipeline) else {
+        return 0;
+    };
+    let manifest = match pipeline.manifest(&http).await {
+        Ok(manifest) => manifest,
+        Err(e) => {
+            crate::trace::mark(format_args!("prefetch: no manifest ({e})"));
+            return 0;
+        }
+    };
+    let mut cached = 0;
+    for code in &codes {
+        // One at a time rather than joined: these are big files off one host,
+        // and a first run has plenty of other things it would rather have the
+        // connection for.
+        if pipeline.resolve_with(&http, &manifest, code).await.is_ok() {
+            cached += 1;
+        }
+        let _ = pipeline.icon(&http, &manifest, code).await;
+    }
+    crate::trace::mark(format_args!("prefetched art for {cached}/{} products", codes.len()));
+    cached
+}
+
 /// Resolve a product's branding, or an empty [`Themed`] when theming isn't
 /// configured or the manifest can't be read.
 ///
@@ -406,6 +446,7 @@ pub async fn download(
     layout: Layout,
     code: ProductCode,
     region: Region,
+    locale: String,
     limit_bytes_per_second: u64,
     optional_tags: Vec<String>,
     cancel: Cancel,
@@ -440,6 +481,7 @@ pub async fn download(
                 let dest = layout.wow_install(&code);
                 let options = InstallOptions {
                     region,
+                    locale,
                     flavor: code.install_dir().into_owned(),
                     optional_tags: optional_tags.clone(),
                     // Tighter than the CLI's 4 GiB. A checkpoint is a few

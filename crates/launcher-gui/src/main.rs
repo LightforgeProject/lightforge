@@ -24,6 +24,7 @@ mod provision;
 mod tasks;
 mod theme;
 mod trace;
+mod wizard;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -54,7 +55,6 @@ use lightforge_core::storage;
 use lightforge_core::tact::install::Offerings;
 use lightforge_core::transfers::{self, Saved, Standing};
 use lightforge_core::tact::download::Cancel;
-use lightforge_core::tact::version::Region;
 use lightforge_core::tweaks::{GraphicsApi, HostTools, Preset, Tweaks};
 
 use art::Art;
@@ -385,6 +385,10 @@ enum Message {
     Show(Screen),
     SetupStatus(Option<Box<SetupStatus>>),
     RunSetup,
+    /// The first-run wizard — see [`wizard`].
+    Wizard(wizard::Msg),
+    /// Take back a declined Battle.net and install it after all.
+    InstallBattleNet,
     /// Put the 32-bit library command on the clipboard. Lightforge never runs
     /// it: installing system packages needs root, and the distributions where
     /// help is most needed cannot be served by a command at all.
@@ -1009,7 +1013,6 @@ struct Lightforge {
     layout: Layout,
     dirs: Option<AppDirs>,
     config: Config,
-    region: Region,
     /// One client, one connection pool, for every request the update loop
     /// starts. `None` only if reqwest failed to build one at startup.
     http: Option<Http>,
@@ -1129,6 +1132,9 @@ struct Lightforge {
 
     screen: Screen,
     setup: Option<SetupStatus>,
+    /// The first run, while it is happening. `None` the rest of the time, and
+    /// on every start after the one that finished or dismissed it.
+    wizard: Option<wizard::Wizard>,
     /// Live setup progress, sampled off the same tick as a download.
     setup_rx: Option<tokio::sync::watch::Receiver<provision::Progress>>,
     setup_sample: provision::Progress,
@@ -1305,7 +1311,6 @@ impl Lightforge {
             layout,
             dirs,
             config,
-            region: Region::default(),
             http: Http::new().ok(),
             pipeline,
             manifest: None,
@@ -1351,6 +1356,7 @@ impl Lightforge {
             closing: None,
             screen: Screen::Dashboard,
             setup: None,
+            wizard: None,
             setup_rx: None,
             setup_sample: provision::Progress::default(),
             setup_running: false,
@@ -1450,6 +1456,20 @@ impl Lightforge {
             tasks::game_families(app.layout.clone(), app.config.prefix_user.clone()),
             |families| Message::FamiliesRead(Box::new(families)),
         );
+        // The first run, exactly once: the flag is written when the wizard is
+        // finished or dismissed, so a machine that has seen it never sees it
+        // again by itself. Nothing is written here — starting the app is not a
+        // reason to touch someone's config.
+        let artwork = match app.config.setup_complete {
+            true => Task::none(),
+            false => {
+                app.wizard = Some(wizard::Wizard::default());
+                // Every product's art into the cache while the user reads the
+                // first slide, so the first visit to a panel is not two seconds
+                // of empty card.
+                wizard::prefetch(&app)
+            }
+        };
         let task = Task::batch([
             app.reload(selected.code),
             addons,
@@ -1459,6 +1479,7 @@ impl Lightforge {
             codes,
             bnet_limit,
             resume,
+            artwork,
         ]);
         (app, task)
     }
@@ -1471,7 +1492,7 @@ impl Lightforge {
                     self.http.clone(),
                     self.layout.clone(),
                     code.clone(),
-                    self.region,
+                    self.config.region,
                     self.kind_of(&code) == Kind::Managed,
                 ),
                 {
@@ -1929,7 +1950,8 @@ impl Lightforge {
             tasks::download(
                 self.layout.clone(),
                 code.clone(),
-                self.region,
+                self.config.region,
+                self.config.locale.clone(),
                 self.config.download_limit_bytes(),
                 self.opted_optional(&code),
                 cancel,
@@ -2693,7 +2715,13 @@ impl Lightforge {
                 // cannot launch anything yet — but never yank the user out of
                 // a screen they chose.
                 if let Some(status) = &status {
-                    if !status.is_ready() && self.screen == Screen::Dashboard && !self.setup_running
+                    // Not while the first run is up: it has a setup step of its
+                    // own, and moving the screen underneath it would be where
+                    // the user lands the moment they dismiss it.
+                    if !status.is_ready()
+                        && self.screen == Screen::Dashboard
+                        && !self.setup_running
+                        && self.wizard.is_none()
                     {
                         self.screen = Screen::Settings;
                         self.settings_tab = SettingsTab::Setup;
@@ -2705,6 +2733,16 @@ impl Lightforge {
                 self.bnet_icon = self.layout.battle_net_icon();
                 self.setup = status;
                 measure
+            }
+
+            Message::Wizard(msg) => wizard::update(self, msg),
+
+            Message::InstallBattleNet => {
+                self.config.battle_net_declined = false;
+                self.save_config();
+                // Straight into the same run the button below starts: the two
+                // steps before it are already done, so this is the one step.
+                Task::done(Message::RunSetup)
             }
 
             Message::RunSetup => {
@@ -2732,7 +2770,7 @@ impl Lightforge {
                     Ok(status) => {
                         let ready = status.is_ready();
                         self.setup = Some(*status);
-                        if ready {
+                        if ready && self.wizard.is_none() {
                             self.screen = Screen::Dashboard;
                         }
                         // Provisioning changes what the disk holds, so the
@@ -3949,7 +3987,7 @@ impl Lightforge {
                     tasks::offerings(
                         self.http.clone(),
                         self.selected.code.clone(),
-                        self.region,
+                        self.config.region,
                         self.opted_optional(&self.selected.code),
                         None,
                     ),
@@ -4320,7 +4358,7 @@ impl Lightforge {
             tasks::offerings(
                 self.http.clone(),
                 code.clone(),
-                self.region,
+                self.config.region,
                 Vec::new(),
                 Some(self.layout.wow_install(&code)),
             ),
@@ -4410,6 +4448,33 @@ impl Lightforge {
 
     /// Rebuild the layout from the config — after a library is added, removed,
     /// made main, or assigned to a product.
+    /// Re-read what is provisioned, off the UI thread.
+    fn setup_status(&self) -> Task<Message> {
+        Task::perform(
+            provision::status(self.layout.clone(), self.config.clone()),
+            |status| Message::SetupStatus(status.map(Box::new)),
+        )
+    }
+
+    /// Bring the header's list back in line with the configured products.
+    ///
+    /// Adoption can add a product nobody chose — a found install of Classic Era
+    /// is a game the user has, whether or not they would have thought to add
+    /// the tile — so the two lists are reconciled rather than appended to.
+    fn sync_choices(&mut self) {
+        self.choices = self
+            .config
+            .products
+            .iter()
+            .map(|p| Choice { code: p.code.clone(), label: p.display_name.clone() })
+            .collect();
+        if !self.choices.iter().any(|c| c.code == self.selected.code) {
+            if let Some(first) = self.choices.first().cloned() {
+                self.selected = first;
+            }
+        }
+    }
+
     fn rebuild_layout(&mut self) {
         if let Ok(layout) = self.config.layout() {
             self.layout = layout;
@@ -4633,6 +4698,17 @@ impl Lightforge {
         let started = Instant::now();
         if let Some(error) = &self.config_error {
             return self.broken_config_screen(error);
+        }
+        // The first run is a layer over the app rather than a `Screen`: there
+        // is no way out of it except the two buttons in its footer, so nothing
+        // else may be reachable while it is up.
+        if let Some(open) = &self.wizard {
+            return Element::from(
+                container(wizard::view(self, open))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(theme::backdrop),
+            );
         }
         let screen = match self.screen {
             Screen::Dashboard => self.dashboard(),
@@ -4899,10 +4975,18 @@ impl Lightforge {
                             .height(Length::Fill)
                             .align_y(Alignment::Center),
                             responsive(|space| self.strip(space.width)),
-                            container(self.battle_net_button())
-                                .height(Length::Fill)
-                                .align_y(Alignment::Center),
                         ]
+                        // Only where there is a client to open. Declining
+                        // Battle.net during setup is a supported choice, and a
+                        // button that opens something that is not installed is
+                        // worse than no button.
+                        .extend((!self.config.battle_net_declined).then(|| {
+                            Element::from(
+                                container(self.battle_net_button())
+                                    .height(Length::Fill)
+                                    .align_y(Alignment::Center),
+                            )
+                        }))
                         .spacing(theme::MD)
                         .align_y(Alignment::Center),
                     )
@@ -5028,9 +5112,21 @@ impl Lightforge {
         }
 
         rows = rows.push(muted("Other Blizzard games".to_owned(), theme::LABEL));
-        rows = rows.extend(self.hint("Installed and started through Battle.net. Lightforge only opens them.").map(Element::from));
-        for entry in self.catalog.hand_offs() {
-            rows = rows.push(row_for(entry));
+        match self.config.battle_net_declined {
+            // Nothing to hand them to. Listed anyway would be a row whose Add
+            // button adds a tile that cannot do anything.
+            true => {
+                rows = rows.push(muted(
+                    "Battle.net is not installed — add it from Settings › Setup.".to_owned(),
+                    theme::CAPTION,
+                ));
+            }
+            false => {
+                rows = rows.extend(self.hint("Installed and started through Battle.net. Lightforge only opens them.").map(Element::from));
+                for entry in self.catalog.hand_offs() {
+                    rows = rows.push(row_for(entry));
+                }
+            }
         }
 
         // Embedded rather than floating: the default scrollbar is drawn over
@@ -7830,6 +7926,18 @@ impl Lightforge {
     /// Proton, the prefix and Battle.net: what is there, and the button that
     /// provisions whatever isn't.
     fn setup_section(&self) -> Element<'_, Message> {
+        self.setup_steps(false)
+    }
+
+    /// The same list inside the first-run wizard, which owns two of the things
+    /// this draws for itself: where to install, and whether Battle.net is
+    /// wanted. Drawing them twice on one slide is how the wizard ended up with
+    /// two "Install to" fields and two ways to say no to Battle.net.
+    fn setup_section_in_wizard(&self) -> Element<'_, Message> {
+        self.setup_steps(true)
+    }
+
+    fn setup_steps(&self, in_wizard: bool) -> Element<'_, Message> {
         let mut body = column![]
             .extend(self.hint(
                 "Proton, the Wine prefix and Battle.net. Each step is skipped if it is \
@@ -7841,7 +7949,7 @@ impl Lightforge {
         // is installed: after that, moving it is a data migration rather than
         // a setting — see `relocate`. Once the prefix is built, the Wine
         // prefix step below says where it is, so nothing is lost by hiding it.
-        if self.library_empty {
+        if self.library_empty && !in_wizard {
             body = body.push(field_row(
                 "Install to".to_owned(),
                 row![
@@ -7917,14 +8025,44 @@ impl Lightforge {
                         false => "not built, or the game link is missing".to_owned(),
                     },
                 ));
-                body = body.push(step(
-                    status.battle_net,
-                    "Battle.net",
-                    match status.battle_net {
-                        true => self.layout.battle_net_dir().display().to_string(),
-                        false => "not installed in the prefix".to_owned(),
-                    },
-                ));
+                // Declined at setup is not the same as missing: the user was
+                // told what it costs and said no, so the row offers it rather
+                // than reporting it as unfinished.
+                if !status.battle_net && !status.battle_net_wanted && !in_wizard {
+                    body = body.push(
+                        container(
+                            row![
+                                column![
+                                    text("Battle.net").size(theme::BODY),
+                                    mono("skipped — only World of Warcraft works".to_owned()),
+                                ]
+                                .spacing(theme::XS)
+                                .width(Length::Fill),
+                                action_button(
+                                    "Install it now",
+                                    theme::ACCENT,
+                                    Message::InstallBattleNet,
+                                )
+                                .enabled(!self.setup_running),
+                            ]
+                            .spacing(theme::MD)
+                            .align_y(Alignment::Center),
+                        )
+                        .width(Length::Fill)
+                        .padding(theme::MD)
+                        .style(theme::row),
+                    );
+                } else {
+                    body = body.push(step(
+                        status.battle_net,
+                        "Battle.net",
+                        match (status.battle_net, status.battle_net_wanted) {
+                            (true, _) => self.layout.battle_net_dir().display().to_string(),
+                            (false, true) => "not installed in the prefix".to_owned(),
+                            (false, false) => "skipped — only World of Warcraft works".to_owned(),
+                        },
+                    ));
+                }
             }
         }
 
@@ -7950,17 +8088,31 @@ impl Lightforge {
             (false, true) => "Re-run setup",
             (false, false) => "Set up Lightforge",
         };
+        let start = action_button(
+            label,
+            match ready {
+                true => theme::PAUSE,
+                false => theme::INSTALL,
+            },
+            Message::RunSetup,
+        )
+        .width(220.0)
+        .enabled(!self.setup_running);
         body = body.push(
-            action_button(
-                label,
-                match ready {
-                    true => theme::PAUSE,
-                    false => theme::INSTALL,
-                },
-                Message::RunSetup,
-            )
-            .width(220.0)
-            .enabled(!self.setup_running),
+            row![start]
+                // The same steps, walked through with the questions a first run
+                // asks — region, language, drives, and the installs that were
+                // here first. Kept here because this is where someone who
+                // dismissed it comes looking for it; inside the wizard it would
+                // be a button that reopens the thing you are looking at.
+                .extend((!in_wizard).then(|| {
+                    Element::from(
+                        secondary("Run the setup wizard", Message::Wizard(wizard::Msg::Open))
+                            .enabled(!self.setup_running),
+                    )
+                }))
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
         );
 
         body.into()

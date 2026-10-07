@@ -245,6 +245,23 @@ pub fn without(existing: &[u8], product: &str) -> Option<Vec<u8>> {
 
 /// [`splice`] and [`without`]: replace or add `installs`, drop `remove`.
 fn rewrite(existing: &[u8], installs: &[ProductInstall], remove: Option<&str>) -> Option<Vec<u8>> {
+    let encoded: Vec<(String, Vec<u8>)> = installs
+        .iter()
+        .map(|install| (install.product.clone(), install.encode()))
+        .collect();
+    merge(existing, &encoded, remove)
+}
+
+/// The byte-preserving merge behind [`splice`], [`without`] and [`graft`].
+///
+/// `records` are record *payloads* — field 1's contents — paired with the
+/// product code they are for. A payload replaces the record of the same code
+/// and is appended when there is none.
+fn merge(
+    existing: &[u8],
+    records: &[(String, Vec<u8>)],
+    remove: Option<&str>,
+) -> Option<Vec<u8>> {
     /// One top-level field, kept exactly as it arrived.
     struct Item {
         /// Field number. `1` is a product record; a real registry also holds
@@ -256,35 +273,12 @@ fn rewrite(existing: &[u8], installs: &[ProductInstall], remove: Option<&str>) -
     }
 
     let mut items: Vec<Item> = Vec::new();
-    let mut at = 0usize;
-    while at < existing.len() {
-        let start = at;
-        let (key, used) = read_varint(existing.get(at..)?)?;
-        at += used;
-        let field = u32::try_from(key >> 3).ok()?;
-
-        let mut payload = None;
-        match key & 7 {
-            0 => at += read_varint(existing.get(at..)?)?.1,
-            1 => at = at.checked_add(8).filter(|end| *end <= existing.len())?,
-            2 => {
-                let (len, used) = read_varint(existing.get(at..)?)?;
-                at += used;
-                let len = usize::try_from(len).ok()?;
-                let end = at.checked_add(len).filter(|end| *end <= existing.len())?;
-                payload = Some(existing.get(at..end)?);
-                at = end;
-            }
-            5 => at = at.checked_add(4).filter(|end| *end <= existing.len())?,
-            // Groups left the wire format decades ago; this is not the file.
-            _ => return None,
-        }
-
-        let code = match field == 1 {
-            true => payload.and_then(decode_install).map(|i| i.product),
+    for raw in raw_fields(existing)? {
+        let code = match raw.field == 1 {
+            true => raw.payload.and_then(decode_install).map(|i| i.product),
             false => None,
         };
-        items.push(Item { field, raw: existing.get(start..at)?.to_vec(), code });
+        items.push(Item { field: raw.field, raw: raw.bytes.to_vec(), code });
     }
 
     if let Some(remove) = remove {
@@ -293,10 +287,10 @@ fn rewrite(existing: &[u8], installs: &[ProductInstall], remove: Option<&str>) -
 
     // Replace what we already own, and collect what has to be added.
     let mut fresh: Vec<Vec<u8>> = Vec::new();
-    for install in installs {
+    for (product, payload) in records {
         let mut encoded = Vec::new();
-        message_field(&mut encoded, 1, &install.encode());
-        match items.iter_mut().find(|item| item.code.as_deref() == Some(&install.product)) {
+        message_field(&mut encoded, 1, payload);
+        match items.iter_mut().find(|item| item.code.as_deref() == Some(product)) {
             Some(item) => item.raw = encoded,
             None => fresh.push(encoded),
         }
@@ -317,6 +311,132 @@ fn rewrite(existing: &[u8], installs: &[ProductInstall], remove: Option<&str>) -
         out.extend_from_slice(&item.raw);
     }
     Some(out)
+}
+
+/// One field of a message, as the exact bytes it arrived as.
+struct Raw<'a> {
+    field: u32,
+    /// Key, length and value — everything this field occupied.
+    bytes: &'a [u8],
+    /// The value alone, for a length-delimited field.
+    payload: Option<&'a [u8]>,
+}
+
+/// Split a message into its fields without interpreting any of them.
+///
+/// `None` for bytes that are not a readable field sequence, which is how every
+/// caller declines to rewrite a file it did not understand.
+fn raw_fields(bytes: &[u8]) -> Option<Vec<Raw<'_>>> {
+    let mut found = Vec::new();
+    let mut at = 0usize;
+    while at < bytes.len() {
+        let start = at;
+        let (key, used) = read_varint(bytes.get(at..)?)?;
+        at += used;
+        let field = u32::try_from(key >> 3).ok()?;
+
+        let mut payload = None;
+        match key & 7 {
+            0 => at += read_varint(bytes.get(at..)?)?.1,
+            1 => at = at.checked_add(8).filter(|end| *end <= bytes.len())?,
+            2 => {
+                let (len, used) = read_varint(bytes.get(at..)?)?;
+                at += used;
+                let len = usize::try_from(len).ok()?;
+                let end = at.checked_add(len).filter(|end| *end <= bytes.len())?;
+                payload = Some(bytes.get(at..end)?);
+                at = end;
+            }
+            5 => at = at.checked_add(4).filter(|end| *end <= bytes.len())?,
+            // Groups left the wire format decades ago; this is not the file.
+            _ => return None,
+        }
+        found.push(Raw { field, bytes: bytes.get(start..at)?, payload });
+    }
+    Some(found)
+}
+
+/// One product record lifted whole out of another prefix's registry.
+///
+/// Opaque on purpose: the point of it is the fields Lightforge does *not*
+/// understand. See [`lift`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Record {
+    pub product: String,
+    payload: Vec<u8>,
+}
+
+/// Lift one product's record out of another `product.db`, with its install
+/// path rewritten and every other byte kept.
+///
+/// For a game Lightforge does not manage. A Diablo that Battle.net installed in
+/// a Lutris prefix can be made visible to the Battle.net in Lightforge's prefix
+/// without reinstalling it, but only if the record our registry gains is one
+/// Agent will accept — and that means a build key, an install-state block and a
+/// tag expression that nothing here knows how to invent. The record Agent wrote
+/// itself has all of them right, so it is copied rather than rebuilt, and only
+/// the install path — the one thing that genuinely changed — is replaced.
+///
+/// `None` when the file holds no record for `product`, or is not a registry.
+pub fn lift(bytes: &[u8], product: &str, install_path: &str) -> Option<Record> {
+    for raw in raw_fields(bytes)? {
+        if raw.field != 1 {
+            continue;
+        }
+        let payload = raw.payload?;
+        if decode_install(payload).map(|i| i.product).as_deref() != Some(product) {
+            continue;
+        }
+        return Some(Record {
+            product: product.to_owned(),
+            payload: with_install_path(payload, install_path)?,
+        });
+    }
+    None
+}
+
+/// A record with its settings block's install path replaced, byte for byte
+/// identical everywhere else.
+fn with_install_path(record: &[u8], install_path: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut replaced = false;
+    for raw in raw_fields(record)? {
+        // Field 3 is the settings block, whose field 1 is the install path.
+        if raw.field != 3 {
+            out.extend_from_slice(raw.bytes);
+            continue;
+        }
+        let mut settings = Vec::new();
+        for field in raw_fields(raw.payload?)? {
+            match field.field == 1 {
+                true => string_field(&mut settings, 1, install_path),
+                false => settings.extend_from_slice(field.bytes),
+            }
+        }
+        message_field(&mut out, 3, &settings);
+        replaced = true;
+    }
+    replaced.then_some(out)
+}
+
+/// Graft lifted records into Agent's registry, under the same rules as
+/// [`register`]: nothing alive in the prefix, and a file that cannot be read is
+/// left alone and reported as `false`.
+pub fn graft(agent_dir: &Path, records: &[Record]) -> Result<bool, ProductDbError> {
+    let payloads: Vec<(String, Vec<u8>)> = records
+        .iter()
+        .map(|r| (r.product.clone(), r.payload.clone()))
+        .collect();
+    let path = agent_dir.join("product.db");
+    let existing = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(source) => return Err(ProductDbError::Io { path, source }),
+    };
+    let Some(merged) = merge(&existing, &payloads, None) else {
+        return Ok(false);
+    };
+    replace(&path, &existing, &merged)
 }
 
 /// Read one varint, returning its value and how many bytes it used.
@@ -356,20 +476,7 @@ pub fn register(agent_dir: &Path, installs: &[ProductInstall]) -> Result<bool, P
     let Some(merged) = splice(&existing, installs) else {
         return Ok(false);
     };
-    if merged == existing {
-        return Ok(false);
-    }
-
-    let temp = agent_dir.join("product.db.lightforge-tmp");
-    std::fs::write(&temp, &merged).map_err(|source| ProductDbError::Io {
-        path: temp.clone(),
-        source,
-    })?;
-    std::fs::rename(&temp, &path).map_err(|source| ProductDbError::Io {
-        path: path.clone(),
-        source,
-    })?;
-    Ok(true)
+    replace(&path, &existing, &merged)
 }
 
 /// Remove `product` from Agent's registry, so Battle.net stops listing a game
@@ -386,16 +493,25 @@ pub fn unregister(agent_dir: &Path, product: &str) -> Result<bool, ProductDbErro
     let Some(trimmed) = without(&existing, product) else {
         return Ok(false);
     };
-    if trimmed == existing {
+    replace(&path, &existing, &trimmed)
+}
+
+/// Write a rewritten registry over the old one, atomically — or do nothing at
+/// all when the rewrite changed nothing.
+///
+/// Agent reads this file while it runs, so the new bytes go to a temporary file
+/// in the same directory and are renamed over it.
+fn replace(path: &Path, existing: &[u8], merged: &[u8]) -> Result<bool, ProductDbError> {
+    if merged == existing {
         return Ok(false);
     }
-    let temp = agent_dir.join("product.db.lightforge-tmp");
-    std::fs::write(&temp, &trimmed).map_err(|source| ProductDbError::Io {
+    let temp = path.with_extension("db.lightforge-tmp");
+    std::fs::write(&temp, merged).map_err(|source| ProductDbError::Io {
         path: temp.clone(),
         source,
     })?;
-    std::fs::rename(&temp, &path).map_err(|source| ProductDbError::Io {
-        path: path.clone(),
+    std::fs::rename(&temp, path).map_err(|source| ProductDbError::Io {
+        path: path.to_path_buf(),
         source,
     })?;
     Ok(true)
@@ -941,6 +1057,73 @@ mod read_tests {
             family: "wow".into(),
             installed_at_ms: 0,
         }
+    }
+
+    /// A record as another launcher's Agent wrote it: a settings block with an
+    /// install path, and fields nothing in this file understands.
+    fn their_record(product: &str, install_path: &str) -> Vec<u8> {
+        let mut settings = Vec::new();
+        string_field(&mut settings, 1, install_path);
+        string_field(&mut settings, 6, "deDE");
+        varint_field(&mut settings, 77, 1234);
+
+        let mut record = Vec::new();
+        string_field(&mut record, 1, product);
+        string_field(&mut record, 2, product);
+        message_field(&mut record, 3, &settings);
+        string_field(&mut record, 6, "hsb");
+        // The sort of field this file has no model for and must not drop.
+        varint_field(&mut record, 42, 7);
+        string_field(&mut record, 99, "something Agent cares about");
+        record
+    }
+
+    #[test]
+    fn a_lifted_record_changes_its_path_and_nothing_else() {
+        let mut theirs = Vec::new();
+        message_field(&mut theirs, 1, &their_record("hs_beta", "C:\\Games\\Hearthstone"));
+
+        let lifted = lift(&theirs, "hs_beta", "E:\\Hearthstone").expect("their record is there");
+        assert_eq!(lifted.product, "hs_beta");
+
+        // Every byte of the record survives except the install path itself.
+        let mut expected = Vec::new();
+        message_field(&mut expected, 1, &their_record("hs_beta", "E:\\Hearthstone"));
+        let mut got = Vec::new();
+        message_field(&mut got, 1, &lifted.payload);
+        assert_eq!(got, expected);
+
+        // A product that is not in the file, and a file that is not a registry.
+        assert!(lift(&theirs, "d3", "E:\\Diablo").is_none());
+        assert!(lift(&[0xff, 0xff], "hs_beta", "E:\\x").is_none());
+    }
+
+    #[test]
+    fn grafting_adds_their_record_without_disturbing_ours() {
+        let dir = std::env::temp_dir().join(format!("lightforge-graft-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut theirs = Vec::new();
+        message_field(&mut theirs, 1, &their_record("hs_beta", "C:\\Games\\Hearthstone"));
+        let lifted = lift(&theirs, "hs_beta", "E:\\Hearthstone").unwrap();
+
+        // No registry at all: nothing is written, because seeding one with only
+        // our records would tell the client its own components are missing.
+        assert!(!graft(&dir, std::slice::from_ref(&lifted)).unwrap());
+
+        let ours = encode(&[install("wow", "12.1.0.69933")]);
+        std::fs::write(dir.join("product.db"), &ours).unwrap();
+        assert!(graft(&dir, std::slice::from_ref(&lifted)).unwrap());
+
+        let merged = std::fs::read(dir.join("product.db")).unwrap();
+        let found = decode(&merged);
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().any(|i| i.product == "wow"));
+        let hs = found.iter().find(|i| i.product == "hs_beta").unwrap();
+        assert_eq!(hs.install_path, "E:\\Hearthstone");
+        // Idempotent: grafting the same record again changes nothing.
+        assert!(!graft(&dir, &[lifted]).unwrap());
     }
 
     #[test]

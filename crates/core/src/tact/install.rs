@@ -39,6 +39,38 @@ use crate::tact::storage::{EKey, Storage};
 use crate::tact::version::{self, Region};
 use crate::tact::writer::{StoreWriter, Summary as StoreSummary};
 
+/// The locales a WoW build ships, as the download manifest spells them, with
+/// something to call each one in a picker.
+///
+/// Not every product has every one — a Classic Era build ships fewer — but the
+/// manifest decides that at plan time: a tag nothing defines selects nothing
+/// rather than failing, so offering the full list is safe and the alternative
+/// is reading a manifest before the user can pick a language.
+pub const LOCALES: &[(&str, &str)] = &[
+    ("enUS", "English (US)"),
+    ("enGB", "English (EU)"),
+    ("deDE", "Deutsch"),
+    ("frFR", "Français"),
+    ("esES", "Español (EU)"),
+    ("esMX", "Español (AL)"),
+    ("itIT", "Italiano"),
+    ("ptBR", "Português (BR)"),
+    ("ptPT", "Português (PT)"),
+    ("ruRU", "Русский"),
+    ("koKR", "한국어"),
+    ("zhCN", "简体中文"),
+    ("zhTW", "繁體中文"),
+];
+
+/// What a locale code is called, or the code itself when it is not one we know.
+pub fn locale_name(code: &str) -> &str {
+    LOCALES
+        .iter()
+        .find(|(locale, _)| *locale == code)
+        .map(|(_, name)| *name)
+        .unwrap_or(code)
+}
+
 /// How a run is tuned. The limits exist for development slices and must never
 /// be set by a real install — each of them makes the result deliberately
 /// partial, which is why [`Summary::complete`] refuses `.build.info` when any

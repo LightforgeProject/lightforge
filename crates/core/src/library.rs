@@ -188,6 +188,27 @@ impl Library {
         }
     }
 
+    /// A library made out of a games directory that already exists — the
+    /// parent of a WoW install found somewhere else on this machine.
+    ///
+    /// The difference from [`Library::on_partition`] is that nothing is placed:
+    /// the directory is taken as it is, because the games in it are already
+    /// there and the point of adoption is that no byte moves. See
+    /// [`crate::discover::adopt`].
+    pub fn adopted(games: PathBuf, label: impl Into<String>) -> Self {
+        Self {
+            id: new_id(),
+            label: label.into(),
+            relative: games.clone(),
+            games,
+            uuid: None,
+            is_default: false,
+            games_letter: String::new(),
+            wow_letter: String::new(),
+            claimed: false,
+        }
+    }
+
     /// The first library: whatever games directory the install already used,
     /// with the drive letters it already had.
     ///

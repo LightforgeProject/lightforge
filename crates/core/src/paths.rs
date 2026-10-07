@@ -172,28 +172,7 @@ impl Layout {
     /// directories that can be measured. Those are the client's own strings,
     /// in its own spelling, and this is the only place that has to care.
     pub fn resolve_windows(&self, windows: &str) -> Option<PathBuf> {
-        let windows = windows.replace('\\', "/");
-        let (letter, rest) = windows.split_once(':')?;
-        let letter = letter.trim();
-        if letter.len() != 1 {
-            return None;
-        }
-        let link = self.dosdevices().join(format!("{}:", letter.to_ascii_lowercase()));
-        // The entry is a symlink, and Wine writes `c:` as a *relative* one
-        // (`../drive_c`), so it is resolved against the directory it lives in.
-        let target = std::fs::read_link(&link).ok()?;
-        let target = match target.is_absolute() {
-            true => target,
-            false => self.dosdevices().join(target),
-        };
-        let relative = rest.trim_start_matches('/');
-        let resolved = match relative.is_empty() {
-            true => target,
-            false => target.join(relative),
-        };
-        // `..` components from a relative `dosdevices` entry would otherwise
-        // survive into every comparison made against this path.
-        Some(normalize(&resolved))
+        resolve_windows_in(&self.dosdevices(), windows)
     }
 
     /// `drive_c/Program Files (x86)`
@@ -203,7 +182,7 @@ impl Layout {
 
     /// Headless Battle.net install inside the prefix.
     pub fn battle_net_dir(&self) -> PathBuf {
-        self.program_files_x86().join("Battle.net")
+        battle_net_dir_in(&self.prefix())
     }
 
     /// `%APPDATA%/Battle.net/Battle.net.config` — the file automated setup
@@ -310,10 +289,7 @@ impl Layout {
     /// it at their games again after every launch — which is exactly what
     /// Lightforge did until this was split out.
     pub fn agent_dir(&self) -> PathBuf {
-        self.drive_c()
-            .join("ProgramData")
-            .join("Battle.net")
-            .join("Agent")
+        agent_dir_in(&self.prefix())
     }
 
     /// The default library's game assets root: `~/Games/Blizzard/games` unless
@@ -396,6 +372,52 @@ impl Layout {
 
 /// Flatten `.` and `..` out of a path without touching the filesystem.
 ///
+/// Resolve a Windows path against any prefix's `dosdevices` directory.
+///
+/// Free of [`Layout`] on purpose: a first run reads the install paths out of
+/// *another* launcher's Battle.net, whose prefix Lightforge does not own and
+/// has no layout for. See [`crate::discover`].
+pub fn resolve_windows_in(dosdevices: &Path, windows: &str) -> Option<PathBuf> {
+    let windows = windows.replace('\\', "/");
+    let (letter, rest) = windows.split_once(':')?;
+    let letter = letter.trim();
+    if letter.len() != 1 {
+        return None;
+    }
+    let link = dosdevices.join(format!("{}:", letter.to_ascii_lowercase()));
+    // The entry is a symlink, and Wine writes `c:` as a *relative* one
+    // (`../drive_c`), so it is resolved against the directory it lives in.
+    let target = std::fs::read_link(&link).ok()?;
+    let target = match target.is_absolute() {
+        true => target,
+        false => dosdevices.join(target),
+    };
+    let relative = rest.trim_start_matches('/');
+    let resolved = match relative.is_empty() {
+        true => target,
+        false => target.join(relative),
+    };
+    // `..` components from a relative `dosdevices` entry would otherwise
+    // survive into every comparison made against this path.
+    Some(normalize(&resolved))
+}
+
+/// Agent's own directory inside any Wine prefix, ours or another launcher's —
+/// where `product.db` lives. See [`Layout::agent_dir`].
+pub fn agent_dir_in(prefix: &Path) -> PathBuf {
+    prefix.join("drive_c").join("ProgramData").join("Battle.net").join("Agent")
+}
+
+/// Battle.net's install directory inside any Wine prefix.
+pub fn battle_net_dir_in(prefix: &Path) -> PathBuf {
+    prefix.join("drive_c").join(WINDOWS_PROGRAM_FILES).join("Battle.net")
+}
+
+/// Whether a directory is a Wine prefix at all.
+pub fn is_prefix(dir: &Path) -> bool {
+    dir.join("drive_c").is_dir()
+}
+
 /// Not `canonicalize`: that resolves symlinks, and the whole point of the
 /// paths this is used on is that one of them *is* the symlink putting a game
 /// where Windows expects it.

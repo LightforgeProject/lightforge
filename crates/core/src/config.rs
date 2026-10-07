@@ -90,6 +90,37 @@ pub struct Config {
     /// nobody can see is a launch that quietly never happens.
     #[serde(default = "yes")]
     pub battle_net_minimized: bool,
+    /// Which of Blizzard's regions products are downloaded from.
+    ///
+    /// Asked once, during the first run. It decides which version service is
+    /// read, and it is written into `.build.info` and `product.db` — the client
+    /// and Battle.net both expect the install to say where it came from.
+    #[serde(default)]
+    pub region: crate::tact::version::Region,
+    /// The language the game is installed in, e.g. `deDE`.
+    ///
+    /// A download decision, not a display one: root lists most files once per
+    /// locale, and the locale is what selects the right ones. Changing it after
+    /// an install means downloading the new language's files, which is why it is
+    /// asked at setup rather than guessed from `LANG`.
+    #[serde(default = "default_locale")]
+    pub locale: String,
+    /// Whether the first-run wizard has been seen through to the end.
+    ///
+    /// Not the same question as "is the machine provisioned": someone who
+    /// dismissed the wizard with "set up later" has seen it, and showing it
+    /// again on every start would be nagging. [`crate::setup::Status`] still
+    /// knows what is missing, and Settings still says so.
+    #[serde(default)]
+    pub setup_complete: bool,
+    /// Battle.net was declined during setup.
+    ///
+    /// Only WoW works without it, so this is also what hides the Battle.net
+    /// button and the hand-off titles: a button that opens a client that is not
+    /// installed is worse than no button. Reversible from Settings, and the
+    /// wizard says so when it is set.
+    #[serde(default)]
+    pub battle_net_declined: bool,
     /// Every product Lightforge manages, official and custom alike.
     pub products: Vec<Product>,
 }
@@ -116,6 +147,13 @@ fn yes() -> bool {
     true
 }
 
+/// The language a WoW install is in unless the user picked another.
+pub const DEFAULT_LOCALE: &str = "enUS";
+
+fn default_locale() -> String {
+    DEFAULT_LOCALE.to_owned()
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -133,6 +171,10 @@ impl Default for Config {
             pause_downloads_while_playing: true,
             minimize_on_launch: false,
             battle_net_minimized: true,
+            region: crate::tact::version::Region::default(),
+            locale: default_locale(),
+            setup_complete: false,
+            battle_net_declined: false,
             products: Vec::new(),
         }
     }

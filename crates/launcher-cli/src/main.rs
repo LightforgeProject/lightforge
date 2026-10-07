@@ -862,7 +862,7 @@ async fn main() -> Result<()> {
             println!("installer {}", installer_path.display());
 
             let setup = Installer::new(&layout, &installer_path)
-                .with_locale(locale)
+                .with_locale(&locale)
                 .with_timeout(std::time::Duration::from_secs(timeout));
             if !setup.is_installed() {
                 println!("running setup — this takes a few minutes");
@@ -872,7 +872,7 @@ async fn main() -> Result<()> {
                 .map(|c| c.managed_products())
                 .unwrap_or_default();
             let report =
-                battlenet::provision(&runner, &layout, &user, &installer_path, &managed)
+                battlenet::provision(&runner, &layout, &user, &locale, &installer_path, &managed)
                 .context("setting Battle.net up")?;
             if report.install.skipped {
                 println!("battle.net      already installed");

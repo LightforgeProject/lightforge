@@ -29,6 +29,14 @@ pub struct Status {
     pub installed: Vec<ProtonRelease>,
     pub prefix: PrefixStatus,
     pub battle_net: bool,
+    /// Whether Battle.net is wanted at all.
+    ///
+    /// Declining it during setup is a supported choice — WoW is downloaded and
+    /// launched by Lightforge alone — so a machine without it is not an
+    /// unfinished one. Everything that asks "is setup done" has to know the
+    /// difference, or the dashboard spends forever offering to finish a step
+    /// the user said no to.
+    pub battle_net_wanted: bool,
     /// Whether this machine has a 32-bit runtime at all.
     ///
     /// Only the cheap loader check ([`runtime::check_loader`]) — one `stat`,
@@ -50,6 +58,7 @@ impl Status {
             installed,
             prefix: PrefixStatus::inspect(layout),
             battle_net: battlenet::Installer::new(layout, PathBuf::new()).is_installed(),
+            battle_net_wanted: !config.battle_net_declined,
             thirty_two_bit: runtime::has_32bit_loader(),
         }
     }
@@ -57,7 +66,7 @@ impl Status {
     /// Nothing left to provision: the dashboard can install, launch and hand
     /// off to Battle.net without help from the CLI.
     pub fn is_ready(&self) -> bool {
-        self.proton.is_some() && self.prefix.is_ready() && self.battle_net
+        self.proton.is_some() && self.prefix.is_ready() && (self.battle_net || !self.battle_net_wanted)
     }
 
     /// The steps still outstanding, in the order they must run.
@@ -69,7 +78,7 @@ impl Status {
         if !self.prefix.is_ready() {
             steps.push(Step::Prefix);
         }
-        if !self.battle_net {
+        if !self.battle_net && self.battle_net_wanted {
             steps.push(Step::BattleNet);
         }
         steps
@@ -196,6 +205,14 @@ pub async fn run(
     //    catches a system with no 32-bit userspace at all; this catches one
     //    where it exists but a library Proton's wine needs does not, and the
     //    dynamic loader says which.
+    //
+    //    Skipped entirely when it was declined: the user is told at that point
+    //    that only WoW will work, and Settings can install it later.
+    if !status.battle_net && !status.battle_net_wanted {
+        status.proton = Some(build);
+        return Ok(status);
+    }
+
     if !status.battle_net {
         runtime::check_wine(runner.dist())?;
     }
@@ -272,6 +289,7 @@ async fn install_battle_net(
         runner,
         layout,
         &config.prefix_user,
+        &config.locale,
         &installer,
         &config.managed_products(),
     )?)
@@ -355,6 +373,7 @@ mod tests {
             installed: Vec::new(),
             prefix,
             battle_net,
+            battle_net_wanted: true,
             // These tests are about which steps are outstanding, which is a
             // question about the disk, not about the host's libraries.
             thirty_two_bit: true,
@@ -372,6 +391,19 @@ mod tests {
         let ready = status(true, true, true);
         assert!(ready.is_ready());
         assert!(ready.outstanding().is_empty());
+    }
+
+    #[test]
+    fn a_machine_that_declined_battle_net_is_still_finished() {
+        let mut status = status(true, true, false);
+        status.battle_net_wanted = false;
+        assert!(status.is_ready(), "WoW alone is a supported setup");
+        assert!(status.outstanding().is_empty());
+
+        // And the same machine with Battle.net wanted is not.
+        status.battle_net_wanted = true;
+        assert!(!status.is_ready());
+        assert_eq!(status.outstanding(), vec![Step::BattleNet]);
     }
 
     #[test]

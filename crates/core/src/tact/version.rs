@@ -26,7 +26,12 @@
 use crate::net::{Http, NetError};
 
 /// Blizzard's regional version services.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// Serialized because it is a setting now: which region a product is
+/// downloaded from is asked once, during the first run, and written to the
+/// config in Blizzard's own spelling (`eu`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Region {
     Us,
     #[default]
@@ -38,6 +43,25 @@ pub enum Region {
 }
 
 impl Region {
+    /// Every region, in the order a picker should offer them: the three with
+    /// most players first, then the rest.
+    pub const ALL: [Region; 6] =
+        [Region::Eu, Region::Us, Region::Kr, Region::Tw, Region::Cn, Region::Sg];
+
+    /// What to call this region to someone choosing one. The codes are
+    /// Blizzard's and several of them name the wrong thing — `us` serves the
+    /// whole of the Americas and Oceania.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Us => "Americas & Oceania",
+            Self::Eu => "Europe",
+            Self::Kr => "Korea",
+            Self::Cn => "China",
+            Self::Tw => "Taiwan",
+            Self::Sg => "Southeast Asia",
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Us => "us",

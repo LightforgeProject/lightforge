@@ -1186,6 +1186,7 @@ pub fn provision(
     runner: &ProtonRunner,
     layout: &Layout,
     user: &str,
+    locale: &str,
     installer: &Path,
     managed: &[ProductCode],
 ) -> Result<SetupReport, BattleNetError> {
@@ -1193,7 +1194,7 @@ pub fn provision(
         return Err(BattleNetError::PrefixNotReady(layout.prefix()));
     }
 
-    let install = Installer::new(layout, installer).install(runner)?;
+    let install = Installer::new(layout, installer).with_locale(locale).install(runner)?;
 
     let registry = registry_tweaks();
     apply_registry(runner, &registry)?;
@@ -1870,7 +1871,7 @@ mod tests {
         let runner = ProtonRunner::new(&release, &layout, dir.join("Steam"));
 
         assert!(matches!(
-            provision(&runner, &layout, "steamuser", &dir.join("setup.exe"), &[]),
+            provision(&runner, &layout, "steamuser", "enUS", &dir.join("setup.exe"), &[]),
             Err(BattleNetError::PrefixNotReady(_))
         ));
     }
