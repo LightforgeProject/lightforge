@@ -742,6 +742,12 @@ async fn main() -> Result<()> {
                 "initialized     {}",
                 if status.initialized { "yes" } else { "no" }
             );
+            // Which build the prefix *is*, as Proton recorded it. A pin older
+            // than this is a downgrade of everything that shares the prefix.
+            println!(
+                "built by        {}",
+                status.built_by.as_deref().unwrap_or("—")
+            );
             println!("symlink         {}", describe_link(&status.link));
             println!(
                 "ready           {}",
@@ -806,8 +812,9 @@ async fn main() -> Result<()> {
                 installer.unwrap_or_else(|| dirs.cache_dir().join(battlenet::INSTALLER_FILE));
             let user = Config::default().prefix_user;
 
-            let (runner, build) = proton_runner(&layout, battle_net_pin(proton.as_deref()))?;
+            let (runner, build) = proton_runner(&layout, battle_net_pin(proton.as_deref(), None))?;
             println!("using {} ({})", build.version, build.path.display());
+            warn_on_downgrade(&layout, &build);
             println!("installer {}", installer_path.display());
 
             let setup = Installer::new(&layout, &installer_path)
@@ -881,9 +888,17 @@ async fn main() -> Result<()> {
                 (None, None) => Launch::Client,
             };
 
-            let (runner, build) = proton_runner(&layout, battle_net_pin(proton.as_deref()))?;
+            // The product this launch is for, so its own pin is honoured the
+            // same way the launcher honours it.
+            let for_product = match &launch {
+                Launch::Product { code, .. } => Some(code.clone()),
+                _ => None,
+            };
+            let (runner, build) =
+                proton_runner(&layout, battle_net_pin(proton.as_deref(), for_product.as_ref()))?;
             let (exe, args) = launch.command(&layout.battle_net_dir());
             println!("using {} ({})", build.version, build.path.display());
+            warn_on_downgrade(&layout, &build);
 
             // Never spawn the client into a prefix that still has one running.
             let code = match &launch {
@@ -2933,17 +2948,46 @@ fn print_tweaks(tweaks: &[lightforge_core::battlenet::Tweak]) {
 /// The build a Battle.net verb should use: `--proton` if given, else the pin
 /// from `config.toml`, else the newest installed.
 ///
+/// With a product named, that product's own pin comes first — the client is
+/// being told to start that game, and a pin set for it means it. Without one,
+/// the verb is about the client itself and takes Battle.net's pin.
+///
 /// Leaks a `String` so the borrowed `&str` outlives the call. That is fine for
 /// a CLI process that is about to exec a game and exit, and beats threading a
 /// lifetime through every call site for one value read once.
-fn battle_net_pin(explicit: Option<&str>) -> Option<&str> {
+fn battle_net_pin<'a>(explicit: Option<&'a str>, code: Option<&ProductCode>) -> Option<&'a str> {
     if explicit.is_some() {
         return explicit;
     }
     let dirs = AppDirs::discover().ok()?;
     let config = Config::load_or_default(&dirs.config_file()).ok()?;
-    let version = config.battle_net_proton_version()?.to_owned();
+    let version = match code {
+        Some(code) => config.handoff_proton(code)?,
+        None => config.battle_net_proton_version()?,
+    }
+    .to_owned();
     Some(Box::leak(version.into_boxed_str()))
+}
+
+/// Say so when the build about to run is older than the one that built the
+/// prefix every product shares.
+///
+/// A line on stderr rather than a refusal: the CLI is where an older build is
+/// deliberately tried, and `--proton` is how you try it. The GUI asks first.
+fn warn_on_downgrade(layout: &Layout, build: &lightforge_core::proton::ProtonRelease) {
+    use lightforge_core::proton;
+
+    let built_by = proton::prefix_build(&layout.compat_data());
+    if let proton::PrefixFit::Older { built_by } =
+        proton::prefix_fit(&build.version, built_by.as_deref())
+    {
+        eprintln!(
+            "warning: {} is older than {built_by}, which last upgraded this prefix.\n\
+             \x20        Proton migrates a prefix forward only; the shared prefix may not \
+             survive it.",
+            build.version,
+        );
+    }
 }
 
 /// Products Lightforge patches, read fresh from `config.toml`.

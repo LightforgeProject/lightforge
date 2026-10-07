@@ -25,7 +25,7 @@ mod tasks;
 mod theme;
 mod trace;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -434,6 +434,9 @@ enum Message {
     UninstallPlanned(ProductCode, Box<Result<tasks::UninstallPreview, String>>),
     UninstallCancel,
     UninstallConfirm,
+    /// Launch anyway, under a build older than the one that built the prefix.
+    DowngradeConfirm,
+    DowngradeCancel,
     Uninstalled(ProductCode, Result<u64, String>),
     ClearCache,
     CacheCleared(Result<u64, String>),
@@ -558,6 +561,25 @@ struct UninstallDialog {
     working: bool,
 }
 
+/// The confirmation before a launch that would open the shared prefix with an
+/// older Proton than the one that last built it.
+///
+/// Shown rather than refused. The pin is a choice the user made — an older
+/// build is sometimes the only one a title runs under — and Lightforge is not
+/// in a position to know that this particular pair breaks. What it can do is
+/// say what is about to happen to the prefix every other game shares.
+#[derive(Debug, Clone)]
+struct DowngradeDialog {
+    /// Held until it is answered, then started unchanged.
+    what: Launch,
+    /// The build the launch would run under.
+    pick: String,
+    /// The build that last created or upgraded the prefix.
+    built_by: String,
+    /// The game being started, for the sentence.
+    label: String,
+}
+
 /// Which section of Settings is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsTab {
@@ -673,13 +695,31 @@ impl std::fmt::Display for ApiChoice {
 
 /// A Proton build in a picker, or the "follow the default" entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ProtonChoice(Option<String>);
+struct ProtonChoice(Option<String>, Unpinned);
+
+/// What a picker's "no pin of my own" entry falls through to, which is not the
+/// same on every row — and the entry has to say which, or it reads as a build
+/// the user never chose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Unpinned {
+    /// The app default: nothing sits above it, so unpinned is the newest build
+    /// installed.
+    Newest,
+    /// A game Lightforge launches itself, and Battle.net's own row: unpinned
+    /// follows the app default.
+    Default,
+    /// A title Battle.net opens: unpinned follows Battle.net's pin, which is
+    /// the old behaviour and still the sensible one to come back to.
+    BattleNet,
+}
 
 impl std::fmt::Display for ProtonChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.0 {
-            Some(version) => f.write_str(version),
-            None => f.write_str("Newest installed"),
+        match (&self.0, self.1) {
+            (Some(version), _) => f.write_str(version),
+            (None, Unpinned::Newest) => f.write_str("Newest installed"),
+            (None, Unpinned::Default) => f.write_str("Follow the default"),
+            (None, Unpinned::BattleNet) => f.write_str("Follow Battle.net"),
         }
     }
 }
@@ -1077,6 +1117,13 @@ struct Lightforge {
     location_input: String,
     install_dialog: Option<InstallDialog>,
     uninstall_dialog: Option<UninstallDialog>,
+    downgrade_dialog: Option<DowngradeDialog>,
+    /// Builds the user has already agreed to launch under this session.
+    ///
+    /// Per build rather than once for all: agreeing to one downgrade is not
+    /// agreeing to the next one. Not persisted — a new run of the launcher is
+    /// a fair moment to ask again, and the prefix may have moved since.
+    downgrade_ok: HashSet<String>,
     /// Editable game folder, applied when the install dialog starts.
     games_input: String,
 
@@ -1259,6 +1306,8 @@ impl Lightforge {
             location_input: String::new(),
             install_dialog: None,
             uninstall_dialog: None,
+            downgrade_dialog: None,
+            downgrade_ok: HashSet::new(),
             games_input: String::new(),
             tools: HostTools::detect(),
             fps_input: String::new(),
@@ -1458,6 +1507,15 @@ impl Lightforge {
     }
 
     fn preflight(&mut self, what: Launch) -> Task<Message> {
+        // Before anything is told to start: the prefix is shared by every
+        // product and one Battle.net login, and Proton only ever migrates it
+        // forward. Running an older build against it is allowed — somebody
+        // pinned it on purpose — but not silently.
+        if let Some(dialog) = self.downgrade_ahead(what) {
+            self.downgrade_dialog = Some(dialog);
+            return Task::none();
+        }
+
         self.busy = true;
         self.error = None;
         self.status = "pre-flight…".to_owned();
@@ -1496,15 +1554,45 @@ impl Lightforge {
                 self.selected.code.clone(),
                 self.downloads.clone(),
                 // Cleared under whichever build is about to run in the prefix.
-                match what {
-                    Launch::Game => tasks::Runs::Game,
-                    Launch::BattleNet | Launch::Client | Launch::Install => {
-                        tasks::Runs::BattleNet
-                    }
-                },
+                Self::runs_for(what),
             ),
             move |result| Message::PreflightDone(what, result),
         )
+    }
+
+    /// The warning this launch owes the user, or `None` to go ahead.
+    ///
+    /// `None` covers every ordinary case: a prefix that does not exist yet, the
+    /// build that made it, a newer one, a pair of tags with no ordering between
+    /// them, and a build already agreed to this session.
+    fn downgrade_ahead(&self, what: Launch) -> Option<DowngradeDialog> {
+        use lightforge_core::proton::PrefixFit;
+
+        let runs = Self::runs_for(what);
+        let code = self.selected.code.clone();
+        let (pick, fit) = tasks::prefix_fit(&self.layout, &code, runs);
+        let (pick, built_by) = match (pick, fit) {
+            (Some(pick), PrefixFit::Older { built_by }) => (pick, built_by),
+            _ => return None,
+        };
+        if self.downgrade_ok.contains(&pick) {
+            return None;
+        }
+        Some(DowngradeDialog {
+            what,
+            pick,
+            built_by,
+            label: self.label_of(&code),
+        })
+    }
+
+    /// Which workload an intent runs as — the game itself, or the client
+    /// acting for it.
+    fn runs_for(what: Launch) -> tasks::Runs {
+        match what {
+            Launch::Game => tasks::Runs::Game,
+            Launch::BattleNet | Launch::Client | Launch::Install => tasks::Runs::BattleNet,
+        }
     }
 
     /// Which Battle.net tile a product belongs to, or `None` when neither
@@ -3250,6 +3338,21 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::DowngradeCancel => {
+                self.downgrade_dialog = None;
+                Task::none()
+            }
+
+            Message::DowngradeConfirm => {
+                let Some(dialog) = self.downgrade_dialog.take() else {
+                    return Task::none();
+                };
+                // Remembered before the launch, so the retry below walks
+                // straight past the guard it just answered.
+                self.downgrade_ok.insert(dialog.pick);
+                self.preflight(dialog.what)
+            }
+
             Message::UninstallCancel => {
                 self.uninstall_dialog = None;
                 Task::none()
@@ -4197,12 +4300,14 @@ impl Lightforge {
         let card = match (
             &self.install_dialog,
             &self.uninstall_dialog,
+            &self.downgrade_dialog,
             &self.version_picker,
             &self.addon_detail,
         ) {
             (Some(dialog), ..) => Some(self.install_card(dialog)),
             (_, Some(dialog), ..) => Some(self.uninstall_card(dialog)),
-            (_, _, Some(picker), _) => Some(self.version_card(picker)),
+            (_, _, Some(dialog), ..) => Some(self.downgrade_card(dialog)),
+            (_, _, _, Some(picker), _) => Some(self.version_card(picker)),
             (.., Some(detail)) => Some(self.detail_card(detail)),
             _ => None,
         };
@@ -7502,9 +7607,9 @@ impl Lightforge {
                 pick_list(
                     self.proton_available
                         .iter()
-                        .map(|v| ProtonChoice(Some(v.clone())))
+                        .map(|v| ProtonChoice(Some(v.clone()), Unpinned::Newest))
                         .collect::<Vec<_>>(),
-                    self.proton_choice.clone().map(|v| ProtonChoice(Some(v))),
+                    self.proton_choice.clone().map(|v| ProtonChoice(Some(v), Unpinned::Newest)),
                     Message::ChooseProtonVersion,
                 )
                 .placeholder("Choose a version")
@@ -7586,6 +7691,31 @@ impl Lightforge {
         }
     }
 
+    /// The build a product's row resolves to, pin or no pin.
+    ///
+    /// Judged the way that product actually starts: a WoW version under its
+    /// own pin or the app default, a hand-off title under its pin or
+    /// Battle.net's. Only the fallback differs — a pin wins on either path.
+    fn row_build(&self, code: &ProductCode) -> Option<&proton::ProtonRelease> {
+        let pin = match Kind::of(code) {
+            Kind::Managed => self.config.effective_proton(code),
+            Kind::HandOff => self.config.handoff_proton(code),
+        };
+        let installed = self.setup.as_ref().map(|s| s.installed.as_slice())?;
+        proton::select(installed, pin)
+    }
+
+    /// How a product's build sits against the prefix every product shares.
+    fn row_fit(&self, code: &ProductCode) -> proton::PrefixFit {
+        let Some(build) = self.row_build(code) else {
+            return proton::PrefixFit::Unknown;
+        };
+        proton::prefix_fit(
+            &build.version,
+            self.setup.as_ref().and_then(|s| s.prefix.built_by.as_deref()),
+        )
+    }
+
     /// The games this page has anything to say about: every configured
     /// product that is actually installed.
     ///
@@ -7609,17 +7739,24 @@ impl Lightforge {
     /// switched tiles read as a bug — correctly, since nothing on the page
     /// said which game it meant.
     fn proton_section(&self) -> Element<'_, Message> {
-        let builds: Vec<ProtonChoice> = std::iter::once(ProtonChoice(None))
-            .chain(
-                self.setup
-                    .iter()
-                    .flat_map(|s| s.installed.iter())
-                    .map(|build| ProtonChoice(Some(build.version.clone()))),
-            )
-            .collect();
+        // Built per row rather than once: the first entry is "no pin of my
+        // own", and what that falls through to is different on a title
+        // Battle.net opens than on a game Lightforge launches itself.
+        let builds = |unpinned: Unpinned| -> Vec<ProtonChoice> {
+            std::iter::once(ProtonChoice(None, unpinned))
+                .chain(
+                    self.setup
+                        .iter()
+                        .flat_map(|s| s.installed.iter())
+                        .map(|build| ProtonChoice(Some(build.version.clone()), unpinned)),
+                )
+                .collect()
+        };
 
-        let picker = |current: Option<String>, on_pick: Box<dyn Fn(ProtonChoice) -> Message>| {
-            pick_list(builds.clone(), Some(ProtonChoice(current)), on_pick)
+        let picker = |unpinned: Unpinned,
+                      current: Option<String>,
+                      on_pick: Box<dyn Fn(ProtonChoice) -> Message>| {
+            pick_list(builds(unpinned), Some(ProtonChoice(current, unpinned)), on_pick)
                 .text_size(theme::BODY)
                 .padding(theme::SM)
                 .width(Length::Fixed(260.0))
@@ -7632,6 +7769,7 @@ impl Lightforge {
         let mut rows = column![field_row(
             "Default".to_owned(),
             picker(
+                Unpinned::Newest,
                 self.config.default_proton.version().map(str::to_owned),
                 Box::new(Message::PinDefaultProton),
             ),
@@ -7641,18 +7779,12 @@ impl Lightforge {
         // One row per installed game, in the order the config lists them —
         // the same order as the Play page's tiles, so the two read alike.
         for (code, label) in &games {
-            // A title Battle.net launches runs under Battle.net's build, so
-            // it gets the fact rather than a control that would do nothing.
-            // Giving it one of its own is a decision still open — see the
-            // backlog note.
-            if Kind::of(code) == Kind::HandOff {
-                rows = rows.push(field_row(
-                    label.clone(),
-                    muted("follows Battle.net".to_owned(), theme::LABEL).into(),
-                ));
-                continue;
-            }
-
+            // Every game, a title Battle.net launches included. Its pin is
+            // honoured on the hand-off path too, so the control is not a lie
+            // — the client is told to start *that* game, and that game is
+            // what the pin is about. What it cannot do is give the title a
+            // prefix of its own: there is one, shared, which is what the
+            // downgrade sign below is for.
             let pin = self
                 .config
                 .product(code)
@@ -7662,19 +7794,32 @@ impl Lightforge {
                 label.clone(),
                 row![
                     picker(
+                        match Kind::of(code) {
+                            Kind::Managed => Unpinned::Default,
+                            Kind::HandOff => Unpinned::BattleNet,
+                        },
                         pin,
                         Box::new(move |choice| Message::PinProductProton(
                             for_code.clone(),
                             choice
                         )),
                     ),
-                    // The sign, where it can be acted on: beside the picker
-                    // that sets it, on the game it is about.
-                    match self.shop_build_state(code) {
-                        ShopBuild::NotWow => Space::new().width(Length::Shrink).into(),
-                        ShopBuild::Running => tag("Shop-ready".to_owned(), theme::OK),
-                        ShopBuild::Elsewhere =>
+                    // One sign, where it can be acted on: beside the picker
+                    // that sets it, on the game it is about. Never two — the
+                    // page's nav, the label and the picker leave about a
+                    // hundred points, so a second tag is one that does not
+                    // fit. On a WoW version the shop wins: it is the thing
+                    // the person at the keyboard will notice, and it names
+                    // the build to move to. The prefix sign is for the rest,
+                    // and is said for everything in the line below anyway.
+                    match (self.shop_build_state(code), self.row_fit(code).is_downgrade()) {
+                        (ShopBuild::Running, _) =>
+                            tag("In-game shop working".to_owned(), theme::OK),
+                        (ShopBuild::Elsewhere, _) =>
                             tag(format!("{} recommended", proton::SHOP_BUILD), theme::UPDATE),
+                        (ShopBuild::NotWow, true) =>
+                            tag("Older than this prefix".to_owned(), theme::UPDATE),
+                        (ShopBuild::NotWow, false) => Space::new().width(Length::Shrink).into(),
                     },
                 ]
                 .spacing(theme::SM)
@@ -7694,10 +7839,22 @@ impl Lightforge {
 
         rows = rows.push(field_row(
             "Battle.net".to_owned(),
-            picker(
-                self.config.battle_net_proton.version().map(str::to_owned),
-                Box::new(Message::PinBattleNetProton),
-            ),
+            row![
+                picker(
+                    Unpinned::Default,
+                    self.config.battle_net_proton.version().map(str::to_owned),
+                    Box::new(Message::PinBattleNetProton),
+                ),
+                // The prefix's own build, beside the pin that will next open
+                // it. The one fact that makes the signs above legible.
+                match self.setup.as_ref().and_then(|s| s.prefix.built_by.as_deref()) {
+                    Some(built_by) => muted(format!("prefix built by {built_by}"), theme::CAPTION),
+                    None => muted("no prefix yet".to_owned(), theme::CAPTION),
+                },
+            ]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center)
+            .into(),
         ));
 
         // One line for the whole list rather than one under each game: the
@@ -7706,16 +7863,43 @@ impl Lightforge {
             .iter()
             .any(|(code, _)| matches!(self.shop_build_state(code), ShopBuild::Elsewhere));
 
+        // Said once, where the pin that causes it is set, and not behind the
+        // hints toggle: this one has a cost to games the user is not looking at.
+        let downgrade: Vec<String> = games
+            .iter()
+            .filter(|(code, _)| self.row_fit(code).is_downgrade())
+            .map(|(_, label)| label.clone())
+            .collect();
+
         rows
             .extend(self.hint(
                 "A game with no pin of its own follows the default. Battle.net and Agent \
-                 are a different workload from the game, so they pin separately — and \
-                 anything Battle.net launches for you runs under its build, not the \
-                 game's own.",
+                 are a different workload from the game, so they pin separately — a game \
+                 Battle.net starts for you follows the game's own pin where it has one, \
+                 and Battle.net's where it does not.",
             ).map(Element::from))
+            .extend((!downgrade.is_empty()).then(|| {
+                text(format!(
+                    "⚠ {} {} pinned to a build older than the {} that last upgraded the \
+                     prefix. There is one prefix for everything here, and Proton only \
+                     migrates it forward, so an older build may leave it in a state the \
+                     newer one did not expect. You will be asked again at launch.",
+                    downgrade.join(", "),
+                    match downgrade.len() {
+                        1 => "is",
+                        _ => "are",
+                    },
+                    self.setup
+                        .as_ref()
+                        .and_then(|s| s.prefix.built_by.clone())
+                        .unwrap_or_default(),
+                ))
+                .size(theme::LABEL)
+                .color(theme::UPDATE)
+            }).map(Element::from))
             .extend(
                 shop.then(|| {
-                    self.hint(&format!(
+                    self.hint(format!(
                         "World of Warcraft's in-game shop and support pages only render \
                          under {}. Newer builds start the game's embedded browser and lose \
                          its GPU process, which is the grey box instead of a page. \
@@ -8025,6 +8209,70 @@ impl Lightforge {
                 actions,
             ]
             .spacing(theme::LG),
+        )
+        .width(Length::Fixed(560.0))
+        .padding(theme::LG)
+        .style(theme::dialog)
+        .into()
+    }
+
+    /// The card asking whether to open the shared prefix with an older build.
+    ///
+    /// Two buttons and no third option on purpose. "Launch anyway" is the one
+    /// the user came for, so it is not hidden behind an explanation; the
+    /// explanation is there because the cost falls on games they are not
+    /// looking at.
+    fn downgrade_card<'a>(&'a self, dialog: &'a DowngradeDialog) -> Element<'a, Message> {
+        let what = match dialog.what {
+            Launch::Game => format!("Launching {}", dialog.label),
+            Launch::BattleNet => format!("Starting {} through Battle.net", dialog.label),
+            Launch::Client => "Opening Battle.net".to_owned(),
+            Launch::Install => "Opening Battle.net's install flow".to_owned(),
+        };
+
+        let body = column![
+            field_row("Would run".to_owned(), mono(dialog.pick.clone()).into()),
+            field_row("Prefix built by".to_owned(), mono(dialog.built_by.clone()).into()),
+            text(format!(
+                "{what} under {} would open the Wine prefix with an older Proton than the \
+                 {} that last upgraded it.",
+                dialog.pick, dialog.built_by,
+            ))
+            .size(theme::LABEL)
+            .color(theme::UPDATE),
+            muted(
+                "Every game here shares that one prefix, along with the Battle.net install \
+                 and its login. Proton migrates a prefix forward and never back, so an older \
+                 build can leave it in a state the newer one did not expect — which shows up \
+                 as a game or the client failing to start, not as an error here. If this \
+                 build is the one the game needs, go ahead; if it is not, pin it back under \
+                 Settings › Proton."
+                    .to_owned(),
+                theme::LABEL,
+            ),
+        ]
+        .spacing(theme::MD);
+
+        let choice = |label: String| {
+            button(text(label).size(theme::LABEL).width(Length::Fill).center())
+                .width(Length::Fixed(170.0))
+                .padding([theme::SM, theme::MD])
+        };
+        let actions = row![
+            Space::new().width(Length::Fill),
+            choice("Cancel".to_owned())
+                .style(theme::outlined)
+                .on_press(Message::DowngradeCancel),
+            choice("Launch anyway".to_owned())
+                .style(theme::filled(theme::UPDATE))
+                .on_press(Message::DowngradeConfirm),
+        ]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center);
+
+        container(
+            column![section("Older Proton than this prefix".to_owned(), body.into()), actions]
+                .spacing(theme::LG),
         )
         .width(Length::Fixed(560.0))
         .padding(theme::LG)
@@ -8930,7 +9178,14 @@ fn rich_paragraph(block: &richtext::Block) -> Element<'_, Message> {
 /// reason those two match each other: side by side, a control that disagrees
 /// about its height reads as a mistake.
 fn tag<'a>(content: String, color: iced::Color) -> Element<'a, Message> {
-    container(text(content).size(theme::LABEL))
+    // Never wrapped. A tag is a mark at the size of the control beside it, and
+    // a two-line one makes its whole row taller than every other row on the
+    // page. Keep the words few enough to fit instead.
+    container(
+        text(content)
+            .size(theme::LABEL)
+            .wrapping(iced::widget::text::Wrapping::None),
+    )
         .padding([theme::SM, theme::MD])
         .style(theme::tag(color))
         .into()

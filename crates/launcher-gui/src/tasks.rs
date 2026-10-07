@@ -954,13 +954,52 @@ pub async fn open_battle_net(
 ///
 /// They pin separately: `SPEC.md` asks for a Proton build chosen for
 /// Battle.net and Agent specifically, because "latest" is not always best for
-/// the client even when it is right for the game.
+/// the client even when it is right for the game. A product's own pin still
+/// wins on both paths — see [`Config::handoff_proton`] — so a hand-off title
+/// is not stuck with whatever the client wants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Runs {
     /// The game itself, under the product's own pin.
     Game,
-    /// Battle.net or Agent, under the Battle.net pin.
+    /// Battle.net or Agent, starting something for this product.
     BattleNet,
+}
+
+impl Runs {
+    /// The build this workload resolves to for `code`.
+    fn pin<'a>(self, config: &'a Config, code: &ProductCode) -> Option<&'a str> {
+        match self {
+            Self::Game => config.effective_proton(code),
+            Self::BattleNet => config.handoff_proton(code),
+        }
+    }
+}
+
+/// The build a launch would use, and how it sits against the prefix.
+///
+/// Read before a launch rather than during it: the prefix is shared, Proton
+/// only migrates it forward, and an older build opening a prefix a newer one
+/// rewrote is the one way this arrangement breaks. The caller decides what to
+/// do about it — nothing here refuses a launch.
+pub fn prefix_fit(
+    layout: &Layout,
+    code: &ProductCode,
+    runs: Runs,
+) -> (Option<String>, lightforge_core::proton::PrefixFit) {
+    use lightforge_core::proton;
+
+    let Ok(dirs) = AppDirs::discover() else {
+        return (None, proton::PrefixFit::Unknown);
+    };
+    let config = Config::load_or_default(&dirs.config_file()).unwrap_or_default();
+    let steam = lightforge_core::steam::SteamRoot::discover();
+    let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());
+    let Some(build) = proton::select(&builds, runs.pin(&config, code)) else {
+        return (None, proton::PrefixFit::Unknown);
+    };
+    let built_by = proton::prefix_build(&layout.compat_data());
+    let fit = proton::prefix_fit(&build.version, built_by.as_deref());
+    (Some(build.version.clone()), fit)
 }
 
 fn runner_for(
@@ -975,11 +1014,7 @@ fn runner_for(
     let config = Config::load_or_default(&dirs.config_file()).unwrap_or_default();
     let steam = lightforge_core::steam::SteamRoot::discover();
     let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());
-    let pin = match runs {
-        Runs::Game => config.effective_proton(code),
-        Runs::BattleNet => config.battle_net_proton_version(),
-    };
-    let build = proton::select(&builds, pin)
+    let build = proton::select(&builds, runs.pin(&config, code))
         .ok_or_else(|| "no supported Proton-GE build installed".to_owned())?;
 
     let target = std::fs::read_link(layout.wow_symlink()).unwrap_or_else(|_| layout.wow_install());

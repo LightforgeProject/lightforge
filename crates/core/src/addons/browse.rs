@@ -217,7 +217,7 @@ fn top_wowi(entries: &[WowiEntry], flavor: &str, limit: usize) -> Vec<Listing> {
         .iter()
         .filter(|e| e.flavors().is_empty() || supports(e.flavors(), flavor))
         .collect();
-    top.sort_by(|a, b| b.downloads.cmp(&a.downloads));
+    top.sort_by_key(|e| std::cmp::Reverse(e.downloads));
     top.truncate(limit);
     top.into_iter()
         .map(|e| Listing {

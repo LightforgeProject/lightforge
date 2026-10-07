@@ -179,8 +179,11 @@ pub fn discover_all(
         found.extend(discover_installed(steam));
     }
     found.sort_by(|a, b| {
-        a.version
-            .cmp(&b.version)
+        // Numerically where both are GE tags, so the list reads 9-20, 10-34,
+        // 11-7 rather than in the lexical order those strings have. Equal
+        // versions stay adjacent either way, which is what the dedup needs.
+        (ge_version(&a.version), &a.version)
+            .cmp(&(ge_version(&b.version), &b.version))
             // Managed sorts before SystemCompatTools/SteamApp, so dedup keeps it.
             .then_with(|| {
                 (a.source != ProtonSource::Managed).cmp(&(b.source != ProtonSource::Managed))
@@ -204,6 +207,89 @@ pub fn select<'a>(builds: &'a [ProtonRelease], pin: Option<&str>) -> Option<&'a 
             .iter()
             .filter(|b| b.flavor.is_supported())
             .max_by_key(|b| (b.built_at, b.version.clone())),
+    }
+}
+
+/// A GE release tag as the pair of numbers it is, for ordering.
+///
+/// `GE-Proton11-7` → `(11, 7)`. Needed because these tags do not sort as
+/// strings — `GE-Proton11-7` < `GE-Proton9-20` lexically — and because the
+/// build that made a prefix is recorded as a bare tag with no build timestamp
+/// beside it, so there is nothing else to compare on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct GeVersion {
+    major: u32,
+    minor: u32,
+}
+
+/// Parse a GE tag, or `None` for anything else — Valve's builds, UMU's, a
+/// directory name read as a fallback. Incomparable is the honest answer there.
+fn ge_version(tag: &str) -> Option<GeVersion> {
+    let (major, rest) = tag.strip_prefix("GE-Proton")?.split_once('-')?;
+    Some(GeVersion {
+        major: major.parse().ok()?,
+        // `GE-Proton11-7-x86_64` never appears in a `version` file, but a
+        // directory name read in its place carries the suffix.
+        minor: rest.split('-').next()?.parse().ok()?,
+    })
+}
+
+/// The Proton build that last ran `wineboot` in a compat-data directory.
+///
+/// Proton writes its own tag to `<compat_data>/version` whenever it creates or
+/// upgrades the prefix, so this is the build the prefix *is* — not whatever is
+/// pinned now. `None` when no prefix has been built there yet.
+pub fn prefix_build(compat_data: &Path) -> Option<String> {
+    let contents = std::fs::read_to_string(compat_data.join("version")).ok()?;
+    parse_version_file(&contents).map(|(_, tag)| tag)
+}
+
+/// How the build about to run compares with the one the prefix carries.
+///
+/// The prefix is shared by every product — one Battle.net install, one login —
+/// and Proton only ever migrates a prefix *forward*. Opening it with an older
+/// Wine than the one that last rewrote its registry and DLLs is the way that
+/// arrangement breaks, so that is the single case worth stopping for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrefixFit {
+    /// No prefix yet; whichever build runs first makes it.
+    Fresh,
+    /// The build that made it.
+    Same,
+    /// Newer than the prefix. Proton upgrades it on the way in, which is
+    /// routine and is what every update does.
+    Newer,
+    /// Older than the build named here — a downgrade of the shared prefix.
+    Older { built_by: String },
+    /// One of the two is not a GE tag, so there is no ordering to trust.
+    /// Never warned about: a guess costs more here than silence.
+    Unknown,
+}
+
+impl PrefixFit {
+    /// Whether this is the case to warn about.
+    pub fn is_downgrade(&self) -> bool {
+        matches!(self, Self::Older { .. })
+    }
+}
+
+/// Compare the build that is about to run against the one in the prefix.
+///
+/// `built_by` is [`prefix_build`]'s answer, passed in rather than read here so
+/// the UI can read the prefix once and judge every product against it.
+pub fn prefix_fit(pick: &str, built_by: Option<&str>) -> PrefixFit {
+    let Some(built_by) = built_by else {
+        return PrefixFit::Fresh;
+    };
+    if pick == built_by {
+        return PrefixFit::Same;
+    }
+    match (ge_version(pick), ge_version(built_by)) {
+        (Some(pick), Some(prefix)) if pick < prefix => PrefixFit::Older {
+            built_by: built_by.to_owned(),
+        },
+        (Some(_), Some(_)) => PrefixFit::Newer,
+        _ => PrefixFit::Unknown,
     }
 }
 
@@ -463,6 +549,73 @@ mod tests {
             Some((None, "GE-Proton9-20".to_owned()))
         );
         assert_eq!(parse_version_file(""), None);
+    }
+
+    #[test]
+    fn ge_tags_order_numerically_not_lexically() {
+        // The whole reason this parse exists: as strings, 11-7 sorts below 9-20.
+        assert!(ge_version("GE-Proton11-7") > ge_version("GE-Proton9-20"));
+        assert!(ge_version("GE-Proton11-10") > ge_version("GE-Proton11-7"));
+        assert_eq!(ge_version("GE-Proton11-7-x86_64"), ge_version("GE-Proton11-7"));
+        assert_eq!(ge_version("proton-11.0-2-x86_64"), None);
+        assert_eq!(ge_version("Proton - Experimental"), None);
+    }
+
+    #[test]
+    fn a_prefix_reports_the_build_that_made_it() {
+        let dir = scratch("prefix-build");
+        assert_eq!(prefix_build(&dir), None);
+        // What Proton actually writes there: the tag alone, no timestamp.
+        std::fs::write(dir.join("version"), "GE-Proton11-7\n").unwrap();
+        assert_eq!(prefix_build(&dir), Some("GE-Proton11-7".to_owned()));
+    }
+
+    #[test]
+    fn only_an_older_build_counts_as_a_downgrade() {
+        assert_eq!(prefix_fit("GE-Proton11-7", None), PrefixFit::Fresh);
+        assert_eq!(
+            prefix_fit("GE-Proton11-7", Some("GE-Proton11-7")),
+            PrefixFit::Same
+        );
+        assert_eq!(
+            prefix_fit("GE-Proton11-8", Some("GE-Proton11-7")),
+            PrefixFit::Newer
+        );
+        // Across a major, where a string comparison would get it backwards.
+        assert_eq!(
+            prefix_fit("GE-Proton11-7", Some("GE-Proton9-20")),
+            PrefixFit::Newer
+        );
+        let fit = prefix_fit("GE-Proton10-34", Some("GE-Proton11-7"));
+        assert_eq!(
+            fit,
+            PrefixFit::Older {
+                built_by: "GE-Proton11-7".to_owned()
+            }
+        );
+        assert!(fit.is_downgrade());
+    }
+
+    #[test]
+    fn an_unparseable_tag_is_never_warned_about() {
+        // A prefix built by Valve's Proton, or by a hand-placed build: there
+        // is no ordering between the two tags, so nothing is claimed.
+        assert_eq!(
+            prefix_fit("GE-Proton11-7", Some("proton-11.0-2")),
+            PrefixFit::Unknown
+        );
+        assert!(!prefix_fit("GE-Proton11-7", Some("proton-11.0-2")).is_downgrade());
+    }
+
+    #[test]
+    fn discovery_lists_builds_in_numeric_order() {
+        let dir = scratch("discovery-order");
+        for version in ["GE-Proton9-20", "GE-Proton11-7", "GE-Proton10-34"] {
+            installed(&dir, version);
+        }
+        let versions: Vec<String> =
+            discover_all(None, &dir).into_iter().map(|b| b.version).collect();
+        assert_eq!(versions, ["GE-Proton9-20", "GE-Proton10-34", "GE-Proton11-7"]);
     }
 
     fn release(tag: &str, prerelease: bool) -> UpstreamRelease {

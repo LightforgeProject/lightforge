@@ -318,6 +318,24 @@ impl Config {
             .or_else(|| self.default_proton.version())
     }
 
+    /// The Proton build a Battle.net *hand-off* for `code` runs under.
+    ///
+    /// The product's own pin first, because the thing being started is that
+    /// game: a title Battle.net launches is still that title, and a user who
+    /// pinned Diablo IV to a build meant it for Diablo IV. Falls through to
+    /// Battle.net's pin, which is where a choice about the client itself
+    /// belongs, and then to the app default.
+    ///
+    /// The prefix is shared, so a pin that is *older* than the build which
+    /// last ran in it is a downgrade of everything — see
+    /// [`crate::proton::prefix_fit`]. Resolved here all the same; refusing a
+    /// pin silently would be the worse answer.
+    pub fn handoff_proton(&self, code: &ProductCode) -> Option<&str> {
+        self.product(code)
+            .and_then(|p| p.profile.proton_ge_version.as_deref())
+            .or_else(|| self.battle_net_proton_version())
+    }
+
     /// Everything pinned to `version`, named the way the user named it.
     ///
     /// Only *explicit* pins count. A product following the app default is not
@@ -375,6 +393,26 @@ mod tests {
         assert_eq!(config.battle_net_proton_version(), Some("GE-Proton10-34"));
         // And it does not disturb what the games launch under.
         assert_eq!(config.effective_proton(&ProductCode::Retail), Some("GE-Proton11-7"));
+    }
+
+    #[test]
+    fn a_hand_off_follows_the_game_it_is_starting() {
+        let mut config = Config::with_default_products();
+        config.default_proton = ProtonPin::Pinned("GE-Proton11-7".into());
+        config.battle_net_proton = ProtonPin::Pinned("GE-Proton11-8".into());
+
+        let diablo = ProductCode::Custom("d4".to_owned());
+        config.products.push(Product::new(diablo.clone(), "Diablo IV"));
+
+        // No pin of its own: the client's build, which is the old behaviour.
+        assert_eq!(config.handoff_proton(&diablo), Some("GE-Proton11-8"));
+
+        // Pinned, and the hand-off follows the game rather than the client.
+        config.product_mut(&diablo).unwrap().profile.proton_ge_version =
+            Some("GE-Proton10-34".to_owned());
+        assert_eq!(config.handoff_proton(&diablo), Some("GE-Proton10-34"));
+        // Another product is untouched by it.
+        assert_eq!(config.handoff_proton(&ProductCode::Retail), Some("GE-Proton11-8"));
     }
 
     #[test]

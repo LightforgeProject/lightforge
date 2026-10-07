@@ -346,6 +346,14 @@ pub struct PrefixStatus {
     pub prefix: PathBuf,
     /// Wine has written its registry hives — the prefix is usable.
     pub initialized: bool,
+    /// The Proton build that last created or upgraded this prefix, as Proton
+    /// itself recorded it. `None` before the prefix exists.
+    ///
+    /// Worth carrying next to `initialized`: the prefix is shared by every
+    /// product, and which build made it is what says whether a pin is a
+    /// routine upgrade or a downgrade of everything — see
+    /// [`crate::proton::prefix_fit`].
+    pub built_by: Option<String>,
     pub link: LinkState,
 }
 
@@ -355,6 +363,7 @@ impl PrefixStatus {
         let prefix = layout.prefix();
         Self {
             initialized: is_initialized(&prefix),
+            built_by: crate::proton::prefix_build(&layout.compat_data()),
             compat_data: layout.compat_data(),
             prefix,
             link: inspect_link(&layout.wow_symlink(), &layout.wow_install()),
