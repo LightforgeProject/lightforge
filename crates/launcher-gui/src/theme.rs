@@ -16,7 +16,7 @@
 //! accent rather than effects.
 
 use iced::widget::{button, container, overlay, pick_list, scrollable, text_input};
-use iced::{border, Background, Border, Color, Font, Shadow, Theme, Vector};
+use iced::{border, gradient, Background, Border, Color, Font, Radians, Shadow, Theme, Vector};
 
 // ---------------------------------------------------------------- palette --
 
@@ -288,6 +288,48 @@ pub fn base() -> Theme {
             danger: ERROR,
         },
     )
+}
+
+/// `a` laid over `b` at `amount`, resolved now rather than by the compositor.
+///
+/// A gradient paints the whole window on its own, so a translucent stop would
+/// be asking the renderer to blend against a clear colour it has already
+/// drawn. Mixing the two here keeps the result the same on both backends.
+const fn mix(a: Color, b: Color, amount: f32) -> Color {
+    Color {
+        r: b.r + (a.r - b.r) * amount,
+        g: b.g + (a.g - b.g) * amount,
+        b: b.b + (a.b - b.b) * amount,
+        a: 1.0,
+    }
+}
+
+/// The window's own background: [`BG`] with a wash of [`ACCENT`] in the bottom
+/// right corner.
+///
+/// Light falling on the app rather than decoration on it — which is why it is
+/// the accent and not the wordmark's gold. The far corner is the one spot with
+/// nothing standing in it: the wordmark and the navigation own the top, the
+/// action panel the lower left, so a glow anywhere else would be lighting
+/// something that already has its own weight. The whole thing is gone by a
+/// third of the way back, leaving the page the flat dark the rest of the
+/// palette was picked against.
+///
+/// Linear, not radial: iced has no radial gradient, and a diagonal fade from
+/// the corner reads as the same thing at this strength.
+pub fn backdrop(_theme: &Theme) -> container::Style {
+    const LIT: Color = mix(ACCENT, BG, 0.09);
+    container::Style {
+        background: Some(Background::Gradient(
+            // 315° clockwise from north: out of the bottom right corner,
+            // towards the top left.
+            gradient::Linear::new(Radians(std::f32::consts::FRAC_PI_4 * 7.0))
+                .add_stop(0.0, LIT)
+                .add_stop(0.32, BG)
+                .into(),
+        )),
+        ..container::Style::default()
+    }
 }
 
 // -------------------------------------------------------------- containers --

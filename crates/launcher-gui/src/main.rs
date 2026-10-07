@@ -4141,6 +4141,17 @@ impl Lightforge {
             false => screen,
         };
 
+        // The lit corner goes behind everything, last, so every screen gets it
+        // and nothing has to opt in. Where a page lays key art over the whole
+        // window the art simply wins, which is the right order: the glow is
+        // for the chrome, not for the picture.
+        let screen = Element::from(
+            container(screen)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(theme::backdrop),
+        );
+
         trace::view_built(started.elapsed());
         screen
     }
