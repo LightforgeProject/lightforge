@@ -32,8 +32,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use iced::widget::{
-    button, column, container, image, mouse_area, pick_list, progress_bar, responsive, rich_text,
-    row, scrollable, span, stack, text, text_input, tooltip, Space,
+    button, canvas, column, container, image, mouse_area, pick_list, progress_bar, responsive,
+    rich_text, row, scrollable, span, stack, text, text_input, tooltip, Space,
 };
 use iced::{Alignment, ContentFit, Element, Length, Subscription, Task};
 
@@ -361,10 +361,11 @@ enum Message {
     /// Grow the splash into the launcher. Separate from `SplashDone` only so
     /// the floor can be waited out between the two.
     GrowWindow,
-    /// The second step of that, once the frame has settled.
-    SizeWindow,
-    /// The third: let the window be resized freely again.
-    ReleaseWindow,
+    /// The second step of that: the frame back on, which is what makes the
+    /// new size stick.
+    ReframeWindow,
+    /// The third: put the window back in the middle.
+    SettleWindow,
     /// Track a product from the catalog, putting it in the header.
     AddProduct(ProductCode),
     /// Stop tracking one, taking it out of the header.
@@ -1615,64 +1616,68 @@ impl Lightforge {
 
     /// Turn the splash window into the launcher's own.
     ///
-    /// Grow the splash into the launcher: put the frame back, then hand the
-    /// resize to the compositor.
+    /// Grow the splash into the launcher: the size first, then the frame.
     ///
-    /// Three steps, each one paid for by a run that got it wrong:
+    /// Three steps 120 ms apart, and the order is the whole of it — each part
+    /// of it was measured on KWin under Wayland, by getting it wrong.
     ///
-    /// 1. **The frame, alone.** Changing it makes the compositor reconfigure
-    ///    the window, and a resize asked for in the same turn of the loop is
-    ///    overwritten by that reconfigure — the window keeps the splash's
-    ///    size while reporting the launcher's minimum.
-    /// 2. **A minimum, then maximize** ([`Lightforge::size_window`]).
-    /// 3. **Unmaximize** ([`Lightforge::release_window`]), which the
-    ///    compositor must do no smaller than the minimum just set — so the
-    ///    window lands at exactly the launcher's size.
+    /// 1. Ask for the new size ([`Lightforge::grow_window`]). The window does
+    ///    move: winit applies the request on the spot. But *because* it
+    ///    applied immediately, winit deliberately emits no `Resized` event, so
+    ///    iced never hears, keeps laying the window out at the splash's size,
+    ///    and the compositor stretches that over the new one.
+    /// 2. Put the frame back ([`Lightforge::reframe_window`]). Changing the
+    ///    frame makes the compositor reconfigure the window — and *that*
+    ///    carries the size it now has, which is the event iced was missing.
+    ///    The two cannot share a turn of the loop: asked for together, the
+    ///    reconfigure carries the size from before the resize and undoes it.
+    /// 3. Centre it ([`Lightforge::settle_window`]).
     ///
-    /// The maximize pair is what makes it stick, and it is not a flourish.
-    /// `window::resize` does move the window: winit applies it on the spot,
-    /// and *because* it applied immediately it deliberately emits no
-    /// `Resized` event — so iced never hears, keeps laying the window out at
-    /// 460x280, and the compositor stretches that over 1280x820. Maximizing
-    /// is a resize the compositor performs, which does send a configure, and
-    /// that iced does hear.
-    ///
-    /// iced reads the frame's live state and inverts it, so given a splash
-    /// that asked for none, step 1 is "put it back".
+    /// The frame is what makes the size stick, in other words, and that is
+    /// why it goes last rather than first. An earlier version grew the window
+    /// by maximizing and unmaximizing it against its new minimum — a resize
+    /// the compositor performs, which does send a configure — and that worked,
+    /// but it threw the window out to the full screen and back on every start.
     fn grow_window() -> Task<Message> {
-        iced::window::oldest()
-            .and_then(iced::window::toggle_decorations)
-            .chain(Task::perform(tasks::after(RECONFIGURE), |()| Message::SizeWindow))
-    }
-
-    /// Step 2: the launcher's minimum size, and out to the screen.
-    fn size_window() -> Task<Message> {
         use iced::window;
         window::oldest()
             .and_then(|id| {
-                window::set_min_size(id, Some(WINDOW_MIN)).chain(window::maximize(id, true))
+                // The size first and the new minimum after it: a minimum only
+                // clamps a window downward, so it grows nothing on its own.
+                window::resize(id, WINDOW).chain(window::set_min_size(id, Some(WINDOW_MIN)))
             })
-            .chain(Task::perform(tasks::after(RECONFIGURE), |()| Message::ReleaseWindow))
+            .chain(Task::perform(tasks::after(RECONFIGURE), |()| Message::ReframeWindow))
     }
 
-    /// Step 3: back off the screen, no smaller than the minimum, and centred.
-    fn release_window() -> Task<Message> {
+    /// Step 2: the frame goes back on, which is also what tells iced the
+    /// window's real size.
+    ///
+    /// iced reads the frame's live state and inverts it, so given a splash
+    /// that asked for none, this is "put it back".
+    fn reframe_window() -> Task<Message> {
+        iced::window::oldest()
+            .and_then(iced::window::toggle_decorations)
+            .chain(Task::perform(tasks::after(RECONFIGURE), |()| Message::SettleWindow))
+    }
+
+    /// Step 3: put the window back in the middle.
+    ///
+    /// A window grown from where the splash stood hangs off the right and
+    /// bottom of a 1080p screen. Wayland may ignore a client placing itself,
+    /// and that is fine — the compositor then places it, which is what this
+    /// asks for.
+    fn settle_window() -> Task<Message> {
         use iced::window;
         window::oldest().and_then(|id| {
-            window::maximize(id, false)
-                // A window restored to where the splash stood hangs off the
-                // right and bottom of a 1080p screen. Wayland may ignore a
-                // client placing itself, and that is fine — the compositor
-                // then places it, which is what this asks for.
-                .chain(window::monitor_size(id).and_then(move |monitor| {
-                    window::move_to(
-                        id,
-                        iced::Point::new(
-                            ((monitor.width - WINDOW.width) / 2.0).max(0.0),
-                            ((monitor.height - WINDOW.height) / 2.0).max(0.0),
-                        ),
-                    )
-                }))
+            window::monitor_size(id).and_then(move |monitor| {
+                window::move_to(
+                    id,
+                    iced::Point::new(
+                        ((monitor.width - WINDOW.width) / 2.0).max(0.0),
+                        ((monitor.height - WINDOW.height) / 2.0).max(0.0),
+                    ),
+                )
+            })
         })
     }
 
@@ -2746,9 +2751,9 @@ impl Lightforge {
                 Self::grow_window()
             }
 
-            Message::SizeWindow => Self::size_window(),
+            Message::ReframeWindow => Self::reframe_window(),
 
-            Message::ReleaseWindow => Self::release_window(),
+            Message::SettleWindow => Self::settle_window(),
 
             Message::AddProduct(code) => {
                 if self.choices.iter().any(|c| c.code == code) {
@@ -7444,6 +7449,7 @@ impl Lightforge {
     /// something is happening without pretending to know for how long.
     fn splash_screen(&self, splash: &Splash) -> Element<'_, Message> {
         const MARK: f32 = 40.0;
+        const SPIN: f32 = 30.0;
         let note = match splash.products {
             // No tracked products at all is a machine that has never been set
             // up, which is a wizard away rather than an artwork fetch.
@@ -7457,7 +7463,7 @@ impl Lightforge {
                     .width(Length::Fixed(MARK * WORDMARK_ASPECT))
                     .height(Length::Fixed(MARK)),
                 muted(note, theme::CAPTION),
-                progress_bar(0.0..=1.0, sweep()).girth(4).length(Length::Fixed(220.0)),
+                canvas(Spinner).width(Length::Fixed(SPIN)).height(Length::Fixed(SPIN)),
             ]
             .spacing(theme::MD)
             .align_x(Alignment::Center),
@@ -10629,6 +10635,88 @@ fn job_progress(job: Job, sample: &TransferState, bytes_per_second: u64) -> stat
 /// how long. Driven straight off the clock rather than off a counter in the
 /// model because the 100 ms tick already redraws the window whenever a
 /// transfer is live, which is exactly when this is on screen.
+/// The splash's spinner: a ring with a bright arc travelling round it.
+///
+/// A canvas rather than a widget, because iced has neither a spinner nor an
+/// indeterminate progress bar and an arc is two paths. Both the angle and the
+/// arc's length come straight off the clock, like [`sweep`] and for the same
+/// reason: the 100 ms tick already redraws the window while the splash is up.
+///
+/// The arc grows and shrinks as it turns rather than running at a fixed
+/// length. A constant arc at a constant speed reads as a rigid object going
+/// round; one that breathes reads as work being done, which is the only thing
+/// this is here to say.
+struct Spinner;
+
+impl Spinner {
+    /// How long one full turn takes.
+    const PERIOD: f32 = 1.5;
+    /// How thick the ring is drawn.
+    const STROKE: f32 = 3.0;
+    /// The shortest and longest the travelling arc gets, in turns.
+    const SHORTEST: f32 = 0.08;
+    const LONGEST: f32 = 0.42;
+
+    fn phase() -> f32 {
+        static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        let elapsed = START.get_or_init(Instant::now).elapsed().as_secs_f32();
+        (elapsed % Self::PERIOD) / Self::PERIOD
+    }
+}
+
+impl canvas::Program<Message> for Spinner {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &iced::Renderer,
+        _theme: &iced::Theme,
+        bounds: iced::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        use std::f32::consts::TAU;
+
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let centre = iced::Point::new(bounds.width / 2.0, bounds.height / 2.0);
+        let radius = (bounds.width.min(bounds.height) - Self::STROKE) / 2.0;
+        let stroke = |colour: iced::Color| {
+            canvas::Stroke::default()
+                .with_color(colour)
+                .with_width(Self::STROKE)
+                .with_line_cap(canvas::LineCap::Round)
+        };
+
+        // The track it runs on, so the ring is a ring even where the arc is
+        // not — without it the arc reads as a stray mark rather than as
+        // something going round something.
+        frame.stroke(
+            &canvas::Path::circle(centre, radius),
+            stroke(iced::Color { a: 0.12, ..theme::TEXT }),
+        );
+
+        // A sine over the turn, so the two ends of the arc move at different
+        // speeds and it is never momentarily still.
+        let turn = Self::phase();
+        let length = Self::SHORTEST
+            + (Self::LONGEST - Self::SHORTEST) * (turn * TAU).sin().mul_add(0.5, 0.5);
+        let head = turn * TAU * 2.0;
+        frame.stroke(
+            &canvas::Path::new(|path| {
+                path.arc(canvas::path::Arc {
+                    center: centre,
+                    radius,
+                    start_angle: iced::Radians(head),
+                    end_angle: iced::Radians(head + length * TAU),
+                });
+            }),
+            stroke(theme::PLAY),
+        );
+
+        vec![frame.into_geometry()]
+    }
+}
+
 /// One release's notes as a bulleted list.
 ///
 /// Shared by the popup and the Lightforge Updates page so the two cannot
