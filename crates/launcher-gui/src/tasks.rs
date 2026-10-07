@@ -719,7 +719,6 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
     .map_err(|e| e.to_string())?
 }
 
-/// Hand off to Battle.net so the session is SSO'd and the in-game shop works.
 /// Read the client's cached catalogue, for the game families in it.
 ///
 /// About 25 ms against a real cache, and only at startup: the answer changes

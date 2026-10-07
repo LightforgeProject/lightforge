@@ -28,6 +28,11 @@ use crate::{
     action_button, field_row, mono, muted, secondary, size_of, Lightforge, Message,
 };
 
+/// How big the Discord and X marks are drawn on the last slide. Larger than the
+/// logo menu's glyph: there they label a row of text, here they are the thing
+/// being offered.
+const MARK: f32 = 32.0;
+
 /// Which slide is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
@@ -509,7 +514,7 @@ pub fn prefetch(app: &Lightforge) -> iced::Task<Message> {
 /// The whole wizard: one card, centred, with the step's own body in it.
 pub fn view<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     let body = match wizard.step {
-        Step::Welcome => welcome(app, wizard),
+        Step::Welcome => welcome(app),
         Step::Place => place(app),
         Step::Found => found(app, wizard),
         Step::Install => install(app, wizard),
@@ -602,7 +607,7 @@ fn footer<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     actions.into()
 }
 
-fn welcome<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
+fn welcome(app: &Lightforge) -> Element<'_, Message> {
     let mut body = column![
         text(
             "Lightforge installs and launches World of Warcraft on Linux itself, and hands \
@@ -654,19 +659,13 @@ fn welcome<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> 
         .map(Element::from),
     );
 
-    body = body.push(Space::new().height(Length::Fill));
-    body = body.push(mono(match wizard.prefetched {
-        None => "fetching artwork in the background…".to_owned(),
-        Some(0) => "no artwork available — the launcher still works".to_owned(),
-        Some(n) => format!("artwork ready for {n} game(s)"),
-    }));
     body.into()
 }
 
 fn place<'a>(app: &'a Lightforge) -> Element<'a, Message> {
     let mut body = column![text(
         "The Wine prefix and Battle.net live in one place, on your home drive. Games can go \
-         on any drive you add — a 120 GB install does not have to be on the system disk."
+         on any drive you add."
     )
     .size(theme::BODY)]
     .spacing(theme::MD);
@@ -883,11 +882,8 @@ fn install<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> 
     }
 
     body = body.push(
-        text(
-            "Proton-GE, the Wine prefix, and Battle.net. Each one is skipped if it is already \
-             done, and you can leave this running while you read.",
-        )
-        .size(theme::BODY),
+        text("Install Proton-GE, the Wine prefix and Battle.net (opt-out possible).")
+            .size(theme::BODY),
     );
 
     body = body.push(
@@ -898,9 +894,8 @@ fn install<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> 
     );
     if !wizard.battle_net {
         body = body.push(muted(
-            "Without it only World of Warcraft works, which is experimental — the in-game \
-             shop and support browser need the client. You can install it later from \
-             Settings › Setup."
+            "Important! Only World of Warcraft games will work for now. You can install \
+             Battle.net at any time later in the Settings menu."
                 .to_owned(),
             theme::CAPTION,
         ));
@@ -914,8 +909,7 @@ fn install<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> 
 
 fn games<'a>(app: &'a Lightforge) -> Element<'a, Message> {
     let mut body = column![text(
-        "Which games sit in the band at the top. Add or remove them here or later — the band \
-         has a + of its own."
+        "Select the Blizzard games you play. You can add more later on."
     )
     .size(theme::BODY)]
     .spacing(theme::MD);
@@ -1008,17 +1002,27 @@ fn done<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
 
     body = body.push(
         text(
-            "Found a bug, or want to ask for something? Report a Bug and Send Feedback are \
-             both under the Lightforge mark in the top left, next to the Discord link.",
+            "Found a bug, have any questions or want to send feedback? Contact me on \
+             Discord or X, or use the options in the Lightforge logo dropdown.",
         )
         .size(theme::BODY),
     );
-    body = body.push(Space::new().height(Length::Fill));
-    body = body.push(mono(format!(
-        "{} · games on {} drive(s)",
-        app.layout.root().display(),
-        app.config.libraries.len()
-    )));
+
+    // The same two marks the logo menu carries, and dimmed by the same rule:
+    // no destination yet means no press. They sit in the middle of the slide
+    // because this is the one page whose job is to hand the user somewhere.
+    body = body.push(
+        container(
+            row![
+                crate::link_square(crate::discord_icon(), crate::DISCORD_URL, MARK),
+                crate::link_square(crate::x_icon(), crate::X_URL, MARK),
+            ]
+            .spacing(theme::MD),
+        )
+        .width(Length::Fill)
+        .center_x(Length::Fill)
+        .padding(theme::LG),
+    );
     body.into()
 }
 

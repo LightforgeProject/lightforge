@@ -995,7 +995,11 @@ impl HandoffAct {
 enum Launch {
     /// Straight to the game executable.
     Game,
-    /// Hand off to Battle.net, so the session is SSO'd and the shop works.
+    /// Hand off to Battle.net, which starts the game itself.
+    ///
+    /// Not for the shop's sake — that was the old assumption, disproven on
+    /// 2026-10-02: the shop is the game's own CEF and works from a direct
+    /// launch. This is for a game only Battle.net can install and update.
     BattleNet,
     /// Open the Battle.net client itself, for everything outside the WoW
     /// family. A pass-through, not a managed install — see `SPEC.md`.
@@ -5618,21 +5622,6 @@ impl Lightforge {
                 .on_press_maybe(message)
         };
 
-        let square = |icon: image::Handle, url: Option<&'static str>| {
-            button(
-                image(icon)
-                    .width(Length::Fixed(MENU_GLYPH))
-                    .height(Length::Fixed(MENU_GLYPH))
-                    .opacity(match url {
-                        Some(_) => 1.0_f32,
-                        None => DIMMED,
-                    }),
-            )
-            .padding(theme::SM)
-            .style(theme::ghost)
-            .on_press_maybe(url.map(Message::OpenLink))
-        };
-
         let rows = column![
             entry(gear_icon(), "Settings", Some(Message::Show(Screen::Settings))),
             entry(updates_icon(), "Lightforge Updates", Some(Message::Show(Screen::Updates))),
@@ -5645,7 +5634,11 @@ impl Lightforge {
                 .width(Length::Fill)
                 .style(theme::divider),
             entry(exit_icon(), "Exit", Some(Message::Exit)),
-            row![square(discord_icon(), DISCORD_URL), square(x_icon(), X_URL)].spacing(theme::XS),
+            row![
+                link_square(discord_icon(), DISCORD_URL, MENU_GLYPH),
+                link_square(x_icon(), X_URL, MENU_GLYPH),
+            ]
+            .spacing(theme::XS),
         ]
         .spacing(theme::XS)
         .width(Length::Fixed(240.0));
@@ -8034,7 +8027,7 @@ impl Lightforge {
                             row![
                                 column![
                                     text("Battle.net").size(theme::BODY),
-                                    mono("skipped — only World of Warcraft works".to_owned()),
+                                    mono("skipped — World of Warcraft only".to_owned()),
                                 ]
                                 .spacing(theme::XS)
                                 .width(Length::Fill),
@@ -8059,7 +8052,7 @@ impl Lightforge {
                         match (status.battle_net, status.battle_net_wanted) {
                             (true, _) => self.layout.battle_net_dir().display().to_string(),
                             (false, true) => "not installed in the prefix".to_owned(),
-                            (false, false) => "skipped — only World of Warcraft works".to_owned(),
+                            (false, false) => "skipped — World of Warcraft only".to_owned(),
                         },
                     ));
                 }
@@ -9783,6 +9776,30 @@ const DIMMED: f32 = 0.35;
 /// Blizzard's own shop, which redirects to the viewer's region on its own, so
 /// one address serves every account without Lightforge guessing at a locale.
 ///
+/// One outbound mark as a square button — Discord and X.
+///
+/// Shared by the logo menu and the first run's last slide, under the same rule
+/// as the menu's entries: no destination yet means no press and a dimmed face,
+/// so the square says what is coming without pretending it is here.
+fn link_square(
+    icon: image::Handle,
+    url: Option<&'static str>,
+    size: f32,
+) -> iced::widget::Button<'static, Message> {
+    button(
+        image(icon)
+            .width(Length::Fixed(size))
+            .height(Length::Fixed(size))
+            .opacity(match url {
+                Some(_) => 1.0_f32,
+                None => DIMMED,
+            }),
+    )
+    .padding(theme::SM)
+    .style(theme::ghost)
+    .on_press_maybe(url.map(Message::OpenLink))
+}
+
 /// Unlike the four constants below this is a plain `&str`: it has a
 /// destination today, so the tab is never the dimmed placeholder those are.
 const SHOP_URL: &str = "https://shop.battle.net";
