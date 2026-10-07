@@ -4960,7 +4960,7 @@ impl Lightforge {
         .spacing(theme::XS)
         .width(Length::Fixed(240.0));
 
-        container(rows).padding(theme::SM).style(theme::floating).into()
+        container(rows).padding(theme::SM).style(theme::menu).into()
     }
 
     /// One addon's own settings: what is true of this addon rather than what
@@ -5090,7 +5090,7 @@ impl Lightforge {
             theme::CAPTION,
         ));
 
-        container(rows).padding(theme::SM).style(theme::floating).into()
+        container(rows).padding(theme::SM).style(theme::menu).into()
     }
 
     /// The games the band had no room for.
@@ -5114,7 +5114,7 @@ impl Lightforge {
                     .on_press(Message::LineSelected(line.clone())),
             );
         }
-        container(rows).padding(theme::SM).style(theme::floating).into()
+        container(rows).padding(theme::SM).style(theme::menu).into()
     }
 
     /// Every branch of the selected line, configured or not.
@@ -5446,7 +5446,19 @@ impl Lightforge {
         left = self.scan_progress(left);
 
         if let Some(progress) = progress_of(action) {
-            left = left.push(progress_bar(0.0..=1.0, progress.fraction()).girth(6));
+            // Two jobs for one bar. While bytes are moving it reports them.
+            // Before the total is known, and again after the last byte lands
+            // while the install is still extracting and writing `.build.info`,
+            // there is no fraction to report but there is still work going on
+            // — so the bar sweeps instead of sitting at a number that would be
+            // a lie in one direction or the other.
+            let sweeping = progress.total_bytes == 0
+                || progress.downloaded_bytes >= progress.total_bytes;
+            let value = match sweeping {
+                true => sweep(),
+                false => progress.fraction(),
+            };
+            left = left.push(progress_bar(0.0..=1.0, value).girth(6));
             left = left.push(
                 row![
                     mono(bytes_of(progress.downloaded_bytes, progress.total_bytes)),
@@ -5490,9 +5502,12 @@ impl Lightforge {
         // somewhere to go. A mark in front of each says "this is a control"
         // before the word is read at all.
         //
-        // No horizontal padding: the air between them is the row's spacing, so
-        // the group starts on the same left edge as "version" and "installed"
-        // above it rather than inset by its own padding.
+        // Padded on all four sides, not just vertically: the hover fill is the
+        // button's own bounds, so with no horizontal padding the glyph and the
+        // last letter sit flush against the rounded edge and the label reads as
+        // if it were spilling out of the box. The cost is that the group starts
+        // one [`theme::SM`] in from "version" and "installed" above it, which
+        // is a smaller wrong than text touching its own border.
         let link = |mark: image::Handle, label: &'static str, message: Option<Message>| {
             button(
                 row![
@@ -5510,7 +5525,7 @@ impl Lightforge {
             )
             .on_press_maybe(message)
             .style(theme::ghost)
-            .padding([theme::XS, 0.0])
+            .padding([theme::XS, theme::SM])
         };
 
         left = left.push(
@@ -5535,7 +5550,10 @@ impl Lightforge {
                     Some(Message::ManageSubscription),
                 ),
             ]
-            .spacing(theme::MD)
+            // Each link now carries its own air, so the row's gap only has to
+            // keep two hover fills from touching; [`theme::MD`] on top of that
+            // padding would read as three separate groups.
+            .spacing(theme::XS)
             .align_y(Alignment::Center),
         );
 
@@ -8840,6 +8858,21 @@ fn job_progress(job: Job, sample: &TransferState, bytes_per_second: u64) -> stat
 }
 
 /// Progress carried by the two transfer states, if this is one of them.
+/// A repeating 0→1 sweep for work whose length is unknown.
+///
+/// iced's progress bar has no indeterminate mode, and a moving segment would
+/// need a widget of its own; a fill that restarts is the older idiom for the
+/// same thing and reads correctly — something is happening, nobody knows for
+/// how long. Driven straight off the clock rather than off a counter in the
+/// model because the 100 ms tick already redraws the window whenever a
+/// transfer is live, which is exactly when this is on screen.
+fn sweep() -> f32 {
+    const PERIOD: f32 = 1.4;
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let elapsed = START.get_or_init(Instant::now).elapsed().as_secs_f32();
+    (elapsed % PERIOD) / PERIOD
+}
+
 fn progress_of(action: &ActionState) -> Option<state::Progress> {
     match action {
         ActionState::Downloading(p) | ActionState::Paused(p) => Some(*p),

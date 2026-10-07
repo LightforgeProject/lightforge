@@ -458,6 +458,13 @@ pub async fn download(
                 let mut stage = String::from("preparing");
                 let mut remaining = None;
                 let mut optional: Vec<String> = Vec::new();
+                // The last figures the downloader actually reported. A stage
+                // event carries no progress of its own, and publishing a
+                // default one in its place is what emptied the bar and dropped
+                // the rate to zero the moment the bytes were in: the tail of
+                // every run — extracting, .build.info, .product.db — is
+                // nothing but stage events.
+                let mut latest = Progress::default();
 
                 let on_event = move |event: Event| {
                     let progress = match &event {
@@ -466,6 +473,7 @@ pub async fn download(
                                 return;
                             }
                             last = Instant::now();
+                            latest = *p;
                             *p
                         }
                         other => {
@@ -476,7 +484,7 @@ pub async fn download(
                                 optional = names.clone();
                             }
                             stage = describe(other);
-                            Progress::default()
+                            latest
                         }
                     };
                     let _ = tx.send(TransferState {

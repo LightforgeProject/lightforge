@@ -326,6 +326,31 @@ pub fn floating(_theme: &Theme) -> container::Style {
     }
 }
 
+/// A dropdown's own surface — the app menu, the overflow list, an addon row's
+/// menu.
+///
+/// Opaque, where [`floating`] is not. The translucency is right for a panel
+/// that occupies the page: it keeps the artwork readable underneath and the
+/// panel is large enough that the text still has contrast. A dropdown is the
+/// opposite case — a small list of short words, drawn over whatever happens to
+/// be behind it, read once and dismissed. At [`PANEL`]'s alpha a bright patch
+/// of key art shows straight through a four-word entry.
+///
+/// Same hairline and lift as [`floating`], so the two still read as the same
+/// material; only the background is solid.
+pub fn menu(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(SURFACE)),
+        border: Border {
+            color: BORDER_OVER_ART,
+            width: 1.0,
+            radius: RADIUS.into(),
+        },
+        shadow: LIFT,
+        ..container::Style::default()
+    }
+}
+
 /// The dimmed window behind a dialog: the page stays visible, but plainly
 /// not the thing to interact with.
 pub fn scrim(_theme: &Theme) -> container::Style {
