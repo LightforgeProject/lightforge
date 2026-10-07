@@ -502,6 +502,29 @@ pub fn badge(color: Color) -> impl Fn(&Theme) -> container::Style {
     }
 }
 
+/// A state worn at a button's size: same height, same corners, no press.
+///
+/// [`badge`] is for a mark inside a line of text — a provider name beside an
+/// addon's title. This is for a state that stands where a button would and has
+/// to hold that space: "installed" next to Install, a build recommendation
+/// beside the picker that sets it. A pill in that position reads as a stray
+/// label rather than as the answer to the button next to it.
+///
+/// Deliberately not a disabled button: iced greys a button out by status, and
+/// grey is the one thing this must not be — the colour is the message.
+pub fn tag(color: Color) -> impl Fn(&Theme) -> container::Style {
+    move |_theme| container::Style {
+        background: Some(Background::Color(Color { a: 0.18, ..color })),
+        text_color: Some(color),
+        border: Border {
+            color: Color { a: 0.45, ..color },
+            width: 1.0,
+            radius: RADIUS_SM.into(),
+        },
+        ..container::Style::default()
+    }
+}
+
 /// A solid round mark, for a status a glyph can't carry: the UI font has no
 /// check mark, and renders U+2713 as a tofu box.
 pub fn dot(color: Color) -> impl Fn(&Theme) -> container::Style {

@@ -7237,7 +7237,7 @@ impl Lightforge {
                 }
             }
             line = line.push(match already {
-                true => pill("installed".to_owned(), theme::OK),
+                true => tag("Installed".to_owned(), theme::OK),
                 false => action_button(
                     "Install",
                     theme::INSTALL,
@@ -7625,8 +7625,8 @@ impl Lightforge {
                     // that sets it, for the product it is about.
                     match self.shop_build_state() {
                         ShopBuild::NotWow => Space::new().width(Length::Shrink).into(),
-                        ShopBuild::Running => pill("shop-ready".to_owned(), theme::OK),
-                        ShopBuild::Elsewhere => pill(
+                        ShopBuild::Running => tag("Shop-ready".to_owned(), theme::OK),
+                        ShopBuild::Elsewhere => tag(
                             format!("{} recommended", proton::SHOP_BUILD),
                             theme::UPDATE,
                         ),
@@ -8859,6 +8859,18 @@ fn rich_paragraph(block: &richtext::Block) -> Element<'_, Message> {
     }
 
     rich_text(spans).size(theme::BODY).on_link_click(Message::OpenUrl).into()
+}
+
+/// A state at a button's size, for where one stands beside buttons.
+///
+/// Padded exactly like [`action_button`] and [`secondary`], for the same
+/// reason those two match each other: side by side, a control that disagrees
+/// about its height reads as a mistake.
+fn tag<'a>(content: String, color: iced::Color) -> Element<'a, Message> {
+    container(text(content).size(theme::LABEL))
+        .padding([theme::SM, theme::MD])
+        .style(theme::tag(color))
+        .into()
 }
 
 fn pill<'a>(content: String, color: iced::Color) -> Element<'a, Message> {
