@@ -690,6 +690,7 @@ pub async fn launch_via_battle_net(
     code: ProductCode,
     user: String,
     family: Option<String>,
+    minimized: bool,
 ) -> Result<Handoff, String> {
     tokio::task::spawn_blocking(move || {
         use lightforge_core::battlenet::{self, Launch, Readiness};
@@ -711,23 +712,33 @@ pub async fn launch_via_battle_net(
         if !preflight::client_running(&layout) {
             // Out of the way, but only where it can sign itself in. A
             // sign-in form nobody can see is a launch that quietly never
-            // happens, so a prefix without auto-login gets a normal window.
-            let minimize = battlenet::signs_in_by_itself(&layout, &user);
+            // happens, so a prefix without auto-login gets a normal window
+            // whatever the setting says.
+            let minimize = minimized && battlenet::signs_in_by_itself(&layout, &user);
             let _ = battlenet::configure_accounts(
                 &layout,
                 &user,
                 &battlenet::window_state_tweaks(minimize),
             );
 
+            // `--autostarted` or not: the preference above is only read on an
+            // autostart, and the flag without the preference does nothing of
+            // its own.
+            let how = match minimize {
+                true => Launch::Autostart,
+                false => Launch::Client,
+            };
+
             let started = std::time::SystemTime::now();
-            battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| e.to_string())?;
+            battlenet::launch(&runner, &layout, &how).map_err(|e| e.to_string())?;
 
             if battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT)
                 == Readiness::NeedsAttention
             {
                 // Stop driving. The client is up and is the only thing that
-                // can finish this, so it is left running for the user.
-                return Ok(Handoff::NeedsAttention);
+                // can finish this, so it is left running for the user — who
+                // has to be told where it is if it was put in the tray.
+                return Ok(Handoff::NeedsAttention { minimized: minimize });
             }
         }
 
@@ -808,8 +819,9 @@ pub async fn install_via_battle_net(
 pub enum Handoff {
     /// The game is running.
     Playing(GameProcess),
-    /// The client never reported signing in. Someone has to look at it.
-    NeedsAttention,
+    /// The client never reported signing in. Someone has to look at it —
+    /// which means being told where it is when it was started minimized.
+    NeedsAttention { minimized: bool },
     /// It was there and then it was not — closed while we waited.
     ClientClosed,
     /// Signed in, told to launch, and nothing appeared.
@@ -913,11 +925,23 @@ pub async fn installed_versions(layout: Layout) -> HashMap<String, String> {
 ///
 /// Still pre-flighted by the caller: a stale wineserver breaks Battle.net
 /// exactly as it breaks a game launch.
-pub async fn open_battle_net(layout: Layout, code: ProductCode) -> Result<String, String> {
+pub async fn open_battle_net(
+    layout: Layout,
+    code: ProductCode,
+    user: String,
+) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         use lightforge_core::battlenet::{self, Launch};
 
         let runner = runner_for(&layout, &code, Runs::BattleNet)?;
+        // A normal window, whatever the last hand-off left behind: somebody
+        // asked for the client itself, so hiding it in the tray would be
+        // answering a different request.
+        let _ = battlenet::configure_accounts(
+            &layout,
+            &user,
+            &battlenet::window_state_tweaks(false),
+        );
         battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| e.to_string())?;
         Ok("Battle.net opening".to_owned())
     })

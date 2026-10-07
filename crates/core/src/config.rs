@@ -65,6 +65,23 @@ pub struct Config {
     /// the rest of the queue, which shares that same store and the same
     /// connection.
     pub pause_downloads_while_playing: bool,
+    /// Whether the launcher gets out of the way once a game is up.
+    ///
+    /// Off by default: a window that disappears without being asked is
+    /// startling, and the launcher is where the download queue and the status
+    /// line live. Nothing is restored when the game exits — the window is in
+    /// the taskbar, and a launcher that raises itself over whatever came next
+    /// is the behaviour people disable this kind of setting to avoid.
+    #[serde(default)]
+    pub minimize_on_launch: bool,
+    /// Whether Battle.net comes up minimized when it is only being used to
+    /// hand a game over.
+    ///
+    /// On by default, and still only honoured where the client can sign itself
+    /// in — see [`crate::battlenet::signs_in_by_itself`]. A sign-in form
+    /// nobody can see is a launch that quietly never happens.
+    #[serde(default = "yes")]
+    pub battle_net_minimized: bool,
     /// Every product Lightforge manages, official and custom alike.
     pub products: Vec<Product>,
 }
@@ -105,6 +122,8 @@ impl Default for Config {
             addon_auto_update: true,
             download_limit_mbps: None,
             pause_downloads_while_playing: true,
+            minimize_on_launch: false,
+            battle_net_minimized: true,
             products: Vec::new(),
         }
     }
@@ -380,6 +399,16 @@ mod tests {
         let toml = toml::to_string(&Config::with_default_products()).unwrap();
         let read: Config = toml::from_str(&toml).unwrap();
         assert!(read.pause_downloads_while_playing);
+    }
+
+    #[test]
+    fn the_launch_window_settings_default_the_way_a_fresh_install_behaves() {
+        // A config written before these existed has to keep working, and has
+        // to keep behaving the way it did: the launcher stayed put, and a
+        // hand-off already put Battle.net out of the way where it could.
+        let old: Config = toml::from_str("prefix_user = \"steamuser\"\n").unwrap();
+        assert!(!old.minimize_on_launch);
+        assert!(old.battle_net_minimized);
     }
 
     #[test]

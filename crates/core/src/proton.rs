@@ -16,6 +16,21 @@ use serde::{Deserialize, Serialize};
 /// GitHub repository Proton-GE releases are polled from.
 pub const GE_RELEASES_REPO: &str = "GloriousEggroll/proton-ge-custom";
 
+/// The build the in-game shop is known to work under.
+///
+/// Not a general "best build": it is specifically the one WoW's embedded
+/// browser — `Utils/BlizzardBrowser.exe`, the CEF that draws the shop and the
+/// support pages — renders under. Newer GE builds start the browser and lose
+/// its GPU child, which is the grey box the shop had instead of a page. Half
+/// of that fix is the install having a Wine drive of its own
+/// ([`crate::paths::Layout::wow_drive`]); this is the other half. Measured
+/// 2026-10-02 against `Logs/BlizzardBrowser/CEF-*.log`.
+///
+/// A recommendation and nothing more — the picker offers every installed
+/// build, and a product pinned elsewhere launches and plays perfectly well
+/// without a shop.
+pub const SHOP_BUILD: &str = "GE-Proton11-7";
+
 /// Where a given Proton build comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

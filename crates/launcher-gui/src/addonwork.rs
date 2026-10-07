@@ -505,6 +505,10 @@ async fn run(
 }
 
 /// Search every provider that can answer.
+///
+/// An empty query is the Browse tab before anybody has typed: it asks for the
+/// most-downloaded addons instead, which goes through the same message and the
+/// same late-reply check because it fills the same list.
 pub async fn search(
     http: Option<Http>,
     layout: Layout,
@@ -521,15 +525,13 @@ pub async fn search(
     };
     let _ = &layout;
 
-    let results = browse::search(
-        &http,
-        catalog().as_ref(),
-        dirs.cache_dir(),
-        &query,
-        addons::flavor_of(&code),
-        30,
-    )
-    .await;
+    let flavor = addons::flavor_of(&code);
+    let results = match query.is_empty() {
+        true => browse::popular(&http, catalog().as_ref(), dirs.cache_dir(), flavor, 30).await,
+        false => {
+            browse::search(&http, catalog().as_ref(), dirs.cache_dir(), &query, flavor, 30).await
+        }
+    };
 
     SearchOutcome {
         query,

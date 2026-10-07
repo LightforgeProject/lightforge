@@ -158,6 +158,80 @@ pub async fn search(
     Results { listings: results, problems }
 }
 
+/// The most-downloaded addons for a flavor, for a search box nobody has typed
+/// in yet.
+///
+/// A different question from [`search`], not a search with no words: there is
+/// nothing to match, so nothing to rank by match, and the whole order is
+/// popularity. WoWInterface answers it out of the catalogue already on disk,
+/// so the Browse tab has rows before the first keystroke and at no cost.
+///
+/// Tukui is deliberately absent. It publishes no download counts at all, so
+/// its two addons would either sit at the bottom of a popularity list as
+/// zeroes or have to be given a rank they did not earn — and ElvUI belongs
+/// nowhere near the bottom. It is one search away.
+///
+/// A provider that cannot answer is dropped rather than reported, unlike in
+/// [`search`]: this list is the default view of a tab, not the answer to a
+/// question somebody asked, and a standing warning over a page nobody asked
+/// to load is noise. A search says so properly.
+pub async fn popular(
+    http: &Http,
+    catalog: Option<&Catalog>,
+    cache_dir: &Path,
+    flavor: &str,
+    limit: usize,
+) -> Results {
+    let mut results = Vec::new();
+
+    if let Ok(entries) = wowi_catalogue(http, cache_dir).await {
+        results.extend(top_wowi(&entries, flavor, limit));
+    }
+    if let Some(catalog) = catalog {
+        if let Ok(projects) = catalog.search(http, flavor, "", limit).await {
+            results.extend(projects.into_iter().map(|p| Listing {
+                provider: Provider::Curse,
+                id: p.id,
+                name: p.name,
+                author: p.authors.first().cloned(),
+                version: None,
+                downloads: p.download_count,
+                website_url: p.website_url,
+            }));
+        }
+    }
+
+    results.sort_by(|a, b| b.downloads.cmp(&a.downloads).then_with(|| a.name.cmp(&b.name)));
+    results.truncate(limit);
+    Results { listings: results, problems: Vec::new() }
+}
+
+/// The most-downloaded WoWInterface entries that support a flavor.
+///
+/// Same flavor rule as [`search_wowi`], including the entries that declare no
+/// game versions at all — half the catalogue does, and excluding them here
+/// would mean the popular list and a search for the same addon disagreed
+/// about whether it exists.
+fn top_wowi(entries: &[WowiEntry], flavor: &str, limit: usize) -> Vec<Listing> {
+    let mut top: Vec<&WowiEntry> = entries
+        .iter()
+        .filter(|e| e.flavors().is_empty() || supports(e.flavors(), flavor))
+        .collect();
+    top.sort_by(|a, b| b.downloads.cmp(&a.downloads));
+    top.truncate(limit);
+    top.into_iter()
+        .map(|e| Listing {
+            provider: Provider::WowInterface,
+            id: e.id.to_string(),
+            name: e.title.clone(),
+            author: e.author.clone(),
+            version: e.version.clone(),
+            downloads: e.downloads,
+            website_url: e.file_info_uri.clone(),
+        })
+        .collect()
+}
+
 /// What a search found, and which providers could not answer.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Results {
@@ -397,6 +471,40 @@ fn is_fresh(path: &PathBuf) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_popular_list_is_ordered_by_downloads_and_honours_the_flavor() {
+        let entry = |id: u64, title: &str, downloads: u64, versions: Option<Vec<&str>>| WowiEntry {
+            id,
+            title: title.to_owned(),
+            author: None,
+            version: None,
+            downloads,
+            game_versions: versions
+                .map(|v| v.into_iter().map(str::to_owned).collect()),
+            file_info_uri: None,
+        };
+
+        let entries = vec![
+            entry(1, "Retail Only", 900, Some(vec!["11.2.0"])),
+            entry(2, "Classic Only", 5_000, Some(vec!["1.15.7"])),
+            entry(3, "Says Nothing", 300, None),
+            entry(4, "Everywhere", 1_000, Some(vec!["1.15.7", "11.2.0"])),
+        ];
+
+        let hits = top_wowi(&entries, "retail", 10);
+        let names: Vec<&str> = hits.iter().map(|l| l.name.as_str()).collect();
+        // The 5,000-download Classic addon is not a retail answer, and the
+        // one that declares no versions is kept — half the catalogue is like
+        // that, and a search would find it.
+        assert_eq!(names, ["Everywhere", "Retail Only", "Says Nothing"]);
+
+        // The cap is applied after the sort, not before: the top two, not
+        // whichever two came first out of the catalogue.
+        let top = top_wowi(&entries, "retail", 2);
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0].name, "Everywhere");
+    }
 
     #[test]
     fn a_pasted_project_page_becomes_a_query_for_that_provider() {

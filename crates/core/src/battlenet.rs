@@ -516,23 +516,59 @@ pub fn account_tweaks() -> Vec<Tweak> {
 /// minimize a window for us, and nothing on Wayland can do it from outside.
 pub const WINDOW_STATE_KEY: &str = "User.Client.Windows.BrowserMainWindow.WindowState";
 
+/// The client's own "launch minimized to the system tray" preference.
+///
+/// Its settings panel calls this *Launch Battle.net minimized to the system
+/// tray*, and it is the key the checkbox writes — `AutoStartMinimized`, beside
+/// `HideOnClose` and `DisplayExitPrompt` in `battle.net.dll`, so it lives in
+/// the per-account config with the rest of the window preferences.
+pub const AUTOSTART_MINIMIZED_KEY: &str = "User.Client.AutoStartMinimized";
+
 /// Start the client minimized, or normally.
 ///
-/// Has to be re-applied before each start, because the client writes this key
-/// back from its live window every time it exits — the same reason the game's
-/// CVars are re-asserted per launch rather than set once.
+/// Two keys, because the client decides this for itself and neither one is
+/// enough alone. It logs the whole decision on every start:
+///
+/// ```text
+/// [Frontend] {Main} Attempting to show main window. isMinimizedOnStartup=false
+/// shouldMainWindowShowMinimizedAtAutoStartup=false varAutoStarted=false …
+/// needToMinimize=false …
+/// ```
+///
+/// `isMinimizedOnStartup` is the Qt window state below — what the client wrote
+/// out of its own window when it last exited. `shouldMainWindowShow…` is the
+/// preference above, and it is only consulted when `varAutoStarted` is set,
+/// which is what [`Launch::Autostart`] is for. Setting the preference without
+/// that flag changes nothing, which is why the window kept appearing.
+///
+/// Both have to be re-applied before each start, because the client writes the
+/// window state back from its live window every time it exits — the same reason
+/// the game's CVars are re-asserted per launch rather than set once.
 pub fn window_state_tweaks(minimized: bool) -> Vec<Tweak> {
-    vec![Tweak::new(
-        WINDOW_STATE_KEY,
-        json!(match minimized {
-            true => "1",
-            false => "0",
-        }),
-        match minimized {
-            true => "come up minimized: the hand-off drives the client, nobody needs to see it",
-            false => "come up as a normal window",
-        },
-    )]
+    vec![
+        Tweak::new(
+            WINDOW_STATE_KEY,
+            json!(match minimized {
+                true => "1",
+                false => "0",
+            }),
+            match minimized {
+                true => "come up minimized: the hand-off drives the client, nobody needs to see it",
+                false => "come up as a normal window",
+            },
+        ),
+        Tweak::new(
+            AUTOSTART_MINIMIZED_KEY,
+            json!(match minimized {
+                true => "true",
+                false => "false",
+            }),
+            match minimized {
+                true => "stay minimized when started as an autostart, which a hand-off is",
+                false => "show the window when started as an autostart",
+            },
+        ),
+    ]
 }
 
 /// Whether the client is set up to sign in without being asked.
@@ -944,6 +980,16 @@ pub fn apply_registry(runner: &ProtonRunner, values: &[RegValue]) -> Result<(), 
 pub enum Launch {
     /// Just the client window — the app-level "other Blizzard titles" path.
     Client,
+    /// The same client start, told that it was started automatically.
+    ///
+    /// `--autostarted` is the flag Blizzard's own Run entry passes — the
+    /// client writes it as `"%1" --autostarted` — and it is the only condition
+    /// under which the client honours
+    /// [`AUTOSTART_MINIMIZED_KEY`]: its startup decision reads
+    /// `needToMinimize` from `shouldMainWindowShowMinimizedAtAutoStartup &&
+    /// varAutoStarted`. A hand-off is exactly an automatic start: nobody asked
+    /// for the client, they asked for the game.
+    Autostart,
     /// Hand straight off into a product, so the user never clicks through the
     /// Battle.net UI. Paired with `GameLaunchWindowBehavior: 2`, the client
     /// exits by itself once the game is up.
@@ -989,6 +1035,13 @@ impl Launch {
     pub fn command(&self, install_dir: &Path) -> (PathBuf, Vec<String>) {
         match self {
             Self::Client => (install_dir.join("Battle.net Launcher.exe"), Vec::new()),
+            // Through the launcher, like a plain start: it is what Blizzard's
+            // shortcut runs, it keeps the client's self-update path intact,
+            // and it passes its command line on to the client.
+            Self::Autostart => (
+                install_dir.join("Battle.net Launcher.exe"),
+                vec!["--autostarted".to_owned()],
+            ),
             Self::InstallFlow { uid } => (
                 install_dir.join("Battle.net.exe"),
                 vec![format!("--game={uid}"), "--install".to_owned()],
@@ -1017,7 +1070,7 @@ impl Launch {
     /// client. Lets a caller label the button for what it will really do.
     pub fn hands_off(&self) -> bool {
         match self {
-            Self::Client => false,
+            Self::Client | Self::Autostart => false,
             Self::Uri(_) | Self::InstallFlow { .. } => true,
             Self::Product { code, exec } => exec.is_some() || game_uid(code).is_some(),
         }
@@ -1209,12 +1262,36 @@ mod tests {
     #[test]
     fn the_window_state_key_is_qts_own_and_is_written_as_a_string() {
         // The client stores every one of these as a string, and a real
-        // integer here is a value it reads back as zero.
+        // integer here is a value it reads back as zero — the booleans
+        // included, which is why `"true"` is quoted below.
         let minimized = window_state_tweaks(true);
-        assert_eq!(minimized.len(), 1);
+        assert_eq!(minimized.len(), 2);
         assert_eq!(minimized[0].path, WINDOW_STATE_KEY.split('.').collect::<Vec<_>>());
         assert_eq!(minimized[0].value, json!("1"));
-        assert_eq!(window_state_tweaks(false)[0].value, json!("0"));
+        assert_eq!(
+            minimized[1].path,
+            AUTOSTART_MINIMIZED_KEY.split('.').collect::<Vec<_>>()
+        );
+        assert_eq!(minimized[1].value, json!("true"));
+
+        let normal = window_state_tweaks(false);
+        assert_eq!(normal[0].value, json!("0"));
+        assert_eq!(normal[1].value, json!("false"));
+    }
+
+    #[test]
+    fn an_autostart_is_the_plain_client_start_plus_the_flag_that_unlocks_it() {
+        let dir = PathBuf::from("/bnet");
+        let (plain, no_args) = Launch::Client.command(&dir);
+        let (exe, args) = Launch::Autostart.command(&dir);
+
+        // Same binary, deliberately: the launcher is what keeps the client's
+        // self-update path intact.
+        assert_eq!(exe, plain);
+        assert!(no_args.is_empty());
+        assert_eq!(args, ["--autostarted"]);
+        // It opens the client; it hands nothing off.
+        assert!(!Launch::Autostart.hands_off());
     }
 
     #[test]

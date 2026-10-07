@@ -47,7 +47,7 @@ use lightforge_core::news;
 use lightforge_core::paths::{AppDirs, Layout};
 use lightforge_core::product::{Branch, Catalog, Kind, Product, ProductCode, ProductLine};
 use lightforge_core::state::{self, ActionState, Local};
-use lightforge_core::proton::ProtonPin;
+use lightforge_core::proton::{self, ProtonPin};
 use lightforge_core::setup::Status as SetupStatus;
 use lightforge_core::storage;
 use lightforge_core::tact::install::Offerings;
@@ -400,6 +400,10 @@ enum Message {
     DownloadLimitChanged(String),
     /// The pause-while-playing switch was flipped.
     PauseWhilePlaying(bool),
+    /// Whether the launcher gets out of the way once a game is up.
+    MinimizeOnLaunch(bool),
+    /// Whether a Battle.net hand-off puts the client in the tray.
+    BattleNetMinimized(bool),
     /// Battle.net's own limit, as read from its config.
     BattleNetLimitRead(Option<u64>),
     /// The Battle.net limit field changed.
@@ -554,6 +558,7 @@ struct UninstallDialog {
 /// Which section of Settings is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsTab {
+    General,
     Setup,
     Proton,
     Downloads,
@@ -563,7 +568,8 @@ enum SettingsTab {
 }
 
 impl SettingsTab {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
+        Self::General,
         Self::Setup,
         Self::Proton,
         Self::Downloads,
@@ -574,6 +580,7 @@ impl SettingsTab {
 
     fn label(self) -> &'static str {
         match self {
+            Self::General => "General",
             Self::Setup => "Setup",
             Self::Proton => "Proton",
             Self::Downloads => "Downloads",
@@ -582,6 +589,20 @@ impl SettingsTab {
             Self::About => "About",
         }
     }
+}
+
+/// Where a product stands on [`proton::SHOP_BUILD`].
+///
+/// Three states rather than a boolean: a hand-off title has no WoW shop to
+/// care about, and saying nothing is different from saying no.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShopBuild {
+    /// Not a WoW product — nothing to recommend.
+    NotWow,
+    /// Already on it.
+    Running,
+    /// A WoW product pinned somewhere else, or following a default that is.
+    Elsewhere,
 }
 
 /// Which half of the addon screen is showing.
@@ -1416,6 +1437,23 @@ impl Lightforge {
     }
 
     /// Clear the way for a launch, then let [`Message::PreflightDone`] start it.
+    /// Get out of the way, where the user asked for that.
+    ///
+    /// The window id has to be asked for rather than kept: this is a
+    /// single-window application, so there is exactly one, but iced hands it
+    /// out at runtime and the only other place that needs it — the close
+    /// request — is given it by the event.
+    ///
+    /// Nothing un-minimizes when the game exits. A launcher that raises itself
+    /// over whatever the user moved on to is the behaviour this kind of
+    /// setting is turned on to avoid; the window is in the taskbar.
+    fn minimize_if_asked(&self) -> Task<Message> {
+        match self.config.minimize_on_launch {
+            true => iced::window::latest().and_then(|id| iced::window::minimize(id, true)),
+            false => Task::none(),
+        }
+    }
+
     fn preflight(&mut self, what: Launch) -> Task<Message> {
         self.busy = true;
         self.error = None;
@@ -2070,10 +2108,15 @@ impl Lightforge {
                             "{} is running — this unlocks when it exits",
                             game.name,
                         );
-                        Task::perform(
-                            tasks::await_game_exit(self.layout.clone(), game),
-                            Message::Launched,
-                        )
+                        // Not when the hand-off started: the client's window
+                        // and its sign-in are things the user is meant to see.
+                        Task::batch([
+                            Task::perform(
+                                tasks::await_game_exit(self.layout.clone(), game),
+                                Message::Launched,
+                            ),
+                            self.minimize_if_asked(),
+                        ])
                     }
                     // The client is up and waiting on a person — two-factor,
                     // an outage, an update of its own. Said plainly, with the
@@ -2083,10 +2126,19 @@ impl Lightforge {
                     Ok(tasks::Handoff::ClientClosed) => self.update(Message::Launched(Ok(
                         "Battle.net was closed before the game could start".to_owned(),
                     ))),
-                    Ok(tasks::Handoff::NeedsAttention) => self.update(Message::Launched(Ok(
-                        "Battle.net needs attention — finish in its window and press Play there"
-                            .to_owned(),
-                    ))),
+                    Ok(tasks::Handoff::NeedsAttention { minimized }) => {
+                        // Where it is matters as much as that it needs
+                        // something: a client started minimized is in the
+                        // tray, and "its window" is not on screen to look at.
+                        self.update(Message::Launched(Ok(match minimized {
+                            true => "Battle.net needs attention — open it from the tray, \
+                                     finish there and press Play"
+                                .to_owned(),
+                            false => "Battle.net needs attention — finish in its window and \
+                                      press Play there"
+                                .to_owned(),
+                        })))
+                    }
                     // Signed in, told to launch, and nothing came up.
                     Ok(tasks::Handoff::NothingStarted) => self.update(Message::Launched(Ok(
                         "Battle.net is open — no game started".to_owned(),
@@ -2241,10 +2293,13 @@ impl Lightforge {
                         // exactly what reads as a hung launcher.
                         self.status =
                             "running — Play unlocks once the game has fully exited".to_owned();
-                        Task::perform(
-                            tasks::run_game(self.layout.clone(), self.selected.code.clone()),
-                            Message::Launched,
-                        )
+                        Task::batch([
+                            Task::perform(
+                                tasks::run_game(self.layout.clone(), self.selected.code.clone()),
+                                Message::Launched,
+                            ),
+                            self.minimize_if_asked(),
+                        ])
                     }
                     Launch::BattleNet => {
                         // Two steps, because Battle.net gives nothing back:
@@ -2258,6 +2313,7 @@ impl Lightforge {
                                 self.selected.code.clone(),
                                 self.config.prefix_user.clone(),
                                 self.family_of(&self.selected.code),
+                                self.config.battle_net_minimized,
                             ),
                             Message::HandoffStarted,
                         )
@@ -2281,6 +2337,7 @@ impl Lightforge {
                             tasks::open_battle_net(
                                 self.layout.clone(),
                                 self.selected.code.clone(),
+                                self.config.prefix_user.clone(),
                             ),
                             Message::Launched,
                         )
@@ -2840,6 +2897,18 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::MinimizeOnLaunch(on) => {
+                self.config.minimize_on_launch = on;
+                self.save_config();
+                Task::none()
+            }
+
+            Message::BattleNetMinimized(on) => {
+                self.config.battle_net_minimized = on;
+                self.save_config();
+                Task::none()
+            }
+
             Message::CheckProton => {
                 // Runs with no build installed too: the release list is what
                 // fills the install picker, and needing a build before you can
@@ -3092,7 +3161,14 @@ impl Lightforge {
                 // confirmed must not survive out of sight of the row it
                 // belongs to.
                 self.addon_remove_armed = None;
-                Task::none()
+                // Browse opens on the most-downloaded addons instead of on an
+                // empty list: "what is there?" has a useful answer before
+                // anybody types, and the catalogue it comes out of is already
+                // on disk.
+                match tab == AddonTab::Browse && self.search_input.trim().is_empty() {
+                    true => self.popular_if_unasked(),
+                    false => Task::none(),
+                }
             }
 
             Message::SettingsTab(tab) => {
@@ -3290,6 +3366,11 @@ impl Lightforge {
                 // Two letters is where a search stops matching half the
                 // catalogue, and the pause is long enough that a word typed at
                 // speed goes out once rather than letter by letter.
+                // Emptying the box is not "no search", it is the question
+                // the tab opened with: back to the popular list.
+                if self.search_input.trim().is_empty() {
+                    return self.popular_if_unasked();
+                }
                 if self.search_input.trim().chars().count() < SEARCH_MIN {
                     return Task::none();
                 }
@@ -3311,10 +3392,10 @@ impl Lightforge {
             }
 
             Message::RunSearch => {
+                // An empty query is not a no-op: it asks for the most
+                // downloaded addons, which is what the tab shows before the
+                // first keystroke.
                 let query = self.search_input.trim().to_owned();
-                if query.is_empty() {
-                    return Task::none();
-                }
                 self.searching = true;
                 Task::perform(
                     addonwork::search(
@@ -4764,6 +4845,16 @@ impl Lightforge {
                 };
                 Task::batch([backdrop, self.fetch_news(false)])
             }
+            // Arriving back on Browse with nothing in it — by the back
+            // button, or on a first visit — is the same question the tab
+            // itself answers: what is there?
+            Screen::Addons
+                if self.addon_tab == AddonTab::Browse
+                    && self.search_input.trim().is_empty()
+                    && self.search.listings.is_empty() =>
+            {
+                self.popular_if_unasked()
+            }
             _ => Task::none(),
         }
     }
@@ -5193,7 +5284,29 @@ impl Lightforge {
         // carrying Retail's frame cap over to Classic's panel.
         self.load_tweak_inputs();
         self.reset_addon_screen();
-        Task::batch([self.reload(choice.code), Task::done(Message::AutoUpdateAddons)])
+        Task::batch([
+            self.reload(choice.code),
+            Task::done(Message::AutoUpdateAddons),
+            // The popular list is per flavor, so it follows the selection for
+            // the same reason the installed list does.
+            match self.addon_tab == AddonTab::Browse {
+                true => self.popular_if_unasked(),
+                false => Task::none(),
+            },
+        ])
+    }
+
+    /// Load the popular list, unless a search is already in flight.
+    ///
+    /// Three things ask for it — opening Browse, clearing the box, switching
+    /// product — and all three can happen while a typed search is still out.
+    /// Its reply would be dropped by the query check anyway; not sending it is
+    /// cheaper and keeps the spinner honest.
+    fn popular_if_unasked(&mut self) -> Task<Message> {
+        match self.searching {
+            true => Task::none(),
+            false => Task::done(Message::RunSearch),
+        }
     }
 
     /// Clear everything on the addon screen that belongs to one product.
@@ -7048,14 +7161,21 @@ impl Lightforge {
             body = body.push(match self.search.query.is_empty() {
                 true => empty(
                     "Search for an addon.",
-                    "Results come from WoWInterface and Tukui; type owner/repo for GitHub, \
-                     or paste an addon's page URL.",
+                    "The most-downloaded addons show here once the catalogue has been \
+                     fetched. Results come from WoWInterface and Tukui; type owner/repo \
+                     for GitHub, or paste an addon's page URL.",
                 ),
                 false => empty(
                     &format!("Nothing found for “{}”.", self.search.query),
                     "It may be a CurseForge addon, which needs a catalog configured.",
                 ),
             });
+        }
+
+        // Said once, above the rows: a list nobody asked for has to explain
+        // what it is, or it reads as the results of a search that went wrong.
+        if self.search.query.is_empty() && !self.search.listings.is_empty() {
+            body = body.push(muted("Most downloaded".to_owned(), theme::LABEL));
         }
 
         let installed_ids: Vec<(&str, &str)> = self
@@ -7418,6 +7538,7 @@ impl Lightforge {
 
         let (title, body) = match self.settings_tab {
             SettingsTab::Setup => ("Setup", self.setup_section()),
+            SettingsTab::General => ("General", self.general_section()),
             SettingsTab::Proton => ("Proton", self.proton_section()),
             SettingsTab::Downloads => ("Downloads", self.downloads_section()),
             SettingsTab::Addons => ("Addons", self.addons_section()),
@@ -7449,6 +7570,17 @@ impl Lightforge {
             .padding(theme::LG),
         ]
         .into()
+    }
+
+    /// Where the selected product stands on the build the in-game shop needs.
+    fn shop_build_state(&self) -> ShopBuild {
+        if Kind::of(&self.selected.code) != Kind::Managed {
+            return ShopBuild::NotWow;
+        }
+        match self.config.effective_proton(&self.selected.code) == Some(proton::SHOP_BUILD) {
+            true => ShopBuild::Running,
+            false => ShopBuild::Elsewhere,
+        }
     }
 
     /// Which Proton each product runs under, and the update check.
@@ -7485,7 +7617,25 @@ impl Lightforge {
                     Message::PinDefaultProton,
                 ),
             ),
-            field_row(self.selected.label.clone(), picker(product_pin, Message::PinProductProton)),
+            field_row(
+                self.selected.label.clone(),
+                row![
+                    picker(product_pin, Message::PinProductProton),
+                    // The sign, where it can be acted on: beside the picker
+                    // that sets it, for the product it is about.
+                    match self.shop_build_state() {
+                        ShopBuild::NotWow => Space::new().width(Length::Shrink).into(),
+                        ShopBuild::Running => pill("shop-ready".to_owned(), theme::OK),
+                        ShopBuild::Elsewhere => pill(
+                            format!("{} recommended", proton::SHOP_BUILD),
+                            theme::UPDATE,
+                        ),
+                    },
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center)
+                .into(),
+            ),
             field_row(
                 "Battle.net".to_owned(),
                 picker(
@@ -7498,6 +7648,21 @@ impl Lightforge {
             "A product with no pin of its own follows the default. Battle.net and Agent \
              are a different workload from the game, so they pin separately.",
         ).map(Element::from))
+        .extend(
+            matches!(self.shop_build_state(), ShopBuild::Elsewhere)
+                .then(|| {
+                    self.hint(&format!(
+                        "World of Warcraft's in-game shop and support pages only render \
+                         under {}. Newer builds start the game's embedded browser and lose \
+                         its GPU process, which is the grey box instead of a page. Everything \
+                         else about the game is unaffected — install it under Installed \
+                         builds below, then pin it here.",
+                        proton::SHOP_BUILD,
+                    ))
+                })
+                .flatten()
+                .map(Element::from),
+        )
         .push(
             row![
                 secondary("Check for updates", Message::CheckProton).enabled(true),
@@ -7555,6 +7720,37 @@ impl Lightforge {
             )
             .map(Element::from),
         )
+        .spacing(theme::SM)
+        .into()
+    }
+
+    /// What the launcher does around a launch: the settings that are about
+    /// the app itself rather than about a product, a transfer or a prefix.
+    fn general_section(&self) -> Element<'_, Message> {
+        let toggle = |on: bool, label: &'static str, msg: fn(bool) -> Message| {
+            iced::widget::checkbox(on).label(label).on_toggle(msg).text_size(theme::BODY)
+        };
+
+        column![toggle(
+            self.config.minimize_on_launch,
+            "Minimize Lightforge when a game starts",
+            Message::MinimizeOnLaunch,
+        )]
+        .extend(self.hint(
+            "It stays minimized after the game exits — the window is in the taskbar, and a \
+             launcher that raises itself over whatever you did next is worse than one that \
+             waits.",
+        ).map(Element::from))
+        .push(toggle(
+            self.config.battle_net_minimized,
+            "Start Battle.net minimized when launching a game via Battle.net",
+            Message::BattleNetMinimized,
+        ))
+        .extend(self.hint(
+            "Only where Battle.net can sign itself in: without that it comes up as a normal \
+             window whatever this says, because a sign-in nobody can see is a launch that \
+             never happens. Opening Battle.net from the game panel always shows its window.",
+        ).map(Element::from))
         .spacing(theme::SM)
         .into()
     }

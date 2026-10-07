@@ -888,7 +888,10 @@ async fn main() -> Result<()> {
             // Never spawn the client into a prefix that still has one running.
             let code = match &launch {
                 Launch::Product { code, .. } => Some(code.clone()),
-                Launch::Client | Launch::Uri(_) | Launch::InstallFlow { .. } => None,
+                Launch::Client
+                | Launch::Autostart
+                | Launch::Uri(_)
+                | Launch::InstallFlow { .. } => None,
             };
             let mut downloads = NoDownloads;
             let mut download_paused = false;
