@@ -251,10 +251,16 @@ const SPLASH_FLOOR: Duration = Duration::from_millis(350);
 const SPLASH_BUDGET: Duration = Duration::from_secs(12);
 
 /// How long the compositor is given to answer between the steps of growing
-/// the window — see [`Lightforge::grow_window`]. It is paid twice, once per
-/// run, and a window that stays the wrong size is worse than one that reaches
-/// the right size a quarter of a second late.
-const RECONFIGURE: Duration = Duration::from_millis(120);
+/// the window — see [`Lightforge::grow_window`]. It is paid twice, and the
+/// window is blank for both, so it is as short as it can be while still
+/// putting each step in a turn of the loop of its own: asked for together,
+/// the frame change and the resize cancel each other.
+const RECONFIGURE: Duration = Duration::from_millis(60);
+
+/// How long to wait for the compositor to confirm the new size before giving
+/// up and drawing the launcher anyway. Never reached on a compositor that
+/// answers; it exists so a blank window can never be the final state.
+const GROW_BACKSTOP: Duration = Duration::from_millis(1500);
 
 // We used to force the software renderer here. Through iced 0.13, `wgpu`
 // lagged badly when resizing a window on native Wayland: the client kept up
@@ -385,6 +391,9 @@ enum Message {
     PreflightDone(Launch, Result<(), String>),
     /// Diagnostic only: subscribed to solely under `LIGHTFORGE_TRACE=frames`.
     ResizeTraced(iced::Size),
+    /// The window really changed size — subscribed to only while growing out
+    /// of the splash, which is the one time the app needs to know.
+    WindowResized(iced::Size),
     /// The optimistic, cache-only paint that precedes [`Message::Themed`].
     CachedTheme(ProductCode, Box<tasks::Themed>),
     Primary,
@@ -1221,6 +1230,9 @@ struct Lightforge {
     /// are on screen. `None` once dismissed, or when this start is not the
     /// first one after an update — see [`Lightforge::patch_notes_due`].
     patch_notes: Option<PatchNotes>,
+    /// True between the splash and the launcher, while the window is being
+    /// grown. Nothing is drawn in it — see [`Lightforge::view`].
+    growing: bool,
     /// The small window the app opens in. `None` once it has grown into the
     /// launcher, which happens exactly once per run.
     splash: Option<Splash>,
@@ -1447,6 +1459,7 @@ impl Lightforge {
             setup: None,
             wizard: None,
             patch_notes: None,
+            growing: false,
             splash: None,
             setup_rx: None,
             setup_sample: provision::Progress::default(),
@@ -1616,6 +1629,18 @@ impl Lightforge {
 
     /// Turn the splash window into the launcher's own.
     ///
+    /// Leave the splash behind and start growing the window.
+    ///
+    /// The one way out of the splash, reached whether the fetch outlasted
+    /// [`SPLASH_FLOOR`] or the floor outlasted the fetch.
+    fn begin_grow(&mut self) -> Task<Message> {
+        self.splash = None;
+        self.growing = true;
+        trace::mark("splash done, growing into the launcher");
+        self.open_patch_notes();
+        Self::grow_window()
+    }
+
     /// Grow the splash into the launcher: the size first, then the frame.
     ///
     /// Three steps 120 ms apart, and the order is the whole of it — each part
@@ -1654,10 +1679,17 @@ impl Lightforge {
     ///
     /// iced reads the frame's live state and inverts it, so given a splash
     /// that asked for none, this is "put it back".
+    ///
+    /// Nothing times step 3. The configure this provokes arrives when the
+    /// compositor is ready and not a moment sooner, so the launcher is drawn
+    /// on [`Message::WindowResized`] — a timer here guessed too early and put
+    /// a full-size window's worth of stretched launcher on screen, which is
+    /// the glitch this whole dance exists to avoid. [`GROW_BACKSTOP`] only
+    /// covers a compositor that never answers at all.
     fn reframe_window() -> Task<Message> {
         iced::window::oldest()
             .and_then(iced::window::toggle_decorations)
-            .chain(Task::perform(tasks::after(RECONFIGURE), |()| Message::SettleWindow))
+            .chain(Task::perform(tasks::after(GROW_BACKSTOP), |()| Message::SettleWindow))
     }
 
     /// Step 3: put the window back in the middle.
@@ -2737,23 +2769,47 @@ impl Lightforge {
                     Some(left) if !left.is_zero() => {
                         Task::perform(tasks::after(left), |()| Message::GrowWindow)
                     }
-                    _ => {
-                        self.splash = None;
-                        self.open_patch_notes();
-                        Self::grow_window()
-                    }
+                    // Both ways out go through `begin_grow` and nothing else:
+                    // an earlier version grew the window here directly and
+                    // left `growing` unset, so the blank-while-growing never
+                    // applied on the only runs that need it — the ones where
+                    // the fetch outlasts the floor, which is every start with
+                    // anything to fetch.
+                    _ => self.begin_grow(),
                 }
             }
 
-            Message::GrowWindow => {
-                self.splash = None;
-                self.open_patch_notes();
-                Self::grow_window()
-            }
+            Message::GrowWindow => self.begin_grow(),
 
             Message::ReframeWindow => Self::reframe_window(),
 
-            Message::SettleWindow => Self::settle_window(),
+            Message::WindowResized(size) => {
+                // The one thing worth waiting for: iced has been told the
+                // window's real size, so the launcher can be laid out at it
+                // without the compositor stretching the result. Anything
+                // wider than the splash counts — the exact figure is the
+                // compositor's to decide, not ours.
+                if self.growing && size.width > SPLASH.width + 1.0 {
+                    self.growing = false;
+                    trace::mark(format_args!("grown to {}x{}", size.width, size.height));
+                    return Self::settle_window();
+                }
+                Task::none()
+            }
+
+            Message::SettleWindow => {
+                // A backstop, not the normal path: `WindowResized` is what
+                // ends the grow. If no configure ever arrives, the launcher
+                // still has to appear rather than leaving a blank window.
+                match self.growing {
+                    true => {
+                        self.growing = false;
+                        trace::mark("grow: no configure arrived, drawing anyway");
+                        Self::settle_window()
+                    }
+                    false => Task::none(),
+                }
+            }
 
             Message::AddProduct(code) => {
                 if self.choices.iter().any(|c| c.code == code) {
@@ -4954,6 +5010,14 @@ impl Lightforge {
 
         // The splash's bar sweeps off the clock, so it needs the tick as much
         // as a live transfer does.
+        // Only while growing: this is how the app learns that the compositor
+        // has actually given the window its new size, which no timer can
+        // know — see [`Lightforge::grow_window`].
+        let grown = match self.growing {
+            true => iced::window::resize_events().map(|(_, size)| Message::WindowResized(size)),
+            false => Subscription::none(),
+        };
+
         match self.splash.is_some()
             || self.running().is_some()
             || self.setup_running
@@ -4964,9 +5028,10 @@ impl Lightforge {
                 closing,
                 hints,
                 resizes,
+                grown,
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),
             ]),
-            false => Subscription::batch([closing, hints, resizes]),
+            false => Subscription::batch([closing, hints, resizes, grown]),
         }
     }
 
@@ -4987,6 +5052,20 @@ impl Lightforge {
         // wizard's card does not fit in it.
         if let Some(splash) = &self.splash {
             return self.splash_screen(splash);
+        }
+        // Mid-grow: the window already has the launcher's size but iced has
+        // not been told yet, so whatever is drawn here is laid out at the
+        // splash's size and stretched over the launcher's by the compositor.
+        // An empty backdrop stretches to an empty backdrop, so there is
+        // nothing to see — which is the point. It lasts two steps of
+        // [`RECONFIGURE`] and reads as the window simply opening.
+        if self.growing {
+            return Element::from(
+                container(Space::new())
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(theme::backdrop),
+            );
         }
         // The first run is a layer over the app rather than a `Screen`: there
         // is no way out of it except the two buttons in its footer, so nothing
