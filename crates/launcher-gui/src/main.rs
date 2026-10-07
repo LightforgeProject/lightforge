@@ -395,7 +395,10 @@ enum Message {
     PinDefaultProton(ProtonChoice),
     /// The build Battle.net and Agent launch under.
     PinBattleNetProton(ProtonChoice),
-    PinProductProton(ProtonChoice),
+    /// One product's own pin. Carries the code, because the Proton page
+    /// lists every installed game rather than whichever one the Play page
+    /// happens to be showing.
+    PinProductProton(ProductCode, ProtonChoice),
     /// The download cap field changed.
     DownloadLimitChanged(String),
     /// The pause-while-playing switch was flipped.
@@ -2527,8 +2530,8 @@ impl Lightforge {
                 Task::none()
             }
 
-            Message::PinProductProton(choice) => {
-                if let Some(product) = self.config.product_mut(&self.selected.code) {
+            Message::PinProductProton(code, choice) => {
+                if let Some(product) = self.config.product_mut(&code) {
                     product.profile.proton_ge_version = choice.0;
                 }
                 self.save_config();
@@ -7572,20 +7575,41 @@ impl Lightforge {
         .into()
     }
 
-    /// Where the selected product stands on the build the in-game shop needs.
-    fn shop_build_state(&self) -> ShopBuild {
-        if Kind::of(&self.selected.code) != Kind::Managed {
+    /// Where one product stands on the build the in-game shop needs.
+    fn shop_build_state(&self, code: &ProductCode) -> ShopBuild {
+        if Kind::of(code) != Kind::Managed {
             return ShopBuild::NotWow;
         }
-        match self.config.effective_proton(&self.selected.code) == Some(proton::SHOP_BUILD) {
+        match self.config.effective_proton(code) == Some(proton::SHOP_BUILD) {
             true => ShopBuild::Running,
             false => ShopBuild::Elsewhere,
         }
     }
 
-    /// Which Proton each product runs under, and the update check.
+    /// The games this page has anything to say about: every configured
+    /// product that is actually installed.
+    ///
+    /// Installed rather than configured, because the list is otherwise
+    /// fourteen rows of which three can launch. Read from Battle.net's own
+    /// `product.db`, which is the one place that knows about every install in
+    /// the prefix — Lightforge's own and the client's alike.
+    fn installed_products(&self) -> Vec<(ProductCode, String)> {
+        self.config
+            .products
+            .iter()
+            .filter(|p| self.installed_versions.contains_key(p.code.as_str()))
+            .map(|p| (p.code.clone(), p.display_name.clone()))
+            .collect()
+    }
+
+    /// Which Proton each game runs under, and the update check.
+    ///
+    /// Every installed game, not the one the Play page is showing: Settings is
+    /// about the install as a whole, and a row that renamed itself as you
+    /// switched tiles read as a bug — correctly, since nothing on the page
+    /// said which game it meant.
     fn proton_section(&self) -> Element<'_, Message> {
-        let installed: Vec<ProtonChoice> = std::iter::once(ProtonChoice(None))
+        let builds: Vec<ProtonChoice> = std::iter::once(ProtonChoice(None))
             .chain(
                 self.setup
                     .iter()
@@ -7594,13 +7618,8 @@ impl Lightforge {
             )
             .collect();
 
-        let product_pin = self
-            .config
-            .product(&self.selected.code)
-            .and_then(|p| p.profile.proton_ge_version.clone());
-
-        let picker = |current: Option<String>, on_pick: fn(ProtonChoice) -> Message| {
-            pick_list(installed.clone(), Some(ProtonChoice(current)), on_pick)
+        let picker = |current: Option<String>, on_pick: Box<dyn Fn(ProtonChoice) -> Message>| {
+            pick_list(builds.clone(), Some(ProtonChoice(current)), on_pick)
                 .text_size(theme::BODY)
                 .padding(theme::SM)
                 .width(Length::Fixed(260.0))
@@ -7609,72 +7628,116 @@ impl Lightforge {
                 .into()
         };
 
-        column![
-            field_row(
-                "Default".to_owned(),
-                picker(
-                    self.config.default_proton.version().map(str::to_owned),
-                    Message::PinDefaultProton,
-                ),
+        let games = self.installed_products();
+        let mut rows = column![field_row(
+            "Default".to_owned(),
+            picker(
+                self.config.default_proton.version().map(str::to_owned),
+                Box::new(Message::PinDefaultProton),
             ),
-            field_row(
-                self.selected.label.clone(),
+        )]
+        .spacing(theme::SM);
+
+        // One row per installed game, in the order the config lists them —
+        // the same order as the Play page's tiles, so the two read alike.
+        for (code, label) in &games {
+            // A title Battle.net launches runs under Battle.net's build, so
+            // it gets the fact rather than a control that would do nothing.
+            // Giving it one of its own is a decision still open — see the
+            // backlog note.
+            if Kind::of(code) == Kind::HandOff {
+                rows = rows.push(field_row(
+                    label.clone(),
+                    muted("follows Battle.net".to_owned(), theme::LABEL).into(),
+                ));
+                continue;
+            }
+
+            let pin = self
+                .config
+                .product(code)
+                .and_then(|p| p.profile.proton_ge_version.clone());
+            let for_code = code.clone();
+            rows = rows.push(field_row(
+                label.clone(),
                 row![
-                    picker(product_pin, Message::PinProductProton),
+                    picker(
+                        pin,
+                        Box::new(move |choice| Message::PinProductProton(
+                            for_code.clone(),
+                            choice
+                        )),
+                    ),
                     // The sign, where it can be acted on: beside the picker
-                    // that sets it, for the product it is about.
-                    match self.shop_build_state() {
+                    // that sets it, on the game it is about.
+                    match self.shop_build_state(code) {
                         ShopBuild::NotWow => Space::new().width(Length::Shrink).into(),
                         ShopBuild::Running => tag("Shop-ready".to_owned(), theme::OK),
-                        ShopBuild::Elsewhere => tag(
-                            format!("{} recommended", proton::SHOP_BUILD),
-                            theme::UPDATE,
-                        ),
+                        ShopBuild::Elsewhere =>
+                            tag(format!("{} recommended", proton::SHOP_BUILD), theme::UPDATE),
                     },
                 ]
                 .spacing(theme::SM)
                 .align_y(Alignment::Center)
                 .into(),
+            ));
+        }
+
+        // Nothing installed is worth saying: an empty gap between Default and
+        // Battle.net looks like a page that failed to load.
+        if games.is_empty() {
+            rows = rows.push(muted(
+                "Games appear here once they are installed.".to_owned(),
+                theme::LABEL,
+            ));
+        }
+
+        rows = rows.push(field_row(
+            "Battle.net".to_owned(),
+            picker(
+                self.config.battle_net_proton.version().map(str::to_owned),
+                Box::new(Message::PinBattleNetProton),
             ),
-            field_row(
-                "Battle.net".to_owned(),
-                picker(
-                    self.config.battle_net_proton.version().map(str::to_owned),
-                    Message::PinBattleNetProton,
-                ),
-            ),
-        ]
-        .extend(self.hint(
-            "A product with no pin of its own follows the default. Battle.net and Agent \
-             are a different workload from the game, so they pin separately.",
-        ).map(Element::from))
-        .extend(
-            matches!(self.shop_build_state(), ShopBuild::Elsewhere)
-                .then(|| {
+        ));
+
+        // One line for the whole list rather than one under each game: the
+        // reason is the same every time it applies.
+        let shop = games
+            .iter()
+            .any(|(code, _)| matches!(self.shop_build_state(code), ShopBuild::Elsewhere));
+
+        rows
+            .extend(self.hint(
+                "A game with no pin of its own follows the default. Battle.net and Agent \
+                 are a different workload from the game, so they pin separately — and \
+                 anything Battle.net launches for you runs under its build, not the \
+                 game's own.",
+            ).map(Element::from))
+            .extend(
+                shop.then(|| {
                     self.hint(&format!(
                         "World of Warcraft's in-game shop and support pages only render \
                          under {}. Newer builds start the game's embedded browser and lose \
-                         its GPU process, which is the grey box instead of a page. Everything \
-                         else about the game is unaffected — install it under Installed \
-                         builds below, then pin it here.",
+                         its GPU process, which is the grey box instead of a page. \
+                         Everything else about the game is unaffected — install it under \
+                         Installed builds below, then pin it here.",
                         proton::SHOP_BUILD,
                     ))
                 })
                 .flatten()
                 .map(Element::from),
-        )
-        .push(
-            row![
-                secondary("Check for updates", Message::CheckProton).enabled(true),
-                muted(self.proton_notice.clone().unwrap_or_default(), theme::LABEL),
-            ]
-            .spacing(theme::SM)
-            .align_y(Alignment::Center),
-        )
-        .push(Space::new().height(Length::Fixed(theme::MD)))
-        .push(section("Installed builds", self.proton_builds()))
-        .spacing(theme::SM)
-        .into()
+            )
+            .push(
+                row![
+                    secondary("Check for updates", Message::CheckProton).enabled(true),
+                    muted(self.proton_notice.clone().unwrap_or_default(), theme::LABEL),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
+            )
+            .push(Space::new().height(Length::Fixed(theme::MD)))
+            .push(section("Installed builds", self.proton_builds()))
+            .into()
     }
 
     /// Speed caps, ours and Battle.net's, and pausing while playing.
