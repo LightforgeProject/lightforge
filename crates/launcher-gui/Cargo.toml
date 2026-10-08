@@ -19,5 +19,6 @@ iced.workspace = true
 image.workspace = true
 open.workspace = true
 ashpd.workspace = true
+base64.workspace = true
 sentry.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }

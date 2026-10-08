@@ -2674,6 +2674,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ashpd",
+ "base64 0.22.1",
  "futures-util",
  "iced",
  "image 0.24.9",

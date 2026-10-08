@@ -124,6 +124,21 @@ pub async fn send(report: Report) -> bool {
             .collect::<Vec<_>>()
             .into();
 
+        // Inside the event, not beside it: GlitchTip's ingest lists
+        // `attachment` among the envelope item types it ignores, so an
+        // attached image is parsed and dropped without an error anywhere.
+        // A data URI survives, and pastes straight into a browser's address
+        // bar from the issue page.
+        if let Some(shot) = shot {
+            use base64::Engine as _;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&shot.bytes);
+            event.extra.insert(
+                "screenshot".to_owned(),
+                format!("data:{};base64,{encoded}", shot.media_type).into(),
+            );
+            event.extra.insert("screenshot_name".to_owned(), shot.name.into());
+        }
+
         let contact = contact.trim();
         if !contact.is_empty() {
             // An address goes in `email` and anything else in `username`, so
@@ -148,19 +163,7 @@ pub async fn send(report: Report) -> bool {
             }
         }
 
-        // The screenshot travels as its own envelope item beside the event,
-        // which is the native way and keeps the event itself small.
-        let mut scope = sentry::Scope::default();
-        if let Some(shot) = shot {
-            scope.add_attachment(sentry::protocol::Attachment {
-                buffer: shot.bytes,
-                filename: shot.name,
-                content_type: Some(shot.media_type.to_owned()),
-                ty: None,
-            });
-        }
-
-        client.capture_event(event, Some(&scope));
+        client.capture_event(event, None);
         client.flush(Some(FLUSH))
     })
     .await

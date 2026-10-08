@@ -426,6 +426,8 @@ enum Message {
     ReportShotLoaded(Result<Box<art::Shot>, String>),
     /// Take the screenshot back off the report.
     ReportShotCleared,
+    /// Put the whole report on the clipboard, for when sending it failed.
+    ReportCopy,
     /// Where they can be reached, if they want to be.
     ReportContact(String),
     ReportSend,
@@ -4508,6 +4510,21 @@ impl Lightforge {
                     Err(e) => self.status = format!("that file is not a screenshot: {e}"),
                 }
                 Task::none()
+            }
+
+            Message::ReportCopy => {
+                let Some(dialog) = self.report_dialog.as_ref() else {
+                    return Task::none();
+                };
+                // What they wrote first, then the diagnostics: pasted into a
+                // chat window it reads as a report rather than a dump.
+                let mut text = dialog.note.text();
+                if !dialog.debug.is_empty() {
+                    text.push('\n');
+                    text.push_str(&dialog.debug);
+                }
+                self.status = "report copied".to_owned();
+                iced::clipboard::write(text)
             }
 
             Message::ReportShotCleared => {
@@ -10721,8 +10738,8 @@ impl Lightforge {
         if let Some((note, color)) = match dialog.stage {
             ReportStage::Sent => Some(("Sent — thank you.".to_owned(), theme::OK)),
             ReportStage::Failed => Some((
-                "It could not be sent. Check the connection and try again, or reach me on \
-                 Discord."
+                "It could not be sent. Try again, or copy it and send it on Discord \
+                 instead — closing this loses it."
                     .to_owned(),
                 theme::ERROR,
             )),
@@ -10749,6 +10766,17 @@ impl Lightforge {
             ],
             _ => row![
                 Space::new().width(Length::Fill),
+                // Only once there is something to lose. The screenshot is not
+                // in it — the clipboard carries text — which the Discord
+                // route solves on its own, since an image is pasted there.
+                match dialog.stage {
+                    ReportStage::Failed => Element::from(
+                        choice("Copy report")
+                            .style(theme::outlined)
+                            .on_press(Message::ReportCopy)
+                    ),
+                    _ => Element::from(Space::new().width(Length::Shrink)),
+                },
                 choice("Cancel").style(theme::outlined).on_press(Message::ReportCancel),
                 choice(match dialog.stage {
                     ReportStage::Sending => "Sending…",
