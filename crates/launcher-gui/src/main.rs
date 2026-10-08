@@ -228,20 +228,23 @@ const NEWS_BACKGROUND: &[u8] = include_bytes!("../assets/news-background.jpg");
 const WINDOW: iced::Size = iced::Size::new(1280.0, 820.0);
 const WINDOW_MIN: iced::Size = WINDOW;
 
-/// The window the app opens in while a start's artwork is fetched.
+/// The splash card — the only thing painted while a start's artwork is
+/// fetched. Small enough to read as a loading screen rather than as a
+/// launcher that has come up broken, which is the complaint it answers: a
+/// cold start used to show the full window with an empty card for a second or
+/// two per game, while that game's background and wordmark came down.
 ///
-/// Small enough to read as a loading screen rather than as a launcher that
-/// has come up broken — which is the complaint it answers: a cold start used
-/// to show the full window with an empty card for a second or two per game,
-/// while that game's background and wordmark came down.
+/// The *window* is the launcher's size throughout — see [`main`]. Only this
+/// card is drawn, on a transparent background, so what anyone sees is a small
+/// panel floating in the middle of the screen.
 const SPLASH: iced::Size = iced::Size::new(460.0, 280.0);
 
-/// How long the splash is kept on screen at the very least.
+/// How long the splash card is kept on screen at the very least.
 ///
-/// A warm cache answers in milliseconds, and a window that flashes open at
-/// one size and jumps to another reads as a glitch rather than as a start.
-/// Short enough that "nothing to fetch" still feels instant — a start is
-/// never *slower* than it was, only less ugly.
+/// A warm cache answers in milliseconds, and a card that appears and vanishes
+/// inside two frames reads as a glitch rather than as a start. Short enough
+/// that "nothing to fetch" still feels instant — a start is never *slower*
+/// than it was, only less ugly.
 const SPLASH_FLOOR: Duration = Duration::from_millis(350);
 
 /// A ceiling on the fetch, so a machine with no network — or one behind a
@@ -249,18 +252,6 @@ const SPLASH_FLOOR: Duration = Duration::from_millis(350);
 /// landed inside the budget is kept; the rest is fetched on demand as it
 /// always was.
 const SPLASH_BUDGET: Duration = Duration::from_secs(12);
-
-/// How long the compositor is given to answer between the steps of growing
-/// the window — see [`Lightforge::grow_window`]. It is paid twice, and the
-/// window is blank for both, so it is as short as it can be while still
-/// putting each step in a turn of the loop of its own: asked for together,
-/// the frame change and the resize cancel each other.
-const RECONFIGURE: Duration = Duration::from_millis(60);
-
-/// How long to wait for the compositor to confirm the new size before giving
-/// up and drawing the launcher anyway. Never reached on a compositor that
-/// answers; it exists so a blank window can never be the final state.
-const GROW_BACKSTOP: Duration = Duration::from_millis(1500);
 
 // We used to force the software renderer here. Through iced 0.13, `wgpu`
 // lagged badly when resizing a window on native Wayland: the client kept up
@@ -295,22 +286,39 @@ fn main() -> iced::Result {
     // Annotated: without the type the closure is inferred for one
     // lifetime, and 0.14's `theme` wants it for any.
     .theme(|_state: &Lightforge| theme::base())
-    // Opens as the splash and grows into the launcher — see [`SPLASH`] and
-    // [`Lightforge::grow_window`]. `min_size` starts at the splash's own size
-    // or the compositor refuses to make it that small, and the frame is off
-    // because a loading screen with a title bar and a close button is a
-    // window, not a splash.
+    // What the surface is cleared to, which is the other half of the splash
+    // being a small window. `transparent: true` only gives the surface an
+    // alpha channel — iced still clears it to the theme's background, so
+    // without this the "transparent" window is an opaque rectangle with a
+    // card in the middle of it. Measured: it dimmed everything behind it.
+    .style(|state: &Lightforge, theme| iced::theme::Style {
+        background_color: match state.splash.is_some() {
+            true => iced::Color::TRANSPARENT,
+            false => theme.palette().background,
+        },
+        text_color: theme.palette().text,
+    })
+    // The window is the launcher's size from the first frame and is never
+    // resized. While the artwork is fetched it paints nothing but the
+    // [`SPLASH`] card on a transparent background, so what anyone sees is a
+    // small panel in the middle of the screen — and the frame is off for the
+    // same reason, because a loading screen with a title bar is a window, not
+    // a splash.
     //
-    // Deliberately still resizable, although nothing should resize a splash:
-    // winit implements "not resizable" on Wayland by pinning the maximum size
-    // to the current one, and a `min_size` beside that is a minimum above a
-    // maximum — which is not a clamp but `xdg_toplevel error 2`, and the
-    // window dies on the spot. It cost a run to find. Undecorated, there is no
-    // handle to drag anyway.
+    // **The window must not be resized to do this**, which an earlier version
+    // did and three bugs came out of. A Wayland client cannot place itself —
+    // winit's `set_outer_position` is literally `// Not possible on Wayland.`
+    // — so the compositor centres the window once, at the size it is mapped
+    // at, and a client-side resize afterwards grows it from its top-left
+    // corner and leaves it off-centre for good. Mapping at the final size is
+    // the only way the window is ever centred. It also costs nothing: no
+    // stretched first frames, no `xdg_toplevel` protocol error from a
+    // `min_size` beside `resizable: false`, and no maximize flash.
     .window(iced::window::Settings {
-        size: SPLASH,
-        min_size: Some(SPLASH),
+        size: WINDOW,
+        min_size: Some(WINDOW_MIN),
         decorations: false,
+        transparent: true,
         position: iced::window::Position::Centered,
         ..iced::window::Settings::default()
     })
@@ -359,19 +367,16 @@ enum Message {
     MutePatchNotes(bool),
     /// The same preference from Settings › General, read the other way round.
     ShowReleaseNotes(bool),
+    /// Show or hide the headlines beside the key art.
+    NewsOnPlay(bool),
     /// Close the release-notes popup, recording what it was told.
     DismissPatchNotes,
     /// The start-up artwork fetch finished, with the number of products whose
     /// art is now cached.
     SplashDone(usize),
-    /// Grow the splash into the launcher. Separate from `SplashDone` only so
-    /// the floor can be waited out between the two.
-    GrowWindow,
-    /// The second step of that: the frame back on, which is what makes the
-    /// new size stick.
-    ReframeWindow,
-    /// The third: put the window back in the middle.
-    SettleWindow,
+    /// Put the splash away and show the launcher. Separate from `SplashDone`
+    /// only so the floor can be waited out between the two.
+    FinishSplash,
     /// Track a product from the catalog, putting it in the header.
     AddProduct(ProductCode),
     /// Stop tracking one, taking it out of the header.
@@ -391,9 +396,6 @@ enum Message {
     PreflightDone(Launch, Result<(), String>),
     /// Diagnostic only: subscribed to solely under `LIGHTFORGE_TRACE=frames`.
     ResizeTraced(iced::Size),
-    /// The window really changed size — subscribed to only while growing out
-    /// of the splash, which is the one time the app needs to know.
-    WindowResized(iced::Size),
     /// The optimistic, cache-only paint that precedes [`Message::Themed`].
     CachedTheme(ProductCode, Box<tasks::Themed>),
     Primary,
@@ -511,6 +513,8 @@ enum Message {
     ChooseProtonVersion(ProtonChoice),
     /// Install the chosen version.
     InstallProton,
+    /// That build finished, or did not.
+    ProtonInstalled(Result<(), String>),
     /// Delete one managed build, by version.
     RemoveProton(String),
     ProtonRemoved(Result<String, String>),
@@ -1230,9 +1234,6 @@ struct Lightforge {
     /// are on screen. `None` once dismissed, or when this start is not the
     /// first one after an update — see [`Lightforge::patch_notes_due`].
     patch_notes: Option<PatchNotes>,
-    /// True between the splash and the launcher, while the window is being
-    /// grown. Nothing is drawn in it — see [`Lightforge::view`].
-    growing: bool,
     /// The small window the app opens in. `None` once it has grown into the
     /// launcher, which happens exactly once per run.
     splash: Option<Splash>,
@@ -1459,7 +1460,6 @@ impl Lightforge {
             setup: None,
             wizard: None,
             patch_notes: None,
-            growing: false,
             splash: None,
             setup_rx: None,
             setup_sample: provision::Progress::default(),
@@ -1519,10 +1519,13 @@ impl Lightforge {
         // Nothing starts on a config that did not load: no probes against a
         // library it may not describe, and above all no restored download.
         if app.config_error.is_some() {
-            // Still grown: the broken-config screen is prose someone has to
-            // read, and the splash is too small to hold it and cannot be
-            // resized.
-            return (app, Self::grow_window());
+            // The frame still goes on: the broken-config screen is prose
+            // someone has to read, close and act on, and a window with no
+            // way to close it is not the thing to hand them.
+            return (
+                app,
+                iced::window::oldest().and_then(iced::window::toggle_decorations),
+            );
         }
         app.load_tweak_inputs();
         // Before anything resolves a path: a drive that came back at a
@@ -1594,15 +1597,22 @@ impl Lightforge {
     fn open_splash(&mut self) -> Task<Message> {
         let codes: Vec<ProductCode> = self.choices.iter().map(|c| c.code.clone()).collect();
         self.splash = Some(Splash { products: codes.len(), opened: Instant::now() });
-        Task::perform(
-            tasks::prefetch_within(
-                SPLASH_BUDGET,
-                self.http.clone(),
-                self.pipeline.clone(),
-                codes,
+        Task::batch([
+            // The window is the launcher's size but only the card is painted,
+            // so the rest of it is a transparent rectangle that would still
+            // swallow every click landing on whatever is behind it. On
+            // Wayland this sets a real empty input region, not a hint.
+            iced::window::oldest().and_then(iced::window::enable_mouse_passthrough),
+            Task::perform(
+                tasks::prefetch_within(
+                    SPLASH_BUDGET,
+                    self.http.clone(),
+                    self.pipeline.clone(),
+                    codes,
+                ),
+                Message::SplashDone,
             ),
-            Message::SplashDone,
-        )
+        ])
     }
 
     /// Put the release notes up, if this start is the first one on this
@@ -1629,88 +1639,32 @@ impl Lightforge {
 
     /// Turn the splash window into the launcher's own.
     ///
-    /// Leave the splash behind and start growing the window.
+    /// Put the splash away and show the launcher.
     ///
     /// The one way out of the splash, reached whether the fetch outlasted
-    /// [`SPLASH_FLOOR`] or the floor outlasted the fetch.
-    fn begin_grow(&mut self) -> Task<Message> {
+    /// [`SPLASH_FLOOR`] or the floor outlasted the fetch. There is deliberately
+    /// no second copy of this: when there were two, they drifted.
+    ///
+    /// Nothing is resized or moved — the window has been the launcher's size
+    /// and in the middle of the screen since it was mapped (see [`main`]).
+    /// All that changes is that the frame goes on, the window starts taking
+    /// clicks again, and `view` stops drawing the card.
+    fn finish_splash(&mut self) -> Task<Message> {
         self.splash = None;
-        self.growing = true;
-        trace::mark("splash done, growing into the launcher");
+        trace::mark("splash done, showing the launcher");
         self.open_patch_notes();
-        Self::grow_window()
-    }
-
-    /// Grow the splash into the launcher: the size first, then the frame.
-    ///
-    /// Three steps 120 ms apart, and the order is the whole of it — each part
-    /// of it was measured on KWin under Wayland, by getting it wrong.
-    ///
-    /// 1. Ask for the new size ([`Lightforge::grow_window`]). The window does
-    ///    move: winit applies the request on the spot. But *because* it
-    ///    applied immediately, winit deliberately emits no `Resized` event, so
-    ///    iced never hears, keeps laying the window out at the splash's size,
-    ///    and the compositor stretches that over the new one.
-    /// 2. Put the frame back ([`Lightforge::reframe_window`]). Changing the
-    ///    frame makes the compositor reconfigure the window — and *that*
-    ///    carries the size it now has, which is the event iced was missing.
-    ///    The two cannot share a turn of the loop: asked for together, the
-    ///    reconfigure carries the size from before the resize and undoes it.
-    /// 3. Centre it ([`Lightforge::settle_window`]).
-    ///
-    /// The frame is what makes the size stick, in other words, and that is
-    /// why it goes last rather than first. An earlier version grew the window
-    /// by maximizing and unmaximizing it against its new minimum — a resize
-    /// the compositor performs, which does send a configure — and that worked,
-    /// but it threw the window out to the full screen and back on every start.
-    fn grow_window() -> Task<Message> {
-        use iced::window;
-        window::oldest()
-            .and_then(|id| {
-                // The size first and the new minimum after it: a minimum only
-                // clamps a window downward, so it grows nothing on its own.
-                window::resize(id, WINDOW).chain(window::set_min_size(id, Some(WINDOW_MIN)))
-            })
-            .chain(Task::perform(tasks::after(RECONFIGURE), |()| Message::ReframeWindow))
-    }
-
-    /// Step 2: the frame goes back on, which is also what tells iced the
-    /// window's real size.
-    ///
-    /// iced reads the frame's live state and inverts it, so given a splash
-    /// that asked for none, this is "put it back".
-    ///
-    /// Nothing times step 3. The configure this provokes arrives when the
-    /// compositor is ready and not a moment sooner, so the launcher is drawn
-    /// on [`Message::WindowResized`] — a timer here guessed too early and put
-    /// a full-size window's worth of stretched launcher on screen, which is
-    /// the glitch this whole dance exists to avoid. [`GROW_BACKSTOP`] only
-    /// covers a compositor that never answers at all.
-    fn reframe_window() -> Task<Message> {
-        iced::window::oldest()
-            .and_then(iced::window::toggle_decorations)
-            .chain(Task::perform(tasks::after(GROW_BACKSTOP), |()| Message::SettleWindow))
-    }
-
-    /// Step 3: put the window back in the middle.
-    ///
-    /// A window grown from where the splash stood hangs off the right and
-    /// bottom of a 1080p screen. Wayland may ignore a client placing itself,
-    /// and that is fine — the compositor then places it, which is what this
-    /// asks for.
-    fn settle_window() -> Task<Message> {
-        use iced::window;
-        window::oldest().and_then(|id| {
-            window::monitor_size(id).and_then(move |monitor| {
-                window::move_to(
-                    id,
-                    iced::Point::new(
-                        ((monitor.width - WINDOW.width) / 2.0).max(0.0),
-                        ((monitor.height - WINDOW.height) / 2.0).max(0.0),
-                    ),
-                )
-            })
-        })
+        let frame = iced::window::oldest().and_then(|id| {
+            // iced reads the frame's live state and inverts it, so given a
+            // window mapped without one, this is "put it on".
+            iced::window::toggle_decorations(id)
+                .chain(iced::window::disable_mouse_passthrough(id))
+        });
+        // Nobody ever *navigates* to the opening screen, so `arrived` has
+        // never run for it — and the news rail on it needs the headlines.
+        // Through the same function the navigation uses rather than a second
+        // call to `fetch_news`, so the dashboard has one definition of what
+        // it wants on the way in.
+        Task::batch([frame, self.arrived()])
     }
 
     /// Re-read the disk, the version service, and the theme for one product.
@@ -2739,6 +2693,12 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::NewsOnPlay(show) => {
+                self.config.news_on_play = show;
+                self.save_config();
+                Task::none()
+            }
+
             Message::ShowReleaseNotes(show) => {
                 self.config.patch_notes_muted = !show;
                 self.save_config();
@@ -2767,49 +2727,19 @@ impl Lightforge {
                     self.splash.as_ref().map(|s| s.opened.elapsed()).unwrap_or_default();
                 match SPLASH_FLOOR.checked_sub(waited) {
                     Some(left) if !left.is_zero() => {
-                        Task::perform(tasks::after(left), |()| Message::GrowWindow)
+                        Task::perform(tasks::after(left), |()| Message::FinishSplash)
                     }
-                    // Both ways out go through `begin_grow` and nothing else:
-                    // an earlier version grew the window here directly and
-                    // left `growing` unset, so the blank-while-growing never
-                    // applied on the only runs that need it — the ones where
-                    // the fetch outlasts the floor, which is every start with
-                    // anything to fetch.
-                    _ => self.begin_grow(),
+                    // Both ways out go through `finish_splash` and nothing
+                    // else. An earlier version did the work here directly as
+                    // well, and the two copies drifted: the one taken
+                    // whenever the fetch outlasts the floor — which is every
+                    // start with anything to fetch — missed a step the other
+                    // had.
+                    _ => self.finish_splash(),
                 }
             }
 
-            Message::GrowWindow => self.begin_grow(),
-
-            Message::ReframeWindow => Self::reframe_window(),
-
-            Message::WindowResized(size) => {
-                // The one thing worth waiting for: iced has been told the
-                // window's real size, so the launcher can be laid out at it
-                // without the compositor stretching the result. Anything
-                // wider than the splash counts — the exact figure is the
-                // compositor's to decide, not ours.
-                if self.growing && size.width > SPLASH.width + 1.0 {
-                    self.growing = false;
-                    trace::mark(format_args!("grown to {}x{}", size.width, size.height));
-                    return Self::settle_window();
-                }
-                Task::none()
-            }
-
-            Message::SettleWindow => {
-                // A backstop, not the normal path: `WindowResized` is what
-                // ends the grow. If no configure ever arrives, the launcher
-                // still has to appear rather than leaving a blank window.
-                match self.growing {
-                    true => {
-                        self.growing = false;
-                        trace::mark("grow: no configure arrived, drawing anyway");
-                        Self::settle_window()
-                    }
-                    false => Task::none(),
-                }
-            }
+            Message::FinishSplash => self.finish_splash(),
 
             Message::AddProduct(code) => {
                 if self.choices.iter().any(|c| c.code == code) {
@@ -3551,18 +3481,38 @@ impl Lightforge {
                 self.setup_sample = provision::Progress::default();
                 self.setup_running = true;
                 self.error = None;
-                self.screen = Screen::Settings;
-                self.settings_tab = SettingsTab::Setup;
+                // Stays on the Proton page, which is the point of the
+                // progress now being drawn in the Builds card. It used to
+                // switch to Settings > Setup because that was the only place
+                // a bar existed, and pressing Install and landing somewhere
+                // else reads as a misclick.
+                //
+                // `install_build` rather than `provision::run` with a pinned
+                // version: that one goes on to the prefix and Battle.net
+                // afterwards, so on a machine that is not set up yet, adding
+                // a Proton build would quietly provision the whole thing.
+                Task::perform(provision::install_build(version, tx), Message::ProtonInstalled)
+            }
 
-                Task::perform(
-                    provision::run(
-                        self.layout.clone(),
-                        self.config.clone(),
-                        Some(version),
-                        tx,
-                    ),
-                    |result| Message::SetupFinished(result.map(Box::new)),
-                )
+            Message::ProtonInstalled(result) => {
+                self.setup_running = false;
+                self.setup_rx = None;
+                match result {
+                    Ok(()) => {
+                        self.proton_choice = None;
+                        self.proton_notice = Some("installed".to_owned());
+                        // What is installed just changed, so re-probe rather
+                        // than editing the list we happen to be holding.
+                        Task::perform(
+                            provision::status(self.layout.clone(), self.config.clone()),
+                            |status| Message::SetupStatus(status.map(Box::new)),
+                        )
+                    }
+                    Err(e) => {
+                        self.error = Some(e);
+                        Task::none()
+                    }
+                }
             }
 
             Message::RemoveProton(version) => {
@@ -3769,6 +3719,18 @@ impl Lightforge {
                 self.settings_tab = tab;
                 self.error = None;
                 match tab {
+                    // Asked on the way in, so the install picker is
+                    // populated by the time anyone looks at it. It used to
+                    // be hidden behind a button, and the caption where it
+                    // should have been told you to go and press that button
+                    // in a different section of the page.
+                    //
+                    // Only when there is nothing to show: the answer is
+                    // cached by ETag, but a request per tab click is still a
+                    // request per tab click.
+                    SettingsTab::Proton if self.proton_available.is_empty() => {
+                        Task::done(Message::CheckProton)
+                    }
                     SettingsTab::Storage => {
                         // Scanned when the page opens rather than polled: a
                         // drive appearing while the page is shut is not news,
@@ -5010,14 +4972,6 @@ impl Lightforge {
 
         // The splash's bar sweeps off the clock, so it needs the tick as much
         // as a live transfer does.
-        // Only while growing: this is how the app learns that the compositor
-        // has actually given the window its new size, which no timer can
-        // know — see [`Lightforge::grow_window`].
-        let grown = match self.growing {
-            true => iced::window::resize_events().map(|(_, size)| Message::WindowResized(size)),
-            false => Subscription::none(),
-        };
-
         match self.splash.is_some()
             || self.running().is_some()
             || self.setup_running
@@ -5028,10 +4982,9 @@ impl Lightforge {
                 closing,
                 hints,
                 resizes,
-                grown,
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),
             ]),
-            false => Subscription::batch([closing, hints, resizes, grown]),
+            false => Subscription::batch([closing, hints, resizes]),
         }
     }
 
@@ -5052,20 +5005,6 @@ impl Lightforge {
         // wizard's card does not fit in it.
         if let Some(splash) = &self.splash {
             return self.splash_screen(splash);
-        }
-        // Mid-grow: the window already has the launcher's size but iced has
-        // not been told yet, so whatever is drawn here is laid out at the
-        // splash's size and stretched over the launcher's by the compositor.
-        // An empty backdrop stretches to an empty backdrop, so there is
-        // nothing to see — which is the point. It lasts two steps of
-        // [`RECONFIGURE`] and reads as the window simply opening.
-        if self.growing {
-            return Element::from(
-                container(Space::new())
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .style(theme::backdrop),
-            );
         }
         // The first run is a layer over the app rather than a `Screen`: there
         // is no way out of it except the two buttons in its footer, so nothing
@@ -5811,6 +5750,12 @@ impl Lightforge {
                 };
                 Task::batch([backdrop, self.fetch_news(false)])
             }
+            // The dashboard needs them too now that the rail is on it. The
+            // same once-per-session fetch — `fetch_news` is idempotent — so
+            // arriving here first and the News page second costs one request
+            // between them, not two. With the rail switched off there is
+            // nothing here to fill, and the News page asks for itself.
+            Screen::Dashboard if self.config.news_on_play => self.fetch_news(false),
             // Arriving back on Browse with nothing in it — by the back
             // button, or on a first visit — is the same question the tab
             // itself answers: what is there?
@@ -6404,16 +6349,29 @@ impl Lightforge {
                 // flush meant *touching* the page edge with no margin of its
                 // own — alignment the eye reads as a mistake rather than as a
                 // column. How far in is [`theme::LOGO_INSET`].
-                container(logo)
-                    .align_x(Alignment::Start)
-                    .width(Length::Fill)
-                    .padding(iced::Padding {
-                        top: 0.0,
-                        right: 0.0,
-                        bottom: theme::MD,
-                        left: theme::LOGO_INSET,
-                    }),
-                Space::new().height(Length::Fill),
+                // The art's own region: the wordmark and whatever space is
+                // left, with the headlines down the right of it. A row rather
+                // than more rows in the column, because the rail wants the
+                // *height* of this region and the column would give it a
+                // share of it instead.
+                row![
+                    column![
+                        container(logo)
+                            .align_x(Alignment::Start)
+                            .width(Length::Fill)
+                            .padding(iced::Padding {
+                                top: 0.0,
+                                right: 0.0,
+                                bottom: theme::MD,
+                                left: theme::LOGO_INSET,
+                            }),
+                        Space::new().height(Length::Fill),
+                    ]
+                    .width(Length::Fill),
+                ]
+                .extend(self.news_rail())
+                .spacing(theme::MD)
+                .height(Length::Fill),
                 // A product Battle.net owns gets a panel that offers only what
                 // Lightforge can actually do for it. Running the normal one
                 // would put an INSTALL button on a game this launcher has no
@@ -6481,6 +6439,120 @@ impl Lightforge {
             .into(),
             None => content.into(),
         }
+    }
+
+    /// Headlines for the game on screen, down the right of the key art.
+    ///
+    /// `None` draws nothing at all, which is the right answer more often than
+    /// it looks:
+    ///
+    /// - **For a game Battle.net hands off** — Diablo, Hearthstone, Overwatch
+    ///   — there will never be an article. Every feed the proxy merges is
+    ///   Wowhead, so an empty rail beside StarCraft would not be "nothing
+    ///   today", it would be "nothing, ever". See [`news::Item::line`].
+    /// - **Before the fetch has been asked for**, so the rail does not appear
+    ///   and then change shape under the reader.
+    /// - **When the fetch failed with nothing cached**, because a panel whose
+    ///   whole content is an error is worse than the art it is covering.
+    ///
+    /// A line with no recent coverage *does* get the rail, saying so. That is
+    /// a fact about this week rather than about the feed, and the difference
+    /// matters to someone wondering whether the thing is broken.
+    fn news_rail(&self) -> Option<Element<'_, Message>> {
+        /// Width of the rail. Taken from the shape Gabriel drew over a
+        /// screenshot rather than derived from anything.
+        const RAIL: f32 = 260.0;
+        /// How many headlines fit before the rail wants scrolling, which it
+        /// will not get: this is a glance, and the News page is one click
+        /// away at the foot of it.
+        const MOST: usize = 5;
+
+        if !self.config.news_on_play {
+            return None;
+        }
+        // Hand-offs never match, but asking the feed would also mean drawing
+        // the rail while the fetch is in flight for a game that cannot have
+        // news. Answered from the product instead.
+        if self.kind_of(&self.selected.code) == Kind::HandOff {
+            return None;
+        }
+        let line = self.catalog.line_of(&self.selected.code);
+
+        let body: Element<'_, Message> = match &self.news {
+            Some(headlines) => {
+                let items = headlines.feed.about(&line, MOST);
+                match items.is_empty() {
+                    true => muted(
+                        format!("Nothing recent for {}.", line.label()),
+                        theme::CAPTION,
+                    )
+                    .into(),
+                    false => column(items.into_iter().map(|item| self.rail_item(item)))
+                        .spacing(theme::XS)
+                        .into(),
+                }
+            }
+            // Pending. `news_asked` without a feed means it failed with
+            // nothing on disk, which is the case that draws no rail at all.
+            None if !self.news_asked => {
+                muted("Fetching headlines…".to_owned(), theme::CAPTION).into()
+            }
+            None => return None,
+        };
+
+        let more = button(
+            row![
+                text("More in News").size(theme::LABEL),
+                Space::new().width(Length::Fill),
+                text("→").size(theme::LABEL),
+            ]
+            .align_y(Alignment::Center),
+        )
+        .padding([theme::XS, theme::SM])
+        .width(Length::Fill)
+        .style(theme::ghost)
+        .on_press(Message::Show(Screen::News));
+
+        Some(
+            container(
+                column![
+                    muted("LATEST NEWS".to_owned(), theme::CAPTION),
+                    body,
+                    // Pinned to the foot however few headlines there are, so
+                    // the link does not wander up the rail on a quiet week.
+                    Space::new().height(Length::Fill),
+                    more,
+                ]
+                .spacing(theme::SM),
+            )
+            .width(Length::Fixed(RAIL))
+            .height(Length::Fill)
+            .padding(theme::MD)
+            .style(theme::floating)
+            .into(),
+        )
+    }
+
+    /// One headline in the rail: the date, then the title, and nothing else.
+    ///
+    /// No summary and no picture, unlike [`Lightforge::news_card`] on the News
+    /// page. This is 260 points wide standing over artwork — a thumbnail
+    /// would leave room for about four words, and the summary is the reason
+    /// to click rather than something to read here.
+    fn rail_item<'a>(&self, item: &'a news::Item) -> Element<'a, Message> {
+        button(
+            column![
+                muted(short_day(&item.published), theme::CAPTION),
+                text(item.title.clone()).size(theme::LABEL),
+            ]
+            .spacing(2.0)
+            .width(Length::Fill),
+        )
+        .padding([theme::XS, theme::SM])
+        .width(Length::Fill)
+        .style(theme::card_button)
+        .on_press(Message::OpenArticle(item.url.clone()))
+        .into()
     }
 
     /// Status, progress, and every action for the selected product.
@@ -7536,7 +7608,10 @@ impl Lightforge {
             1 => "Fetching artwork for 1 game…".to_owned(),
             n => format!("Fetching artwork for {n} games…"),
         };
-        container(
+        // The card, at [`SPLASH`]'s size. `theme::menu` rather than
+        // `theme::floating`: floating is 12% transparent, which over a
+        // transparent window means the desktop showing through the splash.
+        let card = container(
             column![
                 image(wordmark_image())
                     .width(Length::Fixed(MARK * WORDMARK_ASPECT))
@@ -7547,9 +7622,17 @@ impl Lightforge {
             .spacing(theme::MD)
             .align_x(Alignment::Center),
         )
-        .center(Length::Fill)
-        .style(theme::backdrop)
-        .into()
+        .center(Length::Fixed(SPLASH.width))
+        .height(Length::Fixed(SPLASH.height))
+        .style(theme::menu);
+
+        // Centred on a window the size of the launcher, with **no background
+        // of its own**: the window was created `transparent`, so everything
+        // around the card is see-through and what anyone sees is a small
+        // panel in the middle of their screen. Painting a backdrop here
+        // instead would show a full-size empty launcher, which is the thing
+        // the splash exists to avoid.
+        container(card).center(Length::Fill).into()
     }
 
     /// Addon management: what is installed, and what could be.
@@ -8542,6 +8625,12 @@ impl Lightforge {
     }
 
     /// Every Proton build on the machine, and how to add or remove one.
+    ///
+    /// Installing lives in this card's own header rather than behind the
+    /// update check in the card above, which is where it used to be: the
+    /// button that revealed the picker and the picker it revealed were in
+    /// two different sections, so the page told you to go and press
+    /// something somewhere else.
     fn proton_builds(&self) -> Element<'_, Message> {
         let mut rows = column![].spacing(theme::SM);
 
@@ -8572,54 +8661,108 @@ impl Lightforge {
             // Only managed builds are ours to delete, and only when nothing
             // points at them — the reason is shown instead of a dead button,
             // since "why can't I remove this" is the whole question here.
+            //
+            // The count, not the list. Spelled out it ran to two lines of
+            // full product names — "pinned by the app default, Battle.net,
+            // World of Warcraft, World of Warcraft Classic, World of
+            // Warcraft: Forever — Beta" — which is a paragraph where a row
+            // wants a word. The names are still there on hover, because the
+            // count alone does not tell you what to go and unpin.
             let action: Element<Message> = match (managed, pinned_by.is_empty()) {
                 (false, _) => muted("not managed here".to_owned(), theme::CAPTION).into(),
-                (true, false) => {
-                    muted(format!("pinned by {}", pinned_by.join(", ")), theme::CAPTION).into()
-                }
+                (true, false) => tooltip(
+                    muted(
+                        match pinned_by.len() {
+                            1 => "in use by 1".to_owned(),
+                            n => format!("in use by {n}"),
+                        },
+                        theme::CAPTION,
+                    ),
+                    container(text(pinned_by.join(", ")).size(theme::LABEL))
+                        .padding([theme::XS, theme::SM])
+                        .style(theme::floating),
+                    tooltip::Position::Left,
+                )
+                .into(),
                 (true, true) => secondary("Remove", Message::RemoveProton(build.version.clone()))
                     .enabled(!self.setup_running)
                     .into(),
             };
 
             rows = rows.push(
-                row![facts, Space::new().width(Length::Fill), action]
-                    .spacing(theme::MD)
-                    .align_y(Alignment::Center),
+                container(
+                    row![facts, Space::new().width(Length::Fill), action]
+                        .spacing(theme::MD)
+                        .align_y(Alignment::Center),
+                )
+                .padding([theme::SM, theme::MD])
+                .style(theme::row),
             );
         }
 
-        // The picker is only useful once the release list has been fetched,
-        // and saying so beats an empty dropdown.
-        let install: Element<Message> = match self.proton_available.is_empty() {
-            true => muted(
-                "Check for updates to list installable versions.".to_owned(),
-                theme::CAPTION,
-            )
-            .into(),
-            false => row![
-                pick_list(
-                    self.proton_available
-                        .iter()
-                        .map(|v| ProtonChoice(Some(v.clone()), Unpinned::Newest))
-                        .collect::<Vec<_>>(),
-                    self.proton_choice.clone().map(|v| ProtonChoice(Some(v), Unpinned::Newest)),
-                    Message::ChooseProtonVersion,
-                )
-                .placeholder("Choose a version")
-                .text_size(theme::BODY)
-                .padding(theme::SM),
-                secondary("Install", Message::InstallProton)
-                    .enabled(self.proton_choice.is_some() && !self.setup_running),
+        // While a build is coming down, in this card. It used to throw the
+        // user to Settings > Setup, because that was the only place a
+        // progress bar existed — pressing Install and landing on a different
+        // page reads as a misclick.
+        if self.setup_running {
+            let mut working = column![].spacing(theme::XS);
+            for line in &self.setup_sample.log {
+                working = working.push(muted(line.clone(), theme::CAPTION));
+            }
+            working = working.push(match self.setup_sample.fraction() {
+                Some(fraction) => Element::from(progress_bar(0.0..=1.0, fraction).girth(6)),
+                // No content-length: the bytes are the only honest figure.
+                None => mono(bytes_of(self.setup_sample.done, 0)).into(),
+            });
+            rows = rows.push(container(working).padding(theme::MD).style(theme::card));
+        }
+
+        rows.into()
+    }
+
+    /// The control that adds a build, for the Builds card's header.
+    ///
+    /// The release list is fetched on the way into the page (see
+    /// [`Lightforge::arrived`]), so by the time anyone reads this it is
+    /// usually populated. The three states it can be in all say which one
+    /// they are rather than showing an empty dropdown.
+    fn proton_install(&self) -> Element<'_, Message> {
+        if self.proton_available.is_empty() {
+            return row![
+                muted(
+                    self.proton_notice.clone().unwrap_or_else(|| "checking…".to_owned()),
+                    theme::CAPTION,
+                ),
+                secondary("Check again", Message::CheckProton).enabled(!self.setup_running),
             ]
             .spacing(theme::SM)
             .align_y(Alignment::Center)
-            .into(),
-        };
+            .into();
+        }
 
-        rows = rows.push(Space::new().height(Length::Fixed(theme::XS)));
-        rows = rows.push(install);
-        rows.into()
+        row![
+            pick_list(
+                self.proton_available
+                    .iter()
+                    .map(|v| ProtonChoice(Some(v.clone()), Unpinned::Newest))
+                    .collect::<Vec<_>>(),
+                self.proton_choice.clone().map(|v| ProtonChoice(Some(v), Unpinned::Newest)),
+                Message::ChooseProtonVersion,
+            )
+            .placeholder("Install a version")
+            .text_size(theme::BODY)
+            .padding(theme::SM)
+            .width(Length::Fixed(220.0))
+            // The one picker on this page that used to forget the theme, and
+            // it showed: a system-styled dropdown among five themed ones.
+            .style(theme::picker)
+            .menu_style(theme::picker_menu),
+            secondary("Install", Message::InstallProton)
+                .enabled(self.proton_choice.is_some() && !self.setup_running),
+        ]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center)
+        .into()
     }
 
     /// Settings, laid out the way Battle.net lays out its own: a list of
@@ -8661,11 +8804,11 @@ impl Lightforge {
             content =
                 content.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
         }
-        // Storage names each of its own groups — Drives, Add a drive,
-        // Lightforge's own files — so an outer "Storage" heading above the
-        // first of them is a title for a title.
+        // Storage and Proton name each of their own groups — Drives and Add
+        // a drive; Games and their Proton, and Builds — so an outer heading
+        // above the first of them is a title for a title.
         content = content.push(match self.settings_tab {
-            SettingsTab::Storage => body,
+            SettingsTab::Storage | SettingsTab::Proton => body,
             _ => section(title, body),
         });
 
@@ -8771,16 +8914,26 @@ impl Lightforge {
                 .into()
         };
 
+        // A row of this card: the name takes the slack, then any signs, then
+        // the control. Not [`field_row`], whose 160 pt label column left
+        // about a hundred points for a tag and so allowed exactly one. The
+        // name is the shortest thing on the line and the picker a fixed
+        // width, so giving the *name* the slack is what frees the middle.
+        fn line<'a>(
+            label: String,
+            tags: Vec<Element<'a, Message>>,
+            control: Element<'a, Message>,
+        ) -> Element<'a, Message> {
+            row![text(label).size(theme::BODY).width(Length::Fill)]
+                .extend(tags)
+                .push(control)
+                .spacing(theme::SM)
+                .align_y(Alignment::Center)
+                .into()
+        }
+
         let games = self.installed_products();
-        let mut rows = column![field_row(
-            "Default".to_owned(),
-            picker(
-                Unpinned::Newest,
-                self.config.default_proton.version().map(str::to_owned),
-                Box::new(Message::PinDefaultProton),
-            ),
-        )]
-        .spacing(theme::SM);
+        let mut pins = column![].spacing(theme::SM);
 
         // One row per installed game, in the order the config lists them —
         // the same order as the Play page's tiles, so the two read alike.
@@ -8790,77 +8943,82 @@ impl Lightforge {
             // — the client is told to start *that* game, and that game is
             // what the pin is about. What it cannot do is give the title a
             // prefix of its own: there is one, shared, which is what the
-            // downgrade sign below is for.
+            // downgrade sign is for.
             let pin = self
                 .config
                 .product(code)
                 .and_then(|p| p.profile.proton_ge_version.clone());
             let for_code = code.clone();
-            rows = rows.push(field_row(
+
+            // Both signs now, where the old row had space for one and the
+            // shop always won. They say different things — one names a build
+            // to move to, the other warns about the prefix this one shares —
+            // and a game can be in both states at once.
+            let mut tags: Vec<Element<'_, Message>> = Vec::new();
+            match self.shop_build_state(code) {
+                ShopBuild::Running => tags.push(tag("In-game shop working".to_owned(), theme::OK)),
+                ShopBuild::Elsewhere => {
+                    tags.push(tag(format!("{} recommended", proton::SHOP_BUILD), theme::UPDATE))
+                }
+                ShopBuild::NotWow => {}
+            }
+            if self.row_fit(code).is_downgrade() {
+                tags.push(tag("Older than this prefix".to_owned(), theme::UPDATE));
+            }
+
+            pins = pins.push(line(
                 label.clone(),
-                row![
-                    picker(
-                        match Kind::of(code) {
-                            Kind::Managed => Unpinned::Default,
-                            Kind::HandOff => Unpinned::BattleNet,
-                        },
-                        pin,
-                        Box::new(move |choice| Message::PinProductProton(
-                            for_code.clone(),
-                            choice
-                        )),
-                    ),
-                    // One sign, where it can be acted on: beside the picker
-                    // that sets it, on the game it is about. Never two — the
-                    // page's nav, the label and the picker leave about a
-                    // hundred points, so a second tag is one that does not
-                    // fit. On a WoW version the shop wins: it is the thing
-                    // the person at the keyboard will notice, and it names
-                    // the build to move to. The prefix sign is for the rest,
-                    // and is said for everything in the line below anyway.
-                    match (self.shop_build_state(code), self.row_fit(code).is_downgrade()) {
-                        (ShopBuild::Running, _) =>
-                            tag("In-game shop working".to_owned(), theme::OK),
-                        (ShopBuild::Elsewhere, _) =>
-                            tag(format!("{} recommended", proton::SHOP_BUILD), theme::UPDATE),
-                        (ShopBuild::NotWow, true) =>
-                            tag("Older than this prefix".to_owned(), theme::UPDATE),
-                        (ShopBuild::NotWow, false) => Space::new().width(Length::Shrink).into(),
+                tags,
+                picker(
+                    match Kind::of(code) {
+                        Kind::Managed => Unpinned::Default,
+                        Kind::HandOff => Unpinned::BattleNet,
                     },
-                ]
-                .spacing(theme::SM)
-                .align_y(Alignment::Center)
-                .into(),
+                    pin,
+                    Box::new(move |choice| Message::PinProductProton(for_code.clone(), choice)),
+                ),
             ));
         }
 
-        // Nothing installed is worth saying: an empty gap between Default and
-        // Battle.net looks like a page that failed to load.
+        // Nothing installed is worth saying: an empty gap above the rule
+        // looks like a page that failed to load.
         if games.is_empty() {
-            rows = rows.push(muted(
+            pins = pins.push(muted(
                 "Games appear here once they are installed.".to_owned(),
                 theme::LABEL,
             ));
         }
 
-        rows = rows.push(field_row(
+        // Under a rule, because they are not games. Everything above is a
+        // thing you launch; these two are what the things above fall back to.
+        pins = pins.push(
+            container(Space::new().height(Length::Fixed(1.0)))
+                .width(Length::Fill)
+                .style(theme::divider),
+        );
+        pins = pins.push(line(
+            "Default".to_owned(),
+            Vec::new(),
+            picker(
+                Unpinned::Newest,
+                self.config.default_proton.version().map(str::to_owned),
+                Box::new(Message::PinDefaultProton),
+            ),
+        ));
+        pins = pins.push(line(
             "Battle.net".to_owned(),
-            row![
-                picker(
-                    Unpinned::Default,
-                    self.config.battle_net_proton.version().map(str::to_owned),
-                    Box::new(Message::PinBattleNetProton),
-                ),
-                // The prefix's own build, beside the pin that will next open
-                // it. The one fact that makes the signs above legible.
-                match self.setup.as_ref().and_then(|s| s.prefix.built_by.as_deref()) {
-                    Some(built_by) => muted(format!("prefix built by {built_by}"), theme::CAPTION),
-                    None => muted("no prefix yet".to_owned(), theme::CAPTION),
-                },
-            ]
-            .spacing(theme::SM)
-            .align_y(Alignment::Center)
-            .into(),
+            // The prefix's own build, beside the pin that will next open it.
+            // The one fact that makes the signs above legible.
+            vec![match self.setup.as_ref().and_then(|s| s.prefix.built_by.as_deref()) {
+                Some(built_by) => muted(format!("prefix built by {built_by}"), theme::CAPTION),
+                None => muted("no prefix yet".to_owned(), theme::CAPTION),
+            }
+            .into()],
+            picker(
+                Unpinned::Default,
+                self.config.battle_net_proton.version().map(str::to_owned),
+                Box::new(Message::PinBattleNetProton),
+            ),
         ));
 
         // One line for the whole list rather than one under each game: the
@@ -8877,7 +9035,7 @@ impl Lightforge {
             .map(|(_, label)| label.clone())
             .collect();
 
-        rows
+        let pins = pins
             .extend(self.hint(
                 "A game with no pin of its own follows the default. Battle.net and Agent \
                  are a different workload from the game, so they pin separately — a game \
@@ -8910,24 +9068,50 @@ impl Lightforge {
                          under {}. Newer builds start the game's embedded browser and lose \
                          its GPU process, which is the grey box instead of a page. \
                          Everything else about the game is unaffected — install it under \
-                         Installed builds below, then pin it here.",
+                         Builds below, then pin it here.",
                         proton::SHOP_BUILD,
                     ))
                 })
                 .flatten()
                 .map(Element::from),
-            )
-            .push(
-                row![
-                    secondary("Check for updates", Message::CheckProton).enabled(true),
-                    muted(self.proton_notice.clone().unwrap_or_default(), theme::LABEL),
-                ]
+            );
+
+        // A card each, because the page is two questions: which Proton does
+        // each game run, and which Protons are on this machine. They used to
+        // be one list with the second half tacked under the first.
+        fn card<'a>(
+            title: &'static str,
+            header: Option<Element<'a, Message>>,
+            body: Element<'a, Message>,
+        ) -> Element<'a, Message> {
+            let mut heading = row![text(title).size(theme::HEADING)]
                 .spacing(theme::SM)
-                .align_y(Alignment::Center),
+                .align_y(Alignment::Center);
+            if let Some(control) = header {
+                heading = heading.push(Space::new().width(Length::Fill)).push(control);
+            }
+            container(
+                column![
+                    heading,
+                    container(Space::new().height(Length::Fixed(1.0)))
+                        .width(Length::Fill)
+                        .style(theme::divider),
+                    body,
+                ]
+                .spacing(theme::MD),
             )
-            .push(Space::new().height(Length::Fixed(theme::MD)))
-            .push(section("Installed builds", self.proton_builds()))
+            .padding(theme::LG)
+            .width(Length::Fill)
+            .style(theme::card)
             .into()
+        }
+
+        column![
+            card("Games and their Proton", None, pins.into()),
+            card("Builds", Some(self.proton_install()), self.proton_builds()),
+        ]
+        .spacing(theme::MD)
+        .into()
     }
 
     /// Speed caps, ours and Battle.net's, and pausing while playing.
@@ -9003,6 +9187,16 @@ impl Lightforge {
             "Only where Battle.net can sign itself in: without that it comes up as a normal \
              window whatever this says, because a sign-in nobody can see is a launch that \
              never happens. Opening Battle.net from the game panel always shows its window.",
+        ).map(Element::from))
+        .push(toggle(
+            self.config.news_on_play,
+            "Show News on the Play page",
+            Message::NewsOnPlay,
+        ))
+        .extend(self.hint(
+            "A News panel beside the key art, carrying the newest articles about whichever \
+             game you are looking at. Only the World of Warcraft family has a news source \
+             — the games Battle.net launches never show one.",
         ).map(Element::from))
         .push(toggle(
             !self.config.patch_notes_muted,

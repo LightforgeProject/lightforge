@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::net::{ETagCache, Http};
+use crate::product::ProductLine;
 
 /// One headline.
 ///
@@ -40,6 +41,59 @@ pub struct Item {
     /// and parsing one to re-format it is how time zones get invented.
     #[serde(default)]
     pub published: String,
+}
+
+impl Item {
+    /// Which WoW line this article is about, as far as its category says.
+    ///
+    /// `None` is the common and correct answer for about a third of the feed:
+    /// BlizzCon coverage, site news and Blizzard-wide announcements belong to
+    /// no one line, and filing them under whichever game happens to be
+    /// selected would be a lie. Measured against a real 99-item fetch:
+    /// `Live` 27, `Forever` 28, `Classic` 8, `PTR` 4, and 32 with no line.
+    ///
+    /// **Classic and Classic Era are not separable from this data.** Wowhead
+    /// tags both `Classic`, so both lines see the same articles. That is a
+    /// limit of the source, not a bug here — the alternative is guessing, and
+    /// a wrong headline under a game is worse than a shared one.
+    ///
+    /// Nothing maps to a non-WoW game, because nothing in the feed is about
+    /// one: every source the proxy merges is Wowhead. A hand-off title asking
+    /// this will always get `None`, which is why the caller shows it nothing
+    /// rather than an empty list.
+    pub fn line(&self) -> Option<ProductLine> {
+        let category = self.category.as_deref()?.trim();
+        // Case-insensitively, because the tag is whatever an author typed.
+        match category.to_ascii_lowercase().as_str() {
+            "live" | "retail" | "ptr" => Some(ProductLine::Retail),
+            "forever" => Some(ProductLine::Forever),
+            "classic" | "classic era" | "era" | "hardcore" | "season of discovery" => {
+                Some(ProductLine::Classic)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether this article belongs on `line`'s panel.
+    ///
+    /// Classic and Classic Era share, for the reason in [`Item::line`].
+    pub fn is_about(&self, line: &ProductLine) -> bool {
+        match (self.line(), line) {
+            (Some(ProductLine::Classic), ProductLine::Classic | ProductLine::ClassicEra) => true,
+            (Some(mine), wanted) => &mine == wanted,
+            (None, _) => false,
+        }
+    }
+}
+
+impl Feed {
+    /// The newest `limit` articles about one line, newest first.
+    ///
+    /// The feed arrives newest first and nothing re-sorts it, so this is a
+    /// filter and a truncation rather than a search.
+    pub fn about(&self, line: &ProductLine, limit: usize) -> Vec<&Item> {
+        self.items.iter().filter(|item| item.is_about(line)).take(limit).collect()
+    }
 }
 
 /// What the proxy served.
@@ -188,6 +242,78 @@ fn image_name(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// The mapping exists to answer "what is this article about", and the
+    /// honest answer for a third of the feed is "nothing in particular".
+    #[test]
+    fn a_category_places_an_article_on_a_line_or_on_none() {
+        let tagged = |category: &str| Item {
+            category: Some(category.to_owned()),
+            ..Item::default()
+        };
+
+        assert_eq!(tagged("Live").line(), Some(ProductLine::Retail));
+        assert_eq!(tagged("PTR").line(), Some(ProductLine::Retail));
+        assert_eq!(tagged("Forever").line(), Some(ProductLine::Forever));
+        assert_eq!(tagged("Classic").line(), Some(ProductLine::Classic));
+        // Whatever an author typed.
+        assert_eq!(tagged("  live  ").line(), Some(ProductLine::Retail));
+
+        // The third of the feed that belongs to no line: BlizzCon coverage,
+        // site news, Blizzard-wide announcements. Filing these under whichever
+        // game happens to be selected would be a lie.
+        assert_eq!(tagged("Blizzard").line(), None);
+        assert_eq!(tagged("Wowhead").line(), None);
+        assert_eq!(tagged("WoW").line(), None);
+        assert_eq!(Item::default().line(), None, "no category at all");
+    }
+
+    /// Wowhead tags Classic and Classic Era alike, so they share. A limit of
+    /// the source: the alternative is guessing which one an article meant.
+    #[test]
+    fn classic_and_classic_era_see_the_same_articles() {
+        let item = Item { category: Some("Classic".to_owned()), ..Item::default() };
+        assert!(item.is_about(&ProductLine::Classic));
+        assert!(item.is_about(&ProductLine::ClassicEra));
+        assert!(!item.is_about(&ProductLine::Retail));
+    }
+
+    /// Nothing in this feed is about a game Battle.net hands off, because
+    /// every source the proxy merges is Wowhead. The caller relies on this to
+    /// know it should draw no panel at all rather than an empty one.
+    #[test]
+    fn a_handoff_title_matches_nothing() {
+        let feed = Feed {
+            items: vec![
+                Item { category: Some("Live".to_owned()), ..Item::default() },
+                Item { category: Some("Forever".to_owned()), ..Item::default() },
+                Item { category: Some("Blizzard".to_owned()), ..Item::default() },
+            ],
+            degraded: Vec::new(),
+        };
+        let diablo = ProductLine::Custom("d4".to_owned());
+        assert!(feed.about(&diablo, 3).is_empty());
+        // And the lines that do exist get only their own.
+        assert_eq!(feed.about(&ProductLine::Retail, 3).len(), 1);
+        assert_eq!(feed.about(&ProductLine::Forever, 3).len(), 1);
+    }
+
+    /// Newest first and no more than asked for: the feed arrives in order and
+    /// nothing here re-sorts it.
+    #[test]
+    fn the_panel_takes_the_newest_few() {
+        let live = |title: &str| Item {
+            title: title.to_owned(),
+            category: Some("Live".to_owned()),
+            ..Item::default()
+        };
+        let feed = Feed {
+            items: vec![live("newest"), live("middle"), live("oldest")],
+            degraded: Vec::new(),
+        };
+        let shown: Vec<&str> = feed.about(&ProductLine::Retail, 2).iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(shown, vec!["newest", "middle"]);
+    }
     use super::*;
 
     #[test]

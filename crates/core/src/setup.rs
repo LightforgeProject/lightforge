@@ -241,6 +241,29 @@ pub async fn run(
     Ok(status)
 }
 
+/// Install one Proton build and nothing else.
+///
+/// [`run`] also installs a build when one is missing, but it goes on to the
+/// prefix and Battle.net afterwards — which is right for "set this machine
+/// up" and wrong for "add this build to the list". Pressing Install beside a
+/// version on the Proton page should not create a Wine prefix as a side
+/// effect, and on a machine that is not provisioned yet it would.
+pub async fn install_build(
+    dirs: &AppDirs,
+    version: &str,
+    mut on_event: impl FnMut(Event),
+) -> Result<ProtonRelease, SetupError> {
+    let http = Http::new()?;
+    on_event(Event::Started(Step::Proton));
+    let build = install_proton(&http, dirs, Some(version), &mut on_event).await?;
+    on_event(Event::Finished {
+        step: Step::Proton,
+        skipped: false,
+        note: build.version.clone(),
+    });
+    Ok(build)
+}
+
 async fn install_proton(
     http: &Http,
     dirs: &AppDirs,

@@ -31,17 +31,28 @@ impl Progress {
     }
 }
 
-/// Provision whatever is missing, publishing progress to `tx`.
-pub async fn run(
-    layout: Layout,
-    config: Config,
-    proton_version: Option<String>,
+/// Install one Proton build, publishing progress to `tx`.
+///
+/// Deliberately not [`run`] with a pinned version: that goes on to the prefix
+/// and Battle.net, which is not what Install beside a version list means.
+pub async fn install_build(
+    version: String,
     tx: tokio::sync::watch::Sender<Progress>,
-) -> Result<Status, String> {
+) -> Result<(), String> {
     let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
-    let mut progress = Progress::default();
+    setup::install_build(&dirs, &version, reporter(tx))
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
 
-    let on_event = move |event: Event| {
+/// Turn setup [`Event`]s into [`Progress`] updates on `tx`.
+///
+/// Shared by [`run`] and [`install_build`] so the log reads the same whichever
+/// started the work.
+fn reporter(tx: tokio::sync::watch::Sender<Progress>) -> impl FnMut(Event) {
+    let mut progress = Progress::default();
+    move |event: Event| {
         match event {
             Event::Started(step) => {
                 progress.step = Some(step);
@@ -64,9 +75,18 @@ pub async fn run(
             }
         }
         let _ = tx.send(progress.clone());
-    };
+    }
+}
 
-    setup::run(&layout, &dirs, &config, proton_version.as_deref(), on_event)
+/// Provision whatever is missing, publishing progress to `tx`.
+pub async fn run(
+    layout: Layout,
+    config: Config,
+    proton_version: Option<String>,
+    tx: tokio::sync::watch::Sender<Progress>,
+) -> Result<Status, String> {
+    let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
+    setup::run(&layout, &dirs, &config, proton_version.as_deref(), reporter(tx))
         .await
         .map_err(|e| e.to_string())
 }
