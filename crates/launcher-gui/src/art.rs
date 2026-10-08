@@ -356,3 +356,86 @@ mod tests {
         assert!(matches!(logo(&path), (Handle::Path(..), ..)));
     }
 }
+
+// ------------------------------------------------------- report screenshots --
+
+/// The longest edge a screenshot is sent at.
+///
+/// A 4K grab of a launcher is 8 MB of PNG and tells nobody anything a 1920px
+/// one does not. Anything already smaller is left exactly as it was.
+const SHOT_MAX_EDGE: u32 = 1920;
+
+/// Above this, the PNG is re-encoded as JPEG instead.
+///
+/// Screenshots of flat UI compress well as PNG and badly as JPEG, so PNG is
+/// the default; a photograph of a monitor is the other way round, and this is
+/// what catches it.
+const SHOT_PNG_LIMIT: usize = 2 * 1024 * 1024;
+
+/// A screenshot somebody dropped on the bug report dialog.
+#[derive(Debug, Clone)]
+pub struct Shot {
+    /// The file's own name, which is what the attachment is called.
+    pub name: String,
+    /// Encoded bytes exactly as they will be sent.
+    pub bytes: Vec<u8>,
+    pub media_type: &'static str,
+    pub size: (u32, u32),
+    /// The same image, for the thumbnail in the dialog.
+    pub preview: Handle,
+}
+
+/// Read an image from disk, shrink it if it is enormous, and encode it.
+///
+/// Fails rather than guesses: a file that is not an image at all is the common
+/// case here, because anything can be dropped on a window.
+pub fn load_shot(path: &Path) -> Result<Shot, String> {
+    let decoded = image::open(path).map_err(|e| format!("not an image: {e}"))?;
+    let mut rgba = decoded.into_rgba8();
+
+    let longest = rgba.width().max(rgba.height());
+    if longest > SHOT_MAX_EDGE {
+        let scale = f64::from(SHOT_MAX_EDGE) / f64::from(longest);
+        let width = ((f64::from(rgba.width()) * scale) as u32).max(1);
+        let height = ((f64::from(rgba.height()) * scale) as u32).max(1);
+        rgba = image::imageops::resize(&rgba, width, height, FilterType::Triangle);
+    }
+    let size = (rgba.width(), rgba.height());
+
+    let encode = |format: image::ImageOutputFormat| -> Result<Vec<u8>, String> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(rgba.clone())
+            .write_to(&mut out, format)
+            .map_err(|e| format!("could not encode it: {e}"))?;
+        Ok(out.into_inner())
+    };
+
+    let png = encode(image::ImageOutputFormat::Png)?;
+    let (bytes, media_type) = match png.len() > SHOT_PNG_LIMIT {
+        // JPEG has no alpha, and a screenshot has none worth keeping.
+        true => {
+            let rgb = image::DynamicImage::ImageRgba8(rgba).into_rgb8();
+            let mut out = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(rgb)
+                .write_to(&mut out, image::ImageOutputFormat::Jpeg(85))
+                .map_err(|e| format!("could not encode it: {e}"))?;
+            let jpeg = out.into_inner();
+            match jpeg.len() < png.len() {
+                true => (jpeg, "image/jpeg"),
+                false => (png, "image/png"),
+            }
+        }
+        false => (png, "image/png"),
+    };
+
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "screenshot".to_owned());
+    let name = match media_type {
+        "image/jpeg" => format!("{name}.jpg"),
+        _ => name,
+    };
+
+    Ok(Shot { name, preview: Handle::from_bytes(bytes.clone()), bytes, media_type, size })
+}

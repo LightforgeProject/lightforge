@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 
 use iced::widget::{
     button, canvas, column, container, image, mouse_area, pick_list, progress_bar, responsive,
-    rich_text, row, scrollable, span, stack, text, text_input, tooltip, Space,
+    rich_text, row, scrollable, span, stack, text, text_editor, text_input, tooltip, Space,
 };
 use iced::{Alignment, ContentFit, Element, Length, Subscription, Task};
 
@@ -411,10 +411,21 @@ enum Message {
     ManageSubscription,
     OpenFiles,
     CopyDebug,
+    /// What the renderer picked and what it is running on, answered once at
+    /// startup so a report never has to wait for it.
+    SystemInfo(Box<iced::system::Information>),
     /// Open the bug report or the feedback dialog.
     OpenReport(ReportKind),
     /// What someone has typed into whichever of the two is open.
-    ReportNote(String),
+    ReportNote(iced::widget::text_editor::Action),
+    /// Open the desktop's file dialog and ask for an image.
+    ReportShotPick,
+    /// What came back from it, or `None` if it was cancelled.
+    ReportShotPicked(Option<PathBuf>),
+    /// It was read, resized and encoded, or it was not an image.
+    ReportShotLoaded(Result<Box<art::Shot>, String>),
+    /// Take the screenshot back off the report.
+    ReportShotCleared,
     /// Where they can be reached, if they want to be.
     ReportContact(String),
     ReportSend,
@@ -718,17 +729,35 @@ enum ReportStage {
     /// rather than swallowed: a dialog that claims "sent" when the server was
     /// unreachable is worse than no dialog.
     Failed,
+    /// The same text went out a moment ago. Typing anything clears it.
+    TooSoon,
 }
 
+/// How long the same report is refused for after it is sent.
+///
+/// Aimed at the person pressing Send again because nothing visibly happened,
+/// not at an attacker — the DSN ships in the binary, so real abuse is a
+/// server-side limit, not a client-side one.
+const REPORT_COOLDOWN: Duration = Duration::from_secs(300);
+
 /// The bug report / feedback dialog.
-#[derive(Debug, Clone)]
+///
+/// Not `Clone` or `Debug`, unlike its neighbours: a [`text_editor::Content`]
+/// is neither, because it owns a laid-out buffer rather than a string.
 struct ReportDialog {
     kind: ReportKind,
-    /// What the user is typing.
-    note: String,
+    /// What the user is typing. A multi-line editor rather than a field —
+    /// "what were you doing" is a paragraph, and a one-line box that scrolls
+    /// sideways invites a one-line answer.
+    note: iced::widget::text_editor::Content,
     /// An address or a Discord name, so there is a way to answer. Optional,
     /// and the only personal thing either report carries.
     contact: String,
+    /// Facts worth filtering issues by, taken off the same bundle the card
+    /// shows. Empty for feedback, which carries no diagnostics.
+    tags: Vec<(String, String)>,
+    /// A screenshot dropped on the dialog, if there is one.
+    shot: Option<art::Shot>,
     /// The debug bundle, rendered when the dialog opened — that is where the
     /// four things [`DebugInfo::gather`] needs are in scope. Empty for
     /// feedback, which sends none of it. Already scrubbed of the account
@@ -1316,6 +1345,11 @@ struct Lightforge {
     busy: bool,
     status: String,
     error: Option<String>,
+    /// The last few status lines, oldest first, for a bug report to carry.
+    history: std::collections::VecDeque<String>,
+    /// What was last reported and when, so the same text cannot go out twice
+    /// in a row by accident.
+    last_report: Option<(String, Instant)>,
     /// Set when the window has asked to close and a transfer is still coming
     /// to rest; the window closes once it has.
     closing: Option<iced::window::Id>,
@@ -1357,6 +1391,9 @@ struct Lightforge {
     install_dialog: Option<InstallDialog>,
     uninstall_dialog: Option<UninstallDialog>,
     report_dialog: Option<ReportDialog>,
+    /// Filled in once, shortly after startup. `None` until then, and a report
+    /// sent in that window simply says so rather than blocking on it.
+    system: Option<iced::system::Information>,
     downgrade_dialog: Option<DowngradeDialog>,
     /// Builds the user has already agreed to launch under this session.
     ///
@@ -1583,6 +1620,9 @@ impl Lightforge {
             install_dialog: None,
             uninstall_dialog: None,
             report_dialog: None,
+            system: None,
+            history: std::collections::VecDeque::new(),
+            last_report: None,
             downgrade_dialog: None,
             downgrade_ok: HashSet::new(),
             partitions: Vec::new(),
@@ -1699,6 +1739,7 @@ impl Lightforge {
             bnet_limit,
             resume,
             artwork,
+            iced::system::information().map(|info| Message::SystemInfo(Box::new(info))),
         ]);
         (app, task)
     }
@@ -2301,7 +2342,39 @@ impl Lightforge {
         }
     }
 
+    /// Every message, with the status line watched on the way out.
+    ///
+    /// Lightforge only traces to stdout, so the status line is the closest
+    /// thing to a log it has — and whatever it said in the minute before a
+    /// bug report is usually the whole story. Recording it here rather than at
+    /// the hundred-odd places that assign it means nothing can be forgotten.
     fn update(&mut self, message: Message) -> Task<Message> {
+        let before = (self.status.clone(), self.error.clone());
+        let task = self.step(message);
+
+        if self.status != before.0 && !self.status.is_empty() {
+            self.remember(self.status.clone());
+        }
+        if self.error != before.1 {
+            if let Some(error) = self.error.clone() {
+                self.remember(format!("error: {error}"));
+            }
+        }
+        task
+    }
+
+    /// Keep the last [`HISTORY`] things the launcher said.
+    fn remember(&mut self, line: String) {
+        if self.history.back() == Some(&line) {
+            return;
+        }
+        if self.history.len() == HISTORY {
+            self.history.pop_front();
+        }
+        self.history.push_back(line);
+    }
+
+    fn step(&mut self, message: Message) -> Task<Message> {
         let task = self.handle(message);
         self.persist_queue();
         task
@@ -4300,28 +4373,57 @@ impl Lightforge {
                 iced::clipboard::write(info.render())
             }
 
+            Message::SystemInfo(info) => {
+                self.system = Some(*info);
+                Task::none()
+            }
+
             Message::OpenReport(kind) => {
                 self.close_panels();
                 // Gathered here because this is where the four things
                 // `DebugInfo::gather` needs are in scope, and gathered once:
                 // the card shows exactly the text that gets sent, not a
                 // second rendering of it.
-                let debug = match kind {
+                let (debug, tags) = match kind {
                     ReportKind::Bug => {
                         let action = self.action();
-                        DebugInfo::gather(
+                        let mut info = DebugInfo::gather(
                             &self.layout,
                             &self.selected.code,
                             &format!("{action:?}"),
                             tasks::proton_for(&self.selected.code).as_ref(),
-                        )
-                        .render()
+                        );
+                        // What the renderer picked is the one thing core
+                        // cannot know, so the GUI fills it in here.
+                        if let Some(system) = &self.system {
+                            info.graphics = Some(system.graphics_adapter.clone());
+                            info.graphics_backend = Some(system.graphics_backend.clone());
+                            info.cpu = Some(system.cpu_brand.clone());
+                            info.memory = Some(system.memory_total);
+                        }
+                        let tags = report_tags(&info);
+                        // The recent status lines go into the shown block as
+                        // well as into the breadcrumbs, because the card
+                        // promises that this is what gets sent — and they are
+                        // scrubbed like everything else, since a failure
+                        // message can carry a path.
+                        let mut text = info.render();
+                        if !self.history.is_empty() {
+                            text.push_str("\n--- recent activity ---\n");
+                            for line in &self.history {
+                                text.push_str(&lightforge_core::debug::scrub(line));
+                                text.push('\n');
+                            }
+                        }
+                        (text, tags)
                     }
-                    ReportKind::Feedback => String::new(),
+                    ReportKind::Feedback => (String::new(), Vec::new()),
                 };
                 self.report_dialog = Some(ReportDialog {
                     kind,
-                    note: String::new(),
+                    note: iced::widget::text_editor::Content::new(),
+                    tags,
+                    shot: None,
                     // Remembered between reports: someone who gave it once
                     // should not have to type it again to answer a follow-up.
                     contact: self.config.contact.clone().unwrap_or_default(),
@@ -4331,9 +4433,86 @@ impl Lightforge {
                 Task::none()
             }
 
-            Message::ReportNote(note) => {
+            Message::ReportNote(action) => {
+                // `text_editor` has no "read only" of its own, so a report on
+                // its way out is held here instead.
+                if let Some(dialog) = self
+                    .report_dialog
+                    .as_mut()
+                    .filter(|d| !matches!(d.stage, ReportStage::Sending | ReportStage::Sent))
+                {
+                    // Editing is how someone gets out of the cooldown: the
+                    // text that was refused is no longer the text they have.
+                    if dialog.stage == ReportStage::TooSoon && action.is_edit() {
+                        dialog.stage = ReportStage::Writing;
+                    }
+                    dialog.note.perform(action);
+                }
+                Task::none()
+            }
+
+            Message::ReportShotPick => Task::perform(
+                // The desktop's own dialog, asked for over the XDG portal.
+                //
+                // Spoken directly rather than through a file-dialog crate:
+                // `rfd` drives the portal through `libdbus` on a thread of its
+                // own, and inside this process that call never returns — the
+                // dialog does not appear and the thread sits in a futex. The
+                // same call from a bare test binary works, so it is this
+                // process it dislikes, not the machine. `ashpd` is pure Rust
+                // over the `zbus` connection iced already builds.
+                async {
+                    let request = ashpd::desktop::file_chooser::OpenFileRequest::default()
+                        .title("Choose a screenshot")
+                        .modal(true)
+                        .multiple(false)
+                        .filter(
+                            ashpd::desktop::file_chooser::FileFilter::new("Images")
+                                .mimetype("image/png")
+                                .mimetype("image/jpeg")
+                                .mimetype("image/webp")
+                                .mimetype("image/bmp"),
+                        );
+
+                    let files = request.send().await.ok()?.response().ok()?;
+                    // Cancelling comes back as an empty list, which is not an
+                    // error and means nothing happened. `to_file_path` rather
+                    // than the URL's own `path`, which is still percent-encoded
+                    // — and "Screenshot 2026-10-09.png" is the normal case.
+                    files.uris().first().and_then(|uri| uri.to_file_path().ok())
+                },
+                Message::ReportShotPicked,
+            ),
+
+            Message::ReportShotPicked(path) => {
+                // Cancelling is the common answer and means nothing happened.
+                let Some(path) = path else { return Task::none() };
+                Task::perform(
+                    async move {
+                        tokio::task::spawn_blocking(move || art::load_shot(&path))
+                            .await
+                            .unwrap_or_else(|e| Err(e.to_string()))
+                            .map(Box::new)
+                    },
+                    Message::ReportShotLoaded,
+                )
+            }
+
+            Message::ReportShotLoaded(result) => {
+                match result {
+                    Ok(shot) => {
+                        if let Some(dialog) = self.report_dialog.as_mut() {
+                            dialog.shot = Some(*shot);
+                        }
+                    }
+                    Err(e) => self.status = format!("that file is not a screenshot: {e}"),
+                }
+                Task::none()
+            }
+
+            Message::ReportShotCleared => {
                 if let Some(dialog) = self.report_dialog.as_mut() {
-                    dialog.note = note;
+                    dialog.shot = None;
                 }
                 Task::none()
             }
@@ -4353,17 +4532,43 @@ impl Lightforge {
                 let Some(dialog) = self.report_dialog.as_mut() else {
                     return Task::none();
                 };
-                if dialog.stage != ReportStage::Writing || dialog.note.trim().is_empty() {
+                let note = dialog.note.text();
+                if dialog.stage != ReportStage::Writing || note.trim().is_empty() {
                     return Task::none();
                 }
+                // The same words twice in five minutes is the Send button
+                // being pressed again, not a second problem.
+                let repeat = self
+                    .last_report
+                    .as_ref()
+                    .is_some_and(|(last, when)| last == &note && when.elapsed() < REPORT_COOLDOWN);
+                if repeat {
+                    dialog.stage = ReportStage::TooSoon;
+                    return Task::none();
+                }
+
                 dialog.stage = ReportStage::Sending;
-                let kind = match dialog.kind {
-                    ReportKind::Bug => report::Kind::Bug(dialog.debug.clone()),
-                    ReportKind::Feedback => report::Kind::Feedback,
+                let report = report::Report {
+                    kind: match dialog.kind {
+                        ReportKind::Bug => report::Kind::Bug(dialog.debug.clone()),
+                        ReportKind::Feedback => report::Kind::Feedback,
+                    },
+                    note: note.clone(),
+                    contact: dialog.contact.clone(),
+                    tags: dialog.tags.clone(),
+                    shot: dialog.shot.as_ref().map(|shot| report::Shot {
+                        name: shot.name.clone(),
+                        bytes: shot.bytes.clone(),
+                        media_type: shot.media_type,
+                    }),
+                    history: self
+                        .history
+                        .iter()
+                        .map(|line| lightforge_core::debug::scrub(line))
+                        .collect(),
                 };
-                let note = dialog.note.clone();
-                let contact = dialog.contact.clone();
-                Task::perform(report::send(kind, note, contact), Message::ReportSent)
+                self.last_report = Some((note, Instant::now()));
+                Task::perform(report::send(report), Message::ReportSent)
             }
 
             Message::ReportSent(arrived) => {
@@ -10448,6 +10653,7 @@ impl Lightforge {
     }
 
     /// The bug report and the feedback dialog, which are one card.
+    // (`report_tags` sits below the impl, since it needs nothing from `self`.)
     ///
     /// They differ in three things: the prompt, whether the diagnostic bundle
     /// is shown, and whether it is sent. Everything else — the stages, the
@@ -10460,26 +10666,28 @@ impl Lightforge {
                 ("Send Feedback", "What would you like to see improved or changed?")
             }
         };
-        let writing = dialog.stage == ReportStage::Writing;
-
-        let input = |placeholder: &'static str, value: &'a str, on_input: fn(String) -> Message| {
-            text_input(placeholder, value)
-                .on_input_maybe(writing.then_some(on_input))
-                .style(theme::field)
-                .size(theme::BODY)
-                .padding(theme::SM)
-        };
+        // Editable right up until it is on its way: a report that failed, or
+        // one the cooldown refused, is one somebody is about to change.
+        let writing = !matches!(dialog.stage, ReportStage::Sending | ReportStage::Sent);
 
         let mut body = column![
-            input(prompt, &dialog.note, Message::ReportNote),
+            // Five lines: enough that a paragraph looks invited rather than
+            // tolerated, and the card still fits a laptop screen.
+            text_editor(&dialog.note)
+                .placeholder(prompt)
+                .on_action(Message::ReportNote)
+                .height(Length::Fixed(theme::BODY * 1.4 * 5.0 + theme::SM * 2.0))
+                .style(theme::editor)
+                .size(theme::BODY)
+                .padding(theme::SM),
             // Optional, and said so: a report with no way back is still worth
             // sending, and someone who would rather stay anonymous should not
             // have to wonder whether leaving it blank breaks anything.
-            input(
-                "Email or Discord name, so I can reach you (optional)",
-                &dialog.contact,
-                Message::ReportContact,
-            ),
+            text_input("Email or Discord name, so I can reach you (optional)", &dialog.contact)
+                .on_input_maybe(writing.then_some(Message::ReportContact))
+                .style(theme::field)
+                .size(theme::BODY)
+                .padding(theme::SM),
         ]
         .spacing(theme::MD);
 
@@ -10502,7 +10710,8 @@ impl Lightforge {
                     )
                     .padding(theme::SM)
                     .style(theme::row),
-                ),
+                )
+                .push(self.shot_row(dialog)),
             ReportKind::Feedback => body.push(muted(
                 "This will be sent directly to me securely.".to_owned(),
                 theme::LABEL,
@@ -10516,6 +10725,10 @@ impl Lightforge {
                  Discord."
                     .to_owned(),
                 theme::ERROR,
+            )),
+            ReportStage::TooSoon => Some((
+                "That exact report just went out. Add what changed, or close this.".to_owned(),
+                theme::PLAY,
             )),
             _ => None,
         } {
@@ -10540,6 +10753,7 @@ impl Lightforge {
                 choice(match dialog.stage {
                     ReportStage::Sending => "Sending…",
                     ReportStage::Failed => "Try again",
+                    ReportStage::TooSoon => "Just sent",
                     _ => match dialog.kind {
                         ReportKind::Bug => "Send Bug Report",
                         ReportKind::Feedback => "Send Feedback",
@@ -10549,8 +10763,10 @@ impl Lightforge {
                 // Nothing is sent without a description: an empty report is
                 // one more issue nobody can act on.
                 .on_press_maybe(
-                    (dialog.stage != ReportStage::Sending && !dialog.note.trim().is_empty())
-                        .then_some(Message::ReportSend)
+                    (writing
+                        && dialog.stage != ReportStage::TooSoon
+                        && !dialog.note.text().trim().is_empty())
+                    .then_some(Message::ReportSend)
                 ),
             ],
         }
@@ -10562,6 +10778,55 @@ impl Lightforge {
             .padding(theme::LG)
             .style(theme::dialog)
             .into()
+    }
+
+    /// The screenshot line of the bug report card.
+    ///
+    /// A button rather than a drop target: iced has no file dialog of its own,
+    /// so this opens the desktop's through the XDG portal — which is also the
+    /// only one that works when the launcher is sandboxed.
+    fn shot_row<'a>(&self, dialog: &'a ReportDialog) -> Element<'a, Message> {
+        let choose = |label: &'static str| {
+            button(text(label).size(theme::LABEL))
+                .padding([theme::XS, theme::SM])
+                .style(theme::outlined)
+                .on_press(Message::ReportShotPick)
+        };
+
+        let Some(shot) = &dialog.shot else {
+            return row![
+                choose("Add a screenshot…"),
+                muted("Optional, and it is sent with the report.".to_owned(), theme::LABEL),
+            ]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center)
+            .into();
+        };
+
+        let (width, height) = shot.size;
+        row![
+            container(
+                image(shot.preview.clone())
+                    .height(Length::Fixed(72.0))
+                    .content_fit(ContentFit::Contain),
+            )
+            .padding(theme::XS)
+            .style(theme::row),
+            column![
+                text(shot.name.clone()).size(theme::LABEL),
+                muted(format!("{width}×{height}, {}", size_of(shot.bytes.len() as u64)), theme::CAPTION),
+            ]
+            .spacing(theme::XS)
+            .width(Length::Fill),
+            choose("Replace…"),
+            button(text("Remove").size(theme::LABEL))
+                .padding([theme::XS, theme::SM])
+                .style(theme::outlined)
+                .on_press(Message::ReportShotCleared),
+        ]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center)
+        .into()
     }
 
     /// A product's name as the picker shows it, or its code.
@@ -11084,6 +11349,13 @@ const OUTBOUND_GAP: f32 = 2.0;
 /// not available. One value so every dimmed thing dims by the same amount.
 const DIMMED: f32 = 0.35;
 
+/// How many status lines a bug report carries.
+///
+/// Twenty is about a minute of a busy launcher and three screens of a quiet
+/// one — enough to show what led up to the problem, short enough that nobody
+/// has to scroll the card to read what they are sending.
+const HISTORY: usize = 20;
+
 /// Where the app menu's links point.
 ///
 /// `None` is a destination that does not exist yet, and the entry draws itself
@@ -11123,6 +11395,33 @@ const WOWHEAD_URL: &str = "https://www.wowhead.com";
 
 const DISCORD_URL: Option<&str> = Some("https://discord.gg/vtTgmUV9Bq");
 const X_URL: Option<&str> = Some("https://x.com/simplyKennybtw");
+
+/// The handful of facts worth filtering a pile of issues by.
+///
+/// Every one of them is already in the rendered bundle the card shows, so this
+/// sends nothing new — it only puts them where GlitchTip can group on them,
+/// which reading a text blob per issue does not allow.
+fn report_tags(info: &DebugInfo) -> Vec<(String, String)> {
+    let mut tags = vec![
+        ("lightforge".to_owned(), info.app_version.clone()),
+        ("product".to_owned(), info.product.clone()),
+        ("state".to_owned(), info.action_state.clone()),
+        ("os".to_owned(), info.os.clone()),
+        ("kernel".to_owned(), info.kernel.clone()),
+    ];
+    for (key, value) in [
+        ("version", &info.build_version),
+        ("proton", &info.proton),
+        ("session", &info.session),
+        ("gpu", &info.graphics),
+        ("gpu_driver", &info.gpu_driver),
+    ] {
+        if let Some(value) = value {
+            tags.push((key.to_owned(), value.clone()));
+        }
+    }
+    tags
+}
 
 /// A product's mark in the Add a game list.
 ///
@@ -11800,7 +12099,10 @@ fn size_of(bytes: u64) -> String {
     match b {
         b if b >= MIB * 1024.0 * 1024.0 => format!("{:.2} TiB", b / (MIB * 1024.0 * 1024.0)),
         b if b >= MIB * 1024.0 => format!("{:.1} GiB", b / (MIB * 1024.0)),
-        b => format!("{:.0} MiB", b / MIB),
+        // A screenshot is the only thing here smaller than a megabyte, and
+        // "0 MiB" beside a thumbnail reads as a broken file.
+        b if b >= MIB => format!("{:.0} MiB", b / MIB),
+        b => format!("{:.0} KiB", b / 1024.0),
     }
 }
 

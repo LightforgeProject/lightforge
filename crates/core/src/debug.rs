@@ -33,6 +33,27 @@ pub struct DebugInfo {
     pub dxvk: Option<String>,
     pub vkd3d: Option<String>,
     pub prefix: PathBuf,
+    /// Distribution and kernel. Fields rather than looked up inside
+    /// [`DebugInfo::render`] so a caller can tag a report with them without
+    /// parsing the rendered block back apart.
+    pub os: String,
+    pub kernel: String,
+    /// Display server and desktop, e.g. `wayland (KDE)`.
+    pub session: Option<String>,
+    /// Kernel driver and PCI id behind each render node, e.g.
+    /// `amdgpu 1002:744c`. The single most useful line in a report about a
+    /// game that will not draw.
+    pub gpu_driver: Option<String>,
+    /// The proprietary NVIDIA module's version, when that is what is loaded.
+    pub nvidia: Option<String>,
+    /// What the renderer actually picked, and over which API. Filled in by the
+    /// GUI, which is the only half of Lightforge that has a renderer — the CLI
+    /// leaves it empty rather than opening a window to find out.
+    pub graphics: Option<String>,
+    pub graphics_backend: Option<String>,
+    /// Processor model and total RAM, from the same place.
+    pub cpu: Option<String>,
+    pub memory: Option<u64>,
     /// Most recent crash/error log: path, modified time, and its tail.
     pub last_crash: Option<CrashLog>,
 }
@@ -78,6 +99,15 @@ impl DebugInfo {
             dxvk: proton.and_then(|p| component_version(&p.path, "dxvk")),
             vkd3d: proton.and_then(|p| component_version(&p.path, "vkd3d-proton")),
             prefix: layout.prefix(),
+            os: os_release(),
+            kernel: kernel(),
+            session: session(),
+            gpu_driver: gpu_driver(),
+            nvidia: nvidia_version(),
+            graphics: None,
+            graphics_backend: None,
+            cpu: None,
+            memory: None,
             last_crash: newest_log(&install),
         }
     }
@@ -104,8 +134,21 @@ impl DebugInfo {
         row(&mut out, "dxvk", &opt(&self.dxvk));
         row(&mut out, "vkd3d", &opt(&self.vkd3d));
         row(&mut out, "prefix", &self.prefix.display().to_string());
-        row(&mut out, "os", &os_release());
-        row(&mut out, "kernel", &kernel());
+        row(&mut out, "os", &self.os);
+        row(&mut out, "kernel", &self.kernel);
+        row(&mut out, "session", &opt(&self.session));
+        row(&mut out, "gpu", &opt(&self.graphics));
+        row(&mut out, "gpu driver", &opt(&self.gpu_driver));
+        row(&mut out, "nvidia", &opt(&self.nvidia));
+        row(&mut out, "renderer", &opt(&self.graphics_backend));
+        row(&mut out, "cpu", &opt(&self.cpu));
+        row(
+            &mut out,
+            "memory",
+            &self.memory.map_or("unavailable".to_owned(), |b| {
+                format!("{:.1} GiB", b as f64 / (1024.0 * 1024.0 * 1024.0))
+            }),
+        );
 
         match &self.last_crash {
             Some(log) => {
@@ -128,7 +171,7 @@ impl DebugInfo {
 /// `/run/media/<name>/…`, nowhere near home, and the crash log tail carries
 /// whatever absolute paths the client happened to write. So the name itself is
 /// substituted too, wherever it survived the first pass.
-fn scrub(text: &str) -> String {
+pub fn scrub(text: &str) -> String {
     let home = directories::UserDirs::new().map(|d| d.home_dir().to_path_buf());
     scrub_with(text, home.as_deref())
 }
@@ -199,6 +242,68 @@ fn newest_log(install: &Path) -> Option<CrashLog> {
     Some(CrashLog { path, modified: Some(modified), tail })
 }
 
+/// Display server and desktop, as the two environment variables that every
+/// session manager sets. Read rather than detected: asking the compositor
+/// would mean talking to one, and this only has to be good enough to tell a
+/// Wayland bug from an X11 one.
+fn session() -> Option<String> {
+    let var = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
+    match (var("XDG_SESSION_TYPE"), var("XDG_CURRENT_DESKTOP")) {
+        (Some(kind), Some(desktop)) => Some(format!("{kind} ({desktop})")),
+        (Some(kind), None) => Some(kind),
+        (None, Some(desktop)) => Some(desktop),
+        (None, None) => None,
+    }
+}
+
+/// Which kernel driver sits behind each card, and which card it is.
+///
+/// Read out of `/sys` rather than by running `vulkaninfo` or `glxinfo`:
+/// neither is installed by default on a gaming distro, and Lightforge does not
+/// depend on desktop binaries. `uevent` carries both facts in one file, and
+/// the PCI id is enough to identify the card against a public table without
+/// shipping one.
+fn gpu_driver() -> Option<String> {
+    let entries = std::fs::read_dir("/sys/class/drm").ok()?;
+    let mut cards: Vec<String> = Vec::new();
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        // `card0` is a device; `card0-DP-1` is a connector hanging off it.
+        if !name.starts_with("card") || name.contains('-') {
+            continue;
+        }
+        let Ok(uevent) = std::fs::read_to_string(entry.path().join("device/uevent")) else {
+            continue;
+        };
+        let field = |key: &str| {
+            uevent.lines().find_map(|l| l.strip_prefix(key).map(|v| v.to_ascii_lowercase()))
+        };
+        if let Some(driver) = field("DRIVER=") {
+            cards.push(match field("PCI_ID=") {
+                Some(id) => format!("{driver} {id}"),
+                None => driver,
+            });
+        }
+    }
+
+    cards.sort();
+    cards.dedup();
+    (!cards.is_empty()).then(|| cards.join(", "))
+}
+
+/// The proprietary module's version, when it is the one loaded. Absent on an
+/// open-stack machine, which is itself the answer.
+fn nvidia_version() -> Option<String> {
+    let text = std::fs::read_to_string("/proc/driver/nvidia/version").ok()?;
+    // "NVRM version: NVIDIA UNIX x86_64 Kernel Module  580.82.07  ..." — the
+    // first dotted number on the line is the one anybody quotes.
+    text.split_whitespace()
+        .find(|word| word.split('.').count() >= 3 && word.starts_with(|c: char| c.is_ascii_digit()))
+        .map(str::to_owned)
+}
+
 fn os_release() -> String {
     std::fs::read_to_string("/etc/os-release")
         .ok()
@@ -230,7 +335,22 @@ mod tests {
         };
         let text = info.render();
 
-        for key in ["lightforge", "product", "proton", "dxvk", "vkd3d", "prefix", "os", "kernel"] {
+        for key in [
+            "lightforge",
+            "product",
+            "proton",
+            "dxvk",
+            "vkd3d",
+            "prefix",
+            "os",
+            "kernel",
+            "session",
+            "gpu",
+            "gpu driver",
+            "renderer",
+            "cpu",
+            "memory",
+        ] {
             assert!(text.contains(key), "missing row: {key}");
         }
         assert!(text.contains("unavailable"));

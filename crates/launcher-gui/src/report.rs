@@ -75,18 +75,54 @@ fn client() -> Option<Arc<sentry::Client>> {
         .clone()
 }
 
+/// An image sent with a report.
+pub struct Shot {
+    pub name: String,
+    pub bytes: Vec<u8>,
+    pub media_type: &'static str,
+}
+
+/// One report, assembled by the dialog and handed over whole.
+pub struct Report {
+    pub kind: Kind,
+    pub note: String,
+    /// An address, a Discord name, or nothing. The one piece of personal data
+    /// in either report, and it is here because they typed it.
+    pub contact: String,
+    /// Facts worth filtering issues by — product, Proton build, distro. Every
+    /// one of them is already in the bundle the card showed; they are repeated
+    /// here only so GlitchTip can group and search on them.
+    pub tags: Vec<(String, String)>,
+    pub shot: Option<Shot>,
+    /// The last things the launcher said, oldest first.
+    pub history: Vec<String>,
+}
+
 /// Send one report, and say whether it arrived.
-///
-/// `contact` is whatever the sender chose to leave — an address, a Discord
-/// name, or nothing at all. It is the one piece of personal data in either
-/// report, and it is here because they typed it.
-pub async fn send(kind: Kind, note: String, contact: String) -> bool {
+pub async fn send(report: Report) -> bool {
     // `flush` parks until the transport thread has drained, so it belongs on
     // the blocking pool and not on a runtime worker.
     tokio::task::spawn_blocking(move || {
         let Some(client) = client() else { return false };
+        let Report { kind, note, contact, tags, shot, history } = report;
 
         let mut event = sentry::protocol::Event { message: Some(note), ..Default::default() };
+
+        for (key, value) in tags {
+            event.tags.insert(key, value);
+        }
+
+        // Breadcrumbs rather than another block of text: GlitchTip draws them
+        // as a timeline under the event, which is what they are.
+        event.breadcrumbs = history
+            .into_iter()
+            .map(|message| sentry::protocol::Breadcrumb {
+                message: Some(message),
+                category: Some("status".to_owned()),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>()
+            .into();
 
         let contact = contact.trim();
         if !contact.is_empty() {
@@ -112,7 +148,19 @@ pub async fn send(kind: Kind, note: String, contact: String) -> bool {
             }
         }
 
-        client.capture_event(event, None);
+        // The screenshot travels as its own envelope item beside the event,
+        // which is the native way and keeps the event itself small.
+        let mut scope = sentry::Scope::default();
+        if let Some(shot) = shot {
+            scope.add_attachment(sentry::protocol::Attachment {
+                buffer: shot.bytes,
+                filename: shot.name,
+                content_type: Some(shot.media_type.to_owned()),
+                ty: None,
+            });
+        }
+
+        client.capture_event(event, Some(&scope));
         client.flush(Some(FLUSH))
     })
     .await
