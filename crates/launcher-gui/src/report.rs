@@ -63,20 +63,44 @@ fn client() -> Option<Arc<sentry::Client>> {
             let Ok(dsn) = DSN.parse::<sentry::types::Dsn>() else { return None };
             options.dsn = Some(dsn);
 
-            let client = sentry::Client::from_config(options);
+            // `apply_defaults`, not the options alone: it is what installs
+            // the transport and the `contexts` integration. Without it the
+            // client has no way to send anything, reports `is_enabled()` as
+            // false, and `flush` cheerfully returns true on the empty queue —
+            // which looks exactly like a working client that cannot reach the
+            // network.
+            let client = sentry::Client::from_config(sentry::apply_defaults(options));
             client.is_enabled().then(|| Arc::new(client))
         })
         .clone()
 }
 
 /// Send one report, and say whether it arrived.
-pub async fn send(kind: Kind, note: String) -> bool {
+///
+/// `contact` is whatever the sender chose to leave — an address, a Discord
+/// name, or nothing at all. It is the one piece of personal data in either
+/// report, and it is here because they typed it.
+pub async fn send(kind: Kind, note: String, contact: String) -> bool {
     // `flush` parks until the transport thread has drained, so it belongs on
     // the blocking pool and not on a runtime worker.
     tokio::task::spawn_blocking(move || {
         let Some(client) = client() else { return false };
 
         let mut event = sentry::protocol::Event { message: Some(note), ..Default::default() };
+
+        let contact = contact.trim();
+        if !contact.is_empty() {
+            // An address goes in `email` and anything else in `username`, so
+            // GlitchTip shows it in the place a reply would be looked for.
+            // The test is deliberately crude — it only decides which of two
+            // fields the same string lands in.
+            let mut user = sentry::protocol::User::default();
+            match contact.contains('@') {
+                true => user.email = Some(contact.to_owned()),
+                false => user.username = Some(contact.to_owned()),
+            }
+            event.user = Some(user);
+        }
         match kind {
             Kind::Bug(debug) => {
                 event.level = sentry::Level::Error;

@@ -415,6 +415,8 @@ enum Message {
     OpenReport(ReportKind),
     /// What someone has typed into whichever of the two is open.
     ReportNote(String),
+    /// Where they can be reached, if they want to be.
+    ReportContact(String),
     ReportSend,
     /// Whether it actually left the machine.
     ReportSent(bool),
@@ -724,6 +726,9 @@ struct ReportDialog {
     kind: ReportKind,
     /// What the user is typing.
     note: String,
+    /// An address or a Discord name, so there is a way to answer. Optional,
+    /// and the only personal thing either report carries.
+    contact: String,
     /// The debug bundle, rendered when the dialog opened — that is where the
     /// four things [`DebugInfo::gather`] needs are in scope. Empty for
     /// feedback, which sends none of it. Already scrubbed of the account
@@ -4317,6 +4322,9 @@ impl Lightforge {
                 self.report_dialog = Some(ReportDialog {
                     kind,
                     note: String::new(),
+                    // Remembered between reports: someone who gave it once
+                    // should not have to type it again to answer a follow-up.
+                    contact: self.config.contact.clone().unwrap_or_default(),
                     debug,
                     stage: ReportStage::Writing,
                 });
@@ -4327,6 +4335,17 @@ impl Lightforge {
                 if let Some(dialog) = self.report_dialog.as_mut() {
                     dialog.note = note;
                 }
+                Task::none()
+            }
+
+            Message::ReportContact(contact) => {
+                let Some(dialog) = self.report_dialog.as_mut() else {
+                    return Task::none();
+                };
+                dialog.contact = contact;
+                let contact = dialog.contact.trim().to_owned();
+                self.config.contact = (!contact.is_empty()).then_some(contact);
+                self.save_config();
                 Task::none()
             }
 
@@ -4343,7 +4362,8 @@ impl Lightforge {
                     ReportKind::Feedback => report::Kind::Feedback,
                 };
                 let note = dialog.note.clone();
-                Task::perform(report::send(kind, note), Message::ReportSent)
+                let contact = dialog.contact.clone();
+                Task::perform(report::send(kind, note, contact), Message::ReportSent)
             }
 
             Message::ReportSent(arrived) => {
@@ -10442,11 +10462,25 @@ impl Lightforge {
         };
         let writing = dialog.stage == ReportStage::Writing;
 
-        let mut body = column![text_input(prompt, &dialog.note)
-            .on_input_maybe(writing.then_some(Message::ReportNote))
-            .style(theme::field)
-            .size(theme::BODY)
-            .padding(theme::SM)]
+        let input = |placeholder: &'static str, value: &'a str, on_input: fn(String) -> Message| {
+            text_input(placeholder, value)
+                .on_input_maybe(writing.then_some(on_input))
+                .style(theme::field)
+                .size(theme::BODY)
+                .padding(theme::SM)
+        };
+
+        let mut body = column![
+            input(prompt, &dialog.note, Message::ReportNote),
+            // Optional, and said so: a report with no way back is still worth
+            // sending, and someone who would rather stay anonymous should not
+            // have to wonder whether leaving it blank breaks anything.
+            input(
+                "Email or Discord name, so I can reach you (optional)",
+                &dialog.contact,
+                Message::ReportContact,
+            ),
+        ]
         .spacing(theme::MD);
 
         body = match dialog.kind {
@@ -10455,7 +10489,7 @@ impl Lightforge {
             // person can read the thing that leaves it.
             ReportKind::Bug => body
                 .push(muted(
-                    "This exact diagnostic data will be sent to our private server securely."
+                    "This exact diagnostic data will be sent to my private server securely."
                         .to_owned(),
                     theme::LABEL,
                 ))
@@ -10470,7 +10504,7 @@ impl Lightforge {
                     .style(theme::row),
                 ),
             ReportKind::Feedback => body.push(muted(
-                "This will be sent directly to the developer securely.".to_owned(),
+                "This will be sent directly to me securely.".to_owned(),
                 theme::LABEL,
             )),
         };
@@ -10478,7 +10512,7 @@ impl Lightforge {
         if let Some((note, color)) = match dialog.stage {
             ReportStage::Sent => Some(("Sent — thank you.".to_owned(), theme::OK)),
             ReportStage::Failed => Some((
-                "It could not be sent. Check the connection and try again, or reach us on \
+                "It could not be sent. Check the connection and try again, or reach me on \
                  Discord."
                     .to_owned(),
                 theme::ERROR,

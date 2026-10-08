@@ -58,6 +58,12 @@ pub struct Config {
     /// auto-update choice, or being ignored outright.
     #[serde(default = "yes")]
     pub addon_auto_update: bool,
+    /// Where the person can be reached about a bug report — an address, a
+    /// Discord name, whatever they chose to type. Optional, kept only so the
+    /// report dialog can offer it back rather than asking twice, and never
+    /// sent anywhere except with a report they pressed Send on.
+    #[serde(default)]
+    pub contact: Option<String>,
     /// Cap on game download speed, in megabytes per second. `None` is
     /// unlimited.
     ///
@@ -204,6 +210,7 @@ impl Default for Config {
             addon_catalog: None,
             addon_channel: crate::addons::Channel::default(),
             addon_auto_update: true,
+            contact: None,
             download_limit_mbps: None,
             pause_downloads_while_playing: true,
             minimize_on_launch: false,
