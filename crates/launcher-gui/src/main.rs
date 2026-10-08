@@ -410,23 +410,29 @@ enum Message {
     ManageSubscription,
     OpenFiles,
     CopyDebug,
-    /// A switch on the Game Optimizations panel was flipped.
-    Tweak(Tweak, bool),
+    /// Open Settings on a particular tab, for a link that means a specific
+    /// page rather than "settings somewhere".
+    ShowSettingsTab(SettingsTab),
+    /// A switch on a Game Optimizations panel was flipped.
+    Tweak(Scope, Tweak, bool),
     /// A starting point was chosen, setting the frames-versus-scenery switches.
     TweakPreset(Preset),
     /// "Custom": clear the managed switches and leave them to the user.
     TweakCustom,
     /// Show or hide the environment-variable editor.
-    TweakEnvToggle,
+    TweakEnvToggle(Scope),
     /// The graphics API the client should ask for.
     TweakApi(ApiChoice),
     TweakFpsCap(String),
-    TweakSpellQueue(String),
+    /// Frame cap for when the window is not focused.
+    TweakFpsCapBackground(String),
+    /// Which monitor the Wayland backend should treat as primary.
+    TweakWaylandMonitor(Scope, String),
     /// Key and value fields of the environment escape hatch.
     TweakEnvKey(String),
     TweakEnvValue(String),
-    TweakEnvAdd,
-    TweakEnvRemove(String),
+    TweakEnvAdd(Scope),
+    TweakEnvRemove(Scope, String),
     /// Throw away this product's shader cache, e.g. after a Proton swap.
     ClearShaderCache,
     /// Opt in or out of one optional download, by manifest tag name.
@@ -717,6 +723,7 @@ enum SettingsTab {
     General,
     Setup,
     Proton,
+    BattleNet,
     Downloads,
     Addons,
     Storage,
@@ -724,10 +731,11 @@ enum SettingsTab {
 }
 
 impl SettingsTab {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::General,
         Self::Setup,
         Self::Proton,
+        Self::BattleNet,
         Self::Downloads,
         Self::Addons,
         Self::Storage,
@@ -739,6 +747,7 @@ impl SettingsTab {
             Self::General => "General",
             Self::Setup => "Setup",
             Self::Proton => "Proton",
+            Self::BattleNet => "Battle.net",
             Self::Downloads => "Downloads",
             Self::Addons => "Addons",
             Self::Storage => "Storage",
@@ -797,6 +806,34 @@ enum Screen {
 /// A single message with a discriminant rather than a variant each: the panel
 /// is a list of independent booleans, and fifteen near-identical messages would
 /// only obscure that.
+/// Which row of the Game Optimizations grid a height is for.
+///
+/// The two rows hold different amounts, so they are measured apart — see
+/// [`Lightforge::card_height`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CardRow {
+    /// Performance and Looks.
+    Top,
+    /// Input and feel, and Advanced.
+    Bottom,
+}
+
+/// Which profile a Game Optimizations control edits.
+///
+/// The same switches appear twice — on a product's own page, and in
+/// Settings › Battle.net for the shared profile that Battle.net and every
+/// game it launches run under. Routed by an explicit scope rather than by
+/// whichever screen happens to be open: the second is the kind of implicit
+/// rule that works until a panel becomes reachable from somewhere new.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    /// The product the launcher is showing.
+    Product,
+    /// `Config::battle_net_tweaks` — shared, because the mechanism cannot be
+    /// per-game. See that field for why.
+    BattleNet,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tweak {
     GamePerformance,
@@ -808,6 +845,14 @@ enum Tweak {
     RawMouse,
     NoScreenEffects,
     MaxDrawDistance,
+    NoClothPhysics,
+    SoftwareCursor,
+    ClipCursor,
+    NoMouseAcceleration,
+    ShowCursorInRelativeMode,
+    Wayland,
+    Hdr,
+    BigShaderCache,
 }
 
 /// A graphics API in a picker, or the "leave the client's own choice alone"
@@ -1294,7 +1339,9 @@ struct Lightforge {
     /// Editable copies of the selected product's numeric tweaks, and the two
     /// fields of the environment escape hatch.
     fps_input: String,
-    spell_input: String,
+    fps_bk_input: String,
+    monitor_input: String,
+    bnet_monitor_input: String,
     env_key_input: String,
     env_value_input: String,
 
@@ -1318,8 +1365,16 @@ struct Lightforge {
     /// catalogue offers. `None` in the list means the fetch is still out.
     version_picker: Option<VersionPicker>,
     addon_detail: Option<AddonDetail>,
-    /// Whether the environment-variable editor is expanded.
+    /// Whether the environment-variable editor is expanded, per panel.
+    ///
+    /// Two flags rather than one because they want different defaults. On a
+    /// product's page the card is folded away — it is the escape hatch, below
+    /// four cards of switches. In Settings › Battle.net it is open from the
+    /// start: a hand-off game has no client settings, so environment
+    /// variables are not a last resort there but most of what the page is
+    /// for, and hiding them behind a Show button reads as "nothing here".
     env_open: bool,
+    bnet_env_open: bool,
     /// Game families, as Blizzard's own catalogue names them, read out of the
     /// client's cache at startup. Empty on a prefix whose client has never
     /// run, which falls the hand-off back to the compiled-in families.
@@ -1484,7 +1539,9 @@ impl Lightforge {
             drive_states: HashMap::new(),
             tools: HostTools::detect(),
             fps_input: String::new(),
-            spell_input: String::new(),
+            fps_bk_input: String::new(),
+            monitor_input: String::new(),
+            bnet_monitor_input: String::new(),
             env_key_input: String::new(),
             env_value_input: String::new(),
             addons: addonwork::Listing::default(),
@@ -1495,6 +1552,7 @@ impl Lightforge {
             version_picker: None,
             addon_detail: None,
             env_open: false,
+            bnet_env_open: true,
             families: lightforge_core::families::Families::default(),
             import_pinned: false,
             addon_auto_done: Vec::new(),
@@ -1947,6 +2005,25 @@ impl Lightforge {
             (true, false) => HandoffAct::Install,
         };
         left = left.extend(self.hint(act.hint()).map(Element::from));
+        // The managed panel has a row of links and this one had none, so a
+        // hand-off game had no route to any optimization page. It is phrased
+        // for the shared profile on purpose — "its games", not "this game" —
+        // because one environment covers every game the client starts.
+        left = left.push(
+            button(
+                row![
+                    image(sliders_icon())
+                        .width(Length::Fixed(LINK_GLYPH))
+                        .height(Length::Fixed(LINK_GLYPH)),
+                    text("How Battle.net and its games launch").size(theme::LABEL),
+                ]
+                .spacing(theme::XS)
+                .align_y(Alignment::Center),
+            )
+            .on_press(Message::ShowSettingsTab(SettingsTab::BattleNet))
+            .style(theme::ghost)
+            .padding([theme::XS, theme::SM]),
+        );
         let open = button(
             container(text(act.label()).size(theme::HEADING)).center_x(Length::Fill),
         )
@@ -4171,8 +4248,13 @@ impl Lightforge {
                 iced::clipboard::write(info.render())
             }
 
-            Message::Tweak(which, on) => {
-                self.edit_tweaks(|tweaks| match which {
+            Message::ShowSettingsTab(tab) => {
+                self.settings_tab = tab;
+                self.update(Message::Show(Screen::Settings))
+            }
+
+            Message::Tweak(scope, which, on) => {
+                self.edit_tweaks(scope, |tweaks| match which {
                     // Stored as an explicit refusal rather than a bare `false`:
                     // the default is on wherever the tool exists, so "off" has
                     // to be recorded to survive a restart.
@@ -4185,27 +4267,40 @@ impl Lightforge {
                     Tweak::RawMouse => tweaks.raw_mouse = on,
                     Tweak::NoScreenEffects => tweaks.no_screen_effects = on,
                     Tweak::MaxDrawDistance => tweaks.max_draw_distance = on,
+                    Tweak::NoClothPhysics => tweaks.no_cloth_physics = on,
+                    Tweak::SoftwareCursor => tweaks.software_cursor = on,
+                    Tweak::ClipCursor => tweaks.clip_cursor = on,
+                    Tweak::NoMouseAcceleration => tweaks.no_mouse_acceleration = on,
+                    Tweak::ShowCursorInRelativeMode => {
+                        tweaks.show_cursor_in_relative_mode = on
+                    }
+                    Tweak::Wayland => tweaks.wayland = on,
+                    Tweak::Hdr => tweaks.hdr = on,
+                    Tweak::BigShaderCache => tweaks.big_shader_cache = on,
                 });
                 Task::none()
             }
 
             Message::TweakPreset(preset) => {
-                self.edit_tweaks(|tweaks| preset.apply(tweaks));
+                self.edit_tweaks(Scope::Product, |tweaks| preset.apply(tweaks));
                 Task::none()
             }
 
             Message::TweakCustom => {
-                self.edit_tweaks(Tweaks::clear_managed);
+                self.edit_tweaks(Scope::Product, Tweaks::clear_managed);
                 Task::none()
             }
 
-            Message::TweakEnvToggle => {
-                self.env_open = !self.env_open;
+            Message::TweakEnvToggle(scope) => {
+                match scope {
+                    Scope::Product => self.env_open = !self.env_open,
+                    Scope::BattleNet => self.bnet_env_open = !self.bnet_env_open,
+                }
                 Task::none()
             }
 
             Message::TweakApi(ApiChoice(api)) => {
-                self.edit_tweaks(|tweaks| tweaks.graphics_api = api);
+                self.edit_tweaks(Scope::Product, |tweaks| tweaks.graphics_api = api);
                 Task::none()
             }
 
@@ -4214,14 +4309,26 @@ impl Lightforge {
                 // Clearing it is how you say uncapped.
                 self.fps_input = value.chars().filter(char::is_ascii_digit).collect();
                 let cap = self.fps_input.parse::<u32>().ok().filter(|n| *n > 0);
-                self.edit_tweaks(|tweaks| tweaks.fps_cap = cap);
+                self.edit_tweaks(Scope::Product, |tweaks| tweaks.fps_cap = cap);
                 Task::none()
             }
 
-            Message::TweakSpellQueue(value) => {
-                self.spell_input = value.chars().filter(char::is_ascii_digit).collect();
-                let ms = self.spell_input.parse::<u32>().ok().filter(|n| *n > 0);
-                self.edit_tweaks(|tweaks| tweaks.spell_queue_ms = ms);
+            Message::TweakFpsCapBackground(value) => {
+                self.fps_bk_input = value.chars().filter(char::is_ascii_digit).collect();
+                let cap = self.fps_bk_input.parse::<u32>().ok().filter(|n| *n > 0);
+                self.edit_tweaks(Scope::Product, |tweaks| tweaks.fps_cap_background = cap);
+                Task::none()
+            }
+
+            Message::TweakWaylandMonitor(scope, value) => {
+                // A connector name, so no spaces: `DP-1`, `HDMI-A-1`.
+                let field = match scope {
+                    Scope::Product => &mut self.monitor_input,
+                    Scope::BattleNet => &mut self.bnet_monitor_input,
+                };
+                *field = value.chars().filter(|c| !c.is_whitespace()).collect();
+                let name = (!field.is_empty()).then(|| field.clone());
+                self.edit_tweaks(scope, |tweaks| tweaks.wayland_monitor = name);
                 Task::none()
             }
 
@@ -4238,19 +4345,19 @@ impl Lightforge {
                 Task::none()
             }
 
-            Message::TweakEnvAdd => {
+            Message::TweakEnvAdd(scope) => {
                 let key = std::mem::take(&mut self.env_key_input);
                 let value = std::mem::take(&mut self.env_value_input);
                 if !key.is_empty() {
-                    self.edit_tweaks(|tweaks| {
+                    self.edit_tweaks(scope, |tweaks| {
                         tweaks.env.insert(key, value);
                     });
                 }
                 Task::none()
             }
 
-            Message::TweakEnvRemove(key) => {
-                self.edit_tweaks(|tweaks| {
+            Message::TweakEnvRemove(scope, key) => {
+                self.edit_tweaks(scope, |tweaks| {
                     tweaks.env.remove(&key);
                 });
                 Task::none()
@@ -4519,16 +4626,30 @@ impl Lightforge {
 
     /// This product's performance settings.
     fn tweaks(&self) -> Tweaks {
-        self.config
-            .product(&self.selected.code)
-            .map(|p| p.profile.tweaks.clone())
-            .unwrap_or_default()
+        self.tweaks_of(Scope::Product)
     }
 
-    /// Change them and persist, which is what every switch on the panel does.
-    fn edit_tweaks(&mut self, edit: impl FnOnce(&mut Tweaks)) {
-        if let Some(product) = self.config.product_mut(&self.selected.code) {
-            edit(&mut product.profile.tweaks);
+    /// One scope's performance settings.
+    fn tweaks_of(&self, scope: Scope) -> Tweaks {
+        match scope {
+            Scope::Product => self
+                .config
+                .product(&self.selected.code)
+                .map(|p| p.profile.tweaks.clone())
+                .unwrap_or_default(),
+            Scope::BattleNet => self.config.battle_net_tweaks.clone(),
+        }
+    }
+
+    /// Change them and persist, which is what every switch on a panel does.
+    fn edit_tweaks(&mut self, scope: Scope, edit: impl FnOnce(&mut Tweaks)) {
+        match scope {
+            Scope::Product => {
+                if let Some(product) = self.config.product_mut(&self.selected.code) {
+                    edit(&mut product.profile.tweaks);
+                }
+            }
+            Scope::BattleNet => edit(&mut self.config.battle_net_tweaks),
         }
         self.save_config();
     }
@@ -4537,7 +4658,11 @@ impl Lightforge {
     fn load_tweak_inputs(&mut self) {
         let tweaks = self.tweaks();
         self.fps_input = tweaks.fps_cap.map(|v| v.to_string()).unwrap_or_default();
-        self.spell_input = tweaks.spell_queue_ms.map(|v| v.to_string()).unwrap_or_default();
+        self.fps_bk_input =
+            tweaks.fps_cap_background.map(|v| v.to_string()).unwrap_or_default();
+        self.monitor_input = tweaks.wayland_monitor.clone().unwrap_or_default();
+        self.bnet_monitor_input =
+            self.config.battle_net_tweaks.wayland_monitor.clone().unwrap_or_default();
         self.env_key_input.clear();
         self.env_value_input.clear();
     }
@@ -6808,16 +6933,17 @@ impl Lightforge {
         // end at four different places, and iced cannot stretch two fluid
         // siblings against each other with nothing to measure (see
         // [`Lightforge::tweak_card`]).
-        let height = Length::Fixed(self.card_height());
+        let top = Length::Fixed(self.card_height(CardRow::Top, &tweaks));
+        let bottom = Length::Fixed(self.card_height(CardRow::Bottom, &tweaks));
         let body = column![
             self.preset_row(&tweaks),
             row![self.performance_card(&tweaks), self.looks_card(&tweaks)]
                 .spacing(theme::MD)
-                .height(height),
+                .height(top),
             row![self.input_card(&tweaks), self.advanced_card(&tweaks)]
                 .spacing(theme::MD)
-                .height(height),
-            self.env_card(&tweaks),
+                .height(bottom),
+            self.env_card(Scope::Product, &tweaks),
         ]
         .spacing(theme::MD);
 
@@ -6848,13 +6974,14 @@ impl Lightforge {
     /// A checkbox in one of the cards below.
     fn tweak_check<'a>(
         &self,
+        scope: Scope,
         label: &'a str,
         which: Tweak,
         on: bool,
     ) -> iced::widget::Checkbox<'a, Message> {
         iced::widget::checkbox(on)
             .label(label)
-            .on_toggle(move |on| Message::Tweak(which, on))
+            .on_toggle(move |on| Message::Tweak(scope, which, on))
             .text_size(theme::BODY)
     }
 
@@ -6863,20 +6990,48 @@ impl Lightforge {
     /// A pinned number, which is the price of boxes that are the same size
     /// whatever is in them — and it has to clear the *fullest* card on the
     /// *busiest* machine, because a card is a fixed box and content past its
-    /// edge is content nobody can reach. The worst case is Advanced with the
-    /// graphics picker, the frame cap, MangoHud and Clear shader cache, or
-    /// Performance with both host tools present and a note about neither.
+    /// edge is content nobody can reach.
     ///
-    /// Two values because hints are a line of prose under most switches: one
-    /// number tuned with them on wastes a third of the page with them off,
-    /// which is the state this was first built in.
+    /// **Sized per row, not per page.** The two cards you can see beside each
+    /// other still match exactly, which is the part that reads as a grid —
+    /// but Performance and Looks are naturally shorter than Input and
+    /// Advanced, and one number for all four reserved a band of nothing
+    /// under the last switch of the top row. A row is the unit people
+    /// compare; the page is not.
+    ///
+    /// Two axes beyond that. Hints are a line of prose under most switches, and
+    /// a number tuned with them on wastes a third of the page with them off.
+    /// The Wayland backend is the same problem again: ticking it opens two
+    /// more rows in Advanced, and sizing every card for rows that are not
+    /// there left a visible band of nothing under the last switch in both
+    /// rows of the grid. So the grid grows when they appear and shrinks when
+    /// they go. **All four cards still match each other at any moment**,
+    /// which is the rule — it is the page that changes height, not one box
+    /// against its neighbour.
+    ///
+    /// Every number here was measured on screen at the state it names, not
+    /// computed: a card that clips gives no sign of it.
     ///
     /// If a card ever outgrows this, raise it here — it is the one number the
     /// layout depends on.
-    fn card_height(&self) -> f32 {
-        match self.hints {
-            true => 330.0,
-            false => 230.0,
+    fn card_height(&self, row: CardRow, tweaks: &Tweaks) -> f32 {
+        let (base, backend) = match (row, self.hints) {
+            // Performance is the taller of the first pair: six switches, the
+            // shader-cache note, and the missing-tools line on its floor.
+            // Nothing in this row grows with the Wayland backend.
+            (CardRow::Top, true) => (300.0, 0.0),
+            (CardRow::Top, false) => (250.0, 0.0),
+            // Advanced is the taller of the second, and the only card that
+            // changes height: the second number is HDR, the monitor field
+            // and its own hint, which is why it is larger with hints on.
+            (CardRow::Bottom, true) => (486.0, 80.0),
+            (CardRow::Bottom, false) => (312.0, 66.0),
+        };
+        // Those rows only exist once the backend is on — and only where the
+        // backend can be offered at all.
+        match self.tools.wayland && tweaks.wayland {
+            true => base + backend,
+            false => base,
         }
     }
 
@@ -6989,34 +7144,52 @@ impl Lightforge {
         let mut content = column![].spacing(theme::SM);
 
         if self.tools.game_performance.is_some() {
-            content = content.push(self.tweak_check(
+            content = content.push(self.tweak_check(Scope::Product,
                 "Hold the CPU on its performance profile",
                 Tweak::GamePerformance,
                 tweaks.wants_game_performance(),
             ));
         }
         if self.tools.gamemode.is_some() {
-            content = content.push(self.tweak_check(
+            content = content.push(self.tweak_check(Scope::Product,
                 "Launch through GameMode",
                 Tweak::GameMode,
                 tweaks.gamemode,
             ));
         }
-        content = content.push(self.tweak_check(
+        content = content.push(self.tweak_check(Scope::Product,
             "Stop profiling addon execution",
             Tweak::SkipAddonProfiling,
             tweaks.skip_addon_profiling,
         ));
-        content = content.push(self.tweak_check(
+        content = content.push(self.tweak_check(Scope::Product,
             "Drop water and weather detail in raids and battlegrounds",
             Tweak::ReduceRaidEffects,
             tweaks.reduce_raid_effects,
         ));
-        content = content.push(self.tweak_check(
+        content = content.push(self.tweak_check(Scope::Product,
             "Skip non-critical world preloading",
             Tweak::FasterZoneLoads,
             tweaks.faster_zone_loads,
         ));
+        content = content.push(self.tweak_check(Scope::Product,
+            "Turn off cloth and NPC physics",
+            Tweak::NoClothPhysics,
+            tweaks.no_cloth_physics,
+        ));
+        content = content.push(self.tweak_check(Scope::Product,
+            "Give the shader cache room",
+            Tweak::BigShaderCache,
+            tweaks.big_shader_cache,
+        ));
+        content = content.extend(
+            self.hint(
+                "Mesa's default ceiling is small enough that a long session throws away \
+                 shaders it is about to need again, which is felt as stutter that never \
+                 settles. Raises it to 10 GB.",
+            )
+            .map(Element::from),
+        );
 
         // The box is a fixed height now, so this sits on its floor rather
         // than straight under the last switch.
@@ -7050,12 +7223,12 @@ impl Lightforge {
     /// when empty, and that settles the wording.
     fn looks_card(&self, tweaks: &Tweaks) -> Element<'_, Message> {
         let mut content = column![
-            self.tweak_check(
+            self.tweak_check(Scope::Product,
                 "Maximum view distance and ground clutter",
                 Tweak::MaxDrawDistance,
                 tweaks.max_draw_distance,
             ),
-            self.tweak_check(
+            self.tweak_check(Scope::Product,
                 "Turn off the full-screen glow and death filter",
                 Tweak::NoScreenEffects,
                 tweaks.no_screen_effects,
@@ -7114,8 +7287,15 @@ impl Lightforge {
     }
 
     /// How it feels to play, which is not how fast it runs.
+    ///
+    /// Four of the five are Wine or multi-monitor fixes rather than
+    /// preferences, which is why they sit together: each one is the answer to
+    /// a specific thing the game does wrong under Linux, and every name here
+    /// was read out of the client's own string table rather than a wiki —
+    /// `HardwareCursor` is real and `gxCursor`, which the widely-copied lists
+    /// name, is not.
     fn input_card(&self, tweaks: &Tweaks) -> Element<'_, Message> {
-        let mut content = column![self.tweak_check(
+        let mut content = column![self.tweak_check(Scope::Product,
             "Raw mouse input",
             Tweak::RawMouse,
             tweaks.raw_mouse,
@@ -7128,22 +7308,46 @@ impl Lightforge {
             )
             .map(Element::from),
         );
-        content = content.push(
-            row![
-                muted("Spell queue".to_owned(), theme::LABEL).width(Length::Fixed(110.0)),
-                text_input("client default", &self.spell_input)
-                    .on_input(Message::TweakSpellQueue)
-                    .style(theme::field)
-                    .size(theme::BODY)
-                    .padding(theme::SM)
-                    .width(Length::Fixed(110.0)),
-                muted("ms".to_owned(), theme::LABEL),
-            ]
-            .spacing(theme::MD)
-            .align_y(Alignment::Center),
-        );
+        content = content.push(self.tweak_check(Scope::Product,
+            "Keep the pointer inside the window",
+            Tweak::ClipCursor,
+            tweaks.clip_cursor,
+        ));
         content = content.extend(
-            self.hint("Your latency plus about 50ms is the usual advice.").map(Element::from),
+            self.hint(
+                "Stops the cursor walking onto another monitor mid-fight. Only worth it on \
+                 more than one screen.",
+            )
+            .map(Element::from),
+        );
+        content = content.push(self.tweak_check(Scope::Product,
+            "Draw a software cursor",
+            Tweak::SoftwareCursor,
+            tweaks.software_cursor,
+        ));
+        content = content.extend(
+            self.hint(
+                "The hardware cursor is the one that goes missing or lags behind the pointer \
+                 under Wine. A software one also shows up in screenshots.",
+            )
+            .map(Element::from),
+        );
+        content = content.push(self.tweak_check(Scope::Product,
+            "Ignore the desktop's mouse acceleration",
+            Tweak::NoMouseAcceleration,
+            tweaks.no_mouse_acceleration,
+        ));
+        content = content.push(self.tweak_check(Scope::Product,
+            "Show the cursor in relative mode",
+            Tweak::ShowCursorInRelativeMode,
+            tweaks.show_cursor_in_relative_mode,
+        ));
+        content = content.extend(
+            self.hint(
+                "The client's own suggestion for relative-mode bugs, in its words: it \
+                 \"may work around issues in some rare cases\".",
+            )
+            .map(Element::from),
         );
 
         content = content.push(Space::new().height(Length::Fill));
@@ -7191,12 +7395,35 @@ impl Lightforge {
         );
         content = content.extend(
             self.hint(
-                "The client's own limit rather than the driver's, so it keeps working if the                  Direct3D version above changes.",
+                "The client's own limit rather than the driver's, so it keeps working if the \
+                 Direct3D version above changes. The client's floor is 8.",
             )
             .map(Element::from),
         );
+        content = content.push(
+            row![
+                muted("When unfocused".to_owned(), theme::LABEL).width(Length::Fixed(110.0)),
+                text_input("30", &self.fps_bk_input)
+                    .on_input(Message::TweakFpsCapBackground)
+                    .style(theme::field)
+                    .size(theme::BODY)
+                    .padding(theme::SM)
+                    .width(Length::Fixed(110.0)),
+                muted("fps".to_owned(), theme::LABEL),
+            ]
+            .spacing(theme::MD)
+            .align_y(Alignment::Center),
+        );
+        content = content.extend(
+            self.hint(
+                "What the game may draw while you are in a browser. The client's own \
+                 default is 30; lower gives the rest of the machine more back.",
+            )
+            .map(Element::from),
+        );
+        content = content.extend(self.runtime_rows(Scope::Product, tweaks));
         if self.tools.mangohud.is_some() {
-            content = content.push(self.tweak_check(
+            content = content.push(self.tweak_check(Scope::Product,
                 "Show the MangoHud overlay",
                 Tweak::MangoHud,
                 tweaks.mangohud,
@@ -7211,12 +7438,76 @@ impl Lightforge {
             .push(secondary("Clear shader cache", Message::ClearShaderCache).enabled(true));
         content = content.extend(
             self.hint(
-                "Shaders this product compiled under an older Proton build. Clearing them                  costs one session of stutter and affects no other product.",
+                "Shaders this product compiled under an older Proton build. Clearing them \
+                 costs one session of stutter and affects no other product.",
             )
             .map(Element::from),
         );
 
         self.tweak_card("Advanced", "Choices with no better default.", content)
+    }
+
+    /// The Proton-side switches: which graphics backend the game runs on.
+    ///
+    /// A method of its own because the Battle.net profile in Settings offers
+    /// exactly these and nothing else — a hand-off game has no `Config.wtf`,
+    /// so the environment is the only thing Lightforge can set for it, and
+    /// two copies of these rows would be two chances to drift.
+    ///
+    /// **The Wayland switch is hidden outside a Wayland session.** Proton
+    /// ignores `PROTON_ENABLE_WAYLAND` without `WAYLAND_DISPLAY`, so offering
+    /// it on X11 would be a control with no effect. HDR is nested under it
+    /// for a different reason: Proton would set `DXVK_HDR` under XWayland
+    /// too, and that is not a path to send anybody down.
+    // `'static`, not an elided reborrow of `&self`. `Column::extend` unifies
+    // the element lifetime exactly, unlike a single `push` which can coerce,
+    // and the cards hold `Action<'static>` from [`secondary`], which is
+    // invariant. Nothing in here actually borrows from `self`: `text_input`
+    // takes a plain `&str` and keeps its own copy.
+    fn runtime_rows(&self, scope: Scope, tweaks: &Tweaks) -> Vec<Element<'static, Message>> {
+        let mut rows: Vec<Element<'_, Message>> = Vec::new();
+        if !self.tools.wayland {
+            return rows;
+        }
+
+        rows.push(
+            self.tweak_check(scope, "Run on Proton's Wayland backend", Tweak::Wayland, tweaks.wayland)
+                .into(),
+        );
+        rows.extend(
+            self.hint(
+                "Skips XWayland. Newer and less travelled than the X11 path, so it is off \
+                 until asked for.",
+            )
+            .map(Element::from),
+        );
+        if tweaks.wayland {
+            rows.push(self.tweak_check(scope, "Ask for HDR output", Tweak::Hdr, tweaks.hdr).into());
+            rows.push(
+                row![
+                    muted("Monitor".to_owned(), theme::LABEL).width(Length::Fixed(110.0)),
+                    text_input(
+                        "whichever Proton picks",
+                        match scope {
+                            Scope::Product => &self.monitor_input,
+                            Scope::BattleNet => &self.bnet_monitor_input,
+                        },
+                    )
+                    .on_input(move |v| Message::TweakWaylandMonitor(scope, v))
+                        .style(theme::field)
+                        .size(theme::BODY)
+                        .padding(theme::SM)
+                        .width(Length::Fill),
+                ]
+                .spacing(theme::MD)
+                .align_y(Alignment::Center)
+                .into(),
+            );
+            rows.extend(
+                self.hint("A connector name, as in DP-1 or HDMI-A-1.").map(Element::from),
+            );
+        }
+        rows
     }
 
     /// The escape hatch, full width and folded away.
@@ -7225,17 +7516,21 @@ impl Lightforge {
     /// on the page with no bound on its height: a profile with a dozen
     /// variables in it would make its column twice its neighbour's, which is
     /// the exact problem the grid is here to fix.
-    fn env_card(&self, tweaks: &Tweaks) -> Element<'_, Message> {
+    fn env_card(&self, scope: Scope, tweaks: &Tweaks) -> Element<'_, Message> {
         let count = tweaks.env.len();
+        let open = match scope {
+            Scope::Product => self.env_open,
+            Scope::BattleNet => self.bnet_env_open,
+        };
         let summary = row![
             button(
-                text(match self.env_open {
+                text(match open {
                     true => "Hide",
                     false => "Show",
                 })
                 .size(theme::LABEL)
             )
-            .on_press(Message::TweakEnvToggle)
+            .on_press(Message::TweakEnvToggle(scope))
             .style(theme::ghost)
             .padding([theme::XS, theme::SM]),
         ];
@@ -7250,14 +7545,14 @@ impl Lightforge {
             .align_y(Alignment::Center)]
         .spacing(theme::SM);
 
-        if self.env_open {
+        if open {
             for (key, value) in &tweaks.env {
                 inner = inner.push(
                     container(
                         row![
                             mono(format!("{key}={value}")).width(Length::Fill),
                             button(text("Remove").size(theme::LABEL))
-                                .on_press(Message::TweakEnvRemove(key.clone()))
+                                .on_press(Message::TweakEnvRemove(scope, key.clone()))
                                 .style(theme::ghost)
                                 .padding([theme::XS, theme::SM]),
                         ]
@@ -7272,19 +7567,19 @@ impl Lightforge {
                 row![
                     text_input("VARIABLE", &self.env_key_input)
                         .on_input(Message::TweakEnvKey)
-                        .on_submit(Message::TweakEnvAdd)
+                        .on_submit(Message::TweakEnvAdd(scope))
                         .style(theme::field)
                         .size(theme::BODY)
                         .padding(theme::SM)
                         .width(Length::Fixed(220.0)),
                     text_input("value", &self.env_value_input)
                         .on_input(Message::TweakEnvValue)
-                        .on_submit(Message::TweakEnvAdd)
+                        .on_submit(Message::TweakEnvAdd(scope))
                         .style(theme::field)
                         .size(theme::BODY)
                         .padding(theme::SM)
                         .width(Length::Fill),
-                    secondary("Add", Message::TweakEnvAdd).enabled(!self.env_key_input.is_empty()),
+                    secondary("Add", Message::TweakEnvAdd(scope)).enabled(!self.env_key_input.is_empty()),
                 ]
                 .spacing(theme::SM)
                 .align_y(Alignment::Center),
@@ -8785,6 +9080,7 @@ impl Lightforge {
             SettingsTab::Setup => ("Setup", self.setup_section()),
             SettingsTab::General => ("General", self.general_section()),
             SettingsTab::Proton => ("Proton", self.proton_section()),
+            SettingsTab::BattleNet => ("Battle.net", self.battle_net_section()),
             SettingsTab::Downloads => ("Downloads", self.downloads_section()),
             SettingsTab::Addons => ("Addons", self.addons_section()),
             SettingsTab::Storage => ("Storage", self.storage_section()),
@@ -9209,6 +9505,94 @@ impl Lightforge {
         ).map(Element::from))
         .spacing(theme::SM)
         .into()
+    }
+
+    /// How Battle.net and every game it launches are started.
+    ///
+    /// **One profile, not one per game, and that is the mechanism rather than
+    /// a shortcut.** Lightforge only sets the environment of a Battle.net
+    /// client it starts cold; a client already running takes the launch over
+    /// its own IPC queue, where there is no new process to hand an
+    /// environment to. Two games started from one client session therefore
+    /// cannot have different environments, so a per-game control here would
+    /// be a lie — `Config::battle_net_tweaks` and `SPEC.md` both say so.
+    ///
+    /// There is no client-settings half: a hand-off game has no `Config.wtf`.
+    /// So this is the host tools, the runtime switches and the escape hatch,
+    /// and no preset row — a preset decides the frames-versus-scenery trade,
+    /// and none of these are a point on that axis.
+    fn battle_net_section(&self) -> Element<'_, Message> {
+        let tweaks = self.tweaks_of(Scope::BattleNet);
+        let scope = Scope::BattleNet;
+
+        // No heading of its own: `section()` puts "Battle.net" above this,
+        // the way it does for General and Downloads. Storage and Proton name
+        // their own groups and opt out of that; one group does not need to.
+        let mut body = column![]
+            .spacing(theme::SM)
+            .extend(
+                self.hint(
+                    "These apply to the Battle.net client and therefore to every game it \
+                     launches — Diablo, Hearthstone, Overwatch. They cannot be set per game, \
+                     because Lightforge only gets to choose the environment when it starts \
+                     the client itself: a client that is already open is handed the launch \
+                     over its own message queue.",
+                )
+                .map(Element::from),
+            );
+
+        if self.tools.game_performance.is_some() {
+            body = body.push(self.tweak_check(
+                scope,
+                "Hold the CPU on its performance profile",
+                Tweak::GamePerformance,
+                tweaks.wants_game_performance(),
+            ));
+        }
+        if self.tools.gamemode.is_some() {
+            body = body.push(self.tweak_check(
+                scope,
+                "Launch through GameMode",
+                Tweak::GameMode,
+                tweaks.gamemode,
+            ));
+        }
+        if self.tools.mangohud.is_some() {
+            body = body.push(self.tweak_check(
+                scope,
+                "Show the MangoHud overlay",
+                Tweak::MangoHud,
+                tweaks.mangohud,
+            ));
+        }
+        body = body.push(self.tweak_check(
+            scope,
+            "Give the shader cache room",
+            Tweak::BigShaderCache,
+            tweaks.big_shader_cache,
+        ));
+        body = body.extend(self.runtime_rows(scope, &tweaks));
+
+        let missing: Vec<&str> = [
+            self.tools.game_performance.is_none().then_some("game-performance"),
+            self.tools.gamemode.is_none().then_some("GameMode"),
+            self.tools.mangohud.is_none().then_some("MangoHud"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if !missing.is_empty() {
+            body = body.push(muted(
+                format!("{} is not installed, so it is not offered.", missing.join(", ")),
+                theme::CAPTION,
+            ));
+        }
+
+        // The only way to tune a hand-off game beyond the switches above: it
+        // has no client settings for Lightforge to write, so anything else
+        // has to arrive as an environment variable.
+        body = body.push(self.env_card(scope, &tweaks));
+        body.spacing(theme::SM).into()
     }
 
     fn downloads_section(&self) -> Element<'_, Message> {

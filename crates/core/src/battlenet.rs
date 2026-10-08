@@ -1155,15 +1155,30 @@ pub fn launch(
     layout: &Layout,
     launch: &Launch,
 ) -> Result<std::process::Child, BattleNetError> {
+    launch_wrapped(runner, layout, launch, &[])
+}
+
+/// [`launch`], run under `wrappers` (outermost first).
+///
+/// Separate because almost nothing wants them. A wrapper belongs on the
+/// invocation that *becomes* the client — the one whose process the games
+/// inherit from — and not on the invocations that only hand arguments to a
+/// client already running: those exit at once, so a power profile or a
+/// GameMode session held around them would be held for nothing.
+pub fn launch_wrapped(
+    runner: &ProtonRunner,
+    layout: &Layout,
+    launch: &Launch,
+    wrappers: &[PathBuf],
+) -> Result<std::process::Child, BattleNetError> {
     let install_dir = layout.battle_net_dir();
     if !is_installed(&install_dir) {
         return Err(BattleNetError::NotInstalled(install_dir));
     }
 
     let (exe, args) = launch.command(&install_dir);
-    runner
-        .command("run", &exe, args)
-        .stdin(Stdio::null())
+    let mut cmd = crate::tweaks::wrapped(runner.command("run", &exe, args), wrappers);
+    cmd.stdin(Stdio::null())
         .spawn()
         .map_err(|e| BattleNetError::Prefix(PrefixError::Spawn { program: exe, source: e }))
 }

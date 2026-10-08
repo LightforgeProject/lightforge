@@ -799,7 +799,13 @@ pub async fn launch_via_battle_net(
             };
 
             let started = std::time::SystemTime::now();
-            battlenet::launch(&runner, &layout, &how).map_err(|e| e.to_string())?;
+            // Wrappers go here and nowhere else on this path: this
+            // invocation becomes the client, and the game inherits from it.
+            // The launch below only hands arguments to it over IPC.
+            let tools = HostTools::detect();
+            let wrappers = config_tweaks().wrappers(&tools);
+            battlenet::launch_wrapped(&runner, &layout, &how, &wrappers)
+                .map_err(|e| e.to_string())?;
 
             if battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT)
                 == Readiness::NeedsAttention
@@ -1095,17 +1101,30 @@ fn runner_for(
             // product's Proton swap discarding another's shaders.
             .with_shader_cache(dirs.shader_cache_dir(code));
 
-    // Only the game: Battle.net and Agent are a different workload, and a
-    // frame overlay or a power profile held for the storefront is not what the
-    // toggle asked for.
-    if runs == Runs::Game {
-        let tweaks =
-            config.product(code).map(|p| p.profile.tweaks.clone()).unwrap_or_default();
-        for (key, value) in tweaks.environment(&HostTools::detect()) {
-            runner = runner.with_env(key, value);
-        }
+    // Two profiles, because they are two different questions. A direct
+    // launch is this product's own; a Battle.net launch is the client's and
+    // therefore every game the client starts — the one environment all of
+    // them inherit. See `Config::battle_net_tweaks` for why that cannot be
+    // per-game.
+    let tweaks = match runs {
+        Runs::Game => config.product(code).map(|p| p.profile.tweaks.clone()).unwrap_or_default(),
+        Runs::BattleNet => config.battle_net_tweaks.clone(),
+    };
+    for (key, value) in tweaks.environment(&HostTools::detect()) {
+        runner = runner.with_env(key, value);
     }
     Ok(runner)
+}
+
+/// The shared profile Battle.net and its games launch under.
+///
+/// Not per-product on purpose — see `Config::battle_net_tweaks`.
+fn config_tweaks() -> Tweaks {
+    AppDirs::discover()
+        .ok()
+        .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
+        .map(|config| config.battle_net_tweaks)
+        .unwrap_or_default()
 }
 
 /// One product's performance settings, and what this machine can honour.

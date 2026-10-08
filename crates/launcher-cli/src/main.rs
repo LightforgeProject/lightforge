@@ -938,7 +938,7 @@ async fn main() -> Result<()> {
                 Launch::Product { code, .. } => Some(code.clone()),
                 _ => None,
             };
-            let (runner, build) =
+            let (mut runner, build) =
                 proton_runner(&layout, battle_net_pin(proton.as_deref(), for_product.as_ref()))?;
             let (exe, args) = launch.command(&layout.battle_net_dir());
             println!("using {} ({})", build.version, build.path.display());
@@ -963,8 +963,23 @@ async fn main() -> Result<()> {
             }
 
             println!("running {}{}", exe.display(), if args.is_empty() { String::new() } else { format!(" {}", args.join(" ")) });
-            let mut child = battlenet::launch(&runner, &layout, &launch)
-                .context("launching Battle.net")?;
+            // The shared Battle.net profile, the same one the GUI applies —
+            // a launcher that honoured it from one entry point and not the
+            // other would make every measurement unreproducible. Unlike the
+            // GUI this always *is* the client (the CLI has no running-client
+            // fast path), so the wrappers always belong here.
+            let shared = AppDirs::discover()
+                .ok()
+                .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
+                .map(|config| config.battle_net_tweaks)
+                .unwrap_or_default();
+            let tools = lightforge_core::tweaks::HostTools::detect();
+            for (key, value) in shared.environment(&tools) {
+                runner = runner.with_env(key, value);
+            }
+            let mut child =
+                battlenet::launch_wrapped(&runner, &layout, &launch, &shared.wrappers(&tools))
+                    .context("launching Battle.net")?;
             let status = child.wait().context("waiting for Battle.net")?;
 
             if download_paused {

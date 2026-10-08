@@ -90,6 +90,21 @@ pub struct Config {
     /// nobody can see is a launch that quietly never happens.
     #[serde(default = "yes")]
     pub battle_net_minimized: bool,
+    /// How Battle.net and every game it launches are started.
+    ///
+    /// **Shared, not per-game, and that is the mechanism rather than a
+    /// simplification.** Lightforge only ever sets the environment of a
+    /// Battle.net client it starts *cold*; a client that is already up takes
+    /// the launch over its own IPC queue, where there is no new process to
+    /// give an environment to. Two games started from one client session
+    /// therefore cannot have different environments, so offering a per-game
+    /// control would be a lie — see `SPEC.md`, "Per-product pinning".
+    ///
+    /// Only the host and runtime half of [`crate::tweaks::Tweaks`] is read
+    /// here. A hand-off game has no `Config.wtf`, so
+    /// [`crate::tweaks::Tweaks::cvars`] is never called on this value.
+    #[serde(default)]
+    pub battle_net_tweaks: crate::tweaks::Tweaks,
     /// Which of Blizzard's regions products are downloaded from.
     ///
     /// Asked once, during the first run. It decides which version service is
@@ -193,6 +208,7 @@ impl Default for Config {
             pause_downloads_while_playing: true,
             minimize_on_launch: false,
             battle_net_minimized: true,
+            battle_net_tweaks: crate::tweaks::Tweaks::default(),
             region: crate::tact::version::Region::default(),
             locale: default_locale(),
             setup_complete: false,
@@ -508,6 +524,28 @@ pub enum ConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The shared profile is new, so every config on disk predates it. A
+    // missing key must default rather than fail the load, or an upgrade
+    // bricks the launcher for everyone who already had one.
+    #[test]
+    fn a_config_without_a_battle_net_profile_still_loads() {
+        let config: Config = toml::from_str("install_root = \"/games/Blizzard\"").unwrap();
+        assert_eq!(config.battle_net_tweaks, crate::tweaks::Tweaks::default());
+        assert!(config.battle_net_tweaks.is_default());
+    }
+
+    #[test]
+    fn the_battle_net_profile_round_trips() {
+        let mut config = Config::default();
+        config.battle_net_tweaks.gamemode = true;
+        config.battle_net_tweaks.wayland = true;
+        config.battle_net_tweaks.env.insert("DXVK_HUD".to_owned(), "fps".to_owned());
+
+        let text = toml::to_string(&config).unwrap();
+        let back: Config = toml::from_str(&text).unwrap();
+        assert_eq!(back.battle_net_tweaks, config.battle_net_tweaks);
+    }
 
     #[test]
     fn battle_net_has_its_own_pin_but_falls_back_to_the_default() {
