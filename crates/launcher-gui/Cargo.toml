@@ -18,4 +18,5 @@ anyhow.workspace = true
 iced.workspace = true
 image.workspace = true
 open.workspace = true
+sentry.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }

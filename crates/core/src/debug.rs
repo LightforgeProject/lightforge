@@ -116,7 +116,40 @@ impl DebugInfo {
                 let _ = writeln!(out, "\nno crash log found");
             }
         }
-        out
+        scrub(&out)
+    }
+}
+
+/// Take the person's name out of a rendered bundle.
+///
+/// A bundle is pasted into chat rooms and uploaded to our own server, and on
+/// Linux the home directory is spelled with the account name. Rewriting
+/// `$HOME` to `~` is not enough on its own: a game library can sit on
+/// `/run/media/<name>/…`, nowhere near home, and the crash log tail carries
+/// whatever absolute paths the client happened to write. So the name itself is
+/// substituted too, wherever it survived the first pass.
+fn scrub(text: &str) -> String {
+    let home = directories::UserDirs::new().map(|d| d.home_dir().to_path_buf());
+    scrub_with(text, home.as_deref())
+}
+
+/// The shortest account name worth substituting on its own. A two-letter
+/// login would turn every "to" in a crash log into `<user>`; the home path
+/// rewrite above still covers such a name where it matters.
+const MIN_NAME: usize = 3;
+
+/// The body of [`scrub`], with the home directory passed in so it is testable
+/// without reaching for the environment.
+fn scrub_with(text: &str, home: Option<&Path>) -> String {
+    let Some(home) = home else { return text.to_owned() };
+
+    // Home first, so the longer match wins: `/home/ann/Games` becomes
+    // `~/Games` rather than `/home/<user>/Games`.
+    let out = text.replace(&home.display().to_string(), "~");
+
+    match home.file_name().and_then(|n| n.to_str()).filter(|n| n.len() >= MIN_NAME) {
+        Some(name) => out.replace(name, "<user>"),
+        None => out,
     }
 }
 
@@ -221,5 +254,58 @@ mod tests {
         assert_eq!(log.tail.lines().count(), TAIL_LINES);
         assert!(log.tail.contains("line 99"));
         assert!(!log.tail.contains("line 10\n"));
+    }
+
+    #[test]
+    fn a_path_under_home_loses_the_home_directory() {
+        let home = PathBuf::from("/home/ann");
+        let text = scrub_with("install         /home/ann/Games/Blizzard\n", Some(&home));
+        assert_eq!(text, "install         ~/Games/Blizzard\n");
+    }
+
+    #[test]
+    fn the_account_name_goes_even_where_the_path_is_not_under_home() {
+        let home = PathBuf::from("/home/ann");
+        // A library on a second drive, and a crash log that named the person
+        // twice: neither starts with `$HOME`, so the home rewrite misses both.
+        let text = scrub_with(
+            "install         /run/media/ann/games/Blizzard\nERROR: /run/media/ann/games/Wow.exe\n",
+            Some(&home),
+        );
+        assert!(!text.contains("ann"), "name survived: {text}");
+        assert_eq!(text.matches("<user>").count(), 2);
+    }
+
+    #[test]
+    fn a_name_too_short_to_be_distinctive_is_left_alone() {
+        let home = PathBuf::from("/home/jo");
+        let text = scrub_with("install         /home/jo/Games\ngoing to the store\n", Some(&home));
+        // The path still loses home; the bare "jo" in "going" is not touched.
+        assert!(text.starts_with("install         ~/Games"));
+        assert!(text.contains("going to the store"));
+    }
+
+    #[test]
+    fn with_no_home_directory_the_text_is_unchanged() {
+        let text = "install         /home/ann/Games\n";
+        assert_eq!(scrub_with(text, None), text);
+    }
+
+    #[test]
+    fn a_rendered_bundle_is_scrubbed_on_the_way_out() {
+        let home = directories::UserDirs::new().map(|d| d.home_dir().to_path_buf());
+        let Some(home) = home else { return };
+        let info = DebugInfo {
+            app_version: "0.1.0".into(),
+            product: "wow".into(),
+            action_state: "Play".into(),
+            install_path: Some(home.join("Games/Blizzard")),
+            prefix: home.join(".local/share/lightforge/prefix"),
+            ..DebugInfo::default()
+        };
+        let text = info.render();
+
+        assert!(text.contains("~/Games/Blizzard"));
+        assert!(!text.contains(&home.display().to_string()));
     }
 }

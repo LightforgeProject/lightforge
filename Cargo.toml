@@ -25,6 +25,13 @@ md5 = "0.8"
 open = "5"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 sha2 = "0.10"
+# Default features are deliberately off: the default transport is reqwest with
+# **native-tls**, which the release container has no OpenSSL for and which the
+# rest of the workspace replaced with rustls; `panic` would install a panic
+# hook, and a report is only ever sent with someone's explicit consent; and
+# `release-health` sends a session envelope per launch that GlitchTip has no
+# use for.
+sentry = { version = "0.49", default-features = false, features = ["reqwest", "rustls", "backtrace", "contexts"] }
 sysinfo = { version = "0.36", default-features = false, features = ["system"] }
 blte = "0.4"
 ngdp-crypto = "0.4"

@@ -21,6 +21,7 @@ mod addonwork;
 mod art;
 mod popover;
 mod provision;
+mod report;
 mod tasks;
 mod theme;
 mod trace;
@@ -410,6 +411,14 @@ enum Message {
     ManageSubscription,
     OpenFiles,
     CopyDebug,
+    /// Open the bug report or the feedback dialog.
+    OpenReport(ReportKind),
+    /// What someone has typed into whichever of the two is open.
+    ReportNote(String),
+    ReportSend,
+    /// Whether it actually left the machine.
+    ReportSent(bool),
+    ReportCancel,
     /// Open Settings on a particular tab, for a link that means a specific
     /// page rather than "settings somewhere".
     ShowSettingsTab(SettingsTab),
@@ -685,6 +694,42 @@ enum DialogStage {
     Calculating,
     Ready(Box<Offerings>),
     Failed(String),
+}
+
+/// Which of the two report dialogs is open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReportKind {
+    /// Something is broken, so the diagnostic bundle goes with it.
+    Bug,
+    /// A note about the app. Nothing is wrong with the machine, so nothing
+    /// about the machine is sent.
+    Feedback,
+}
+
+/// How far a report has got.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReportStage {
+    Writing,
+    Sending,
+    Sent,
+    /// It did not leave the machine inside the flush window. Said plainly
+    /// rather than swallowed: a dialog that claims "sent" when the server was
+    /// unreachable is worse than no dialog.
+    Failed,
+}
+
+/// The bug report / feedback dialog.
+#[derive(Debug, Clone)]
+struct ReportDialog {
+    kind: ReportKind,
+    /// What the user is typing.
+    note: String,
+    /// The debug bundle, rendered when the dialog opened — that is where the
+    /// four things [`DebugInfo::gather`] needs are in scope. Empty for
+    /// feedback, which sends none of it. Already scrubbed of the account
+    /// name: every rendered bundle is.
+    debug: String,
+    stage: ReportStage,
 }
 
 /// The confirmation before a game is deleted.
@@ -1306,6 +1351,7 @@ struct Lightforge {
     location_input: String,
     install_dialog: Option<InstallDialog>,
     uninstall_dialog: Option<UninstallDialog>,
+    report_dialog: Option<ReportDialog>,
     downgrade_dialog: Option<DowngradeDialog>,
     /// Builds the user has already agreed to launch under this session.
     ///
@@ -1531,6 +1577,7 @@ impl Lightforge {
             location_input: String::new(),
             install_dialog: None,
             uninstall_dialog: None,
+            report_dialog: None,
             downgrade_dialog: None,
             downgrade_ok: HashSet::new(),
             partitions: Vec::new(),
@@ -4248,6 +4295,76 @@ impl Lightforge {
                 iced::clipboard::write(info.render())
             }
 
+            Message::OpenReport(kind) => {
+                self.close_panels();
+                // Gathered here because this is where the four things
+                // `DebugInfo::gather` needs are in scope, and gathered once:
+                // the card shows exactly the text that gets sent, not a
+                // second rendering of it.
+                let debug = match kind {
+                    ReportKind::Bug => {
+                        let action = self.action();
+                        DebugInfo::gather(
+                            &self.layout,
+                            &self.selected.code,
+                            &format!("{action:?}"),
+                            tasks::proton_for(&self.selected.code).as_ref(),
+                        )
+                        .render()
+                    }
+                    ReportKind::Feedback => String::new(),
+                };
+                self.report_dialog = Some(ReportDialog {
+                    kind,
+                    note: String::new(),
+                    debug,
+                    stage: ReportStage::Writing,
+                });
+                Task::none()
+            }
+
+            Message::ReportNote(note) => {
+                if let Some(dialog) = self.report_dialog.as_mut() {
+                    dialog.note = note;
+                }
+                Task::none()
+            }
+
+            Message::ReportSend => {
+                let Some(dialog) = self.report_dialog.as_mut() else {
+                    return Task::none();
+                };
+                if dialog.stage != ReportStage::Writing || dialog.note.trim().is_empty() {
+                    return Task::none();
+                }
+                dialog.stage = ReportStage::Sending;
+                let kind = match dialog.kind {
+                    ReportKind::Bug => report::Kind::Bug(dialog.debug.clone()),
+                    ReportKind::Feedback => report::Kind::Feedback,
+                };
+                let note = dialog.note.clone();
+                Task::perform(report::send(kind, note), Message::ReportSent)
+            }
+
+            Message::ReportSent(arrived) => {
+                if let Some(dialog) = self.report_dialog.as_mut() {
+                    dialog.stage = match arrived {
+                        true => ReportStage::Sent,
+                        false => ReportStage::Failed,
+                    };
+                }
+                self.status = match arrived {
+                    true => "report sent".to_owned(),
+                    false => "the report could not be sent".to_owned(),
+                };
+                Task::none()
+            }
+
+            Message::ReportCancel => {
+                self.report_dialog = None;
+                Task::none()
+            }
+
             Message::ShowSettingsTab(tab) => {
                 self.settings_tab = tab;
                 self.update(Message::Show(Screen::Settings))
@@ -5195,13 +5312,15 @@ impl Lightforge {
             &self.downgrade_dialog,
             &self.version_picker,
             &self.addon_detail,
+            &self.report_dialog,
             &self.patch_notes,
         ) {
             (Some(dialog), ..) => Some(self.install_card(dialog)),
             (_, Some(dialog), ..) => Some(self.uninstall_card(dialog)),
             (_, _, Some(dialog), ..) => Some(self.downgrade_card(dialog)),
             (_, _, _, Some(picker), ..) => Some(self.version_card(picker)),
-            (_, _, _, _, Some(detail), _) => Some(self.detail_card(detail)),
+            (_, _, _, _, Some(detail), ..) => Some(self.detail_card(detail)),
+            (_, _, _, _, _, Some(dialog), _) => Some(self.report_card(dialog)),
             // Last, so a dialog someone opened themselves is never buried
             // under the one the app opened for them.
             (.., Some(notes)) => Some(self.patch_notes_card(notes)),
@@ -6072,8 +6191,12 @@ impl Lightforge {
             container(Space::new().height(Length::Fixed(1.0)))
                 .width(Length::Fill)
                 .style(theme::divider),
-            entry(bug_icon(), "Report a Bug", BUG_URL.map(Message::OpenLink)),
-            entry(feedback_icon(), "Send Feedback", FEEDBACK_URL.map(Message::OpenLink)),
+            entry(bug_icon(), "Report a Bug", Some(Message::OpenReport(ReportKind::Bug))),
+            entry(
+                feedback_icon(),
+                "Send Feedback",
+                Some(Message::OpenReport(ReportKind::Feedback)),
+            ),
             container(Space::new().height(Length::Fixed(1.0)))
                 .width(Length::Fill)
                 .style(theme::divider),
@@ -10304,6 +10427,109 @@ impl Lightforge {
         .into()
     }
 
+    /// The bug report and the feedback dialog, which are one card.
+    ///
+    /// They differ in three things: the prompt, whether the diagnostic bundle
+    /// is shown, and whether it is sent. Everything else — the stages, the
+    /// outcome line, the two buttons — is the same, and splitting them in two
+    /// would mean maintaining that twice.
+    fn report_card<'a>(&'a self, dialog: &'a ReportDialog) -> Element<'a, Message> {
+        let (title, prompt) = match dialog.kind {
+            ReportKind::Bug => ("Report a Bug", "What were you doing when this occurred?"),
+            ReportKind::Feedback => {
+                ("Send Feedback", "What would you like to see improved or changed?")
+            }
+        };
+        let writing = dialog.stage == ReportStage::Writing;
+
+        let mut body = column![text_input(prompt, &dialog.note)
+            .on_input_maybe(writing.then_some(Message::ReportNote))
+            .style(theme::field)
+            .size(theme::BODY)
+            .padding(theme::SM)]
+        .spacing(theme::MD);
+
+        body = match dialog.kind {
+            // Shown in full, and shown before it is sent: the only way a
+            // promise about what leaves the machine is checkable is if the
+            // person can read the thing that leaves it.
+            ReportKind::Bug => body
+                .push(muted(
+                    "This exact diagnostic data will be sent to our private server securely."
+                        .to_owned(),
+                    theme::LABEL,
+                ))
+                .push(
+                    container(
+                        scrollable(mono(dialog.debug.clone()))
+                            .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
+                            .height(Length::Fixed(200.0))
+                            .width(Length::Fill),
+                    )
+                    .padding(theme::SM)
+                    .style(theme::row),
+                ),
+            ReportKind::Feedback => body.push(muted(
+                "This will be sent directly to the developer securely.".to_owned(),
+                theme::LABEL,
+            )),
+        };
+
+        if let Some((note, color)) = match dialog.stage {
+            ReportStage::Sent => Some(("Sent — thank you.".to_owned(), theme::OK)),
+            ReportStage::Failed => Some((
+                "It could not be sent. Check the connection and try again, or reach us on \
+                 Discord."
+                    .to_owned(),
+                theme::ERROR,
+            )),
+            _ => None,
+        } {
+            body = body.push(text(note).size(theme::LABEL).color(color));
+        }
+
+        let choice = |label: &'static str| {
+            button(text(label).size(theme::LABEL).width(Length::Fill).center())
+                .width(Length::Fixed(150.0))
+                .padding([theme::SM, theme::MD])
+        };
+        // Once it has arrived there is nothing left to cancel, so the card
+        // offers one button that says what it does.
+        let actions = match dialog.stage {
+            ReportStage::Sent => row![
+                Space::new().width(Length::Fill),
+                choice("Close").style(theme::filled(theme::ACCENT)).on_press(Message::ReportCancel),
+            ],
+            _ => row![
+                Space::new().width(Length::Fill),
+                choice("Cancel").style(theme::outlined).on_press(Message::ReportCancel),
+                choice(match dialog.stage {
+                    ReportStage::Sending => "Sending…",
+                    ReportStage::Failed => "Try again",
+                    _ => match dialog.kind {
+                        ReportKind::Bug => "Send Bug Report",
+                        ReportKind::Feedback => "Send Feedback",
+                    },
+                })
+                .style(theme::filled(theme::ACCENT))
+                // Nothing is sent without a description: an empty report is
+                // one more issue nobody can act on.
+                .on_press_maybe(
+                    (dialog.stage != ReportStage::Sending && !dialog.note.trim().is_empty())
+                        .then_some(Message::ReportSend)
+                ),
+            ],
+        }
+        .spacing(theme::SM)
+        .align_y(Alignment::Center);
+
+        container(column![section(title, body.into()), actions].spacing(theme::LG))
+            .width(Length::Fixed(560.0))
+            .padding(theme::LG)
+            .style(theme::dialog)
+            .into()
+    }
+
     /// A product's name as the picker shows it, or its code.
     fn label_of(&self, code: &ProductCode) -> String {
         self.choices
@@ -10856,17 +11082,13 @@ fn link_square(
     .on_press_maybe(url.map(Message::OpenLink))
 }
 
-/// Unlike the four constants below this is a plain `&str`: it has a
-/// destination today, so the tab is never the dimmed placeholder those are.
 const SHOP_URL: &str = "https://shop.battle.net";
 
 /// Where the News page's headlines come from, and where its button goes.
 const WOWHEAD_URL: &str = "https://www.wowhead.com";
 
-const BUG_URL: Option<&str> = None;
-const FEEDBACK_URL: Option<&str> = None;
-const DISCORD_URL: Option<&str> = None;
-const X_URL: Option<&str> = None;
+const DISCORD_URL: Option<&str> = Some("https://discord.gg/vtTgmUV9Bq");
+const X_URL: Option<&str> = Some("https://x.com/simplyKennybtw");
 
 /// A product's mark in the Add a game list.
 ///
