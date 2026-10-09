@@ -2,7 +2,7 @@
 
 <img src="docs/banner.png" alt="Lightforge" width="640">
 
-**A native Linux launcher for World of Warcraft.**
+**A native Linux launcher for World of Warcraft — and a proper home for the rest of Battle.net.**
 No Electron, no Agent deadlocks, no telemetry — just your games. 🔨
 
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-E9AB28?style=flat-square)](LICENSE)
@@ -23,9 +23,15 @@ weighs more than the thing it is supposed to launch.
 
 Lightforge skips it. It talks to Blizzard's CDN directly — the same TACT/CASC
 pipeline the real client uses, reimplemented in Rust — so it can install,
-patch, verify and launch every flavour of WoW on its own. Battle.net is still
-there when you want it, set up for you and tuned, for the shop, the Token and
-everything outside the WoW family. You just stop depending on it to play.
+patch, verify and launch every flavour of WoW on its own. You stop depending
+on Battle.net to play.
+
+You don't stop *having* it, though. Lightforge builds and maintains one
+Battle.net prefix, and the rest of the catalogue lives in it: install Diablo,
+Overwatch, Hearthstone or StarCraft the usual way and they appear as tiles
+here, launch straight into the game from one button, and share a tuning
+profile of their own. Lightforge doesn't manage their files — Battle.net
+does, because it's good at that — it just means you only open one launcher.
 
 It's one 22 MB binary. It starts instantly. ✨
 
@@ -50,9 +56,12 @@ Wayland backend with HDR, shader-cache headroom, a background frame cap,
 cursor fixes that actually exist in the client, and your own environment
 variables kept well away from all of it.
 
-🛠️ **Sets Battle.net up for you.** The Wine prefix, a verified Proton-GE
-build and the client itself, in three steps you can watch. The in-game shop
-and the Token work — that one took a while. 😅
+🛠️ **Sets Battle.net up for you, and then gets out of the way.** The Wine
+prefix, a verified Proton-GE build and the client itself, in three steps you
+can watch. Everything you install through it gets a tile here and starts with
+one press — Lightforge opens the client, waits for the sign-in, tells it which
+game, and sits quietly until you quit. The in-game shop and the Token work
+too, which took a while. 😅
 
 📰 **Tells you what's going on.** News from Wowhead, Icy Veins and Blizzard,
 filtered to the game you're actually looking at.
@@ -100,7 +109,7 @@ work on Arch, Fedora, Ubuntu, Bazzite and the Steam Deck alike.
 ## 🧰 Requirements
 
 | | |
-|---|---|
+| --- | --- |
 | **OS** | Any current Linux. glibc 2.36+ for release binaries; source builds don't care. |
 | **GPU** | Anything with a working Vulkan driver — Mesa (RADV/ANV) or NVIDIA. |
 | **Also** | `fontconfig`, and a 64-bit Rust 1.86+ toolchain if you're building. |
@@ -176,7 +185,7 @@ Lightforge is free, GPL-3.0, and built in my spare time. If it saved you an
 evening of fighting Battle.net, you can buy me a coffee:
 
 <!-- TODO: replace both with your real pages before publishing -->
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/YOUR_HANDLE)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/simplykenny)
 [![Patreon](https://img.shields.io/badge/Patreon-support-F96854?style=for-the-badge&logo=patreon&logoColor=white)](https://patreon.com/YOUR_HANDLE)
 
 Telling someone about it works too. 🙂

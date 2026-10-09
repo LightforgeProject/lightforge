@@ -15,7 +15,7 @@ GLIBC_MAX ?= 2.36
 
 BINARIES := lightforge lightforge-gui
 
-.PHONY: release image check-glibc clean-release
+.PHONY: release image check-glibc clean-release cli-doc check-cli-doc
 
 ## Build release binaries against an old glibc, and verify they are portable.
 release: image
@@ -52,6 +52,24 @@ check-glibc:
 	  fi; \
 	done; \
 	exit $$fail
+
+## Regenerate docs/CLI.md from the binary's own --help.
+##
+## The page is forty-four commands long; typing it by hand guarantees it is
+## wrong the first time a flag changes, and nobody finds out until a reader
+## follows it.
+cli-doc:
+	cargo build --release --bin lightforge
+	sh docs/gen-cli.sh
+
+## Fail if docs/CLI.md is not what the current binary would produce.
+##
+## Belongs in whatever runs before a release: the generator is only useful if
+## somebody notices it was not run.
+check-cli-doc: cli-doc
+	@git diff --quiet -- docs/CLI.md \
+	  || { echo "docs/CLI.md is out of date — commit the regenerated page"; exit 1; }
+	@echo "ok   docs/CLI.md matches the binary"
 
 clean-release:
 	rm -rf target/container
