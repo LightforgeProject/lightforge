@@ -32,13 +32,16 @@ open = "5"
 ashpd = { version = "0.12", default-features = false, features = ["async-std"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 sha2 = "0.10"
-# Default features are deliberately off: the default transport is reqwest with
-# **native-tls**, which the release container has no OpenSSL for and which the
-# rest of the workspace replaced with rustls; `panic` would install a panic
-# hook, and a report is only ever sent with someone's explicit consent; and
-# `release-health` sends a session envelope per launch that GlitchTip has no
-# use for.
-sentry = { version = "0.49", default-features = false, features = ["reqwest", "rustls", "backtrace", "contexts"] }
+# Default features are deliberately off, and **no transport feature at all**:
+# the launcher implements sentry's `Transport` over its own `core::net::Http`
+# (see `report.rs`). `sentry/reqwest` wants reqwest 0.13 beside our 0.12, and
+# its `rustls` feature switches the *shared* rustls onto `aws-lc-rs` — so the
+# release was building a second HTTP client, a platform certificate verifier
+# and a whole second crypto provider in C for a client we already had.
+# `panic` would install a panic hook, and a report is only ever sent with
+# someone's explicit consent; `release-health` sends a session envelope per
+# launch that GlitchTip has no use for.
+sentry = { version = "0.49", default-features = false, features = ["backtrace", "contexts"] }
 sysinfo = { version = "0.36", default-features = false, features = ["system"] }
 # For the screenshot a report carries: GlitchTip drops envelope attachments,
 # so the image travels inside the event as a data URI.

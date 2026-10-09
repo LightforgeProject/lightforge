@@ -118,24 +118,48 @@ impl Http {
         body: Vec<u8>,
         timeout: Duration,
     ) -> Result<T, NetError> {
-        let response = self
+        let body = self.post(url, content_type, &[], body, timeout).await?;
+        serde_json::from_slice(&body)
+            .map_err(|e| NetError::Decode { url: url.to_owned(), source: e })
+    }
+
+    /// POST a body with whatever extra headers it needs, and hand back the
+    /// response.
+    ///
+    /// The second sender, and the reason this takes headers at all: a bug
+    /// report's event goes to our own Sentry server, which authenticates it
+    /// with an `X-Sentry-Auth` header. Sending it through this client rather
+    /// than through the one the sentry crate brings with it is what keeps a
+    /// second HTTP stack — and a second TLS verifier — out of the release.
+    pub async fn post(
+        &self,
+        url: &str,
+        content_type: &str,
+        headers: &[(&str, &str)],
+        body: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, NetError> {
+        let mut request = self
             .client
             .post(url)
             .header(reqwest::header::CONTENT_TYPE, content_type)
-            .timeout(timeout)
+            .timeout(timeout);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+
+        let response = request
             .body(body)
             .send()
             .await
             .map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
 
         let response = check_status(url, response)?;
-        let body = response
+        response
             .bytes()
             .await
-            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
-
-        serde_json::from_slice(&body)
-            .map_err(|e| NetError::Decode { url: url.to_owned(), source: e })
+            .map(|body| body.to_vec())
+            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })
     }
 
     /// Fetch a body, revalidating against `cache` when possible.
