@@ -18,6 +18,8 @@ comes from the manifest at runtime.
 | `ellipsis.png` | Lucide `ellipsis`, same treatment | ISC |
 | `discord.png` | [Simple Icons](https://simpleicons.org) `discord`, filled white, 64x64 | CC0 |
 | `x.png` | Simple Icons `x`, same treatment | CC0 |
+| `kofi.png` | Simple Icons `kofi`, same treatment | CC0 |
+| `paypal.png` | Simple Icons `paypal`, same treatment | CC0 |
 | `news-background.jpg` | Supplied by Gabriel; resized, see below | — |
 
 `news-background.jpg` is the odd one out: artwork, not a mark. Gabriel
@@ -51,8 +53,9 @@ are **not** trimmed, deliberately. They are read down a column against their
 labels, where a shared box keeps the labels aligned and the marks optically the
 same size; trimming each to its ink would make a wide one loom over a narrow one.
 
-`discord.png` and `x.png` are brand marks, so the CC0 licence covers the files
-rather than the trademarks: they are fine as links to those services, and must
-not be restyled or used to imply either company endorses Lightforge. They are
+`discord.png`, `x.png`, `kofi.png` and `paypal.png` are brand marks, so the
+CC0 licence covers the files rather than the trademarks: they are fine as
+links to those services, and must not be restyled or used to imply any of
+those companies endorses Lightforge. They are
 filled where the Lucide set is stroked, which is why they sit in squares of
 their own rather than in the menu's icon column.

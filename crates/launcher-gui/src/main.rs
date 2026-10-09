@@ -177,6 +177,8 @@ bundled_icons! {
     ellipsis_icon => "ellipsis.png",
     discord_icon => "discord.png",
     x_icon => "x.png",
+    kofi_icon => "kofi.png",
+    paypal_icon => "paypal.png",
 }
 
 /// How far the News backdrop is darkened over the body of the page.
@@ -6485,9 +6487,16 @@ impl Lightforge {
                 .width(Length::Fill)
                 .style(theme::divider),
             entry(exit_icon(), "Exit", Some(Message::Exit)),
+            // Where to find me, and where to say thanks. One row rather
+            // than two entries with words: these are marks people recognise,
+            // and a menu that ends in a line of labels reading "Ko-fi" and
+            // "PayPal" would read as the point of the menu.
             row![
                 link_square(discord_icon(), DISCORD_URL, MENU_GLYPH),
                 link_square(x_icon(), X_URL, MENU_GLYPH),
+                Space::new().width(Length::Fill),
+                link_square(kofi_icon(), KOFI_URL, MENU_GLYPH),
+                link_square(paypal_icon(), PAYPAL_URL, MENU_GLYPH),
             ]
             .spacing(theme::XS),
         ]
@@ -11546,6 +11555,10 @@ const WOWHEAD_URL: &str = "https://www.wowhead.com";
 
 const DISCORD_URL: Option<&str> = Some("https://discord.gg/vtTgmUV9Bq");
 const X_URL: Option<&str> = Some("https://x.com/simplyKennybtw");
+/// Where someone can say thanks. Offered, never asked for: these sit beside
+/// the places to get help rather than in front of anything.
+const KOFI_URL: Option<&str> = Some("https://ko-fi.com/simplykenny");
+const PAYPAL_URL: Option<&str> = Some("https://paypal.me/simplykenny");
 
 /// The handful of facts worth filtering a pile of issues by.
 ///

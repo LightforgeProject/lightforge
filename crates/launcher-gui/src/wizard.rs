@@ -1072,6 +1072,40 @@ fn done<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
         .center_x(Length::Fill)
         .padding(theme::LG),
     );
+
+    // Asked once, at the end of the one flow where the work is visibly done,
+    // and never again anywhere a person is trying to get something finished.
+    // Below the rule and below the marks for getting help, because help comes
+    // first: this slide's job is to hand someone somewhere, and this is the
+    // least important of the places.
+    body = body.push(
+        container(Space::new().height(Length::Fixed(1.0)))
+            .width(Length::Fill)
+            .style(theme::divider),
+    );
+    body = body.push(
+        container(
+            column![
+                text(
+                    "Lightforge is free and always will be. If it saved you an evening, \
+                     you can buy me a coffee.",
+                )
+                .size(theme::LABEL)
+                .color(theme::MUTED)
+                .center(),
+                row![
+                    crate::link_square(crate::kofi_icon(), crate::KOFI_URL, MARK),
+                    crate::link_square(crate::paypal_icon(), crate::PAYPAL_URL, MARK),
+                ]
+                .spacing(theme::MD),
+            ]
+            .spacing(theme::SM)
+            .align_x(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .center_x(Length::Fill)
+        .padding(theme::MD),
+    );
     body.into()
 }
 

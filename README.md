@@ -101,17 +101,16 @@ cargo build --release --locked
 ./target/release/lightforge-gui
 ```
 
-Want a binary that runs on an older distro than the one you built it on?
-`make release` builds inside a Debian 12 container and refuses to finish if
-the result demands a glibc newer than 2.36 — which is what makes one build
-work on Arch, Fedora, Ubuntu, Bazzite and the Steam Deck alike.
+[**INSTALL.md**](INSTALL.md) covers the rest: what you need per distro, the
+32-bit package Battle.net's installer quietly depends on, building a binary
+that runs on other people's machines, and how to remove it again.
 
 ## 🧰 Requirements
 
 | | |
 | --- | --- |
 | **OS** | Any current Linux. glibc 2.36+ for release binaries; source builds don't care. |
-| **GPU** | Anything with a working Vulkan driver — Mesa (RADV/ANV) or NVIDIA. |
+| **GPU** | Vulkan if you have it (Mesa, NVIDIA); it falls back to software rendering on its own if you don't. |
 | **Also** | `fontconfig`, and a 64-bit Rust 1.86+ toolchain if you're building. |
 | **Optional** | A 32-bit userspace (`multilib` / i686 libraries). **Only** needed for Battle.net's installer, which is the single 32-bit binary in the whole flow. WoW alone doesn't need it. |
 
@@ -177,18 +176,77 @@ But it's had one pair of eyes on it, on one machine. Expect rough edges on
 hardware and distros it hasn't met yet, and please tell me when you find them:
 the in-app reporter (`☰ › Report a bug`) collects the useful details for you.
 
+Hit something odd? [**TROUBLESHOOTING.md**](TROUBLESHOOTING.md) covers the
+failures I already know about — the 32-bit package Battle.net's installer
+needs, a drive that isn't mounted, a store that wants a repair.
+
 See [RELEASES.md](RELEASES.md) for what's new.
+
+## 🗺️ What's next
+
+No dates, and no promises — this is one person's spare time. Roughly in the
+order I expect to get to them:
+
+**Soon**
+
+- 📦 **Packages** — AUR, `.deb`, `.rpm` and a Flatpak, so installing is one
+  command and updating happens with everything else on your system.
+- 🎮 **Steam Deck** — the Flatpak is most of the answer; the glibc floor that
+  used to block it no longer does.
+- 🚚 **Move a game to another drive** without re-downloading it.
+
+**After that**
+
+- ⏬ **Pre-downloads.** Blizzard publishes a patch before it goes live, and
+  the launcher should stage it so release day is a few minutes instead of an
+  evening. The channel for it is already understood; it needs a real
+  pre-download window to be built against.
+- 📊 **A MangoHud panel** — choose what the overlay shows instead of editing
+  a config by hand.
+- 🔗 **Steam integration** — add your games to Steam's library while still
+  launching them the Lightforge way.
+- 💳 **Subscription status** on the Play page, if there's an honest way to
+  ask for it.
+- 🃏 **Hearthstone's companion app**, installed and launched from its tile.
+
+**Being thought about**
+
+- Alternate and private servers, which the product model already allows for.
+- Moving or removing the games Battle.net installed, rather than only
+  installing them.
+
+Something missing? Say so in [Discord](https://discord.gg/vtTgmUV9Bq) — the
+list is short enough that one good argument can move things up it.
 
 ## 💛 Support the project
 
 Lightforge is free, GPL-3.0, and built in my spare time. If it saved you an
 evening of fighting Battle.net, you can buy me a coffee:
 
-<!-- TODO: replace both with your real pages before publishing -->
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/simplykenny)
-[![Patreon](https://img.shields.io/badge/Patreon-support-F96854?style=for-the-badge&logo=patreon&logoColor=white)](https://patreon.com/YOUR_HANDLE)
+[![PayPal](https://img.shields.io/badge/PayPal-support-003087?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/simplykenny)
 
 Telling someone about it works too. 🙂
+
+## 🔧 Under the hood
+
+[**TECHDOC.md**](TECHDOC.md) is the technical documentation — the TACT/CASC
+pipeline, how a plan avoids 1.57 million range requests, why the store has to
+be byte-identical to Agent's, the prefix layout, and the rest of it. It also
+says where the project came from and how it was built.
+
+## 📚 Everything else
+
+| | |
+| --- | --- |
+| [INSTALL.md](INSTALL.md) | Building it, what each distro needs, and how to remove it |
+| [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | The failures I already know about, and what to do about them |
+| [docs/CLI.md](docs/CLI.md) | All forty-five commands, generated from the binary |
+| [TECHDOC.md](TECHDOC.md) | How it works underneath |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Reporting bugs, sending patches, the house rules |
+| [SECURITY.md](SECURITY.md) | Reporting a vulnerability, and how downloads are trusted |
+| [DISCLAIMER.md](DISCLAIMER.md) | Blizzard, the guardrail, and what leaves your machine |
+| [RELEASES.md](RELEASES.md) | What's in each version |
 
 ## 💬 Community
 
@@ -204,6 +262,10 @@ Entertainment, Inc.
 
 Lightforge ships no game content. It downloads from Blizzard's own CDN, using
 your own account and your own subscription, the same way their client does.
+
+[**DISCLAIMER.md**](DISCLAIMER.md) has the rest: what the launcher touches and
+what it will never touch, an honest word about risk, and a list of every
+host it talks to and what each one sees.
 
 ## 📄 License
 
