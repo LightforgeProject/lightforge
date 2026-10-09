@@ -4,7 +4,7 @@ What changed, in the words of someone using the launcher rather than someone
 reading its source. Newest first. The launcher shows the section for the
 version it is running, once, after an update.
 
-## 0.1.0
+## 1.0.0-beta.1
 
 - Download, verify and launch every World of Warcraft flavour — Retail,
   Classic, Classic Era and their PTR and beta branches — without Battle.net.

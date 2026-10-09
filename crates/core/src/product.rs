@@ -6,6 +6,7 @@
 //! disturb another.
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
 
@@ -521,6 +522,14 @@ impl Catalog {
                 entry.code = ProductCode::from(code.clone());
             }
         }
+        // Two keys can name one game. The asset manifest carries both `hsb`
+        // and `hs_beta` on purpose — artwork is looked up by whichever code
+        // the machine reports — and every manifest key becomes a catalog
+        // entry, so Hearthstone arrives twice and the rewrite above makes the
+        // two identical. Keeping the first is what collapses the duplicate
+        // row in Add a game.
+        let mut seen: HashSet<ProductCode> = HashSet::new();
+        self.entries.retain(|entry| seen.insert(entry.code.clone()));
     }
 
     /// Products Lightforge downloads itself.
@@ -690,6 +699,31 @@ mod tests {
 
         // And a managed product is never rewritten by what Battle.net thinks.
         assert!(catalog.get(&ProductCode::Retail).is_some());
+    }
+
+    #[test]
+    fn one_game_under_two_manifest_keys_is_one_row() {
+        // The asset manifest states Hearthstone twice, under both codes, so
+        // that either one finds its artwork. That must not become two rows.
+        let stated = ["hsb", "hs_beta"].map(|code| {
+            let code = ProductCode::from(code.to_owned());
+            CatalogEntry {
+                label: "Hearthstone".to_owned(),
+                line: code.line(),
+                branch: code.branch(),
+                kind: Kind::of(&code),
+                code,
+            }
+        });
+        let mut catalog = Catalog::with(stated);
+        assert_eq!(catalog.hand_offs().filter(|e| e.label == "Hearthstone").count(), 2);
+
+        catalog.reconcile(&["battle_net".into(), "hs_beta".into()]);
+
+        let rows: Vec<&CatalogEntry> =
+            catalog.hand_offs().filter(|e| e.label == "Hearthstone").collect();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].code, ProductCode::from("hs_beta".to_owned()));
     }
 
     #[test]

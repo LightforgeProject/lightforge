@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/core", "crates/launcher-cli", "crates/launcher-gui"]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0-beta.1"
 edition = "2021"
 rust-version = "1.86"
 license = "GPL-3.0-or-later"
