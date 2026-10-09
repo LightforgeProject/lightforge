@@ -238,8 +238,43 @@ fn load(path: &Path, max_width: u32) -> Handle {
     scale(path, max_width, FilterType::Triangle)
 }
 
+/// Decode a file, asking a JPEG to come out no larger than it needs to be.
+///
+/// The ordinary path decodes at full size and resizes afterwards, which for a
+/// 3840x2160 headline picture means a 33 MB buffer to produce a 320px
+/// thumbnail — 665 MB of decoding across one news feed, for 22 MB of pictures.
+/// JPEG can do better: the format is built on 8x8 blocks, so a decoder can
+/// emit at 1/2, 1/4 or 1/8 scale almost free, and `scale` asks for the
+/// smallest of those that still covers the width wanted. The resize below
+/// then takes it the rest of the way, so the result is the same picture.
+///
+/// Only JPEG — 88 of the 97 images in a real news cache, and the format every
+/// large one arrives in. PNG has no such trick and is decoded whole.
+/// Recognised by its magic bytes rather than its extension: these files are
+/// named by the hash of their URL, and a `.jpg` from a CDN is not always one.
+fn decode(path: &Path, max_width: u32) -> image::ImageResult<image::DynamicImage> {
+    use std::io::Read;
+
+    let mut file = std::io::BufReader::new(std::fs::File::open(path)?);
+    let mut magic = [0u8; 3];
+    let is_jpeg = file.read_exact(&mut magic).is_ok() && magic == [0xFF, 0xD8, 0xFF];
+    file.seek_relative(-(magic.len() as i64))?;
+
+    if !is_jpeg {
+        return image::io::Reader::new(file).with_guessed_format()?.decode();
+    }
+
+    let mut decoder = image::codecs::jpeg::JpegDecoder::new(file)?;
+    // Height goes along for the ride: the decoder keeps the aspect ratio and
+    // picks one scale for both, so asking for a tall enough box and a narrow
+    // enough one is the same request.
+    let target = u16::try_from(max_width).unwrap_or(u16::MAX);
+    let _ = decoder.scale(target, u16::MAX);
+    image::DynamicImage::from_decoder(decoder)
+}
+
 fn scale(path: &Path, max_width: u32, filter: FilterType) -> Handle {
-    let decoded = match image::open(path) {
+    let decoded = match decode(path, max_width) {
         Ok(decoded) => decoded,
         Err(e) => {
             crate::trace::mark(format_args!("decode failed for {}: {e}", path.display()));
@@ -283,6 +318,53 @@ mod tests {
         let handle = load(&path, BACKGROUND_MAX_WIDTH);
         let _ = std::fs::remove_file(&path);
         assert_eq!(rgba_size(&handle), Some((2560, 1066)));
+    }
+
+    /// The point of the JPEG path: the buffer that comes out of the decoder
+    /// is already close to the size wanted, so the 33 MB full-resolution one
+    /// is never allocated. A thumbnail is 320 wide, and 3840/8 = 480 is the
+    /// smallest eighth that still covers it.
+    #[test]
+    fn a_large_jpeg_is_decoded_small_rather_than_decoded_and_shrunk() {
+        let path = write_jpeg("dct", 3840, 2160);
+        let decoded = decode(&path, 320).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            decoded.width() < 3840,
+            "decoded at full size ({}x{}) — the DCT scale was not applied",
+            decoded.width(),
+            decoded.height(),
+        );
+        assert!(
+            decoded.width() >= 320,
+            "decoded smaller than asked for ({}), which would soften the result",
+            decoded.width(),
+        );
+        // Still the same picture, so the aspect has to survive.
+        assert_eq!(decoded.width() * 2160 / 3840, decoded.height());
+    }
+
+    /// And the result is the same size it always was: the decoder gets it
+    /// close, the resize lands it exactly.
+    #[test]
+    fn a_scaled_decode_still_ends_at_the_width_asked_for() {
+        let path = write_jpeg("thumb", 2560, 1440);
+        let handle = thumbnail(&path);
+        let _ = std::fs::remove_file(&path);
+        let width = (crate::theme::NEWS_THUMB_WIDTH * 2.0) as u32;
+        assert_eq!(rgba_size(&handle), Some((width, width * 1440 / 2560)));
+    }
+
+    /// A PNG has no such trick and must still come through whole.
+    #[test]
+    fn a_png_is_decoded_and_resized_as_before() {
+        let path = std::env::temp_dir()
+            .join(format!("lightforge-art-{}-plain.png", std::process::id()));
+        image::RgbaImage::new(1024, 512).save(&path).unwrap();
+        let handle = scale(&path, 256, FilterType::Triangle);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(rgba_size(&handle), Some((256, 128)));
     }
 
     #[test]

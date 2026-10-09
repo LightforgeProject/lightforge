@@ -269,7 +269,49 @@ const SPLASH_BUDGET: Duration = Duration::from_secs(12);
 // `ICED_BACKEND=tiny-skia` remains as a manual escape hatch for hardware that
 // initialises fine but renders poorly, which no fallback can detect.
 
+/// Keep large, short-lived allocations out of the heap.
+///
+/// Decoding pictures is this app's one big allocator load: a news thumbnail
+/// is 320px wide but its source is often 2560 or 3840, and the decode happens
+/// at full size before the resize. Those buffers are freed correctly — but
+/// glibc raises its own mmap threshold as it watches large blocks come and go
+/// (up to 32 MiB), after which such allocations come off the heap instead,
+/// and freed heap pages stay resident. Across 48 threads, each with its own
+/// arena, that strands hundreds of megabytes of free space.
+///
+/// Measured on the News page with 97 cached images, before and after:
+///
+/// ```text
+/// as shipped                        444 MB RSS
+/// MALLOC_ARENA_MAX=2                276 MB
+/// + trim and mmap thresholds        149 MB   (the Play page costs 148)
+/// ```
+///
+/// Pinning the mmap threshold also disables glibc's dynamic adjustment of it,
+/// which is the mechanism that caused the drift. The trim threshold decides
+/// how much free space at the top of the heap is kept rather than returned.
+///
+/// glibc only: these are GNU extensions, absent on musl, where the allocator
+/// behaves differently and would need measuring again rather than assuming.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn tune_allocator() {
+    // 128 KiB: large enough that ordinary small allocations are untouched,
+    // small enough that every image buffer is mapped and so handed straight
+    // back on free.
+    const LARGE: libc::c_int = 128 * 1024;
+    // SAFETY: `mallopt` takes two ints and touches only the allocator's own
+    // parameters. Called before any thread is spawned.
+    unsafe {
+        libc::mallopt(libc::M_MMAP_THRESHOLD, LARGE);
+        libc::mallopt(libc::M_TRIM_THRESHOLD, LARGE);
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn tune_allocator() {}
+
 fn main() -> iced::Result {
+    tune_allocator();
     trace::begin();
     // 0.14 takes the boot function where 0.13 took the title, and runs it
     // from `run` rather than `run_with`.

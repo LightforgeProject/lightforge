@@ -2622,6 +2622,7 @@ dependencies = [
  "futures-util",
  "iced",
  "image 0.24.9",
+ "libc",
  "lightforge-core",
  "open",
  "sentry",

@@ -17,6 +17,7 @@ futures-util.workspace = true
 anyhow.workspace = true
 iced.workspace = true
 image.workspace = true
+libc.workspace = true
 open.workspace = true
 ashpd.workspace = true
 base64.workspace = true
