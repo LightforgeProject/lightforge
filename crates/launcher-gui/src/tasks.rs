@@ -976,15 +976,38 @@ pub async fn known_codes(layout: Layout, user: String) -> Vec<String> {
     .unwrap_or_default()
 }
 
+/// Index Battle.net's registry by every name a record answers to.
+///
+/// The tile asking "is this installed?" holds the CDN's product code, and
+/// this file is keyed by the client's install key. They are the same string
+/// for every product but one: Hearthstone is `hs_beta` to Battle.net and
+/// `hsb` to the CDN, so a map keyed only by the install key left an installed
+/// Hearthstone reading `Install via Battle.net` forever — locating it in the
+/// client did not help, because the client was never the thing that was
+/// wrong.
+///
+/// A record with no version is skipped rather than recorded as installed:
+/// Agent writes the row before the download finishes, and a tile that offers
+/// Play for a game that is still arriving is worse than one that waits.
+fn by_every_name(
+    installs: Vec<lightforge_core::tact::productdb::Installed>,
+) -> HashMap<String, String> {
+    let mut found = HashMap::new();
+    for install in installs {
+        let Some(version) = install.version else { continue };
+        if !install.product_code.is_empty() && install.product_code != install.product {
+            found.insert(install.product_code, version.clone());
+        }
+        found.insert(install.product, version);
+    }
+    found
+}
+
 pub async fn installed_versions(layout: Layout) -> HashMap<String, String> {
     tokio::task::spawn_blocking(move || {
         use lightforge_core::tact::productdb;
 
-        productdb::read(&layout.agent_dir().join("product.db"))
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|i| Some((i.product, i.version?)))
-            .collect()
+        by_every_name(productdb::read(&layout.agent_dir().join("product.db")).unwrap_or_default())
     })
     .await
     .unwrap_or_default()
@@ -1349,6 +1372,49 @@ mod uninstall_tests {
         assert_eq!(after.len(), had.len() - 1);
         assert!(after.iter().all(|r| r.product != "wow_classic_era"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+    use lightforge_core::tact::productdb::Installed;
+
+    fn record(product: &str, product_code: &str, version: Option<&str>) -> Installed {
+        Installed {
+            product: product.to_owned(),
+            product_code: product_code.to_owned(),
+            install_path: "C:/Program Files (x86)/Whatever".to_owned(),
+            version: version.map(str::to_owned),
+            family: String::new(),
+        }
+    }
+
+    /// Gabriel's bug, 2026-10-10: Hearthstone installed through Battle.net,
+    /// located in the client, and the tile still read `Install via
+    /// Battle.net`. The registry calls it `hs_beta`; the tile asks for `hsb`.
+    #[test]
+    fn hearthstone_answers_to_the_name_its_tile_uses() {
+        let found = by_every_name(vec![record("hs_beta", "hsb", Some("36.6.3.253932"))]);
+
+        assert_eq!(found.get("hsb").map(String::as_str), Some("36.6.3.253932"));
+        // And still under the name the registry itself uses, which is what
+        // anything reading Agent's own file will hold.
+        assert_eq!(found.get("hs_beta").map(String::as_str), Some("36.6.3.253932"));
+    }
+
+    #[test]
+    fn a_product_whose_names_agree_is_indexed_once() {
+        let found = by_every_name(vec![record("wow", "wow", Some("12.1.0.69933"))]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found.get("wow").map(String::as_str), Some("12.1.0.69933"));
+    }
+
+    /// A row Agent wrote before the download finished is not an install.
+    #[test]
+    fn a_record_without_a_version_is_not_installed() {
+        let found = by_every_name(vec![record("hs_beta", "hsb", None)]);
+        assert!(found.is_empty(), "{found:?}");
     }
 }
 

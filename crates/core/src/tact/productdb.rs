@@ -48,8 +48,11 @@ use crate::product::ProductCode;
 /// One installed product, as Agent records it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductInstall {
-    /// Product code — `uid` and `product_code` are the same string in every
-    /// real record.
+    /// Product code, written to both the `uid` and `product_code` fields.
+    ///
+    /// The two coincide for every product Lightforge writes a record for —
+    /// they only differ for Hearthstone, which Battle.net installs itself.
+    /// On the reading side they are kept apart: see [`Installed`].
     pub product: String,
     /// Windows-visible install root, e.g. `C:/Program Files (x86)/World of Warcraft`.
     pub install_path: String,
@@ -708,7 +711,8 @@ mod tests {
                 .map(|(_, _, v)| String::from_utf8_lossy(v).into_owned())
                 .unwrap()
         };
-        // uid and product_code are the same string in every real record.
+        // The same string for a WoW product; see `Installed` for the one
+        // product where they differ.
         assert_eq!(text(1), "wow_classic_era");
         assert_eq!(text(2), "wow_classic_era");
         assert_eq!(text(6), "wow");
@@ -842,13 +846,27 @@ mod tests {
 /// install Lightforge does not manage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Installed {
-    /// Product code, e.g. `hs_beta`.
+    /// The client's install key — field 1, e.g. `hs_beta`.
+    ///
+    /// This is what Battle.net calls the product, which is **not always what
+    /// the CDN calls it**: see [`Installed::product_code`].
     pub product: String,
+    /// The TACT product code — field 2, e.g. `hsb`.
+    ///
+    /// The two are the same string for every product but Hearthstone, which
+    /// Battle.net records as `hs_beta` and Blizzard's CDN publishes as `hsb`.
+    /// Lightforge's catalog is keyed by the CDN's name, so a caller matching
+    /// a tile against this file has to accept either — matching only on
+    /// [`Installed::product`] leaves Hearthstone reading as "not installed"
+    /// however many times someone installs it. Empty on a record that omits
+    /// the field rather than assumed equal to `product`.
+    pub product_code: String,
     /// Windows-visible install root, e.g. `C:/Program Files (x86)/Hearthstone`.
     pub install_path: String,
     /// Installed version, when the record carries one.
     pub version: Option<String>,
-    /// Product family, e.g. `hsb`. Empty when absent.
+    /// Product family, e.g. `wow` for every WoW flavour. Empty when absent,
+    /// which is the normal state for a single-title game like Hearthstone.
     pub family: String,
 }
 
@@ -896,6 +914,7 @@ pub fn read(path: &Path) -> Result<Vec<Installed>, ProductDbError> {
 
 fn decode_install(bytes: &[u8]) -> Option<Installed> {
     let mut product = String::new();
+    let mut product_code = String::new();
     let mut install_path = String::new();
     let mut family = String::new();
     let mut version = None;
@@ -903,6 +922,7 @@ fn decode_install(bytes: &[u8]) -> Option<Installed> {
     for (field, value) in Fields::new(bytes) {
         match (field, value) {
             (1, Wire::Bytes(b)) => product = string(b),
+            (2, Wire::Bytes(b)) => product_code = string(b),
             (3, Wire::Bytes(settings)) => {
                 for (field, value) in Fields::new(settings) {
                     if let (1, Wire::Bytes(b)) = (field, value) {
@@ -930,6 +950,7 @@ fn decode_install(bytes: &[u8]) -> Option<Installed> {
     // nowhere. Either way there is no tile to draw.
     (!product.is_empty() && !install_path.is_empty()).then_some(Installed {
         product,
+        product_code,
         install_path,
         version,
         family,
@@ -1076,6 +1097,39 @@ mod read_tests {
         varint_field(&mut record, 42, 7);
         string_field(&mut record, 99, "something Agent cares about");
         record
+    }
+
+    /// The one product whose two names disagree, taken from a real registry.
+    ///
+    /// Agent records Hearthstone as uid `hs_beta` in field 1 and TACT code
+    /// `hsb` in field 2, with no family at all — where every other product
+    /// repeats one string in both fields. A reader that kept only field 1
+    /// made an installed Hearthstone read as "not installed" forever, because
+    /// the tile asking the question holds the CDN's name.
+    #[test]
+    fn hearthstone_is_read_under_both_of_the_names_it_has() {
+        let mut base = Vec::new();
+        string_field(&mut base, 7, "36.6.3.253932.253216");
+        let mut cached = Vec::new();
+        message_field(&mut cached, 1, &base);
+        let mut settings = Vec::new();
+        string_field(&mut settings, 1, "C:/Program Files (x86)/Hearthstone");
+
+        let mut record = Vec::new();
+        string_field(&mut record, 1, "hs_beta");
+        string_field(&mut record, 2, "hsb");
+        message_field(&mut record, 3, &settings);
+        message_field(&mut record, 4, &cached);
+
+        let mut file = Vec::new();
+        message_field(&mut file, 1, &record);
+
+        let found = decode(&file);
+        assert_eq!(found.len(), 1, "one record in, one out");
+        assert_eq!(found[0].product, "hs_beta");
+        assert_eq!(found[0].product_code, "hsb");
+        assert_eq!(found[0].version.as_deref(), Some("36.6.3.253932.253216"));
+        assert!(found[0].family.is_empty(), "a single-title game has no family");
     }
 
     #[test]
@@ -1259,6 +1313,7 @@ mod read_tests {
     fn agent_and_the_client_are_not_games() {
         let plumbing = |product: &str| Installed {
             product: product.into(),
+            product_code: product.into(),
             install_path: "C:/whatever".into(),
             version: None,
             family: String::new(),
