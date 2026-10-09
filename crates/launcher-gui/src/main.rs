@@ -10536,9 +10536,31 @@ impl Lightforge {
     /// live on the Lightforge Updates page for anyone who wants them again —
     /// including after the checkbox has been ticked.
     fn patch_notes_card<'a>(&'a self, notes: &'a PatchNotes) -> Element<'a, Message> {
+        // The notes are as long as the release was — this one is fifteen
+        // wrapped paragraphs — and a card that grows with them runs off the
+        // top and bottom of the window, taking the button with it.
+        //
+        // Only the notes scroll. The heading says what the card is and the
+        // checkbox and button are how it is answered; both stay put, so the
+        // dialog is dismissable at any length without scrolling to find the
+        // way out. The cap plus the heading, the version line and the actions
+        // come to about 630pt, inside the 820 the window is never smaller
+        // than (`WINDOW_MIN`).
+        //
+        // `theme::scrollbar_shape` sets a spacing, which is what makes iced
+        // reserve room for the bar beside the text rather than draw it over
+        // the words — and only while it is actually needed, so a short
+        // release is laid out exactly as before.
+        const NOTES_MAX: f32 = 480.0;
+
         let body = column![
             muted(format!("Version {}", notes.release.version), theme::LABEL),
-            release_notes(&notes.release),
+            container(
+                scrollable(release_notes(&notes.release))
+                    .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
+                    .style(theme::scrollbar),
+            )
+            .max_height(NOTES_MAX),
         ]
         .spacing(theme::SM);
 
