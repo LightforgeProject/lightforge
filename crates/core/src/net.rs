@@ -102,6 +102,42 @@ impl Http {
             })
     }
 
+    /// POST a body and read a small JSON answer back.
+    ///
+    /// The one thing the launcher ever *sends*: the screenshot that goes with
+    /// a bug report, which is uploaded so the report can carry a link rather
+    /// than a megabyte of base64. It has its own timeout because, unlike a
+    /// download, there is somebody watching a dialog wait for it — and
+    /// because the whole call is optional: a failure here means the picture
+    /// travels inside the report instead, so it must fail quickly rather than
+    /// sit on the read timeout.
+    pub async fn post_bytes<T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+        content_type: &str,
+        body: Vec<u8>,
+        timeout: Duration,
+    ) -> Result<T, NetError> {
+        let response = self
+            .client
+            .post(url)
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .timeout(timeout)
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
+
+        let response = check_status(url, response)?;
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
+
+        serde_json::from_slice(&body)
+            .map_err(|e| NetError::Decode { url: url.to_owned(), source: e })
+    }
+
     /// Fetch a body, revalidating against `cache` when possible.
     ///
     /// Returns `None` on `304 Not Modified`; the caller reads the cached copy

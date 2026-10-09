@@ -34,5 +34,9 @@ version it is running, once, after an update.
 - Per-game Proton: pin a build to one game, including the games Battle.net
   starts, and keep the in-game shop working.
 - News from Wowhead, Icy Veins and Blizzard in one page.
+- Report a bug or send feedback from inside the launcher, with a screenshot
+  you drop on the window and the last things the launcher said. Nothing is
+  ever sent without pressing Send, and the report shows you exactly what it
+  carries.
 - Battle.net can start minimized, and the launcher can get out of the way when
   a game comes up.

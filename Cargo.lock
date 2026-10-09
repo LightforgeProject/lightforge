@@ -2681,6 +2681,7 @@ dependencies = [
  "lightforge-core",
  "open",
  "sentry",
+ "serde",
  "tokio",
 ]
 

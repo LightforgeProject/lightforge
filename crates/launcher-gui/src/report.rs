@@ -9,6 +9,8 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use lightforge_core::net::Http;
+
 /// Our GlitchTip project. A Sentry DSN is a write-only ingest key and is meant
 /// to ship inside the client, which is why this is a plain constant rather
 /// than something read from the environment.
@@ -18,6 +20,20 @@ const DSN: &str = "https://788f3511837f42abade303476cdeef11@bugs.k3nny.tech/1";
 /// tells someone their report was sent, so that has to be true rather than
 /// hopeful — `capture` alone only queues it.
 const FLUSH: Duration = Duration::from_secs(15);
+
+/// Where a screenshot is uploaded, so the issue carries a link instead of a
+/// megabyte of base64 — GlitchTip drops envelope attachments, so this is the
+/// only way the picture gets to be a picture. Our own host, the same one the
+/// artwork manifest comes from.
+const SHOTS: &str = "https://lightforge.tuxcore.pro/shots/v1";
+
+/// How long the upload may take before the report goes without it.
+///
+/// Short on purpose. Nothing depends on it working: the picture travels
+/// inside the event when it fails, exactly as it used to, so the only thing a
+/// longer wait buys is a longer wait in front of someone who has already
+/// pressed Send.
+const UPLOAD: Duration = Duration::from_secs(20);
 
 /// What is being sent.
 pub enum Kind {
@@ -98,13 +114,62 @@ pub struct Report {
     pub history: Vec<String>,
 }
 
+/// What the event ends up saying about the screenshot.
+enum Picture {
+    /// It was uploaded and this is where it lives.
+    Link(String),
+    /// It could not be, so it rides inside the event as a data URI — a wall
+    /// of base64 on the issue page, and still better than losing it.
+    Embedded(String),
+}
+
+/// Upload the screenshot, or say why the report will have to carry it.
+///
+/// Every failure lands in the same place deliberately: an unreachable host, a
+/// refusal, a rate limit and a reply we cannot read are all "the picture goes
+/// inside the event", and none of them is worth putting in front of someone
+/// who is already reporting a bug.
+async fn upload(shot: &Shot, http: Option<&Http>) -> Picture {
+    use base64::Engine as _;
+
+    let embed = || {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&shot.bytes);
+        Picture::Embedded(format!("data:{};base64,{encoded}", shot.media_type))
+    };
+
+    let Some(http) = http else { return embed() };
+    let uploaded: Result<Uploaded, _> =
+        http.post_bytes(SHOTS, shot.media_type, shot.bytes.clone(), UPLOAD).await;
+    match uploaded {
+        Ok(Uploaded { url }) if url.starts_with("https://") => Picture::Link(url),
+        _ => embed(),
+    }
+}
+
+/// What the upload endpoint answers with.
+#[derive(serde::Deserialize)]
+struct Uploaded {
+    url: String,
+}
+
 /// Send one report, and say whether it arrived.
-pub async fn send(report: Report) -> bool {
+///
+/// `http` is the launcher's own client, so the upload shares the connection
+/// pool and the TLS roots with everything else; without one the picture is
+/// embedded as before.
+pub async fn send(report: Report, http: Option<Http>) -> bool {
+    // Before the blocking half, because it is the one part that is actually
+    // asynchronous — and because what it answers decides what the event says.
+    let picture = match &report.shot {
+        Some(shot) => Some((shot.name.clone(), upload(shot, http.as_ref()).await)),
+        None => None,
+    };
+
     // `flush` parks until the transport thread has drained, so it belongs on
     // the blocking pool and not on a runtime worker.
     tokio::task::spawn_blocking(move || {
         let Some(client) = client() else { return false };
-        let Report { kind, note, contact, tags, shot, history } = report;
+        let Report { kind, note, contact, tags, shot: _, history } = report;
 
         let mut event = sentry::protocol::Event { message: Some(note), ..Default::default() };
 
@@ -124,19 +189,18 @@ pub async fn send(report: Report) -> bool {
             .collect::<Vec<_>>()
             .into();
 
-        // Inside the event, not beside it: GlitchTip's ingest lists
-        // `attachment` among the envelope item types it ignores, so an
+        // Inside the event either way, never beside it: GlitchTip's ingest
+        // lists `attachment` among the envelope item types it ignores, so an
         // attached image is parsed and dropped without an error anywhere.
-        // A data URI survives, and pastes straight into a browser's address
-        // bar from the issue page.
-        if let Some(shot) = shot {
-            use base64::Engine as _;
-            let encoded = base64::engine::general_purpose::STANDARD.encode(&shot.bytes);
-            event.extra.insert(
-                "screenshot".to_owned(),
-                format!("data:{};base64,{encoded}", shot.media_type).into(),
-            );
-            event.extra.insert("screenshot_name".to_owned(), shot.name.into());
+        // A link is one click from the issue page; a data URI pastes into a
+        // browser's address bar.
+        if let Some((name, picture)) = picture {
+            let (key, value) = match picture {
+                Picture::Link(url) => ("screenshot_url", url),
+                Picture::Embedded(uri) => ("screenshot", uri),
+            };
+            event.extra.insert(key.to_owned(), value.into());
+            event.extra.insert("screenshot_name".to_owned(), name.into());
         }
 
         let contact = contact.trim();

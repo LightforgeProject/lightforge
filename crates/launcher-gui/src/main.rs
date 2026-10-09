@@ -4585,7 +4585,7 @@ impl Lightforge {
                         .collect(),
                 };
                 self.last_report = Some((note, Instant::now()));
-                Task::perform(report::send(report), Message::ReportSent)
+                Task::perform(report::send(report, self.http.clone()), Message::ReportSent)
             }
 
             Message::ReportSent(arrived) => {
