@@ -6548,6 +6548,36 @@ impl Lightforge {
             (None, None) => {}
         }
 
+        // Where the addon came from and who wrote it. Above the rule
+        // because they leave Lightforge rather than change anything in it,
+        // and the project page first: on CurseForge that page is where an
+        // author is actually paid, so sending people to it is the point
+        // rather than a courtesy.
+        //
+        // Each entry appears only when there is somewhere to go. A provider
+        // that publishes no repository, and an addon installed before the
+        // ledger kept these, both leave the menu one line shorter — which is
+        // better than a line that opens nothing.
+        let support = managed.support_url().map(str::to_owned);
+        if managed.website_url.is_some() || support.is_some() {
+            rows = rows.push(
+                container(Space::new().height(Length::Fixed(1.0)))
+                    .width(Length::Fill)
+                    .style(theme::divider),
+            );
+        }
+        if let Some(url) = managed.website_url.clone() {
+            rows = rows.push(entry("Open project page".to_owned(), Message::OpenUrl(url)));
+        }
+        // Source before author profile, because that is where the money can
+        // actually go: a repository usually carries a Sponsor button, where a
+        // provider's author page is a list of their projects. Neither is a
+        // donation link as such — no catalogue publishes one — so the label
+        // promises help, not a payment form.
+        if let Some(url) = support {
+            rows = rows.push(entry("Support the author…".to_owned(), Message::OpenUrl(url)));
+        }
+
         // An action, not a setting, so it sits under a rule of its own —
         // and busy means busy: a second fetch into the same directory while
         // one is running is the race the whole page guards against.
@@ -8442,6 +8472,10 @@ impl Lightforge {
                         column_head("LATEST"),
                         column_head("RELEASED"),
                         column_head("INSTALLED"),
+                        // Standing in for the controls each row carries, so
+                        // the three headings sit over their own columns
+                        // rather than over the buttons.
+                        Space::new().width(Length::Fixed(ADDON_ACTIONS)),
                     ]
                     .spacing(theme::SM)
                     .align_y(Alignment::Center),
@@ -8612,11 +8646,19 @@ impl Lightforge {
             line = line.push(cell(
                 managed_row.and_then(|m| m.installed_at.as_deref().map(short_day)),
             ));
+            // Everything that acts on the row lives in a box of its own
+            // width, right-aligned inside it. Without it the three columns
+            // float: a row with an Update button pushes them left of a row
+            // without one, and both sit left of the header that is supposed
+            // to name them. The box is pushed for an addon installed by hand
+            // too, which has no controls at all — otherwise its columns would
+            // be the ones out of step.
+            let mut actions = row![].spacing(theme::SM).align_y(Alignment::Center);
             if let Some(managed) = &addon.managed {
                 // Which builds this addon accepts. Narrow and first, so the
                 // buttons that act stay where the eye expects them whether or
                 // not there is an update to show.
-                line = line.push(
+                actions = actions.push(
                     pick_list(
                         RowChannel::ALL.to_vec(),
                         Some(RowChannel(managed.channel)),
@@ -8661,7 +8703,7 @@ impl Lightforge {
                         true => "Switch",
                         false => "Update",
                     };
-                    line = line.push(
+                    actions = actions.push(
                         action_button(
                             label,
                             theme::UPDATE,
@@ -8680,8 +8722,8 @@ impl Lightforge {
                 let armed = self.addon_remove_armed.as_ref().is_some_and(|(p, id)| {
                     p == &managed.provider && id == &managed.id
                 });
-                line = match armed {
-                    true => line
+                actions = match armed {
+                    true => actions
                         .push(
                             action_button(
                                 "Delete",
@@ -8696,7 +8738,7 @@ impl Lightforge {
                         .push(
                             secondary("Keep", Message::CancelRemoveAddon).enabled(true),
                         ),
-                    false => line.push(
+                    false => actions.push(
                         secondary(
                             "Remove",
                             Message::ArmRemoveAddon(
@@ -8714,7 +8756,7 @@ impl Lightforge {
                 // off the button itself rather than the row's corner.
                 let key = (managed.provider.clone(), managed.id.clone());
                 let open = self.addon_menu_open.as_ref() == Some(&key);
-                line = line.push(popover::popover(
+                actions = actions.push(popover::popover(
                     button(
                         image(ellipsis_icon())
                             .width(Length::Fixed(MENU_GLYPH))
@@ -8729,6 +8771,12 @@ impl Lightforge {
                     open.then(|| self.addon_row_menu(managed, &addon.version, &addon.title)),
                 ));
             }
+            line = line.push(
+                container(actions)
+                    .width(Length::Fixed(ADDON_ACTIONS))
+                    .align_x(Alignment::End),
+            );
+
             body = body.push(container(line).padding(theme::MD).style(theme::row));
         }
 
@@ -10427,6 +10475,17 @@ impl Lightforge {
         if let Some(url) = detail.loaded.as_ref().and_then(|d| d.project.website_url.clone()) {
             footer = footer.push(secondary("Open the page", Message::OpenUrl(url)).enabled(true));
         }
+        // The same offer the installed row's menu makes, in the panel someone
+        // reads *before* installing — where a project's own repository is
+        // often the thing they came to find.
+        if let Some(url) = detail
+            .loaded
+            .as_ref()
+            .and_then(|d| d.project.source_url.clone().or_else(|| d.project.author_url.clone()))
+        {
+            footer =
+                footer.push(secondary("Support the author", Message::OpenUrl(url)).enabled(true));
+        }
         if !installed {
             let install: Element<'static, Message> = action_button(
                 "Install",
@@ -11775,6 +11834,15 @@ fn section<'a>(title: impl Into<String>, body: Element<'a, Message>) -> Element<
 /// Width of each fact column on an addon row. One number, so the header and
 /// the rows cannot drift apart.
 const ADDON_COLUMN: f32 = 92.0;
+
+/// Width reserved for a row's controls, so the columns beside them line up
+/// with each other and with the header.
+///
+/// Measured against the widest a row gets: the channel picker (a fixed 120),
+/// an Update or Switch button, the two-button armed Remove (Delete beside
+/// Keep, which is wider than Remove alone), and the menu glyph, with
+/// [`theme::SM`] between each.
+const ADDON_ACTIONS: f32 = 380.0;
 
 /// One fact in an addon row's column, or a dash where there is none.
 fn cell<'a>(value: Option<String>) -> Element<'a, Message> {

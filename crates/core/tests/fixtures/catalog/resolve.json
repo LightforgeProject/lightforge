@@ -1,6 +1,7 @@
 {
   "results": [
     {
+      "author_url": "https://curseforge.example/members/author-one",
       "channel": "stable",
       "download_url": "https://edge.forgecdn.example/BigWigs.zip",
       "file_date": "2026-09-01T00:00:00Z",
@@ -14,12 +15,15 @@
       "id": "3358",
       "md5": "0123456789abcdef0123456789abcdef",
       "name": "BigWigs",
+      "source_url": "https://github.example/BigWigs",
       "status": "ok",
       "website_url": "https://curseforge.example/BigWigs"
     },
     {
+      "author_url": "https://curseforge.example/members/author-one",
       "id": "4242",
       "name": "PrivateAddon",
+      "source_url": "https://github.example/PrivateAddon",
       "status": "opt_out",
       "website_url": "https://curseforge.example/PrivateAddon"
     },

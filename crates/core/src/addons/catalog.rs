@@ -85,6 +85,20 @@ pub struct Resolved {
     /// Where to send the user when the download is unavailable.
     #[serde(default)]
     pub website_url: Option<String>,
+    /// The author's own page at the provider, when it names one.
+    ///
+    /// Carried on the resolve reply so an installed addon can offer it
+    /// without a second request — see [`crate::addons::install::Record`],
+    /// which is where it ends up.
+    #[serde(default)]
+    pub author_url: Option<String>,
+    /// The project's source repository, when the provider publishes one.
+    ///
+    /// Worth having beside [`Resolved::author_url`] because this is where
+    /// sponsorship actually lives: a CurseForge author profile takes no
+    /// money, a GitHub repository usually has a Sponsor button.
+    #[serde(default)]
+    pub source_url: Option<String>,
     /// When the provider published this file, RFC 3339 as it states it.
     ///
     /// Carried on the resolve reply rather than fetched per addon: the files
@@ -175,6 +189,12 @@ pub struct Project {
     pub authors: Vec<String>,
     #[serde(default)]
     pub website_url: Option<String>,
+    /// The author's own page at the provider. Absent on an older proxy.
+    #[serde(default)]
+    pub author_url: Option<String>,
+    /// The project's source repository. Absent on an older proxy.
+    #[serde(default)]
+    pub source_url: Option<String>,
     #[serde(default)]
     pub thumbnail_url: Option<String>,
     /// Lifetime downloads, as the proxy reports them. Absent on an older

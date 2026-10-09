@@ -1,23 +1,27 @@
 {
   "results": [
     {
+      "author_url": "https://curseforge.example/members/author-one",
       "authors": [
         "Author One"
       ],
       "download_count": 98400000,
       "id": "3358",
       "name": "BigWigs",
+      "source_url": "https://github.example/BigWigs",
       "summary": "BigWigs summary",
       "thumbnail_url": "https://img.example/BigWigs.png",
       "website_url": "https://curseforge.example/BigWigs"
     },
     {
+      "author_url": "https://curseforge.example/members/author-one",
       "authors": [
         "Author One"
       ],
       "download_count": 98400000,
       "id": "5151",
       "name": "BigWigs_Voice",
+      "source_url": "https://github.example/BigWigs_Voice",
       "summary": "BigWigs_Voice summary",
       "thumbnail_url": "https://img.example/BigWigs_Voice.png",
       "website_url": "https://curseforge.example/BigWigs_Voice"

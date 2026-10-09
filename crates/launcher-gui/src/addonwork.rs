@@ -28,7 +28,10 @@ pub struct Row {
     pub child_of: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `Default` is for tests and for growing the struct, the same reason
+/// [`Record`] has one: a field added here should not mean editing every
+/// literal that never cared about it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Managed {
     pub provider: String,
     pub id: String,
@@ -46,6 +49,26 @@ pub struct Managed {
     /// The day this build was installed, `YYYY-MM-DD`. `None` for anything
     /// installed before Lightforge started recording it.
     pub installed_at: Option<String>,
+    /// Links the ledger recorded at install time: the project page, the
+    /// author's page and the source repository, each absent for a provider
+    /// that does not publish it or an addon installed before they were kept.
+    pub website_url: Option<String>,
+    pub author_url: Option<String>,
+    pub source_url: Option<String>,
+}
+
+impl Managed {
+    /// Where "Support the author" should go, or `None` when there is nowhere.
+    ///
+    /// The repository first and the author's provider page second, because
+    /// that is the order of usefulness rather than the order of specificity:
+    /// a repository usually carries a Sponsor button, where a provider's
+    /// author page is a list of their projects. No catalogue publishes a
+    /// donation link as such — the CurseForge schema has no such field — so
+    /// this is the closest honest thing to one.
+    pub fn support_url(&self) -> Option<&str> {
+        self.source_url.as_deref().or(self.author_url.as_deref())
+    }
 }
 
 /// What the addon screen shows.
@@ -148,6 +171,9 @@ pub fn rows_from(installed: &[Installed], ledger: &Ledger) -> Vec<Row> {
                     auto_update: record.auto_update,
                     file_id: record.file_id.clone(),
                     pinned: record.pinned.clone(),
+                    website_url: record.website_url.clone(),
+                    author_url: record.author_url.clone(),
+                    source_url: record.source_url.clone(),
                     installed_at: record.installed_at.clone(),
                 }),
                 child_of: known
@@ -173,6 +199,52 @@ mod tests {
             ids: Default::default(),
             interfaces: Vec::new(),
         }
+    }
+
+    #[test]
+    fn support_goes_to_the_repository_first_and_to_nowhere_when_there_is_none() {
+        let with = |source: Option<&str>, author: Option<&str>| Managed {
+            provider: "curse".into(),
+            id: "65387".into(),
+            source_url: source.map(str::to_owned),
+            author_url: author.map(str::to_owned),
+            ..Managed::default()
+        };
+
+        // A repository is where a Sponsor button lives, so it wins.
+        assert_eq!(
+            with(Some("https://github.com/WeakAuras/WeakAuras2"), Some("https://x/author"))
+                .support_url(),
+            Some("https://github.com/WeakAuras/WeakAuras2"),
+        );
+        // With no repository the author's provider page is better than nothing.
+        assert_eq!(with(None, Some("https://x/author")).support_url(), Some("https://x/author"));
+        // And an addon installed before the ledger kept these offers neither,
+        // which is the menu one line shorter rather than a link to nowhere.
+        assert_eq!(with(None, None).support_url(), None);
+    }
+
+    #[test]
+    fn the_links_an_install_recorded_reach_the_row() {
+        let scan = vec![installed("WeakAuras", "5.21.1")];
+        let mut ledger = Ledger::default();
+        ledger.record(Record {
+            provider: "curse".into(),
+            id: "65387".into(),
+            name: "WeakAuras".into(),
+            folders: vec!["WeakAuras".into()],
+            website_url: Some("https://www.curseforge.com/wow/addons/weakauras-2".into()),
+            source_url: Some("https://github.com/WeakAuras/WeakAuras2".into()),
+            ..Default::default()
+        });
+
+        let rows = rows_from(&scan, &ledger);
+        let managed = rows[0].managed.as_ref().expect("the ledger knows this folder");
+        assert_eq!(
+            managed.website_url.as_deref(),
+            Some("https://www.curseforge.com/wow/addons/weakauras-2"),
+        );
+        assert_eq!(managed.support_url(), Some("https://github.com/WeakAuras/WeakAuras2"));
     }
 
     #[test]

@@ -259,6 +259,13 @@ async fn fetch_and_install(
         // Stamped now, not carried over: the question it answers is when
         // *this* build arrived, and a new build arriving is this line.
         installed_at: Some(install::today()),
+        // Taken from the reply that was just acted on rather than carried
+        // across: a project can move its repository, and the record should
+        // say where it is now. An older proxy answers none of these, which
+        // costs the menu entries and nothing else.
+        website_url: entry.website_url.clone(),
+        author_url: entry.author_url.clone(),
+        source_url: entry.source_url.clone(),
     });
     Ok(extracted.folders)
 }

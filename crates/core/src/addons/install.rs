@@ -96,6 +96,21 @@ pub struct Record {
     /// recorded — an absent fact, not a zero.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed_at: Option<String>,
+    /// The project page at its provider.
+    ///
+    /// Recorded here rather than read from an update check, because
+    /// [`crate::addons::manage::check_updates`] deliberately asks nothing
+    /// for a pinned or ignored addon — and those rows want the link as much
+    /// as any other. `None` on anything installed before this was recorded,
+    /// which only costs the menu entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub website_url: Option<String>,
+    /// The author's page at the provider, when it names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_url: Option<String>,
+    /// The project's source repository, when the provider publishes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
 }
 
 /// Today, as `YYYY-MM-DD` in UTC.

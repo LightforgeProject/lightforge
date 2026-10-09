@@ -1,10 +1,12 @@
 {
+  "author_url": "https://curseforge.example/members/author-one",
   "authors": [
     "Author One"
   ],
   "download_count": 98400000,
   "id": "3358",
   "name": "BigWigs",
+  "source_url": "https://github.example/BigWigs",
   "summary": "BigWigs summary",
   "thumbnail_url": "https://img.example/BigWigs.png",
   "website_url": "https://curseforge.example/BigWigs"

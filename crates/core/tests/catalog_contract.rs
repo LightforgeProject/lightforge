@@ -87,6 +87,19 @@ async fn resolve_parses_every_outcome() {
     // "release" on CurseForge is "stable" here, and the proxy does that
     // translation so the client has one set of names.
     assert_eq!(ok.channel, Some(lightforge_core::addons::Channel::Stable));
+    // The two links the row menu's "Support the author" and "Open project
+    // page" open. They are recorded in the ledger at install time, so losing
+    // them in the proxy's flattening would show up as entries that quietly
+    // stop appearing rather than as an error.
+    assert_eq!(
+        ok.website_url.as_deref(),
+        Some("https://curseforge.example/BigWigs"),
+    );
+    assert_eq!(
+        ok.author_url.as_deref(),
+        Some("https://curseforge.example/members/author-one"),
+    );
+    assert_eq!(ok.source_url.as_deref(), Some("https://github.example/BigWigs"));
 
     let opted_out = &resolved[1];
     assert_eq!(opted_out.status, Status::OptOut);
@@ -97,6 +110,10 @@ async fn resolve_parses_every_outcome() {
     assert!(
         opted_out.website_url.is_some(),
         "an opt-out has to say where to go instead"
+    );
+    assert!(
+        opted_out.source_url.is_some(),
+        "an addon that cannot be downloaded here can still be supported"
     );
     assert!(opted_out.unavailable_reason().is_some());
 
@@ -139,6 +156,10 @@ async fn project_parses() {
     assert_eq!(project.name, "BigWigs");
     assert_eq!(project.summary.as_deref(), Some("BigWigs summary"));
     assert!(project.thumbnail_url.is_some());
+    // Same two links as the resolve reply carries, so the detail panel and
+    // the row menu can offer the same thing.
+    assert!(project.author_url.is_some());
+    assert_eq!(project.source_url.as_deref(), Some("https://github.example/BigWigs"));
 }
 
 /// Why the server has to quote its ids, stated as a test rather than a comment.
