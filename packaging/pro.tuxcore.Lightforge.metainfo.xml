@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AppStream metadata. Software centres (GNOME Software, KDE Discover) read it
+  to show the launcher as an application rather than as a loose binary, and
+  Flathub requires it, so it is written once here and installed by every
+  package.
+
+  The component id, the desktop entry's basename and the window's `app_id`
+  are required to be the same string.
+-->
+<component type="desktop-application">
+  <id>pro.tuxcore.Lightforge</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>Lightforge</name>
+  <summary>Install, update and play World of Warcraft on Linux</summary>
+  <developer id="pro.tuxcore">
+    <name>Kenny</name>
+  </developer>
+
+  <description>
+    <p>
+      Lightforge is a native Linux launcher for World of Warcraft. It talks to
+      Blizzard's content servers directly — the same TACT/CASC pipeline the
+      real client uses — so it installs, patches, verifies and launches every
+      flavour of WoW on its own, without Battle.net in the way.
+    </p>
+    <p>
+      Battle.net is still there if you want it: the launcher builds and
+      maintains one Wine prefix for it, and everything you install through it
+      gets a tile here too.
+    </p>
+    <p>Among other things it:</p>
+    <ul>
+      <li>Installs Retail, Classic, Classic Era and Anniversary, with their PTR and beta branches.</li>
+      <li>Resumes an interrupted download instead of starting it again.</li>
+      <li>Verifies an install two ways, and re-fetches only what is damaged.</li>
+      <li>Keeps games on as many drives as you like, and leaves installs it finds where they already are.</li>
+      <li>Downloads, checks and manages Proton-GE itself — no Steam, no Lutris, no system Wine.</li>
+      <li>Manages addons from CurseForge, WoWInterface, Tukui and GitHub in one list.</li>
+      <li>Applies graphics and Wine tuning as three presets, over your own environment variables.</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">pro.tuxcore.Lightforge.desktop</launchable>
+
+  <url type="homepage">https://git.tuxcore.pro/kenny/lightforge</url>
+  <url type="bugtracker">https://git.tuxcore.pro/kenny/lightforge/issues</url>
+  <url type="help">https://git.tuxcore.pro/kenny/lightforge/src/branch/main/TROUBLESHOOTING.md</url>
+  <url type="donation">https://ko-fi.com/simplykenny</url>
+  <url type="vcs-browser">https://git.tuxcore.pro/kenny/lightforge</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://git.tuxcore.pro/kenny/lightforge/raw/branch/main/docs/play.jpg</image>
+      <caption>The Play page</caption>
+    </screenshot>
+  </screenshots>
+
+  <categories>
+    <category>Game</category>
+  </categories>
+
+  <keywords>
+    <keyword>WoW</keyword>
+    <keyword>World of Warcraft</keyword>
+    <keyword>Blizzard</keyword>
+    <keyword>Battle.net</keyword>
+    <keyword>Proton</keyword>
+  </keywords>
+
+  <provides>
+    <binary>lightforge-gui</binary>
+    <binary>lightforge</binary>
+  </provides>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="1.0.0-beta.1" date="2026-10-10">
+      <description>
+        <p>The first public build.</p>
+      </description>
+      <url>https://git.tuxcore.pro/kenny/lightforge/src/branch/main/RELEASES.md</url>
+    </release>
+  </releases>
+</component>

@@ -5,7 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "iced-based Lightforge GUI"
+homepage.workspace = true
+# Doubles as the .deb/.rpm one-line summary, so it is written for someone
+# reading a package list rather than for a crate index.
+description = "Install, update and play World of Warcraft on Linux"
 
 [[bin]]
 name = "lightforge-gui"
@@ -26,3 +29,94 @@ sentry.workspace = true
 # screenshot it just uploaded now lives.
 serde.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
+
+# ---------------------------------------------------------------------------
+# Distribution packages.
+#
+# `cargo-deb` and `cargo-generate-rpm` both write their format natively, so
+# neither `dpkg` nor `rpmbuild` has to exist on the machine doing the
+# packaging — which matters, because this one is Arch. Both are driven from
+# the `deb` / `rpm` targets in the Makefile, never on their own: they package
+# the **container** binaries (`make release`), and a package built from a host
+# build would demand the host's glibc. See `Containerfile`.
+#
+# The metadata lives on the GUI crate because a package needs one owner, and
+# the GUI is what someone installs. Both binaries ship in it.
+# ---------------------------------------------------------------------------
+
+[package.metadata.deb]
+# The deb is named for the project, not for the crate that carries the
+# metadata; `lightforge-gui` would be a strange thing to `apt install`.
+name = "lightforge"
+maintainer = "Kenny <onlyusemycontroler@gmail.com>"
+license-file = ["../../LICENSE", "0"]
+section = "games"
+priority = "optional"
+extended-description = """\
+Lightforge talks to Blizzard's content servers directly — the same TACT/CASC \
+pipeline the real client uses — so it installs, patches, verifies and \
+launches every flavour of World of Warcraft on its own, without Battle.net \
+in the way. Battle.net is still managed for you if you want it: one Wine \
+prefix, a verified Proton-GE build and the client, set up in three steps. \
+Addons, per-game Proton pinning and graphics tuning are built in."""
+# Not `$auto`: that resolves against the host's libraries, and this package is
+# assembled on a rolling-release machine from binaries built in a Debian 12
+# container. The floor is stated instead, and `make check-glibc` is what
+# proves the binaries honour it.
+depends = "libc6 (>= 2.36), libgcc-s1"
+# Battle.net's installer is the one 32-bit binary in the sequence. WoW itself
+# never needs this, so it is a suggestion rather than a dependency.
+suggests = "wine32"
+assets = [
+    ["target/release/lightforge-gui", "usr/bin/", "755"],
+    ["target/release/lightforge", "usr/bin/", "755"],
+    ["../../packaging/pro.tuxcore.Lightforge.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/pro.tuxcore.Lightforge.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["../../packaging/icons/hicolor/16x16/apps/pro.tuxcore.Lightforge.png", "usr/share/icons/hicolor/16x16/apps/", "644"],
+    ["../../packaging/icons/hicolor/22x22/apps/pro.tuxcore.Lightforge.png", "usr/share/icons/hicolor/22x22/apps/", "644"],
+    ["../../packaging/icons/hicolor/24x24/apps/pro.tuxcore.Lightforge.png", "usr/share/icons/hicolor/24x24/apps/", "644"],
+    ["../../packaging/icons/hicolor/32x32/apps/pro.tuxcore.Lightforge.png", "usr/share/icons/hicolor/32x32/apps/", "644"],
+    ["../../packaging/icons/hicolor/48x48/apps/pro.tuxcore.Lightforge.png", "usr/share/icons/hicolor/48x48/apps/", "644"],
+    ["../../packaging/icons/hicolor/64x64/apps/pro.tuxcore.Lightforge.png", "usr/share/icons/hicolor/64x64/apps/", "644"],
+    ["../../packaging/icons/hicolor/128x128/apps/pro.tuxcore.Lightforge.png", "usr/share/icons/hicolor/128x128/apps/", "644"],
+    ["../../packaging/icons/hicolor/256x256/apps/pro.tuxcore.Lightforge.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+    ["../../packaging/icons/hicolor/512x512/apps/pro.tuxcore.Lightforge.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
+    ["../../packaging/icons/hicolor/scalable/apps/pro.tuxcore.Lightforge.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["../../README.md", "usr/share/doc/lightforge/", "644"],
+    ["../../RELEASES.md", "usr/share/doc/lightforge/", "644"],
+    ["../../TROUBLESHOOTING.md", "usr/share/doc/lightforge/", "644"],
+    ["../../docs/CLI.md", "usr/share/doc/lightforge/", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "lightforge"
+url = "https://github.com/LightforgeProject/lightforge"
+summary = "Install, update and play World of Warcraft on Linux"
+# Stated rather than discovered, for the same reason as the deb's `depends`.
+auto-req = "disabled"
+# There are no scriptlets, so nothing in the package needs a shell.
+require-sh = false
+assets = [
+    { source = "target/release/lightforge-gui", dest = "/usr/bin/lightforge-gui", mode = "755" },
+    { source = "target/release/lightforge", dest = "/usr/bin/lightforge", mode = "755" },
+    { source = "packaging/pro.tuxcore.Lightforge.desktop", dest = "/usr/share/applications/pro.tuxcore.Lightforge.desktop", mode = "644" },
+    { source = "packaging/pro.tuxcore.Lightforge.metainfo.xml", dest = "/usr/share/metainfo/pro.tuxcore.Lightforge.metainfo.xml", mode = "644" },
+    { source = "packaging/icons/hicolor/16x16/apps/pro.tuxcore.Lightforge.png", dest = "/usr/share/icons/hicolor/16x16/apps/pro.tuxcore.Lightforge.png", mode = "644" },
+    { source = "packaging/icons/hicolor/22x22/apps/pro.tuxcore.Lightforge.png", dest = "/usr/share/icons/hicolor/22x22/apps/pro.tuxcore.Lightforge.png", mode = "644" },
+    { source = "packaging/icons/hicolor/24x24/apps/pro.tuxcore.Lightforge.png", dest = "/usr/share/icons/hicolor/24x24/apps/pro.tuxcore.Lightforge.png", mode = "644" },
+    { source = "packaging/icons/hicolor/32x32/apps/pro.tuxcore.Lightforge.png", dest = "/usr/share/icons/hicolor/32x32/apps/pro.tuxcore.Lightforge.png", mode = "644" },
+    { source = "packaging/icons/hicolor/48x48/apps/pro.tuxcore.Lightforge.png", dest = "/usr/share/icons/hicolor/48x48/apps/pro.tuxcore.Lightforge.png", mode = "644" },
+    { source = "packaging/icons/hicolor/64x64/apps/pro.tuxcore.Lightforge.png", dest = "/usr/share/icons/hicolor/64x64/apps/pro.tuxcore.Lightforge.png", mode = "644" },
+    { source = "packaging/icons/hicolor/128x128/apps/pro.tuxcore.Lightforge.png", dest = "/usr/share/icons/hicolor/128x128/apps/pro.tuxcore.Lightforge.png", mode = "644" },
+    { source = "packaging/icons/hicolor/256x256/apps/pro.tuxcore.Lightforge.png", dest = "/usr/share/icons/hicolor/256x256/apps/pro.tuxcore.Lightforge.png", mode = "644" },
+    { source = "packaging/icons/hicolor/512x512/apps/pro.tuxcore.Lightforge.png", dest = "/usr/share/icons/hicolor/512x512/apps/pro.tuxcore.Lightforge.png", mode = "644" },
+    { source = "packaging/icons/hicolor/scalable/apps/pro.tuxcore.Lightforge.svg", dest = "/usr/share/icons/hicolor/scalable/apps/pro.tuxcore.Lightforge.svg", mode = "644" },
+    { source = "LICENSE", dest = "/usr/share/licenses/lightforge/LICENSE", mode = "644", doc = true },
+    { source = "README.md", dest = "/usr/share/doc/lightforge/README.md", mode = "644", doc = true },
+    { source = "RELEASES.md", dest = "/usr/share/doc/lightforge/RELEASES.md", mode = "644", doc = true },
+    { source = "TROUBLESHOOTING.md", dest = "/usr/share/doc/lightforge/TROUBLESHOOTING.md", mode = "644", doc = true },
+    { source = "docs/CLI.md", dest = "/usr/share/doc/lightforge/CLI.md", mode = "644", doc = true },
+]
+
+[package.metadata.generate-rpm.requires]
+glibc = ">= 2.36"

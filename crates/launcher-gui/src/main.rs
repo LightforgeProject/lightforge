@@ -205,6 +205,11 @@ const NEWS_SCRIM_TOP: f32 = 0.88;
 /// — see `assets/README.md` for how it was prepared.
 const NEWS_BACKGROUND: &[u8] = include_bytes!("../assets/news-background.jpg");
 
+/// The desktop entry's basename, the Wayland `app_id` and the AppStream
+/// component id, which are required to be the same string — see
+/// `packaging/README.md`.
+const APP_ID: &str = "pro.tuxcore.Lightforge";
+
 /// Opening size, and the floor for resizing — deliberately the same number.
 ///
 /// The header sets the width: the title, the product picker (whose longest
@@ -365,6 +370,15 @@ fn main() -> iced::Result {
         decorations: false,
         transparent: true,
         position: iced::window::Position::Centered,
+        // The Wayland `app_id` / X11 `WM_CLASS`, and the one thing that ties
+        // a running window to the installed desktop entry: a compositor
+        // matches `pro.tuxcore.Lightforge.desktop` by this string and by
+        // nothing else. Left at winit's default the taskbar shows a generic
+        // placeholder instead of the launcher's icon.
+        platform_specific: iced::window::settings::PlatformSpecific {
+            application_id: APP_ID.to_owned(),
+            ..Default::default()
+        },
         ..iced::window::Settings::default()
     })
     // Closing is handled by the app, so a transfer can checkpoint first.

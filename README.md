@@ -90,8 +90,22 @@ Worth being straight about, because some of these are permanent:
 
 ## 📦 Install
 
-Packages for the AUR, Debian, Fedora and Flathub are the next thing on the
-list. Until they land, it builds from source in one command:
+Grab a package from the
+[releases page](https://github.com/LightforgeProject/lightforge/releases):
+
+```bash
+sudo apt install ./lightforge_1.0.0~beta.1-1_amd64.deb     # Debian, Ubuntu
+sudo dnf install ./lightforge-1.0.0~beta.1-1.x86_64.rpm    # Fedora, openSUSE
+```
+
+On Arch there's a PKGBUILD in the repository — the AUR has registrations
+closed, so there's no account to upload it from yet:
+
+```bash
+cd packaging/aur/lightforge-bin && makepkg -si
+```
+
+Or build it yourself, which takes one command and a couple of minutes:
 
 ```bash
 git clone https://git.tuxcore.pro/kenny/lightforge.git
@@ -101,9 +115,9 @@ cargo build --release --locked
 ./target/release/lightforge-gui
 ```
 
-[**INSTALL.md**](INSTALL.md) covers the rest: what you need per distro, the
-32-bit package Battle.net's installer quietly depends on, building a binary
-that runs on other people's machines, and how to remove it again.
+[**INSTALL.md**](INSTALL.md) covers the rest: the portable tarball for the
+Steam Deck, what you need per distro, the 32-bit package Battle.net's
+installer quietly depends on, and how to remove it again.
 
 ## 🧰 Requirements
 
@@ -189,8 +203,8 @@ order I expect to get to them:
 
 **Soon**
 
-- 📦 **Packages** — AUR, `.deb`, `.rpm` and a Flatpak, so installing is one
-  command and updating happens with everything else on your system.
+- 📦 **A Flatpak**, and the AUR the moment registrations there reopen. The
+  `.deb`, the `.rpm` and the Arch PKGBUILDs are done.
 - 🎮 **Steam Deck** — the Flatpak is most of the answer; the glibc floor that
   used to block it no longer does.
 - 🚚 **Move a game to another drive** without re-downloading it.

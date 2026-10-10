@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Lightforge
+GenericName=WoW Launcher
+Comment=Install, update and play World of Warcraft on Linux
+Exec=lightforge-gui
+TryExec=lightforge-gui
+Icon=pro.tuxcore.Lightforge
+Terminal=false
+Categories=Game;
+Keywords=WoW;World of Warcraft;Blizzard;Battle.net;Proton;Wine;launcher;
+StartupNotify=true
+# Must equal the window's `app_id` (see `APP_ID` in the GUI's `main.rs`), or
+# the compositor shows a placeholder rather than the icon above.
+StartupWMClass=pro.tuxcore.Lightforge

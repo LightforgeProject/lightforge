@@ -1,11 +1,69 @@
 # Installing Lightforge
 
-Packages for Arch, Debian, Fedora and Flathub are the next thing on my list.
-Until they exist there's one way in, and it's not a bad one: Lightforge is a
-Rust program with almost no dependencies, so building it is three commands and
-a couple of minutes of your CPU fan.
+There's a package for Debian/Ubuntu, one for Fedora, and a PKGBUILD for Arch.
+Failing that, Lightforge is a Rust program with almost no dependencies, so
+building it is three commands and a couple of minutes of your CPU fan.
 
-## Build it
+Everything below installs the same two binaries, the menu entry and the icons.
+
+## Debian, Ubuntu, Mint
+
+Download `lightforge_<version>_amd64.deb` from the
+[releases page](https://github.com/LightforgeProject/lightforge/releases):
+
+```bash
+sudo apt install ./lightforge_1.0.0~beta.1-1_amd64.deb
+```
+
+It asks for glibc 2.36 or newer — Debian 12, Ubuntu 22.10 and anything after
+them. `apt` pulls in nothing else; see [what you need](#to-run) below.
+
+Ubuntu 22.04 LTS is glibc 2.35 and `apt` will refuse the package. The binaries
+themselves only import 2.34 and 2.35, so the [tarball](#steam-deck-and-everything-else)
+below runs there — the `.deb` states the container's own 2.36 because that is
+the version it can actually promise for every future build.
+
+## Fedora, RHEL, openSUSE
+
+Download `lightforge-<version>.x86_64.rpm` from the same place:
+
+```bash
+sudo dnf install ./lightforge-1.0.0~beta.1-1.x86_64.rpm   # or zypper install
+```
+
+## Arch, CachyOS, EndeavourOS
+
+**Not on the AUR yet** — registrations there are closed and there's no account
+to upload from. The PKGBUILDs are finished and in the repository, so until
+that changes:
+
+```bash
+git clone https://git.tuxcore.pro/kenny/lightforge.git
+cd lightforge/packaging/aur/lightforge-bin   # prebuilt binaries
+makepkg -si
+```
+
+Use `packaging/aur/lightforge` instead to build it from source. Both were
+built and installed in a clean Arch container before they were committed, and
+both land on the AUR as `lightforge` and `lightforge-bin` the day an account
+is possible.
+
+## Steam Deck, and everything else
+
+A Flatpak is the answer there and isn't done yet. In the meantime the
+[portable tarball](https://github.com/LightforgeProject/lightforge/releases)
+runs anywhere with glibc 2.36 or newer, SteamOS included:
+
+```bash
+tar xzf lightforge-1.0.0-beta.1-x86_64-linux.tar.gz
+cd lightforge-1.0.0-beta.1
+install -Dm755 lightforge-gui ~/.local/bin/lightforge-gui
+install -Dm755 lightforge     ~/.local/bin/lightforge
+install -Dm644 pro.tuxcore.Lightforge.desktop ~/.local/share/applications/
+cp -r icons/hicolor ~/.local/share/icons/
+```
+
+## Build it yourself
 
 ```bash
 git clone https://git.tuxcore.pro/kenny/lightforge.git
@@ -25,14 +83,17 @@ Run it straight out of the tree:
 ./target/release/lightforge-gui
 ```
 
-Or put them somewhere on your `PATH` — they're self-contained, with every
-icon and the fonts' worth of chrome compiled in, so there's no data directory
-to install alongside them:
+Or install it properly, which also gives you the menu entry and the icons a
+package would:
 
 ```bash
-install -Dm755 target/release/lightforge-gui ~/.local/bin/lightforge-gui
-install -Dm755 target/release/lightforge     ~/.local/bin/lightforge
+make install PREFIX=~/.local          # no root needed
+sudo make install                     # or system-wide, into /usr/local
 ```
+
+`make uninstall` takes the same `PREFIX` and removes exactly what it put
+there. The binaries are self-contained — every icon and the chrome are
+compiled in — so there's no data directory either way.
 
 `--locked` matters more than it looks: it builds against the exact dependency
 versions the project was tested with, rather than whatever resolved today.
@@ -142,18 +203,24 @@ Then you're on the Play page and it's one button.
 
 ## Updating
 
+With a package, however your system updates everything else — install the new
+`.deb` or `.rpm` over the old one, or `makepkg -si` again on Arch. From a
+source tree:
+
 ```bash
 git pull
 cargo build --release --locked
 ```
 
 Nothing migrates behind your back; your config, games and addons are outside
-the build directory and stay where they are. There's no self-updater yet,
-which is one of the better arguments for the distro packages.
+the build directory and stay where they are. There's no self-updater, which is
+most of the argument for installing a package rather than a binary.
 
 ## Uninstalling
 
-Delete the binaries, and then as much of this as you want gone:
+`sudo apt remove lightforge`, `sudo dnf remove lightforge`,
+`sudo pacman -R lightforge-bin`, or `make uninstall PREFIX=~/.local` — then as
+much of this as you want gone:
 
 ```text
 ~/.config/lightforge/        settings
@@ -171,15 +238,6 @@ The games are somewhere else on purpose:
 Removing the prefix costs you nothing but a rebuild. **Removing `games/` costs
 you the downloads**, so check what's in there first — and if you added other
 drives as libraries, each of those has its own `Lightforge/games/` folder too.
-
-## When the packages land
-
-They'll be on the releases page, and in the usual places:
-
-- **Arch** — the AUR, both a source package and a prebuilt one.
-- **Debian / Ubuntu** — a `.deb`.
-- **Fedora** — an `.rpm`.
-- **Everything else** — a Flatpak, which is also the answer for the Steam Deck.
 
 ## Stuck?
 

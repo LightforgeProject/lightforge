@@ -8,6 +8,11 @@ edition = "2021"
 rust-version = "1.86"
 license = "GPL-3.0-or-later"
 repository = "https://git.tuxcore.pro/kenny/lightforge.git"
+# The public mirror rather than the line above: the Forgejo instance upstream
+# lives on wants a login for anything but `git clone`, and a homepage that
+# sends a stranger to a sign-in form is worse than no homepage. This is what
+# the packages print as the project's address.
+homepage = "https://github.com/LightforgeProject/lightforge"
 
 [workspace.dependencies]
 lightforge-core = { path = "crates/core" }
