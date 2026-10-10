@@ -144,10 +144,11 @@ pub struct Config {
     pub battle_net_declined: bool,
     /// Whether the News panel is shown beside the game's key art.
     ///
-    /// On by default — it is the Play page's only news about the game you are
-    /// looking at. Off gives the artwork the whole page back, which is the
-    /// reason someone would want it off.
-    #[serde(default = "yes")]
+    /// Off by default: a first run should show the game's key art and nothing
+    /// else, and the panel also costs a network fetch on every visit to the
+    /// Play page. Settings › General turns it on, and that is where someone
+    /// who wants news about the game they are looking at will find it.
+    #[serde(default)]
     pub news_on_play: bool,
     /// Whether the release-notes popup has been switched off for good.
     ///
@@ -220,7 +221,7 @@ impl Default for Config {
             locale: default_locale(),
             setup_complete: false,
             battle_net_declined: false,
-            news_on_play: true,
+            news_on_play: false,
             patch_notes_muted: false,
             patch_notes_seen: None,
             products: Vec::new(),

@@ -3057,12 +3057,11 @@ impl Lightforge {
                 // rather than a running game.
                 match what {
                     Launch::Game => {
-                        // Names the tail too: the wine process tree takes a
-                        // few seconds to wind down after the window closes,
-                        // and an unexplained dead button in that window is
-                        // exactly what reads as a hung launcher.
-                        self.status =
-                            "running — Play unlocks once the game has fully exited".to_owned();
+                        // Play unlocks when the *game* exits, not when the
+                        // prefix is quiet — the wind-down behind it is watched
+                        // and reaped without holding the button. See
+                        // `tasks::run_game`.
+                        self.status = "running — Play unlocks when the game closes".to_owned();
                         Task::batch([
                             Task::perform(
                                 tasks::run_game(self.layout.clone(), self.selected.code.clone()),

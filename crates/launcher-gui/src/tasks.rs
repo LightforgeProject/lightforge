@@ -694,13 +694,39 @@ pub async fn preflight(
     .map_err(|e| e.to_string())?
 }
 
-/// Run the game, blocking until it exits.
+/// How long the game itself gets to appear in the prefix before the watch
+/// gives up and falls back to waiting on the whole process tree.
 ///
-/// "Exits" is the whole wine process tree winding down, not the moment the
-/// window disappears, so this returns a little after the game looks closed.
-/// That tail is wanted — it is what makes the *next* launch's pre-flight find
-/// a clean prefix — but it has to be visible as winding down rather than as a
-/// dead button.
+/// Generous on purpose: a cold start on a mechanical drive, or a first launch
+/// that compiles pipelines before it opens a window, is still a launch. The
+/// fallback is correct either way — it is only slower to notice.
+const GAME_APPEAR_WITHIN: Duration = Duration::from_secs(180);
+
+/// How often the prefix is re-scanned while watching the game.
+///
+/// 60 ms a scan, measured, so this is well under a percent of a core.
+const WATCH_POLL: Duration = Duration::from_millis(500);
+
+/// Run the game, returning when *the game* has exited.
+///
+/// Not when the prefix is quiet. Proton launches the client through its own
+/// `steam.exe`, which waits for every process left in the prefix — WoW's voice
+/// proxy, the shop's CEF children, then `services.exe` and `winedevice.exe`
+/// until wineserver times out. Waiting on that child is what used to keep
+/// `[ PLAY ]` dead for tens of seconds after the window had gone.
+///
+/// So the child is spawned rather than waited on, and the exe we spawned is
+/// watched by name in the process table — the same scan the Battle.net
+/// hand-off uses, which is 60 ms a pass. The moment it is gone the launch is
+/// over as far as the UI is concerned; a detached thread reaps the Proton
+/// child so nothing is left a zombie, and the tail cleans itself up. The next
+/// launch's pre-flight is what guarantees a quiet prefix, and it does it
+/// deterministically with `wineserver -k -w` rather than by hoping the tail
+/// finished.
+///
+/// The fallback path — nothing recognisable ever appeared — keeps the old
+/// behaviour, because a launch that produced no game is exactly the case where
+/// the child's exit status is the only thing worth reporting.
 pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         // The install's native path, *not* the `C:\Program Files (x86)`
@@ -737,11 +763,102 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
             runner.command("run", &exe, Vec::<String>::new()),
             &tweaks.wrappers(&tools),
         );
-        let status = launch.status().map_err(|e| e.to_string())?;
-        Ok(format!("game exited ({status})"))
+
+        // What the prefix held before the click, so a session already running
+        // under another launcher is not mistaken for this one's.
+        let before = lightforge_core::preflight::games_running(&layout);
+        let mut child = launch.spawn().map_err(|e| e.to_string())?;
+        crate::trace::mark(format!("launch: spawned {}", exe.display()));
+
+        let watch = exe.file_name().map(|n| n.to_string_lossy().into_owned());
+        let Some(watch) = watch else {
+            return reap(child);
+        };
+
+        match watch_for(&layout, &before, &watch, &mut child)? {
+            Watched::Running(pid) => {
+                crate::trace::mark(format!("launch: {watch} is up (pid {pid})"));
+                watch_until_gone(&layout, pid, &mut child);
+                crate::trace::mark(format!("launch: {watch} has exited"));
+                // The tail is nobody's business but the kernel's now. Reaped
+                // on a thread of its own so the process is not left a zombie,
+                // and so this returns while it is still winding down.
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                    crate::trace::mark("launch: the prefix is quiet");
+                });
+                Ok("game closed".to_owned())
+            }
+            // Either the game was never recognisable or it went down with the
+            // tree. Both make the child's own status the honest answer.
+            Watched::TreeExited(status) => Ok(format!("game exited ({status})")),
+            Watched::NeverAppeared => reap(child),
+        }
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// What [`watch_for`] saw.
+enum Watched {
+    /// The spawned executable is in the process table, with this pid.
+    Running(u32),
+    /// The Proton child exited before anything was recognised.
+    TreeExited(std::process::ExitStatus),
+    /// Nothing by that name appeared inside [`GAME_APPEAR_WITHIN`].
+    NeverAppeared,
+}
+
+/// Watch the prefix for the executable that was just spawned.
+///
+/// Matched by file name against the process table rather than by walking the
+/// child's descendants: Proton hands the launch to its `steam.exe`, so the
+/// game is not our child's child in any dependable way.
+fn watch_for(
+    layout: &Layout,
+    before: &[GameProcess],
+    exe: &str,
+    child: &mut std::process::Child,
+) -> Result<Watched, String> {
+    let known: HashSet<u32> = before.iter().map(|p| p.pid).collect();
+    let deadline = Instant::now() + GAME_APPEAR_WITHIN;
+
+    loop {
+        if let Some(found) = lightforge_core::preflight::games_running(layout)
+            .into_iter()
+            .find(|p| !known.contains(&p.pid) && p.name.eq_ignore_ascii_case(exe))
+        {
+            return Ok(Watched::Running(found.pid));
+        }
+        // Checked after the scan, not before it: a game that starts and exits
+        // between two polls still has to be seen, and the scan is the only
+        // thing that can see it.
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(status) => return Ok(Watched::TreeExited(status)),
+            None if Instant::now() >= deadline => return Ok(Watched::NeverAppeared),
+            None => std::thread::sleep(WATCH_POLL),
+        }
+    }
+}
+
+/// Block until `pid` is gone from the prefix, or the whole tree is.
+///
+/// Watched by pid, so a client that re-execs itself counts as closed. That is
+/// the right call here too: the next launch cleans the prefix anyway.
+fn watch_until_gone(layout: &Layout, pid: u32, child: &mut std::process::Child) {
+    while lightforge_core::preflight::games_running(layout).iter().any(|p| p.pid == pid) {
+        if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
+            return;
+        }
+        std::thread::sleep(WATCH_POLL);
+    }
+}
+
+/// Wait the Proton child out and report what it said — the old contract, kept
+/// for the launches where nothing better is knowable.
+fn reap(mut child: std::process::Child) -> Result<String, String> {
+    let status = child.wait().map_err(|e| e.to_string())?;
+    Ok(format!("game exited ({status})"))
 }
 
 /// Read the client's cached catalogue, for the game families in it.
