@@ -45,15 +45,15 @@
 
   <launchable type="desktop-id">pro.tuxcore.Lightforge.desktop</launchable>
 
-  <url type="homepage">https://git.tuxcore.pro/kenny/lightforge</url>
-  <url type="bugtracker">https://git.tuxcore.pro/kenny/lightforge/issues</url>
-  <url type="help">https://git.tuxcore.pro/kenny/lightforge/src/branch/main/TROUBLESHOOTING.md</url>
+  <url type="homepage">https://github.com/LightforgeProject/lightforge</url>
+  <url type="bugtracker">https://github.com/LightforgeProject/lightforge/issues</url>
+  <url type="help">https://github.com/LightforgeProject/lightforge/blob/main/TROUBLESHOOTING.md</url>
   <url type="donation">https://ko-fi.com/simplykenny</url>
-  <url type="vcs-browser">https://git.tuxcore.pro/kenny/lightforge</url>
+  <url type="vcs-browser">https://github.com/LightforgeProject/lightforge</url>
 
   <screenshots>
     <screenshot type="default">
-      <image>https://git.tuxcore.pro/kenny/lightforge/raw/branch/main/docs/play.jpg</image>
+      <image>https://raw.githubusercontent.com/LightforgeProject/lightforge/main/docs/play.jpg</image>
       <caption>The Play page</caption>
     </screenshot>
   </screenshots>
@@ -78,11 +78,21 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.0.0-beta.2" date="2026-10-10">
+      <description>
+        <p>
+          Play unlocks when the game closes rather than when the Wine prefix
+          has finished winding down, and News on the Play page is off until
+          you ask for it.
+        </p>
+      </description>
+      <url>https://github.com/LightforgeProject/lightforge/blob/main/RELEASES.md</url>
+    </release>
     <release version="1.0.0-beta.1" date="2026-10-10">
       <description>
         <p>The first public build.</p>
       </description>
-      <url>https://git.tuxcore.pro/kenny/lightforge/src/branch/main/RELEASES.md</url>
+      <url>https://github.com/LightforgeProject/lightforge/blob/main/RELEASES.md</url>
     </release>
   </releases>
 </component>

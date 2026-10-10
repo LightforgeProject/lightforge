@@ -22,7 +22,7 @@ understood, the rest was work rather than guessing.
 
 This repository starts on **16 September 2026**, and it is a rebuild rather
 than a beginning. What you are reading documents the state about a month
-later, at `1.0.0-beta.1`.
+later, at `1.0.0-beta.2`.
 
 ### How it was built
 

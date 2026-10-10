@@ -1,6 +1,19 @@
 # Lightforge release notes
 
 
+## 1.0.0-beta.2
+
+- Play comes back the moment the game closes. It used to stay dark until the
+  whole Wine prefix had wound down behind the game — the voice proxy, the
+  in-game shop's browser, then Wine's own background services — which on a
+  long session reads as a launcher that has hung rather than one that is
+  tidying up. The tidying still happens, out of your way.
+- News on the Play page now starts off, so a first run is the game's artwork
+  and nothing else. It is one switch in Settings under General, and anyone
+  who already has it on keeps it.
+- The download and install commands in the README and the install guide name
+  the files GitHub actually serves for a release.
+
 ## 1.0.0-beta.1
 
 - The first public build. Everything below is what it does.

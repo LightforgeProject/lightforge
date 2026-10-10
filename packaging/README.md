@@ -48,16 +48,16 @@ cargo install cargo-deb cargo-generate-rpm
 
 ### Why the version changes shape
 
-`1.0.0-beta.1` is a valid semver prerelease and an invalid package version
+`1.0.0-beta.2` is a valid semver prerelease and an invalid package version
 nearly everywhere else.
 
 | | |
 | --- | --- |
-| Cargo | `1.0.0-beta.1` |
-| deb / rpm | `1.0.0~beta.1` — `~` sorts *before* `1.0.0`, `-` does not |
-| AUR | `1.0.0beta.1` — hyphens are not allowed at all |
+| Cargo | `1.0.0-beta.2` |
+| deb / rpm | `1.0.0~beta.2` — `~` sorts *before* `1.0.0`, `-` does not |
+| AUR | `1.0.0beta.2` — hyphens are not allowed at all |
 
-`vercmp 1.0.0beta.1 1.0.0` is `-1`, so the Arch version orders correctly too
+`vercmp 1.0.0beta.2 1.0.0` is `-1`, so the Arch version orders correctly too
 and the stable release will need no `epoch`. The Makefile derives the deb and
 rpm forms from `Cargo.toml`; the two PKGBUILDs carry theirs by hand.
 
@@ -88,6 +88,14 @@ cannot download from it, so releases are published to a GitHub mirror and
 everything user-facing — the PKGBUILD sources, the AppStream screenshot, the
 homepage field in both packages — points there.
 
+It fails quietly, which is why it was missed until `1.0.0-beta.2`: an
+anonymous `GET` of a Forgejo raw URL answers **200 with the sign-in page**,
+not 401. A software centre fetching the screenshot that way shows no
+screenshot and no error. Every browser-facing URL in the AppStream file —
+homepage, bugtracker, help, vcs-browser and the screenshot — is therefore a
+`github.com` or `raw.githubusercontent.com` one. The `git clone` URLs in the
+docs stay on Forgejo, because cloning is the one thing that does work.
+
 Setting it up once:
 
 ```bash
@@ -115,13 +123,13 @@ make check-cli-doc        # docs/CLI.md matches the binary
 make release              # binaries + the glibc floor check
 make packages             # tarball, .deb, .rpm, SHA256SUMS
 
-git tag -a v1.0.0-beta.1 -m 'Lightforge 1.0.0-beta.1'
-git push origin v1.0.0-beta.1
-git push github v1.0.0-beta.1
+git tag -a v1.0.0-beta.2 -m 'Lightforge 1.0.0-beta.2'
+git push origin v1.0.0-beta.2
+git push github v1.0.0-beta.2
 
-gh release create v1.0.0-beta.1 \
+gh release create v1.0.0-beta.2 \
   --repo LightforgeProject/lightforge \
-  --title 'Lightforge 1.0.0-beta.1' \
+  --title 'Lightforge 1.0.0-beta.2' \
   --prerelease \
   target/dist/*
 ```
@@ -130,7 +138,7 @@ Then fill the two `sha256sums` in the PKGBUILDs — they are `SKIP` until the
 tag exists, because the sums are of files GitHub has not generated yet:
 
 - `lightforge` hashes GitHub's own source archive
-  (`.../archive/refs/tags/v1.0.0-beta.1.tar.gz`), which is not byte-identical
+  (`.../archive/refs/tags/v1.0.0-beta.2.tar.gz`), which is not byte-identical
   to anything produced locally. `updpkgsums` fetches it and fills it in.
 - `lightforge-bin` hashes the tarball `make packages` just built, so its sum
   is already in `target/dist/SHA256SUMS`.
@@ -157,7 +165,7 @@ git clone ssh://aur@aur.archlinux.org/lightforge.git aur-lightforge
 cp packaging/aur/lightforge/PKGBUILD aur-lightforge/
 cd aur-lightforge
 makepkg --printsrcinfo > .SRCINFO     # mandatory, and must match the PKGBUILD
-git add PKGBUILD .SRCINFO && git commit -m 'Lightforge 1.0.0-beta.1' && git push
+git add PKGBUILD .SRCINFO && git commit -m 'Lightforge 1.0.0-beta.2' && git push
 ```
 
 `.SRCINFO` is generated rather than written, and is not kept in this repo for
