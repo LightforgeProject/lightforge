@@ -1,11 +1,5 @@
 # Lightforge release notes
 
-What changed, in the words of someone using the launcher rather than someone
-reading its source. Newest first. The launcher shows the section for the
-version it is running, once, after an update.
-
-The first entry is the exception: there is nothing before it to have changed
-from, so it lists what the launcher does rather than what moved.
 
 ## 1.0.0-beta.1
 
