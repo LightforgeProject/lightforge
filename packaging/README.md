@@ -76,7 +76,7 @@ podman run --rm -v "$PWD/packaging:/p:Z" registry.fedoraproject.org/fedora:41 \
          appstreamcli validate /p/pro.tuxcore.Lightforge.metainfo.xml'
 ```
 
-All three pass as of 1.0.0-beta.1. `appstreamcli --pedantic` has one remaining
+All three pass as of 1.0.0-beta.2. `appstreamcli --pedantic` has one remaining
 note — the component id contains capitals — which is a style preference
 (`org.gnome.Software` has them too) and not an error.
 

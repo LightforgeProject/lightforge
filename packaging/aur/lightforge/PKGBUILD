@@ -29,7 +29,9 @@ conflicts=('lightforge-bin')
 # LTO anyway — `lto = "thin"` in the workspace's release profile.
 options=('!lto')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
-sha256sums=('SKIP')
+# Of GitHub's generated source archive for the tag, which is not
+# byte-identical to anything produced locally. Regenerate with `updpkgsums`.
+sha256sums=('cae328bf60f37c95cdeab7ac735b5ee3424d93123b154318cc042c5d9ea9b3d6')
 _srcdir="$pkgname-${_tag#v}"
 
 prepare() {
