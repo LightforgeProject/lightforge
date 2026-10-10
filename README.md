@@ -94,8 +94,8 @@ Grab a package from the
 [releases page](https://github.com/LightforgeProject/lightforge/releases):
 
 ```bash
-sudo apt install ./lightforge_1.0.0~beta.1-1_amd64.deb     # Debian, Ubuntu
-sudo dnf install ./lightforge-1.0.0~beta.1-1.x86_64.rpm    # Fedora, openSUSE
+sudo apt install ./lightforge_1.0.0.beta.1-1_amd64.deb     # Debian, Ubuntu
+sudo dnf install ./lightforge-1.0.0.beta.1-1.x86_64.rpm    # Fedora, openSUSE
 ```
 
 On Arch there's a PKGBUILD in the repository — the AUR has registrations

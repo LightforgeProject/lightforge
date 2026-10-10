@@ -9,10 +9,13 @@ Everything below installs the same two binaries, the menu entry and the icons.
 ## Debian, Ubuntu, Mint
 
 Download `lightforge_<version>_amd64.deb` from the
-[releases page](https://github.com/LightforgeProject/lightforge/releases):
+[releases page](https://github.com/LightforgeProject/lightforge/releases).
+The filename says `1.0.0.beta.1` because GitHub will not serve a `~` in an
+asset name; the version inside the package, which is the one `apt` reads and
+orders by, is `1.0.0~beta.1`:
 
 ```bash
-sudo apt install ./lightforge_1.0.0~beta.1-1_amd64.deb
+sudo apt install ./lightforge_1.0.0.beta.1-1_amd64.deb
 ```
 
 It asks for glibc 2.36 or newer — Debian 12, Ubuntu 22.10 and anything after
@@ -28,7 +31,7 @@ the version it can actually promise for every future build.
 Download `lightforge-<version>.x86_64.rpm` from the same place:
 
 ```bash
-sudo dnf install ./lightforge-1.0.0~beta.1-1.x86_64.rpm   # or zypper install
+sudo dnf install ./lightforge-1.0.0.beta.1-1.x86_64.rpm   # or zypper install
 ```
 
 ## Arch, CachyOS, EndeavourOS

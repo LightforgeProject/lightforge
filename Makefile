@@ -29,8 +29,8 @@ GLIBC_MAX ?= 2.36
 BINARIES := lightforge lightforge-gui
 
 .PHONY: release image check-glibc clean-release cli-doc check-cli-doc \
-	packages deb rpm tarball checksums check-binaries clean-packages \
-	install uninstall
+	packages deb rpm tarball checksums github-names check-binaries \
+	clean-packages install uninstall
 
 ## Build release binaries against an old glibc, and verify they are portable.
 release: image
@@ -172,8 +172,23 @@ rpm: check-binaries
 	  --set-metadata 'release = "1"' \
 	  --output $(DIST)/
 
+## Rename the packages to the names GitHub will actually serve them under.
+##
+## A release asset may not have a `~` in its name: GitHub rewrites it to `.`,
+## so `lightforge_1.0.0~beta.1-1_amd64.deb` is downloaded as
+## `lightforge_1.0.0.beta.1-1_amd64.deb` — and a `SHA256SUMS` listing the name
+## we built fails `sha256sum -c` for everyone. Renaming here means what is
+## built is exactly what is published. Only the filename changes; the version
+## *inside* the package is still `1.0.0~beta.1`, which is what `apt` and `dnf`
+## read and order by.
+github-names:
+	@for f in $(DIST)/*~*; do \
+	  [ -e "$$f" ] || continue; \
+	  mv "$$f" "$$(echo "$$f" | tr '~' '.')"; \
+	done
+
 ## The sums the AUR PKGBUILDs and the release page quote.
-checksums:
+checksums: github-names
 	@cd $(DIST) && rm -f SHA256SUMS && sha256sum lightforge* > SHA256SUMS
 	@cat $(DIST)/SHA256SUMS
 
