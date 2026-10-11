@@ -105,7 +105,7 @@ versions the project was tested with, rather than whatever resolved today.
 
 ### To build
 
-A Rust toolchain, **1.86 or newer** — from [rustup](https://rustup.rs) if your
+A Rust toolchain, **1.90 or newer** — from [rustup](https://rustup.rs) if your
 distro's is older, which it often is. That's genuinely it. No GTK, no Qt, no
 Vulkan headers, no `-dev` packages to hunt down: the launcher links `libc`,
 `libm` and `libgcc_s` and nothing else, because everything a desktop app

@@ -163,7 +163,7 @@ installer quietly depends on, and how to remove it again.
 | --- | --- |
 | **OS** | Any current Linux. glibc 2.36+ for release binaries; source builds don't care. |
 | **GPU** | Vulkan if you have it (Mesa, NVIDIA); it falls back to software rendering on its own if you don't. |
-| **Also** | `fontconfig`, and a 64-bit Rust 1.86+ toolchain if you're building. |
+| **Also** | `fontconfig`, and a 64-bit Rust 1.90+ toolchain if you're building. |
 | **Optional** | A 32-bit userspace (`multilib` / i686 libraries). **Only** needed for Battle.net's installer, which is the single 32-bit binary in the whole flow. WoW alone doesn't need it. |
 
 Proton-GE is downloaded and verified by Lightforge itself. You don't need

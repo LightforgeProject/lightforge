@@ -13,9 +13,9 @@ env:
 jobs:
   test:
     name: Build and test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # The launcher links libc, libm and libgcc_s and opens everything else at
       # run time, so a toolchain is the whole build environment.
@@ -36,12 +36,13 @@ jobs:
 
   msrv:
     name: Minimum supported Rust version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      # Cargo.toml promises 1.86; this is what keeps that promise true.
-      - uses: dtolnay/rust-toolchain@1.86.0
+      # Cargo.toml promises 1.90; this is what keeps that promise true.
+      # The floor is wgpu-hal's ordered-float, reached through iced.
+      - uses: dtolnay/rust-toolchain@1.90.0
 
       - uses: Swatinem/rust-cache@v2
 
