@@ -16,7 +16,7 @@ No Electron, no Agent deadlocks, no telemetry — just your games. 🔨
 
 ---
 
-Running WoW on Linux works fine. Running **Battle.net** on Linux is the part
+[This Project was assited by AI!] Running WoW on Linux works fine. Running **Battle.net** on Linux is the part
 that hurts — the client idles at "Initializing Data…", Agent wedges itself,
 updates take a scenic route through a Windows installer, and the whole thing
 weighs more than the thing it is supposed to launch.

@@ -199,6 +199,7 @@ pub const KNOWN_PRODUCTS: &[(&str, &str)] = &[
     ("s1", "StarCraft Remastered"),
     ("s2", "StarCraft II"),
     ("pro", "Overwatch 2"),
+    ("hero", "Heroes of the Storm"),
 ];
 
 /// What a probe found out about one product code.
