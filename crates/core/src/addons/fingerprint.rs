@@ -44,10 +44,10 @@ pub fn murmur2(bytes: &[u8], seed: u32) -> u32 {
     const R: u32 = 24;
 
     let mut hash = seed ^ (bytes.len() as u32);
-    let mut chunks = bytes.chunks_exact(4);
+    let (chunks, tail) = bytes.as_chunks::<4>();
 
-    for chunk in &mut chunks {
-        let mut k = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    for chunk in chunks {
+        let mut k = u32::from_le_bytes(*chunk);
         k = k.wrapping_mul(M);
         k ^= k >> R;
         k = k.wrapping_mul(M);
@@ -55,7 +55,6 @@ pub fn murmur2(bytes: &[u8], seed: u32) -> u32 {
         hash ^= k;
     }
 
-    let tail = chunks.remainder();
     if tail.len() >= 3 {
         hash ^= u32::from(tail[2]) << 16;
     }

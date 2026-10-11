@@ -170,7 +170,7 @@ pub fn scan(store: &Storage, mut on_progress: impl FnMut(Progress)) -> Report {
 
     for entry in entries {
         report.checked += 1;
-        if report.checked % 8192 == 0 {
+        if report.checked.is_multiple_of(8192) {
             on_progress(Progress {
                 checked: report.checked,
                 total,

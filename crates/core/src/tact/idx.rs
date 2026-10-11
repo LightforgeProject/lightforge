@@ -146,7 +146,7 @@ impl Entry {
         let header = CASC_ENTRY_HEADER as u32;
         self.key[2..] == ARCHIVE_MARKER_SUFFIX
             && self.size == header
-            && self.offset % header == 0
+            && self.offset.is_multiple_of(header)
             && self.offset / header < u32::from(BUCKETS)
     }
 
@@ -318,7 +318,9 @@ impl Index {
         }
 
         let blocks = body[8..]
-            .chunks_exact(8)
+            .as_chunks::<8>()
+            .0
+            .iter()
             .map(|c| (u32::from_be_bytes(c[..4].try_into().unwrap()), u32::from_be_bytes(c[4..].try_into().unwrap())))
             .collect::<Vec<_>>();
 
@@ -332,7 +334,7 @@ impl Index {
         if bytes.len() < end {
             return Err(IdxError::Truncated { need: end, got: bytes.len() });
         }
-        if section_size % ENTRY_SIZE != 0 {
+        if !section_size.is_multiple_of(ENTRY_SIZE) {
             return Err(IdxError::RaggedSection { size: section_size, entry_size: ENTRY_SIZE });
         }
 
@@ -342,7 +344,7 @@ impl Index {
             return Err(IdxError::DataHash { expected: stored_data_hash, found: hash });
         }
 
-        let entries: Vec<Entry> = raw.chunks_exact(ENTRY_SIZE).map(Entry::read).collect();
+        let entries: Vec<Entry> = raw.as_chunks::<ENTRY_SIZE>().0.iter().map(|c| Entry::read(c)).collect();
 
         Ok(Self {
             version,
@@ -517,7 +519,7 @@ fn data_offset(block_count: usize) -> usize {
 /// look corrupt to Agent while passing any test we wrote against ourselves.
 fn entries_hash(entries: &[u8]) -> u32 {
     let (mut pc, mut pb) = (0u32, 0u32);
-    for entry in entries.chunks_exact(ENTRY_SIZE) {
+    for entry in entries.as_chunks::<ENTRY_SIZE>().0 {
         hashlittle2(entry, &mut pc, &mut pb);
     }
     pc
@@ -629,7 +631,7 @@ mod tests {
         assert_ne!(entries_hash(&raw), hashlittle(&raw, 0));
 
         let (mut pc, mut pb) = (0u32, 0u32);
-        for e in raw.chunks_exact(ENTRY_SIZE) {
+        for e in raw.as_chunks::<ENTRY_SIZE>().0 {
             hashlittle2(e, &mut pc, &mut pb);
         }
         assert_eq!(entries_hash(&raw), pc);
@@ -775,7 +777,7 @@ mod tests {
             entry(key, archive, 0, 100).write(&mut raw);
         }
         let mut idx = Index::new(0);
-        idx.entries = raw.chunks_exact(ENTRY_SIZE).map(Entry::read).collect();
+        idx.entries = raw.as_chunks::<ENTRY_SIZE>().0.iter().map(|c| Entry::read(c)).collect();
 
         let bytes = idx.to_bytes().unwrap();
         let parsed = Index::parse(&bytes).unwrap();

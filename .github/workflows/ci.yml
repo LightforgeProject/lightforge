@@ -20,8 +20,6 @@ jobs:
       # The launcher links libc, libm and libgcc_s and opens everything else at
       # run time, so a toolchain is the whole build environment.
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
 
       - uses: Swatinem/rust-cache@v2
 
@@ -30,6 +28,23 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --locked
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # Pinned, not @stable: every six-week release adds lints, and with
+      # -D warnings that turns a toolchain bump into a red main on a commit
+      # that changed nothing. Bumped deliberately, as its own commit.
+      # Its own job so it keeps its own cache; sharing one with the @stable
+      # build would invalidate every artifact on both sides.
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Clippy
         run: cargo clippy --workspace --locked --all-targets
