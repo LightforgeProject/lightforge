@@ -1,7 +1,7 @@
 //! Steam installation discovery.
 //!
 //! Lightforge targets Proton-GE from a Steam library, so it needs to find the
-//! Steam root and enumerate library folders. Both are read-only operations —
+//! Steam root and enumerate library folders. Both are read-only operations,
 //! Lightforge never writes into Steam's configuration.
 
 use std::path::{Path, PathBuf};
@@ -59,7 +59,7 @@ impl SteamRoot {
     /// Every library folder Steam knows about, **filtered to those that
     /// currently exist**.
     ///
-    /// Library entries routinely point at unmounted drives — external disks,
+    /// Library entries routinely point at unmounted drives, external disks,
     /// other distros' partitions. A missing path is normal, not an error.
     pub fn library_paths(&self) -> Vec<PathBuf> {
         let mut out = vec![self.path.clone()];
@@ -87,7 +87,7 @@ impl SteamRoot {
 ///
 /// Deliberately a targeted extractor rather than a general KeyValues parser:
 /// one field is needed, and a tolerant line scan degrades gracefully if Valve
-/// changes the surrounding schema — which they have done before.
+/// changes the surrounding schema, which they have done before.
 fn parse_library_paths(contents: &str) -> Vec<PathBuf> {
     contents
         .lines()
@@ -150,7 +150,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("lightforge-steam-test");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(tmp.join(".steam/steam")).unwrap();
-        // No steamapps/ yet — not a real Steam root.
+        // No steamapps/ yet, not a real Steam root.
         assert!(SteamRoot::discover_in(&tmp).is_none());
 
         std::fs::create_dir_all(tmp.join(".steam/steam/steamapps")).unwrap();

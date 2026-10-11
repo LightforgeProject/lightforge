@@ -1,7 +1,7 @@
 //! The primary action button's state machine.
 //!
-//! The UI renders exactly one of these per product. Milestone 1 defined the
-//! shape; Milestone 5 adds the resolver that decides which one a product is in.
+//! The UI renders exactly one of these per product. The resolver below
+//! decides which one a product is in.
 //!
 //! Three rules are deliberate and none are obvious:
 //!
@@ -33,9 +33,9 @@ pub enum ActionState {
     /// Local state hasn't been determined yet (startup, or a refresh in flight).
     #[default]
     Unknown,
-    /// Game is missing — `[ INSTALL ]`, light blue.
+    /// Game is missing, `[ INSTALL ]`, light blue.
     Install,
-    /// Ribbit reports newer CDN hashes than local `.build.info` — `[ UPDATE ]`, violet.
+    /// Ribbit reports newer CDN hashes than local `.build.info`: `[ UPDATE ]`, violet.
     Update {
         local_build: String,
         remote_build: String,
@@ -50,15 +50,15 @@ pub enum ActionState {
     /// Download is paused, either by the user or by pre-flight before launching
     /// Battle.net (concurrent CASC writes are a real corruption risk).
     Paused(Progress),
-    /// Ready to launch — `[ PLAY ]`, the wordmark's gold.
+    /// Ready to launch, `[ PLAY ]`, the wordmark's gold.
     Play,
     /// Something went wrong; the message is user-facing.
     Error { message: String },
     /// The drive this product lives on is not mounted.
     ///
     /// Not an error, and never resolved by downloading: the files are intact
-    /// on a volume that is simply not here. Everything that writes — launch,
-    /// update, repair — is held, and the only action offered is to look
+    /// on a volume that is simply not here. Everything that writes, launch,
+    /// update, repair, is held, and the only action offered is to look
     /// again. Decided outside [`decide`], because it is a fact about the
     /// filesystem rather than about a build.
     Offline { drive: String },
@@ -170,7 +170,7 @@ impl Local {
     ///
     /// All three have to hold. A `.build.info` naming a build proves a download
     /// once completed, the binary proves the flavor directory was extracted,
-    /// and a non-empty store proves the content is there — any one alone is a
+    /// and a non-empty store proves the content is there, any one alone is a
     /// shape an interrupted run leaves behind.
     pub fn is_installed(&self) -> bool {
         self.build_key.is_some() && self.executable.is_some() && self.store_files > 0
@@ -217,8 +217,8 @@ pub fn decide(local: &Local, remote: Option<&Version>, transfer: Option<Transfer
         crate::tact::version::Status::Behind { local_build, remote_build, .. } => {
             ActionState::Update { local_build, remote_build }
         }
-        // `NotInstalled` cannot happen here — `is_installed` already required a
-        // build key — and `Current` is the ordinary ready case.
+        // `NotInstalled` cannot happen here, `is_installed` already required a
+        // build key, and `Current` is the ordinary ready case.
         _ => ActionState::Play,
     }
 }

@@ -12,7 +12,7 @@
 //!
 //! That makes the build config the entry point to everything else. It names
 //! the encoding manifest by *both* its content key and its encoding key, and
-//! the encoding key is directly readable from local storage — which is what
+//! the encoding key is directly readable from local storage, which is what
 //! breaks the chicken-and-egg problem of needing the encoding manifest in
 //! order to look anything up.
 
@@ -94,14 +94,14 @@ pub struct CdnConfig {
     /// against three real CDN configs (1406, 1362 and 1363 archives): every
     /// `archives` list is sorted lexicographically, every size list is a
     /// permutation of the true sizes, and pairing them by position matches
-    /// only 2-4% — about what coincidence gives, since sizes repeat. The CDN
+    /// only 2-4%, about what coincidence gives, since sizes repeat. The CDN
     /// serves exactly the bytes the local files hold, so the sizes are right
     /// and only their order is lost.
     ///
     /// An index is therefore checked by its own geometry at parse time, where
     /// blocks, TOC and footer must account for every byte.
     pub archives_index_size: Vec<u64>,
-    /// Present in the config but **not fetchable** — the CDN answers 403.
+    /// Present in the config but **not fetchable**: the CDN answers 403.
     /// Agent builds it locally from the per-archive indices, which is why a
     /// real install has one in `Data/indices` beside the others.
     pub archive_group: Option<String>,
@@ -115,7 +115,7 @@ impl CdnConfig {
     /// The size is always `None`: see [`CdnConfig::archives_index_size`] for
     /// why the published list cannot be paired with the archive list. The
     /// shape keeps a size in the signature so the day Blizzard publishes an
-    /// aligned list — or a per-index hash — nothing above here changes.
+    /// aligned list, or a per-index hash, nothing above here changes.
     pub fn archive_indices(&self) -> Vec<(&str, Option<u64>)> {
         self.archives.iter().map(|a| (a.as_str(), None)).collect()
     }
@@ -158,7 +158,7 @@ impl CdnConfig {
     }
 }
 
-/// `<dir>/<h0h1>/<h2h3>/<hash>` — the fan-out CASC stores configs under.
+/// `<dir>/<h0h1>/<h2h3>/<hash>`: the fan-out CASC stores configs under.
 ///
 /// The same shape is used by the CDN, so this doubles as the URL path for a
 /// config fetch once the network side lands.

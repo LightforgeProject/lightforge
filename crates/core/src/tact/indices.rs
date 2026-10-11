@@ -5,8 +5,8 @@
 //! beside each archive. For 12.1.0 that is **1406 indices totalling 119 MiB**,
 //! mean 87 KiB, plus the file index listing the loose keys.
 //!
-//! There is no shortcut. The CDN config names an `archive-group` — a single
-//! combined index that would answer every lookup in one fetch — but the CDN
+//! There is no shortcut. The CDN config names an `archive-group`: a single
+//! combined index that would answer every lookup in one fetch, but the CDN
 //! answers **403** for it. Agent builds it locally from the per-archive
 //! indices, which is why a real install has one in `Data/indices` beside the
 //! others. Measured, not assumed.
@@ -18,7 +18,7 @@
 //! An index is not named by the hash of its own bytes, and the CDN config's
 //! `archives-index-size` list turns out not to be positionally aligned with
 //! its `archives` list, so there is no declared size to check an archive index
-//! against either — see [`super::config::CdnConfig::archives_index_size`].
+//! against either; see [`super::config::CdnConfig::archives_index_size`].
 //! What remains is the index's own geometry, checked at parse time, and it is
 //! a strong check: block count, TOC and footer must account for every byte.
 //! The file index is the exception, since `file-index-size` is a single value
@@ -191,7 +191,7 @@ impl IndexCache {
         temp.persist(&path)
             .map_err(|e| IndexError::Io { path: path.clone(), source: e.error })?;
 
-        // 0644, as Agent's own cached indices are — tempfile's 0600 would
+        // 0644, as Agent's own cached indices are, tempfile's 0600 would
         // leave a file the client cannot read.
         std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o644))
             .map_err(|source| IndexError::Io { path, source })?;
@@ -215,7 +215,7 @@ impl Locations {
     /// Fold one archive's index in, keeping only keys `wanted` contains.
     ///
     /// Returns how many of that index's entries were kept. A key found in two
-    /// archives keeps the first — duplicates across archives are normal, since
+    /// archives keeps the first, duplicates across archives are normal, since
     /// an archive is never rewritten once published.
     pub fn absorb(
         &mut self,

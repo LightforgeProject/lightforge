@@ -22,7 +22,7 @@ pub enum StorageError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Disk {
     pub total: u64,
-    /// Available to an unprivileged user — what a download can actually use,
+    /// Available to an unprivileged user, what a download can actually use,
     /// not counting blocks reserved for root.
     pub free: u64,
 }
@@ -47,12 +47,12 @@ pub struct LibraryUsage {
     /// The library's `games/` directory.
     pub path: PathBuf,
     pub state: crate::library::State,
-    /// The standard install target. The prefix is not here by implication —
+    /// The standard install target. The prefix is not here by implication,
     /// it is always at the Blizzard root.
     pub is_default: bool,
     /// The drive letters this library occupies inside the prefix, for display.
     pub letters: (String, String),
-    /// `None` when the filesystem could not be queried — a missing drive, or
+    /// `None` when the filesystem could not be queried, a missing drive, or
     /// one `statvfs` refused.
     pub disk: Option<Disk>,
     pub usage: Vec<Usage>,
@@ -76,7 +76,7 @@ pub struct Report {
     /// One per configured library, main first.
     pub libraries: Vec<LibraryUsage>,
     /// Lightforge's own directories. These follow XDG rather than the
-    /// libraries, so they are on one drive however many libraries there are —
+    /// libraries, so they are on one drive however many libraries there are,
     /// which is why they are listed apart rather than attributed to one.
     pub app: Vec<Usage>,
     /// The drive the entries in `app` are on.
@@ -137,8 +137,8 @@ pub fn report(layout: &Layout, dirs: &AppDirs) -> Report {
 
                     // Battle.net's own titles on this drive, each by name.
                     // One is on this drive if its files are under the library's
-                    // `games/`, or — for the older arrangement, which is what
-                    // every existing install still has — inside the prefix.
+                    // `games/`, or, for the older arrangement, which is what
+                    // every existing install still has, inside the prefix.
                     let mine: Vec<&Game> = installed
                         .iter()
                         .filter(|game| {
@@ -241,7 +241,7 @@ pub fn report(layout: &Layout, dirs: &AppDirs) -> Report {
 
 /// Delete what [`report`] marked clearable on one library.
 ///
-/// Today that is Battle.net's own leftovers — the bootstrapper's staging copy
+/// Today that is Battle.net's own leftovers, the bootstrapper's staging copy
 /// and Agent's directory cache, both of which pre-flight already removes when
 /// it gets the chance. Game files are never touched from here.
 pub fn clear_library(layout: &Layout, library: &crate::library::Library) -> Result<u64, StorageError> {
@@ -267,7 +267,7 @@ const WOW: &str = "World of Warcraft";
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Game {
     /// What to call it. The install folder's own name, which is what Blizzard
-    /// named it and what the user would call it — the alternative is the
+    /// named it and what the user would call it, the alternative is the
     /// product code (`hs_beta`, `w1r`), which names nothing to anyone.
     name: String,
     path: PathBuf,
@@ -315,12 +315,12 @@ fn battle_net_games(layout: &Layout) -> Vec<Game> {
     games
 }
 
-/// The directory under the cache root that holds DXVK state caches — see
+/// The directory under the cache root that holds DXVK state caches, see
 /// [`AppDirs::shader_cache_dir`].
 const SHADER_CACHE_DIR: &str = "dxvk";
 
 /// Free and total space on the filesystem holding `path`, or on its nearest
-/// existing ancestor — a library root that does not exist yet still has a
+/// existing ancestor, a library root that does not exist yet still has a
 /// disk it would land on.
 // The statvfs fields are u64 on 64-bit targets and narrower elsewhere; the
 // conversions below are no-ops only on the former.
@@ -347,7 +347,7 @@ pub fn disk(path: &Path) -> Result<Disk, StorageError> {
     })
 }
 
-/// Whether nothing has been installed under this library root yet — the only
+/// Whether nothing has been installed under this library root yet, the only
 /// state in which moving it is a config change rather than a data migration.
 pub fn library_is_empty(layout: &Layout) -> bool {
     [layout.games_root(), layout.compat_data()].iter().all(|dir| is_empty_dir(dir))
@@ -361,7 +361,7 @@ pub fn library_is_empty(layout: &Layout) -> bool {
 pub fn holds_wow(layout: &Layout, library: &crate::library::Library) -> bool {
     // `is_present` rather than `is_ready`: a library that has never been
     // claimed can still have a game in it, and on an upgrade from before
-    // multi-drive storage that is exactly the case — the first library is
+    // multi-drive storage that is exactly the case, the first library is
     // seeded unclaimed and has 150 GB in it.
     library.state().is_present() && !is_empty_dir(&layout.wow_install_in(library))
 }
@@ -385,8 +385,8 @@ fn is_empty_dir(dir: &Path) -> bool {
 ///
 /// Shader caches are kept: they are what spares the game a stutter while it
 /// recompiles every shader, and dropping them is never the fix for a full
-/// disk. Everything else here — theming art, the Battle.net installer, the
-/// addon catalogue and the Proton release list — is re-fetched on demand.
+/// disk. Everything else here, theming art, the Battle.net installer, the
+/// addon catalogue and the Proton release list, is re-fetched on demand.
 pub fn clear_cache(dirs: &AppDirs) -> Result<u64, StorageError> {
     let mut freed = 0;
     for path in clearable_entries(dirs) {
@@ -527,7 +527,7 @@ mod tests {
         assert!(holds_wow(&layout, &library));
 
         // A drive that went away holds nothing, whatever is under its old
-        // path — the library it would have to read from is not there. The
+        // path, the library it would have to read from is not there. The
         // claim is what tells that apart from a library nobody has set up.
         std::fs::remove_file(library.marker()).unwrap();
         assert!(!holds_wow(&layout, &library));
@@ -539,7 +539,7 @@ mod tests {
     }
 
     /// The games Battle.net installed for itself live inside the prefix, and
-    /// used to be reported as part of it — a 15.4 GiB "Wine prefix" row that
+    /// used to be reported as part of it, a 15.4 GiB "Wine prefix" row that
     /// was mostly Hearthstone. Each is now named, measured where it is, and
     /// subtracted from the prefix.
     #[test]
@@ -554,7 +554,7 @@ mod tests {
         let layout = layout.with_libraries(crate::library::Libraries::new(vec![library]));
 
         // A prefix with Wine in it, a game Battle.net installed, and the `c:`
-        // entry Wine writes — a relative symlink, which is what makes the
+        // entry Wine writes, a relative symlink, which is what makes the
         // resolver worth having.
         let program_files = layout.program_files_x86();
         std::fs::create_dir_all(program_files.join("Hearthstone")).unwrap();

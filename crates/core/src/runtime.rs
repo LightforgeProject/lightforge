@@ -1,50 +1,34 @@
 //! Whether this machine can run 32-bit Windows binaries at all.
 //!
-//! Proton is two wines: a 64-bit one and a 32-bit one. Everything Lightforge
-//! does to *build* a prefix — `wineboot -u`, the registry edits, `wineserver`
-//! — is 64-bit and works on a bare 64-bit system. `Battle.net-Setup.exe` is
-//! 32-bit, and it is the first thing in the whole sequence that is.
+//! Proton is two wines. Everything Lightforge does to build a prefix is
+//! 64-bit and works on a bare 64-bit system; `Battle.net-Setup.exe` is the
+//! only 32-bit binary in the whole sequence. Without a 32-bit userspace the
+//! prefix provisions fine and then the Battle.net step dies in under a
+//! second with nothing to explain it. Stock Debian does this, because it
+//! ships no i386 packages until something enables the architecture.
+//! (Installing Steam appears to fix Lightforge; it doesn't. The `steam`
+//! package is multi-arch, so it runs `dpkg --add-architecture i386` as a
+//! side effect.)
 //!
-//! So a machine with no 32-bit userspace gets all the way through Proton
-//! provisioning and prefix creation looking perfectly healthy, then dies in
-//! under a second on the Battle.net step with nothing in the UI to explain
-//! it. That is not hypothetical: it is what a stock Debian does, because
-//! Debian ships no i386 packages until something enables the architecture.
-//! Installing Steam appears to "fix" Lightforge, which is a coincidence — the
-//! `steam` package is multi-arch, so installing it runs
-//! `dpkg --add-architecture i386` and pulls in the 32-bit chain as a side
-//! effect. Nobody should need Steam to run this launcher.
+//! Two checks, because they catch different failures at different cost:
 //!
-//! Two checks, because they catch different failures and cost different
-//! amounts:
+//! 1. [`check_loader`] stats for a 32-bit dynamic loader. No Proton needed,
+//!    so it runs before a 400 MB download the user could not have used.
+//! 2. [`check_wine`] starts Proton's own 32-bit wine. Catches the case where
+//!    i386 is enabled but a library is missing; the loader names that
+//!    library, so its stderr is kept rather than summarised.
 //!
-//! 1. [`check_loader`] — is there a 32-bit dynamic loader at all? One `stat`,
-//!    no Proton required, so it runs *before* a 400 MB download the user
-//!    could not have used.
-//! 2. [`check_wine`] — can Proton's own 32-bit wine actually start? Needs
-//!    Proton on disk, and catches the subtler case where i386 is enabled but
-//!    an individual library is missing. The loader names that library, so its
-//!    stderr is kept rather than summarised.
+//! Both only establish a floor. They cannot see the 32-bit *graphics* stack,
+//! which is dlopened at run time and so appears in neither the loader's view
+//! nor `ldd`'s: measured on Fedora 44, `glibc.i686` + `freetype.i686` turns
+//! both checks green while the installer still exits 1 for want of 32-bit
+//! X11 and GL. That is why [`remedy_for`] names the distribution's 32-bit
+//! *Wine* package instead of a library list: Wine's dependencies are the
+//! closure we need, maintained by people who package it for a living.
 //!
-//! **What these checks do not prove.** They establish a floor — that 32-bit
-//! binaries can run at all — and nothing more. They cannot tell you the
-//! 32-bit *graphics* stack is present, because `wine --version` is a console
-//! program and the libraries a GUI needs are dlopened at run time, so they
-//! appear in neither the loader's view nor `ldd`'s. Measured on Fedora 44:
-//! installing `glibc.i686` and `freetype.i686` turns both checks green and
-//! the Battle.net installer still exits 1, for want of 32-bit X11 and GL.
-//!
-//! That is why [`remedy_for`] points at the distribution's 32-bit *Wine*
-//! package rather than a list of libraries. Wine's own dependencies are the
-//! closure we need, maintained by people who package it for a living; a list
-//! of our own would have to track every distro's graphics stack and would be
-//! wrong in exactly the way a green check that still fails is wrong.
-//!
-//! When the floor is met and the install fails anyway, the thing that
-//! explains it is [`crate::battlenet::BattleNetError::InstallerExited`],
-//! which carries the installer's own stderr. These checks are the cheap
-//! catch; that error is the backstop, and it is the one that found both bugs
-//! in this story.
+//! When the floor is met and the install still fails,
+//! [`crate::battlenet::BattleNetError::InstallerExited`] carries the
+//! installer's own stderr. That is the backstop, and it found both bugs here.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -55,7 +39,7 @@ use thiserror::Error;
 ///
 /// Debian and Ubuntu put it at `/lib/ld-linux.so.2` (multiarch, from
 /// `libc6:i386`); Arch and Fedora use the `lib32`/`usr/lib32` spellings. Any
-/// one of them is enough — this is a question of "is there a 32-bit userspace
+/// one of them is enough. This is a question of "is there a 32-bit userspace
 /// here", not of which distro we are on.
 const LOADER_CANDIDATES: &[&str] = &[
     "/lib/ld-linux.so.2",
@@ -129,7 +113,7 @@ pub fn check_loader() -> Result<(), RuntimeError> {
 /// dynamic loader can resolve the binary's libraries, and its complaint is
 /// passed through verbatim because it names the library that is missing.
 ///
-/// A Proton build with no 32-bit wine at all is not an error here — some
+/// A Proton build with no 32-bit wine at all is not an error here, some
 /// builds are 64-bit only, and that is a question about the build rather than
 /// about the system this code is checking.
 pub fn check_wine(dist: &Path) -> Result<(), RuntimeError> {
@@ -168,9 +152,9 @@ mod tests {
     #[test]
     fn the_fallback_advice_names_no_package_manager() {
         // The fallback is for distributions this table does not know, so it
-        // must not assume one's tooling. It may name the *libraries* — those
+        // must not assume one's tooling. It may name the *libraries*: those
         // are the actual requirement and every distro ships them under some
-        // spelling — but naming a package manager would make it wrong for
+        // spelling, but naming a package manager would make it wrong for
         // everyone it is meant to serve.
         for rotting in ["apt", "dnf", "pacman", "zypper", "dpkg", "emerge"] {
             assert!(
@@ -229,7 +213,7 @@ mod tests {
 /// Lightforge never runs this itself. Installing system packages needs root,
 /// and a launcher that invokes a package manager as root on a guess about the
 /// user's distribution is a trust escalation this project does not need to
-/// make — especially since on the distributions where a button would work the
+/// make, especially since on the distributions where a button would work the
 /// user can run one command, and on the ones where help is most needed
 /// (read-only SteamOS, rpm-ostree, NixOS) no button could work at all.
 ///
@@ -288,8 +272,8 @@ pub fn remedy() -> Remedy {
 
 /// The table, kept deliberately short.
 ///
-/// Every entry here is a maintenance liability — package names move and
-/// distributions fork — so this covers the families that actually ship WoW
+/// Every entry here is a maintenance liability, package names move and
+/// distributions fork, so this covers the families that actually ship WoW
 /// players and says nothing at all about the rest, rather than guessing.
 /// An unrecognised system gets [`ADVICE`] and no command, which is honest and
 /// still actionable.
@@ -317,7 +301,7 @@ pub fn remedy_for(os: &OsRelease) -> Remedy {
             ),
         )
     } else if os.id == "steamos" || os.is("steamos") {
-        // SteamOS already ships the 32-bit stack, so reaching this is odd —
+        // SteamOS already ships the 32-bit stack, so reaching this is odd,
         // and its rootfs is read-only, so `pacman` is the wrong instruction.
         (
             None,
@@ -359,11 +343,11 @@ pub fn remedy_for(os: &OsRelease) -> Remedy {
         // VERIFIED on Fedora 44, after two wrong answers worth recording:
         //
         // `dnf install wine` resolves to x86_64 and installs nothing 32-bit
-        // at all — not even glibc.i686 — so the machine still has no loader.
+        // at all, not even glibc.i686, so the machine still has no loader.
         //
         // `dnf install glibc.i686 freetype.i686` produces the loader and is
         // enough for `wine --version`, so both of this module's checks go
-        // green — and the Battle.net installer still exits 1, because it is a
+        // green, and the Battle.net installer still exits 1, because it is a
         // GUI application and needs the 32-bit X11, GL and audio stacks that
         // those two packages do not bring.
         //

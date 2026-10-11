@@ -19,8 +19,8 @@
 //! costs a read of the whole store.
 //!
 //! **What makes the deep scan affordable.** It never decodes anything. A BLTE
-//! file carries a chunk table giving an MD5 of every chunk *as stored* —
-//! compressed, and for encrypted chunks still encrypted — and the file's
+//! file carries a chunk table giving an MD5 of every chunk *as stored*:
+//! compressed, and for encrypted chunks still encrypted, and the file's
 //! encoding key is the MD5 of that table. So hashing the raw bytes verifies the
 //! table against the key and every chunk against the table, which covers every
 //! stored byte without zlib, without the encoding manifest, and without
@@ -33,7 +33,7 @@
 //! `Agent.exe` update or a transfer writes the same archives, and reading a
 //! file mid-write looks exactly like damage. A [`Snapshot`] of every index and
 //! archive, taken before and compared after, turns that into
-//! [`VerifyError::StoreChanged`] instead of a false report — whoever the
+//! [`VerifyError::StoreChanged`] instead of a false report, whoever the
 //! writer was.
 //!
 //! Repair is deliberately not a separate mechanism: a damaged entry is removed
@@ -131,7 +131,7 @@ pub struct Report {
     /// Archives named by the index that are not on disk.
     pub missing_archives: Vec<u16>,
     pub damaged: Vec<Damage>,
-    /// Files a deep scan could read but has no way to check — see
+    /// Files a deep scan could read but has no way to check, see
     /// [`Payload::Unverifiable`]. Healthy as far as anyone can tell, and never
     /// repaired.
     pub unverifiable: u64,
@@ -147,7 +147,7 @@ impl Report {
 
 /// Verify every file entry in `store`.
 ///
-/// Read-only. `on_progress` is called periodically rather than per entry —
+/// Read-only. `on_progress` is called periodically rather than per entry,
 /// there are over a million of them, and a callback per entry costs more than
 /// the check does.
 pub fn scan(store: &Storage, mut on_progress: impl FnMut(Progress)) -> Report {
@@ -265,8 +265,8 @@ fn fault_in(header: &[u8], entry: &Entry) -> Option<Fault> {
 /// else writes meanwhile.
 ///
 /// Archives are spread over worker threads, each read front to back. Hashing,
-/// not the disk, is the ceiling on one thread — about 730 MB/s on a current
-/// desktop — so a handful of threads is what reaches the drive's speed.
+/// not the disk, is the ceiling on one thread, about 730 MB/s on a current
+/// desktop, so a handful of threads is what reaches the drive's speed.
 ///
 /// `on_progress` runs on the calling thread a few times a second.
 pub fn deep_scan(
@@ -524,7 +524,7 @@ fn blte_fault(blte: &[u8], key: &[u8; KEY_SIZE]) -> Option<Fault> {
 
 /// Every index and archive file in a store, by size and modification time.
 ///
-/// Cheap — a couple of hundred `stat`s — and deliberately blunt: it cannot say
+/// Cheap, a couple of hundred `stat`s, and deliberately blunt: it cannot say
 /// *who* wrote, only that the bytes a scan read may no longer be the bytes on
 /// disk. That is the whole question a scan needs answered.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -563,7 +563,7 @@ pub fn repair_unchanged(data_dir: &Path, report: &Report) -> Result<usize, Verif
 ///
 /// This *is* the repair: the planner asks the index what the store holds, so
 /// an entry that is gone becomes a file the next download fetches again. The
-/// archives are not touched — the bad bytes stay where they are and are
+/// archives are not touched, the bad bytes stay where they are and are
 /// written over or orphaned, which is exactly what the writer already does
 /// with superseded content.
 ///
@@ -703,7 +703,7 @@ mod tests {
         let entry = *open(&dir).files().next().unwrap();
 
         // The header stores its key byte-reversed across offsets 7..16, so
-        // byte 15 is the key's first byte — flipping it changes which file
+        // byte 15 is the key's first byte, flipping it changes which file
         // the header claims to be, which is checked before any checksum.
         let mut bytes = std::fs::read(&archive).unwrap();
         bytes[entry.offset as usize + 15] ^= 0xff;
@@ -823,7 +823,7 @@ mod tests {
     #[test]
     fn a_damaged_chunk_table_is_caught_against_the_key() {
         // Flipping a checksum in the table would otherwise make a healthy
-        // chunk look rotten — or, flipped to match rot, a rotten one healthy.
+        // chunk look rotten, or, flipped to match rot, a rotten one healthy.
         let dir = deep_store(&[blte(&[b"payload"])]);
         flip(&dir, 12 + 8);
         assert_eq!(deep(&dir).unwrap().damaged[0].fault, Fault::WrongPayload);

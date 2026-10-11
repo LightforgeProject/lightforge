@@ -38,8 +38,8 @@ const WINDOWS_PROGRAM_FILES: &str = "Program Files (x86)";
 /// Resolved filesystem layout: one Wine prefix, and the storage libraries
 /// games are installed into.
 ///
-/// The prefix is always at `root` — on the user's home drive, where a Wine
-/// prefix belongs — whatever drives the games are spread over. Each library
+/// The prefix is always at `root`: on the user's home drive, where a Wine
+/// prefix belongs, whatever drives the games are spread over. Each library
 /// reaches into the prefix through its own `dosdevices` entries rather than
 /// moving anything about; see [`crate::library`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,14 +104,14 @@ impl Layout {
         &self.root
     }
 
-    /// The Proton compat-data directory — the value of
+    /// The Proton compat-data directory, the value of
     /// `STEAM_COMPAT_DATA_PATH`. Proton creates the Wine prefix one level
     /// inside it, at `pfx/`.
     pub fn compat_data(&self) -> PathBuf {
         self.root.join("prefix")
     }
 
-    /// The Wine prefix itself, `prefix/pfx`. Treated as disposable — never
+    /// The Wine prefix itself, `prefix/pfx`. Treated as disposable, never
     /// store game or user data here that isn't reproducible.
     ///
     /// The `pfx` component is Proton's, not Lightforge's: Proton always builds
@@ -129,8 +129,8 @@ impl Layout {
     /// The WoW install's own Windows drive letter, as a `dosdevices` entry.
     ///
     /// Not cosmetic, and not interchangeable with [`Layout::wow_symlink`]: the
-    /// game's embedded browser — `Utils/BlizzardBrowser.exe`, the CEF that
-    /// draws the in-game shop — fails to start its GPU child unless the
+    /// game's embedded browser, `Utils/BlizzardBrowser.exe`, the CEF that
+    /// draws the in-game shop, fails to start its GPU child unless the
     /// install is a drive of its own. Reached through `C:` or through the
     /// catch-all `Z:`, that child dies three times and Chromium gives up,
     /// which is the grey box the shop had instead of a page. Measured
@@ -143,14 +143,14 @@ impl Layout {
         self.dosdevices().join(&library.wow_letter)
     }
 
-    /// A library's `games/` directory as a Windows drive — the directory
+    /// A library's `games/` directory as a Windows drive, the directory
     /// Battle.net is told to install other titles into.
     ///
     /// Separate from [`Layout::wow_drive`] because the two want opposite
     /// things: the shop needs the WoW install to *be* a drive root, while
     /// Battle.net needs a drive it can create a game folder *inside*. Wine
     /// resolves a Unix path to the most specific drive mapped over it, so both
-    /// hold at once — the install is on its own letter even though its parent
+    /// hold at once, the install is on its own letter even though its parent
     /// is on another.
     pub fn games_drive(&self, library: &Library) -> PathBuf {
         self.dosdevices().join(&library.games_letter)
@@ -164,8 +164,8 @@ impl Layout {
     /// Resolve a Windows path the way Wine would, into a real one.
     ///
     /// Reads `dosdevices` rather than assuming anything, so it answers for
-    /// every letter the prefix has — `C:` for the prefix's own `drive_c`, and
-    /// each library's two letters — without this needing to know which is
+    /// every letter the prefix has, `C:` for the prefix's own `drive_c`, and
+    /// each library's two letters, without this needing to know which is
     /// which. `None` for a letter the prefix does not map.
     ///
     /// Used to turn the install paths in Battle.net's `product.db` back into
@@ -185,7 +185,7 @@ impl Layout {
         battle_net_dir_in(&self.prefix())
     }
 
-    /// `%APPDATA%/Battle.net/Battle.net.config` — the file automated setup
+    /// `%APPDATA%/Battle.net/Battle.net.config`: the file automated setup
     /// injects `GameLaunchWindowBehavior` and `DefaultInstallPath` into.
     ///
     /// `user` is the prefix's Windows user name; Proton prefixes conventionally
@@ -200,7 +200,7 @@ impl Layout {
             .join("Battle.net.config")
     }
 
-    /// `%LOCALAPPDATA%/Battle.net/Logs` — where the client writes its own
+    /// `%LOCALAPPDATA%/Battle.net/Logs`: where the client writes its own
     /// running commentary, one timestamped file per start.
     ///
     /// Read, never written. It is the only place the client says out loud
@@ -216,12 +216,12 @@ impl Layout {
             .join("Logs")
     }
 
-    /// `%LOCALAPPDATA%/Battle.net/Cache` — the client's content-addressed
+    /// `%LOCALAPPDATA%/Battle.net/Cache`: the client's content-addressed
     /// cache, where it keeps Blizzard's published product catalogue.
     ///
     /// Read, never written. It is the only place in the prefix that says
     /// which game family a product belongs to, which is what a hand-off has
-    /// to name — see [`crate::families`].
+    /// to name; see [`crate::families`].
     pub fn battle_net_cache(&self, user: &str) -> PathBuf {
         self.drive_c()
             .join("users")
@@ -271,7 +271,7 @@ impl Layout {
     ///
     /// `Battle.net-Setup.exe` unpacks the client here and then promotes it to
     /// `Battle.net.<build>/` alongside. A setup that was torn down at the
-    /// moment of promotion leaves a full duplicate behind — roughly 750 MB —
+    /// moment of promotion leaves a full duplicate behind, roughly 750 MB,
     /// which the client only clears on its next successful launch. Pre-flight
     /// removes it once nothing in the prefix is alive.
     pub fn battle_net_staging(&self) -> PathBuf {
@@ -286,7 +286,7 @@ impl Layout {
     /// Agent's own directory. **Never delete this**: it holds `product.db`,
     /// the registry of every game Battle.net knows is installed. Wiping it
     /// makes the client forget every located install, so the user has to point
-    /// it at their games again after every launch — which is exactly what
+    /// it at their games again after every launch, which is exactly what
     /// Lightforge did until this was split out.
     pub fn agent_dir(&self) -> PathBuf {
         agent_dir_in(&self.prefix())
@@ -328,7 +328,7 @@ impl Layout {
     /// because `C:\Program Files (x86)\World of Warcraft` is a single path
     /// and an install Battle.net has already adopted has that string recorded
     /// on disk. Every other library presents its install under its own
-    /// `games/` drive instead — see [`Library::windows_wow_path`].
+    /// `games/` drive instead; see [`Library::windows_wow_path`].
     pub fn wow_symlink(&self) -> PathBuf {
         self.program_files_x86().join(WOW_DIR)
     }
@@ -402,7 +402,7 @@ pub fn resolve_windows_in(dosdevices: &Path, windows: &str) -> Option<PathBuf> {
     Some(normalize(&resolved))
 }
 
-/// Agent's own directory inside any Wine prefix, ours or another launcher's —
+/// Agent's own directory inside any Wine prefix, ours or another launcher's,
 /// where `product.db` lives. See [`Layout::agent_dir`].
 pub fn agent_dir_in(prefix: &Path) -> PathBuf {
     prefix.join("drive_c").join("ProgramData").join("Battle.net").join("Agent")
@@ -444,8 +444,8 @@ fn normalize(path: &Path) -> PathBuf {
 /// finds nothing can still name a plausible file in its error.
 ///
 /// Takes the directory rather than a [`Layout`] because the launch path goes
-/// through the prefix symlink — Wine has to see the conventional Windows path
-/// — while everything else addresses the install directly.
+/// through the prefix symlink, Wine has to see the conventional Windows path,
+/// while everything else addresses the install directly.
 pub fn game_executable(flavor_dir: &Path, code: &ProductCode) -> PathBuf {
     let expected = flavor_dir.join(code.executable());
     if expected.is_file() {
@@ -555,7 +555,7 @@ impl AppDirs {
     ///
     /// Keyed per product deliberately. All products share a single prefix, so
     /// letting DXVK pool its cache there would mean clearing Retail's stale
-    /// shaders after a Proton swap also discards Classic's — a stutter penalty
+    /// shaders after a Proton swap also discards Classic's, a stutter penalty
     /// on a product the user never touched.
     pub fn shader_cache_dir(&self, code: &ProductCode) -> PathBuf {
         self.cache.join("dxvk").join(code.as_str())

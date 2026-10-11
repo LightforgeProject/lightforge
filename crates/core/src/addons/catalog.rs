@@ -3,17 +3,17 @@
 //!
 //! The proxy exists because the CurseForge API needs a key, and a key cannot
 //! live in a GPL repo or in a binary anyone can unpack. It holds the key, adds
-//! caching and rate limiting, and hands back a trimmed shape of its own — so
+//! caching and rate limiting, and hands back a trimmed shape of its own, so
 //! this module never talks to CurseForge, and nothing here has to change if the
 //! upstream API does.
 //!
 //! Two outcomes are normal rather than failures, and both are modelled as
 //! [`Status`] instead of errors:
 //!
-//! - **`opt_out`** — an author can switch off third-party distribution, and the
+//! - **`opt_out`**: an author can switch off third-party distribution, and the
 //!   API then returns no download URL. The only correct response is to send the
 //!   user to the project page. Never synthesise a CDN URL around it.
-//! - **`not_found`** — a project id in someone's shared list that no longer
+//! - **`not_found`**: a project id in someone's shared list that no longer
 //!   exists. One dead entry must not fail the other nineteen.
 //!
 //! File bytes are fetched straight from CurseForge's CDN using the URL the
@@ -56,9 +56,9 @@ pub enum Status {
     NotFound,
 }
 
-/// One resolved addon, ready to download — or a reason it is not.
+/// One resolved addon, ready to download, or a reason it is not.
 /// `Default` exists so a field the catalog starts reporting does not mean
-/// editing every construction that never cared about it — the same reason
+/// editing every construction that never cared about it, the same reason
 /// [`crate::addons::Record`] has one.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Resolved {
@@ -88,7 +88,7 @@ pub struct Resolved {
     /// The author's own page at the provider, when it names one.
     ///
     /// Carried on the resolve reply so an installed addon can offer it
-    /// without a second request — see [`crate::addons::install::Record`],
+    /// without a second request; see [`crate::addons::install::Record`],
     /// which is where it ends up.
     #[serde(default)]
     pub author_url: Option<String>,
@@ -106,7 +106,7 @@ pub struct Resolved {
     /// addons would be thirty requests for one column.
     #[serde(default)]
     pub file_date: Option<String>,
-    /// Anything worth telling the user about how this was resolved — a guessed
+    /// Anything worth telling the user about how this was resolved, a guessed
     /// flavor, or why a provider could not answer.
     #[serde(default)]
     pub note: Option<String>,
@@ -148,7 +148,7 @@ pub struct Request {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version_id: Option<String>,
     /// Which builds are acceptable. Omitted means the proxy's own default,
-    /// which is stable — so an older client keeps getting releases.
+    /// which is stable, so an older client keeps getting releases.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel: Option<super::Channel>,
 }
@@ -198,7 +198,7 @@ pub struct Project {
     #[serde(default)]
     pub thumbnail_url: Option<String>,
     /// Lifetime downloads, as the proxy reports them. Absent on an older
-    /// proxy, which then ranks every CurseForge hit equally — see
+    /// proxy, which then ranks every CurseForge hit equally, see
     /// [`crate::addons::browse`].
     #[serde(default)]
     pub download_count: u64,
@@ -236,7 +236,7 @@ struct MatchReply {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileInfo {
     pub file_id: String,
-    /// What the author calls this build — a version people recognise, where
+    /// What the author calls this build, a version people recognise, where
     /// the file id is an opaque number.
     #[serde(default)]
     pub display_name: Option<String>,
@@ -310,7 +310,7 @@ impl Catalog {
     /// Resolve a batch of addons to download URLs.
     ///
     /// Requests beyond [`RESOLVE_LIMIT`] are split into several calls rather
-    /// than rejected — a shared list is allowed to be long, and the chunking is
+    /// than rejected, a shared list is allowed to be long, and the chunking is
     /// nobody else's problem.
     pub async fn resolve(
         &self,
@@ -457,7 +457,7 @@ impl Catalog {
     /// One file's changelog.
     ///
     /// Keyed by the file as well as the project, because "what changed" is a
-    /// question about a build and not about an addon — which is also why the
+    /// question about a build and not about an addon, which is also why the
     /// proxy can cache it for a day: a published file's changelog is final.
     pub async fn changelog(
         &self,

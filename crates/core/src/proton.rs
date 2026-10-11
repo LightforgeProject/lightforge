@@ -1,8 +1,7 @@
 //! Proton-GE version model.
 //!
 //! Policy is **pinned + notify-only**: Lightforge never swaps a working Proton
-//! build out from under the user. Discovery, download, and launching land in
-//! Milestones 2 and 7; Milestone 1 fixes the model the whole feature hangs off.
+//! build out from under the user.
 //!
 //! All products share one prefix, so a pin selects which Proton-GE binary runs
 //! at launch rather than isolating a prefix. The stale-shader safety step on a
@@ -19,14 +18,14 @@ pub const GE_RELEASES_REPO: &str = "GloriousEggroll/proton-ge-custom";
 /// The build the in-game shop is known to work under.
 ///
 /// Not a general "best build": it is specifically the one WoW's embedded
-/// browser — `Utils/BlizzardBrowser.exe`, the CEF that draws the shop and the
-/// support pages — renders under. Newer GE builds start the browser and lose
+/// browser, `Utils/BlizzardBrowser.exe`, the CEF that draws the shop and the
+/// support pages, renders under. Newer GE builds start the browser and lose
 /// its GPU child, which is the grey box the shop had instead of a page. Half
 /// of that fix is the install having a Wine drive of its own
 /// ([`crate::paths::Layout::wow_drive`]); this is the other half. Measured
 /// 2026-10-02 against `Logs/BlizzardBrowser/CEF-*.log`.
 ///
-/// A recommendation and nothing more — the picker offers every installed
+/// A recommendation and nothing more, the picker offers every installed
 /// build, and a product pinned elsewhere launches and plays perfectly well
 /// without a shop.
 pub const SHOP_BUILD: &str = "GE-Proton11-7";
@@ -55,7 +54,7 @@ pub enum ProtonFlavor {
     GloriousEggroll,
     /// Valve's official Proton, including Experimental.
     Valve,
-    /// umu's Proton build. Out of scope — umu-launcher is not a runtime target.
+    /// umu's Proton build. Out of scope, umu-launcher is not a runtime target.
     Umu,
     /// Anything else found in `compatibilitytools.d`.
     Other,
@@ -94,7 +93,7 @@ impl ProtonFlavor {
 pub struct ProtonRelease {
     /// Upstream release tag, e.g. `GE-Proton11-6`.
     ///
-    /// Read from the build's `version` file rather than its directory name —
+    /// Read from the build's `version` file rather than its directory name,
     /// they disagree in practice (`GE-Proton11-6-x86_64/` ships
     /// `version` = `GE-Proton11-6`), and only the tag matches what the GitHub
     /// Releases API reports.
@@ -110,7 +109,7 @@ pub struct ProtonRelease {
 impl ProtonRelease {
     /// Read a build from a compatibility-tool directory.
     ///
-    /// Returns `None` when the directory has no `proton` entry point — partial
+    /// Returns `None` when the directory has no `proton` entry point, partial
     /// extractions and stray directories are common in `compatibilitytools.d`.
     pub fn read_from_dir(dir: &Path, source: ProtonSource) -> Option<Self> {
         if !dir.join("proton").is_file() {
@@ -169,7 +168,7 @@ pub fn discover_managed(proton_dir: &Path) -> Vec<ProtonRelease> {
 /// everything found across the user's Steam libraries.
 ///
 /// Managed builds are listed first so they win the dedup against an identical
-/// version installed under Steam — Lightforge controls its own copy's integrity.
+/// version installed under Steam, Lightforge controls its own copy's integrity.
 pub fn discover_all(
     steam: Option<&crate::steam::SteamRoot>,
     proton_dir: &Path,
@@ -195,7 +194,7 @@ pub fn discover_all(
 
 /// Choose the build to launch with.
 ///
-/// A pin is honored exactly — silently falling back to another build is how a
+/// A pin is honored exactly, silently falling back to another build is how a
 /// user ends up debugging a regression against a Proton version they never
 /// selected. Without a pin, the newest supported build wins, dated by the
 /// `version` file rather than by tag, since tags don't sort numerically
@@ -213,7 +212,7 @@ pub fn select<'a>(builds: &'a [ProtonRelease], pin: Option<&str>) -> Option<&'a 
 /// A GE release tag as the pair of numbers it is, for ordering.
 ///
 /// `GE-Proton11-7` → `(11, 7)`. Needed because these tags do not sort as
-/// strings — `GE-Proton11-7` < `GE-Proton9-20` lexically — and because the
+/// strings, `GE-Proton11-7` < `GE-Proton9-20` lexically, and because the
 /// build that made a prefix is recorded as a bare tag with no build timestamp
 /// beside it, so there is nothing else to compare on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -222,7 +221,7 @@ struct GeVersion {
     minor: u32,
 }
 
-/// Parse a GE tag, or `None` for anything else — Valve's builds, UMU's, a
+/// Parse a GE tag, or `None` for anything else, Valve's builds, UMU's, a
 /// directory name read as a fallback. Incomparable is the honest answer there.
 fn ge_version(tag: &str) -> Option<GeVersion> {
     let (major, rest) = tag.strip_prefix("GE-Proton")?.split_once('-')?;
@@ -237,7 +236,7 @@ fn ge_version(tag: &str) -> Option<GeVersion> {
 /// The Proton build that last ran `wineboot` in a compat-data directory.
 ///
 /// Proton writes its own tag to `<compat_data>/version` whenever it creates or
-/// upgrades the prefix, so this is the build the prefix *is* — not whatever is
+/// upgrades the prefix, so this is the build the prefix *is*: not whatever is
 /// pinned now. `None` when no prefix has been built there yet.
 pub fn prefix_build(compat_data: &Path) -> Option<String> {
     let contents = std::fs::read_to_string(compat_data.join("version")).ok()?;
@@ -246,7 +245,7 @@ pub fn prefix_build(compat_data: &Path) -> Option<String> {
 
 /// How the build about to run compares with the one the prefix carries.
 ///
-/// The prefix is shared by every product — one Battle.net install, one login —
+/// The prefix is shared by every product, one Battle.net install, one login,
 /// and Proton only ever migrates a prefix *forward*. Opening it with an older
 /// Wine than the one that last rewrote its registry and DLLs is the way that
 /// arrangement breaks, so that is the single case worth stopping for.
@@ -259,7 +258,7 @@ pub enum PrefixFit {
     /// Newer than the prefix. Proton upgrades it on the way in, which is
     /// routine and is what every update does.
     Newer,
-    /// Older than the build named here — a downgrade of the shared prefix.
+    /// Older than the build named here, a downgrade of the shared prefix.
     Older { built_by: String },
     /// One of the two is not a GE tag, so there is no ordering to trust.
     /// Never warned about: a guess costs more here than silence.
@@ -331,7 +330,7 @@ pub fn discover_installed(steam: &crate::steam::SteamRoot) -> Vec<ProtonRelease>
 
 /// Which Proton build a product is pinned to.
 ///
-/// The Battle.net prefix carries its own pin, independent of any WoW product —
+/// The Battle.net prefix carries its own pin, independent of any WoW product,
 /// "latest" is not reliably best for Agent.exe and CEF.
 ///
 /// Serialized as an optional string rather than a tagged enum, so TOML stays a
@@ -375,7 +374,7 @@ impl From<ProtonPin> for Option<String> {
     }
 }
 
-/// A newer upstream release, surfaced passively — never applied automatically.
+/// A newer upstream release, surfaced passively, never applied automatically.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateNotice {
     pub current: String,
@@ -812,7 +811,7 @@ impl UpstreamRelease {
     ///
     /// | era | assets |
     /// |---|---|
-    /// | ≤ `GE-Proton11-2` | `GE-ProtonX-Y.tar.gz` — unsuffixed, x86_64 |
+    /// | ≤ `GE-Proton11-2` | `GE-ProtonX-Y.tar.gz`: unsuffixed, x86_64 |
     /// | `GE-Proton11-1`, `11-3` | unsuffixed x86_64 **plus** `-aarch64` |
     /// | ≥ `GE-Proton11-4` | explicit `-x86_64` **and** `-aarch64` |
     ///
@@ -871,7 +870,7 @@ pub fn latest_stable(releases: &[UpstreamRelease]) -> Option<&UpstreamRelease> {
 
 /// Compare an installed version against upstream, producing a passive notice.
 ///
-/// Returns `None` when already current. Nothing here applies an update — the
+/// Returns `None` when already current. Nothing here applies an update, the
 /// policy is pinned + notify-only.
 pub fn check_for_update(installed: &str, releases: &[UpstreamRelease]) -> Option<UpdateNotice> {
     let latest = latest_stable(releases)?;
@@ -938,7 +937,7 @@ pub fn size_on_disk(path: &Path) -> u64 {
 ///
 /// The tarball unpacks to a single top-level directory named for the release,
 /// so the installed build lands at `dest_root/<dir>`. The download is verified
-/// against the published SHA-512 before anything is extracted — a truncated
+/// against the published SHA-512 before anything is extracted, a truncated
 /// Proton fails much later and far more confusingly than a checksum mismatch.
 pub async fn install_release(
     http: &crate::net::Http,

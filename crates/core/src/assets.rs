@@ -1,4 +1,4 @@
-//! Dynamic theming asset pipeline — **Milestone 5**.
+//! Dynamic theming asset pipeline.
 //!
 //! Hybrid manifest + per-asset ETags against Tuxcore-hosted branding:
 //! `manifest.json` is revalidated with `If-None-Match` on each launch, and the
@@ -6,7 +6,7 @@
 //! metadata-only manifest change never re-downloads unchanged art.
 //!
 //! Cached under [`crate::paths::AppDirs::asset_cache_dir`], where each asset's
-//! cache file *is* the image the UI renders — the ETag body and the artwork are
+//! cache file *is* the image the UI renders, the ETag body and the artwork are
 //! the same bytes, so a `304` costs one `stat` and nothing else.
 //!
 //! Labels are per-product and stable (`Retail`, `Classic`, `Classic Era`), not
@@ -35,8 +35,8 @@ use crate::product::{Branch, Catalog, CatalogEntry, ProductCode};
 /// than half-understood theming.
 ///
 /// **2** made `logo` and `background` optional, so a product can be themed
-/// with nothing but its square mark. Battle.net hand-offs — Diablo,
-/// Hearthstone, StarCraft — are never drawn with a logo or a background by
+/// with nothing but its square mark. Battle.net hand-offs, Diablo,
+/// Hearthstone, StarCraft, are never drawn with a logo or a background by
 /// this launcher, but they do want a mark in the product bar and the browse
 /// list, and under schema 1 that was unreachable without inventing a wordmark
 /// and a background for each of them.
@@ -53,7 +53,7 @@ pub const MANIFEST_FILE: &str = "manifest.json";
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
     pub schema: u32,
-    /// Product code whose theme covers anything `products` doesn't name —
+    /// Product code whose theme covers anything `products` doesn't name,
     /// PTR, beta, and user-added custom products.
     #[serde(default)]
     pub default: Option<String>,
@@ -64,9 +64,9 @@ pub struct Manifest {
 /// One product's branding.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Theme {
-    /// Stable display name — `Retail`, never `Midnight`.
+    /// Stable display name, `Retail`, never `Midnight`.
     pub label: String,
-    /// Which game this product is a build of — `retail`, `classic`,
+    /// Which game this product is a build of, `retail`, `classic`,
     /// `classic_era`, `forever`, or a name of your own.
     ///
     /// Optional. Without it the client works the line out from the product
@@ -75,7 +75,7 @@ pub struct Theme {
     /// instead of appearing as a game of its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<String>,
-    /// Which build of that line — `live`, `ptr`, `ptr2` or `beta`. Optional,
+    /// Which build of that line, `live`, `ptr`, `ptr2` or `beta`. Optional,
     /// on the same terms as `line`. A value outside that set is ignored
     /// rather than guessed at; the set is closed and the UI has to render it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -109,7 +109,7 @@ pub struct AssetRef {
     /// [`Slot::Logo`]; a background is always drawn to fill.
     ///
     /// Logos are drawn to a fixed height, so two of them at the same height
-    /// but different aspect ratios read as different sizes — a wide wordmark
+    /// but different aspect ratios read as different sizes, a wide wordmark
     /// looks twice the size of a square one. How much room a particular piece
     /// of art wants is a property of that art, so it is declared next to it
     /// rather than guessed at by the client. Absent means the app's default.
@@ -157,11 +157,11 @@ impl Manifest {
     /// The theme for a product: its own entry, else the one `default` names.
     ///
     /// A `default` pointing at a product that isn't in the map is treated as
-    /// absent — a broken pointer shouldn't read as a themed product.
+    /// absent, a broken pointer shouldn't read as a themed product.
     /// This product's own entry, with no fallback.
     ///
     /// [`Manifest::theme`]'s fallback to `default` is right for a logo and a
-    /// background — a WoW product released after the binary should look like
+    /// background, a WoW product released after the binary should look like
     /// WoW rather than like nothing. It is wrong for a *mark*, which is
     /// identity: falling back there puts World of Warcraft's icon beside the
     /// word "Hearthstone", which is worse than no icon at all.
@@ -174,7 +174,7 @@ impl Manifest {
         self.default.as_deref().and_then(|code| self.products.get(code))
     }
 
-    /// The theme of this product's *line* — Classic's for Classic PTR.
+    /// The theme of this product's *line*: Classic's for Classic PTR.
     ///
     /// The step between a product's own entry and `default`. A PTR is the
     /// same game as the branch it tracks, so when the manifest does not name
@@ -199,7 +199,7 @@ impl Manifest {
     /// Per *slot* rather than per theme, because since schema 2 an entry can
     /// carry a mark and nothing else. Falling back a whole theme at a time
     /// would mean a WoW product that gains its own icon silently *loses* the
-    /// logo and background it used to inherit — it stopped being an unknown
+    /// logo and background it used to inherit, it stopped being an unknown
     /// product, so the fallback stopped applying. That is a surprising way to
     /// lose artwork, and it bit Anniversary the moment it got a mark.
     pub fn slot(
@@ -241,7 +241,7 @@ impl Manifest {
 
     /// The product catalog this manifest states, over the built-in one.
     ///
-    /// A product is only *stated* here — identity, grouping, what to call it.
+    /// A product is only *stated* here, identity, grouping, what to call it.
     /// Where its files go and what runs stays derived from the code, so a bad
     /// publish can mislabel a product but never install one over another.
     pub fn catalog(&self) -> Catalog {
@@ -293,7 +293,7 @@ pub struct Asset {
     pub path: PathBuf,
     /// `true` when bytes moved this run; `false` on a `304` or a fixture read.
     pub fetched: bool,
-    /// The manifest's height hint, carried through unverified — see
+    /// The manifest's height hint, carried through unverified, see
     /// [`AssetRef::height`]. The UI decides what is a sane value.
     pub height: Option<f32>,
 }
@@ -305,7 +305,7 @@ pub struct Branding {
     pub logo: Asset,
     pub background: Asset,
     /// `None` when the theme declares no icon, or when one is declared but
-    /// isn't resolvable — a missing mark costs a fallback label, not a theme.
+    /// isn't resolvable, a missing mark costs a fallback label, not a theme.
     pub icon: Option<Asset>,
 }
 
@@ -327,7 +327,7 @@ impl Store {
     /// Cache file name for a URL.
     ///
     /// Keyed by the URL rather than by product and slot, so two products
-    /// sharing one image share one cached file — and so a rename upstream
+    /// sharing one image share one cached file, and so a rename upstream
     /// lands as a new file instead of overwriting art that other products may
     /// still be pointing at.
     pub fn cache_name(url: &str) -> String {
@@ -345,8 +345,8 @@ impl Store {
 
     /// Delete cached art that `keep` does not name.
     ///
-    /// Published art is content-addressed upstream — the filename carries the
-    /// first bytes of its sha256 — so every image that changes arrives under
+    /// Published art is content-addressed upstream, the filename carries the
+    /// first bytes of its sha256, so every image that changes arrives under
     /// a *new* URL, and the cache file for the old one is never written to
     /// again. Without this, a few megabytes are stranded on disk per art
     /// revision, forever.
@@ -359,7 +359,7 @@ impl Store {
     /// **Each kept file keeps its `.etag` sidecar too.** Missing that was a
     /// real bug: every pass deleted every validator, so the next revalidation
     /// had nothing to send, re-downloaded art it already had, and the UI
-    /// swapped pictures that had not changed — which looks like the page
+    /// swapped pictures that had not changed, which looks like the page
     /// flickering a second after each product switch.
     pub fn prune(&self, keep: &[String]) -> usize {
         let mut wanted: std::collections::HashSet<String> =
@@ -465,7 +465,7 @@ impl Pipeline {
         self.resolve_with(http, &manifest, code).await
     }
 
-    /// Resolve against a manifest already in hand — the GUI fetches it once
+    /// Resolve against a manifest already in hand, the GUI fetches it once
     /// and themes every product from it.
     pub async fn resolve_with(
         &self,
@@ -479,7 +479,7 @@ impl Pipeline {
 
         // Since schema 2 a theme may carry nothing but a mark, which is all a
         // Battle.net hand-off needs. [`Branding`] means drawable art, so a
-        // theme without it is not partial branding — it is none, and the
+        // theme without it is not partial branding. It is none, and the
         // caller is asking the wrong question.
         let (Some(logo_ref), Some(background_ref)) = (
             manifest.slot(code, |t| t.logo.as_ref()),
@@ -540,7 +540,7 @@ impl Pipeline {
     /// last good art at once; [`Pipeline::resolve_with`] follows behind and
     /// swaps in whatever actually changed.
     ///
-    /// `None` whenever the cache cannot fully answer — a missing manifest, an
+    /// `None` whenever the cache cannot fully answer, a missing manifest, an
     /// unthemed product, an image not fetched yet, or one that no longer
     /// matches its checksum. Partial branding is not a thing the UI can draw,
     /// so a half-warm cache simply waits for the network like a cold one.
@@ -574,7 +574,7 @@ impl Pipeline {
     }
 
     /// One image from the cache, verified the same way the network path
-    /// verifies it — bytes that would be rejected after a fetch must not be
+    /// verifies it, bytes that would be rejected after a fetch must not be
     /// painted just because they arrived before one.
     fn cached_asset(&self, asset: &AssetRef, slot: Slot) -> Option<Asset> {
         let path = match &self.origin {
@@ -588,7 +588,7 @@ impl Pipeline {
     /// Fetch (or revalidate) one image and verify it.
     ///
     /// The checksum is checked on the cached bytes too, not only on a fresh
-    /// download — a file truncated on disk after the fact would otherwise be
+    /// download, a file truncated on disk after the fact would otherwise be
     /// served forever, since a `304` never looks at the body.
     async fn asset(
         &self,
@@ -781,7 +781,7 @@ mod tests {
     #[test]
     fn unnamed_products_fall_back_to_the_default() {
         let m = manifest();
-        // Retail's PTR and a user-added custom product both theme as Retail —
+        // Retail's PTR and a user-added custom product both theme as Retail,
         // the PTR because retail *is* its line's head, the custom code because
         // nothing is known about what it is a branch of.
         assert_eq!(m.theme(&ProductCode::Ptr).unwrap().label, "Retail");
@@ -806,7 +806,7 @@ mod tests {
     }
 
     /// A line whose head the manifest does not name either still reaches
-    /// `default` — the head must not resolve to itself and dead-end.
+    /// `default`: the head must not resolve to itself and dead-end.
     #[test]
     fn a_line_with_no_art_of_its_own_still_reaches_the_default() {
         let m = manifest();
@@ -937,7 +937,7 @@ mod tests {
     ///
     /// Anniversary had no entry at all and so fell back to Retail's logo and
     /// background. Giving it an icon made the entry exist, and a per-theme
-    /// fallback would have dropped it to no art whatsoever — a worse outcome
+    /// fallback would have dropped it to no art whatsoever, a worse outcome
     /// produced by adding art.
     #[test]
     fn a_mark_only_entry_still_inherits_the_default_artwork() {
@@ -1104,7 +1104,7 @@ mod tests {
         assert_eq!(entry.branch, Branch::Ptr);
         assert_eq!(entry.label, "Midnight PTR");
 
-        // And it joins retail's version list rather than standing alone —
+        // And it joins retail's version list rather than standing alone,
         // which is the whole point of stating it.
         let retail = catalog.branches(&crate::product::ProductLine::Retail);
         assert!(retail.iter().any(|e| e.code == code));

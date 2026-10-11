@@ -57,7 +57,7 @@ pub async fn refresh(
         let layout = layout.clone();
         let code = code.clone();
         // Opening the store to count files is an index read, but on a 123 GB
-        // install it is still tens of milliseconds — off the UI thread.
+        // install it is still tens of milliseconds, off the UI thread.
         tokio::task::spawn_blocking(move || Local::inspect(&layout, &code))
             .await
             .unwrap_or_default()
@@ -124,7 +124,7 @@ pub struct Scanned {
 /// Verify the store's entries against their own headers, and drop the bad ones.
 ///
 /// Repair rewrites the indices a running client memory-maps, so this refuses
-/// to run while anything is alive in the prefix — the same gate a launch and a
+/// to run while anything is alive in the prefix, the same gate a launch and a
 /// download go through.
 pub async fn scan_and_repair(
     layout: Layout,
@@ -190,7 +190,7 @@ pub async fn deep_scan(
 pub enum Unrepaired {
     /// Something is alive in the prefix; the repair is still owed.
     InUse,
-    /// Anything else — including a store that moved since the scan, whose
+    /// Anything else, including a store that moved since the scan, whose
     /// findings are no longer worth acting on.
     Failed(String),
 }
@@ -260,7 +260,7 @@ fn cached_icons(
 /// A theming pass: the branding it produced, the manifest it read, and every
 /// configured product's bar icon.
 ///
-/// The manifest comes back so the app can hold onto it — see [`theme`]. The
+/// The manifest comes back so the app can hold onto it; see [`theme`]. The
 /// icons ride along because the pass already holds the one manifest that names
 /// them all, and the product bar needs the whole set, not just the selected
 /// product's.
@@ -277,7 +277,7 @@ pub struct Themed {
 /// *different* marks or the same ones again. [`Handle::from_path`] used to
 /// make that free, because iced caches those by path and reassigning one costs
 /// nothing. A handle built from pixels is a fresh id every time, so assigning
-/// an identical set makes the renderer re-upload every texture — which is the
+/// an identical set makes the renderer re-upload every texture, which is the
 /// band blinking after a switch. Comparing paths answers it exactly, the same
 /// way [`Art`] compares its [`lightforge_core::assets::Branding`].
 #[derive(Debug, Clone)]
@@ -431,7 +431,7 @@ pub async fn theme(
     }
 
     // Decoded here, off the UI thread, so the dashboard never decodes on
-    // draw — see [`crate::art`].
+    // draw; see [`crate::art`].
     let branding = match branding {
         Some(branding) => tokio::task::spawn_blocking(move || Art::decode(branding)).await.ok(),
         None => None,
@@ -443,8 +443,8 @@ pub async fn theme(
 /// What a running transfer publishes for the UI to read.
 ///
 /// A `watch` channel deliberately keeps only the newest value: the download
-/// calls its progress callback once per stored file — 1.5 million times on
-/// retail — and the UI samples at its own rate. Nothing queues, so the
+/// calls its progress callback once per stored file, 1.5 million times on
+/// retail, and the UI samples at its own rate. Nothing queues, so the
 /// transfer can never be slowed by a busy window.
 #[derive(Debug, Clone, Default)]
 pub struct TransferState {
@@ -467,6 +467,9 @@ pub struct TransferState {
 /// Returns the run's summary. A paused transfer is not an error: `pause` trips
 /// the same cancel token the guard uses, and the next run resumes from what
 /// the store already holds.
+// Eight arguments, all of them a distinct input to one transfer; a struct
+// here would only move the same list one level out.
+#[allow(clippy::too_many_arguments)]
 pub async fn download(
     layout: Layout,
     code: ProductCode,
@@ -511,7 +514,7 @@ pub async fn download(
                     optional_tags: optional_tags.clone(),
                     // Tighter than the CLI's 4 GiB. A checkpoint is a few
                     // milliseconds of index writing, and it bounds what is
-                    // lost if the app is killed rather than closed — the CLI
+                    // lost if the app is killed rather than closed, the CLI
                     // is a foreground process someone is watching, a launcher
                     // is not.
                     checkpoint_bytes: 512 * 1024 * 1024,
@@ -532,7 +535,7 @@ pub async fn download(
                 // event carries no progress of its own, and publishing a
                 // default one in its place is what emptied the bar and dropped
                 // the rate to zero the moment the bytes were in: the tail of
-                // every run — extracting, .build.info, .product.db — is
+                // every run, extracting, .build.info, .product.db, is
                 // nothing but stage events.
                 let mut latest = Progress::default();
 
@@ -582,7 +585,7 @@ fn describe(event: &Event) -> String {
         Event::Build { versions_name, .. } => format!("build {versions_name}"),
         Event::Encoding { entries } => format!("encoding — {entries} entries"),
         Event::Manifests { download, .. } => format!("manifests — {download} entries"),
-        // The whole product's size, not the job's — an update would flash
+        // The whole product's size, not the job's, an update would flash
         // "90 GiB" before planning says 10. `Planned` states what is fetched.
         Event::Wanted { files, .. } => format!("checking {files} files against the store"),
         Event::Optional { names } => match names.is_empty() {
@@ -614,8 +617,8 @@ fn gib(bytes: u64) -> f64 {
 
 /// `Downloads` behind a lock, so pre-flight can pause a transfer the UI owns.
 ///
-/// This is the seam Milestone 3 defined and left as a no-op: a launch must not
-/// let Agent and our downloader write the same CASC files.
+/// A launch must not let Agent and our downloader write the same CASC
+/// files.
 #[derive(Debug, Clone, Default)]
 pub struct SharedDownloads(pub Arc<Mutex<Downloads>>);
 
@@ -655,7 +658,7 @@ impl DownloadGuard for SharedDownloads {
     }
 }
 
-/// Launch the game directly under Proton — the `[ PLAY ]` path.
+/// Launch the game directly under Proton, the `[ PLAY ]` path.
 ///
 /// Blocking from start to finish: pre-flight spawns processes and the returned
 /// future only resolves when the game exits.
@@ -663,7 +666,7 @@ impl DownloadGuard for SharedDownloads {
 /// prefix, no transfer mid-flight.
 ///
 /// Split from the launch itself because the two take wildly different amounts
-/// of time — this is seconds, the launch is however long someone plays — and a
+/// of time, this is seconds, the launch is however long someone plays, and a
 /// UI that cannot tell them apart ends up claiming it is still doing pre-flight
 /// an hour into a raid.
 pub async fn preflight(
@@ -699,7 +702,7 @@ pub async fn preflight(
 ///
 /// Generous on purpose: a cold start on a mechanical drive, or a first launch
 /// that compiles pipelines before it opens a window, is still a launch. The
-/// fallback is correct either way — it is only slower to notice.
+/// fallback is correct either way. It is only slower to notice.
 const GAME_APPEAR_WITHIN: Duration = Duration::from_secs(180);
 
 /// How often the prefix is re-scanned while watching the game.
@@ -710,13 +713,13 @@ const WATCH_POLL: Duration = Duration::from_millis(500);
 /// Run the game, returning when *the game* has exited.
 ///
 /// Not when the prefix is quiet. Proton launches the client through its own
-/// `steam.exe`, which waits for every process left in the prefix — WoW's voice
+/// `steam.exe`, which waits for every process left in the prefix, WoW's voice
 /// proxy, the shop's CEF children, then `services.exe` and `winedevice.exe`
 /// until wineserver times out. Waiting on that child is what used to keep
 /// `[ PLAY ]` dead for tens of seconds after the window had gone.
 ///
 /// So the child is spawned rather than waited on, and the exe we spawned is
-/// watched by name in the process table — the same scan the Battle.net
+/// watched by name in the process table, the same scan the Battle.net
 /// hand-off uses, which is 60 ms a pass. The moment it is gone the launch is
 /// over as far as the UI is concerned; a detached thread reaps the Proton
 /// child so nothing is left a zombie, and the tail cleans itself up. The next
@@ -724,13 +727,13 @@ const WATCH_POLL: Duration = Duration::from_millis(500);
 /// deterministically with `wineserver -k -w` rather than by hoping the tail
 /// finished.
 ///
-/// The fallback path — nothing recognisable ever appeared — keeps the old
+/// The fallback path, nothing recognisable ever appeared, keeps the old
 /// behaviour, because a launch that produced no game is exactly the case where
 /// the child's exit status is the only thing worth reporting.
 pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         // The install's native path, *not* the `C:\Program Files (x86)`
-        // symlink — this is half of what makes the in-game shop work, and the
+        // symlink. This is half of what makes the in-game shop work, and the
         // other half is [`Layout::wow_drive`]. Wine resolves a Unix path to
         // the most specific drive mapped over it, so launching from here puts
         // the game on `D:`; launching through the symlink would keep it on
@@ -854,7 +857,7 @@ fn watch_until_gone(layout: &Layout, pid: u32, child: &mut std::process::Child) 
     }
 }
 
-/// Wait the Proton child out and report what it said — the old contract, kept
+/// Wait the Proton child out and report what it said, the old contract, kept
 /// for the launches where nothing better is knowable.
 fn reap(mut child: std::process::Child) -> Result<String, String> {
     let status = child.wait().map_err(|e| e.to_string())?;
@@ -893,7 +896,7 @@ pub async fn launch_via_battle_net(
         // on a real start, the client was signed in after five seconds and
         // the game did not begin for another forty-eight. The arguments have
         // to arrive at a client that is already up, which is what the
-        // client's own IPC queue is for — a second invocation hands them to
+        // client's own IPC queue is for, a second invocation hands them to
         // the first.
         if !preflight::client_running(&layout) {
             // Out of the way, but only where it can sign itself in. A
@@ -928,14 +931,14 @@ pub async fn launch_via_battle_net(
                 == Readiness::NeedsAttention
             {
                 // Stop driving. The client is up and is the only thing that
-                // can finish this, so it is left running for the user — who
+                // can finish this, so it is left running for the user, who
                 // has to be told where it is if it was put in the tray.
                 return Ok(Handoff::NeedsAttention { minimized: minimize });
             }
         }
 
         // The client can be gone by now: signing in takes a few seconds, and
-        // a window nobody expected is a window somebody closes — with
+        // a window nobody expected is a window somebody closes, with
         // `HideOnClose` off, closing it quits. Sending the launch anyway
         // would start a *second*, cold client, and a cold client drops the
         // `--exec` it was handed. Saying so is the better outcome.
@@ -969,7 +972,7 @@ pub async fn launch_via_battle_net(
 /// - `--exec="launch <uid>"` sets the active product and the homepage then
 ///   draws over it. Nothing visible happens.
 /// - `--uri="battlenet://<family>"` is handled properly, by a `UriController`
-///   that waits until the client is ready — but all it does is select the
+///   that waits until the client is ready, but all it does is select the
 ///   game, and the homepage still wins the window.
 /// - `--game=<uid> --install` starts the install flow, which has a **view of
 ///   its own**. It opens over the homepage, with the path picker, which is
@@ -1011,10 +1014,10 @@ pub async fn install_via_battle_net(
 pub enum Handoff {
     /// The game is running.
     Playing(GameProcess),
-    /// The client never reported signing in. Someone has to look at it —
+    /// The client never reported signing in. Someone has to look at it,
     /// which means being told where it is when it was started minimized.
     NeedsAttention { minimized: bool },
-    /// It was there and then it was not — closed while we waited.
+    /// It was there and then it was not, closed while we waited.
     ClientClosed,
     /// Signed in, told to launch, and nothing appeared.
     NothingStarted,
@@ -1023,8 +1026,8 @@ pub enum Handoff {
 /// How long the client gets to start and sign itself in.
 ///
 /// A cold start under Proton reaches "Logged into Battle.net successfully" in
-/// about five and a half seconds. A minute is for the bad days — a client
-/// updating itself, or a slow network — and running out of it is not an
+/// about five and a half seconds. A minute is for the bad days, a client
+/// updating itself, or a slow network, and running out of it is not an
 /// error, just the point where a person is needed.
 const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -1032,7 +1035,7 @@ const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 /// claiming a launch is in progress.
 ///
 /// Generous: a cold Battle.net under Wine has to start, update itself if it
-/// feels like it, and may stop at a login screen — and the cost of being
+/// feels like it, and may stop at a login screen, and the cost of being
 /// wrong in this direction is only an unlocked button.
 const HANDOFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
@@ -1052,7 +1055,7 @@ pub async fn await_game_exit(layout: Layout, game: GameProcess) -> Result<String
 /// What Battle.net reports as installed, keyed by product code.
 ///
 /// Read when the browse panel opens, never on a timer and never to decide
-/// what the header shows — it labels a list the user asked to see.
+/// what the header shows, it labels a list the user asked to see.
 /// Battle.net's own download limit, in MB/s, or `None` when it has none.
 pub async fn battle_net_limit(layout: Layout, user: String) -> Option<u64> {
     tokio::task::spawn_blocking(move || {
@@ -1099,7 +1102,7 @@ pub async fn known_codes(layout: Layout, user: String) -> Vec<String> {
 /// this file is keyed by the client's install key. They are the same string
 /// for every product but one: Hearthstone is `hs_beta` to Battle.net and
 /// `hsb` to the CDN, so a map keyed only by the install key left an installed
-/// Hearthstone reading `Install via Battle.net` forever — locating it in the
+/// Hearthstone reading `Install via Battle.net` forever, locating it in the
 /// client did not help, because the client was never the thing that was
 /// wrong.
 ///
@@ -1134,8 +1137,8 @@ pub async fn installed_versions(layout: Layout) -> HashMap<String, String> {
 /// WoW family.
 ///
 /// Deliberately a hand-off and nothing more. Lightforge does not track,
-/// install or update other Blizzard titles — `SPEC.md` is explicit that it is
-/// WoW-family-primary and a pass-through for the rest — so this opens the
+/// install or update other Blizzard titles, `SPEC.md` is explicit that it is
+/// WoW-family-primary and a pass-through for the rest, so this opens the
 /// client and stops there.
 ///
 /// Still pre-flighted by the caller: a stale wineserver breaks Battle.net
@@ -1170,7 +1173,7 @@ pub async fn open_battle_net(
 /// They pin separately: `SPEC.md` asks for a Proton build chosen for
 /// Battle.net and Agent specifically, because "latest" is not always best for
 /// the client even when it is right for the game. A product's own pin still
-/// wins on both paths — see [`Config::handoff_proton`] — so a hand-off title
+/// wins on both paths; see [`Config::handoff_proton`], so a hand-off title
 /// is not stuck with whatever the client wants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Runs {
@@ -1195,7 +1198,7 @@ impl Runs {
 /// Read before a launch rather than during it: the prefix is shared, Proton
 /// only migrates it forward, and an older build opening a prefix a newer one
 /// rewrote is the one way this arrangement breaks. The caller decides what to
-/// do about it — nothing here refuses a launch.
+/// do about it. Nothing here refuses a launch.
 pub fn prefix_fit(
     layout: &Layout,
     code: &ProductCode,
@@ -1243,7 +1246,7 @@ fn runner_for(
 
     // Two profiles, because they are two different questions. A direct
     // launch is this product's own; a Battle.net launch is the client's and
-    // therefore every game the client starts — the one environment all of
+    // therefore every game the client starts, the one environment all of
     // them inherit. See `Config::battle_net_tweaks` for why that cannot be
     // per-game.
     let tweaks = match runs {
@@ -1258,7 +1261,7 @@ fn runner_for(
 
 /// The shared profile Battle.net and its games launch under.
 ///
-/// Not per-product on purpose — see `Config::battle_net_tweaks`.
+/// Not per-product on purpose; see `Config::battle_net_tweaks`.
 fn config_tweaks() -> Tweaks {
     AppDirs::discover()
         .ok()
@@ -1323,7 +1326,7 @@ async fn reclaim_plan(
     })
 }
 
-/// What uninstalling `code` would delete and free — nothing is touched.
+/// What uninstalling `code` would delete and free. Nothing is touched.
 pub async fn uninstall_plan(
     http: Option<Http>,
     layout: Layout,
@@ -1350,7 +1353,7 @@ pub async fn uninstall_plan(
 /// was the last product), and its entry in Battle.net's registry. Returns
 /// the bytes freed.
 ///
-/// Refuses while anything is alive in the prefix — the same gate repair uses:
+/// Refuses while anything is alive in the prefix, the same gate repair uses:
 /// deleting files a running client has open, or a registry Agent rewrites on
 /// exit, is not something to race.
 ///
@@ -1546,7 +1549,7 @@ mod mark_tests {
     /// The regression this guards: icons became decoded handles, and a handle
     /// built from pixels is a fresh id every time. Reassigning an identical
     /// set makes the renderer re-upload every texture, which is the band
-    /// blinking a second after each product switch — the same fault the
+    /// blinking a second after each product switch, the same fault the
     /// branding swap was fixed for in October.
     #[test]
     fn identical_icon_sets_compare_equal_despite_new_handles() {
@@ -1571,7 +1574,7 @@ mod mark_tests {
 /// Fetch and decode the pictures for a set of headlines.
 ///
 /// `have` is what is already drawn: those URLs are skipped entirely, so a
-/// Refresh re-downloads nothing and — more importantly — mints no new handle
+/// Refresh re-downloads nothing and, more importantly, mints no new handle
 /// for a picture already on screen. `Handle::from_rgba` gets a fresh id every
 /// call, so handing the view an identical-looking handle re-uploads the
 /// texture and flashes. Returning only what is genuinely new is the guard.
@@ -1635,7 +1638,7 @@ pub async fn news_background(bytes: &'static [u8]) -> Handle {
 
 /// Fetch the News page's headlines.
 ///
-/// Returns `None` only when there is genuinely nothing to show — no network
+/// Returns `None` only when there is genuinely nothing to show, no network
 /// and nothing cached. Anything else, including a proxy that is down while a
 /// cached copy exists, comes back as headlines that know whether they are
 /// stale.

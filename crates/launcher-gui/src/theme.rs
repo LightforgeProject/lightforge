@@ -5,10 +5,10 @@
 //! 1. **Nothing hard-codes a colour, size or gap.** Everything comes from the
 //!    scales below, so a change lands everywhere at once instead of in one
 //!    screen.
-//! 2. **The action button's colour is state, not decoration** — light blue
+//! 2. **The action button's colour is state, not decoration**: light blue
 //!    install, orange update, green play. Those four are the only saturated
 //!    colours on screen, which is what makes them readable at a glance.
-//! 3. **Machine text is monospaced** — versions, paths, ids. It stops a
+//! 3. **Machine text is monospaced**: versions, paths, ids. It stops a
 //!    version number from being mistaken for prose, and makes columns line up
 //!    without a table.
 //!
@@ -20,17 +20,17 @@ use iced::{border, gradient, Background, Border, Color, Font, Radians, Shadow, T
 
 // ---------------------------------------------------------------- palette --
 
-/// Page background — near black, slightly blue, so art laid behind it reads as
+/// Page background, near black, slightly blue, so art laid behind it reads as
 /// part of the page rather than a picture on a grey wall.
 pub const BG: Color = rgb(0x0B, 0x0D, 0x10);
 /// A panel sitting on the page.
 pub const SURFACE: Color = rgb(0x14, 0x17, 0x1C);
-/// A panel on a panel — list rows, inputs.
+/// A panel on a panel, list rows, inputs.
 pub const RAISED: Color = rgb(0x1B, 0x20, 0x27);
 /// Hairline. Always a translucent white so it works over art too.
 pub const BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
 /// Hairline for a panel laid over artwork, where a hairline meant for a flat
-/// surface disappears. Draws the edge that [`LIFT`]'s shadow cannot — see
+/// surface disappears. Draws the edge that [`LIFT`]'s shadow cannot, see
 /// [`floating`].
 pub const BORDER_OVER_ART: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.16);
 
@@ -38,7 +38,7 @@ pub const TEXT: Color = rgb(0xE8, 0xED, 0xF2);
 /// Secondary text. Contrast-checked against [`SURFACE`], not against black.
 pub const MUTED: Color = rgb(0x8A, 0x94, 0xA3);
 
-/// Blizzard blue — the single accent, and the Battle.net hand-off colour.
+/// Blizzard blue, the single accent, and the Battle.net hand-off colour.
 /// Wowhead's own red, sampled from their mark (831 px of its 180x180, by a
 /// wide margin the dominant colour). Used for the one button that goes to
 /// Wowhead and nowhere else in the app: a brand colour borrowed for anything
@@ -50,7 +50,7 @@ pub const INSTALL: Color = rgb(0x4F, 0xC3, 0xF7);
 
 /// An update waiting. Violet rather than the orange it used to be: orange and
 /// [`PLAY`]'s gold are the same hue to the eye at a glance, and Update and Play
-/// are the two buttons that occupy the same spot on the panel — a player who
+/// are the two buttons that occupy the same spot on the panel, a player who
 /// reads the colour before the word has to be able to tell them apart. Violet
 /// is the one strong hue the palette had not already spent.
 pub const UPDATE: Color = rgb(0xA7, 0x8B, 0xFA);
@@ -63,7 +63,7 @@ pub const UPDATE: Color = rgb(0xA7, 0x8B, 0xFA);
 /// light next to a gold mark.
 pub const PLAY: Color = rgb(0xE9, 0xAB, 0x28);
 
-/// Done, healthy, present — a status, never an action. This is the green
+/// Done, healthy, present, a status, never an action. This is the green
 /// [`PLAY`] used to be, kept for the things that only report: the "installed"
 /// pill, a finished setup step, the dot that says the install is shared.
 pub const OK: Color = rgb(0x4C, 0xAF, 0x50);
@@ -103,7 +103,7 @@ pub const CAPTION: f32 = 11.0;
 /// The box a product's wordmark is drawn in, on the dashboard under the app
 /// title.
 ///
-/// This is a *limit*, not the size anything is drawn at — [`logo_size`] does
+/// This is a *limit*, not the size anything is drawn at, [`logo_size`] does
 /// the sizing, and in the present catalogue nothing reaches either edge. The
 /// box is here for the mark this catalogue does not contain yet: art so
 /// extreme in shape that giving it the same area as everything else would run
@@ -111,8 +111,8 @@ pub const CAPTION: f32 = 11.0;
 ///
 /// The width is deliberately narrower than equal area alone would ask for.
 /// The two StarCraft marks are so much wider than they are tall that the same
-/// area makes them span the page — StarCraft's would be 601pt across against
-/// 349 for Retail — and however equal the two are by the arithmetic, the long
+/// area makes them span the page, StarCraft's would be 601pt across against
+/// 349 for Retail, and however equal the two are by the arithmetic, the long
 /// one reads as the louder. The box cuts those two back and reaches nothing
 /// else; the next widest, Classic Era's, comes to 407.
 ///
@@ -140,7 +140,7 @@ pub fn logo_offset(width: f32) -> f32 {
 /// How far in from the page's own inset the wordmark sits.
 ///
 /// Small: the marks are trimmed to their own ink, so flush with the page edge
-/// meant *touching* it, and this is the margin that stops that — not a place
+/// meant *touching* it, and this is the margin that stops that, not a place
 /// the wordmark was moved to. The box is centred on what this leaves, so a
 /// narrow mark still sits further in than a wide one starts.
 pub const LOGO_INSET: f32 = XL;
@@ -154,7 +154,7 @@ pub const LOGO_INSET: f32 = XL;
 /// strip spends the whole width and the square one spends only the height,
 /// and the second looks half the size of the first although both "fit". Given
 /// the same area instead, a wide mark is long and low, a square one is
-/// shorter and deep, and the two carry the same weight on the page — which is
+/// shorter and deep, and the two carry the same weight on the page, which is
 /// what "the same size" means for logos that are not the same shape.
 ///
 /// The number is the largest that keeps every mark in the catalogue inside
@@ -166,7 +166,7 @@ const LOGO_AREA: f32 = 56_000.0;
 /// glow.
 ///
 /// Dividing by the ink fraction is dividing by a number below one, so a
-/// mistaken reading — art that is genuinely almost all soft edge — would ask
+/// mistaken reading, art that is genuinely almost all soft edge, would ask
 /// for a wordmark several times the size of every other. A floor costs
 /// nothing on the art we have, where the lowest is Retail's 0.59.
 const LOGO_MIN_INK: f32 = 0.4;
@@ -179,7 +179,7 @@ const LOGO_MIN_INK: f32 = 0.4;
 /// so that the *mark* ends up at the standard area with its glow spilling
 /// past.
 ///
-/// The result is then scaled down — never up — if it would leave the box, so
+/// The result is then scaled down, never up, if it would leave the box, so
 /// a mark of some shape nobody has published yet is made smaller rather than
 /// allowed off the page.
 pub fn logo_size(aspect: f32, ink: f32) -> (f32, f32) {
@@ -202,14 +202,14 @@ pub fn logo_size(aspect: f32, ink: f32) -> (f32, f32) {
 ///
 /// Sized for a row of its own under the tabs rather than a seat in them: when
 /// the band shared the ribbon it had to stay near the height of a button, and
-/// it no longer does. Not as large as that freedom allows, though — the band
+/// it no longer does. Not as large as that freedom allows, though, the band
 /// is a card over the artwork now, and a card is sized by what it holds.
 pub const TILE: f32 = 40.0;
 
 /// A headline's picture on the News page, and the 16:9 box it sits in.
 ///
-/// Wowhead publishes these at whatever shape the article wanted — 802x624 is
-/// typical — so the box is fixed and the picture is cropped to fill it. A row
+/// Wowhead publishes these at whatever shape the article wanted, 802x624 is
+/// typical, so the box is fixed and the picture is cropped to fill it. A row
 /// of thumbnails that each kept their own aspect ratio would leave the titles
 /// beside them starting at different places, which is the thing the eye
 /// notices first in a list.
@@ -221,9 +221,9 @@ pub const NEWS_THUMB_HEIGHT: f32 = NEWS_THUMB_WIDTH * 9.0 / 16.0;
 //
 // It meant "draw this art set's logo at this many pixels tall", from when
 // every logo was drawn on its publisher's own canvas and a height was the
-// only lever there was for making two of them look alike. It never worked —
+// only lever there was for making two of them look alike. It never worked,
 // a height is not a size when the shapes differ, which is why every row in
-// the published table carries the same number — and against [`logo_size`] it
+// the published table carries the same number, and against [`logo_size`] it
 // does active harm: capping Retail at the table's 210 undoes most of what
 // measuring its mark rather than its halo just bought it.
 
@@ -237,7 +237,7 @@ pub const RADIUS_SM: f32 = 6.0;
 /// is either part of the page or laid over it. Two shadows would imply a
 /// hierarchy among floating things that the four screens do not have.
 ///
-/// Tuned for a near-black page — pure black at a low alpha, since a grey
+/// Tuned for a near-black page, pure black at a low alpha, since a grey
 /// shadow over [`BG`] reads as fog rather than depth, and a downward offset
 /// smaller than the blur so the panel lifts without appearing to tilt.
 pub const LIFT: Shadow = Shadow {
@@ -307,7 +307,7 @@ const fn mix(a: Color, b: Color, amount: f32) -> Color {
 /// The window's own background: [`BG`] with a wash of [`ACCENT`] in the bottom
 /// right corner.
 ///
-/// Light falling on the app rather than decoration on it — which is why it is
+/// Light falling on the app rather than decoration on it, which is why it is
 /// the accent and not the wordmark's gold. The far corner is the one spot with
 /// nothing standing in it: the wordmark and the navigation own the top, the
 /// action panel the lower left, so a glow anywhere else would be lighting
@@ -351,9 +351,9 @@ pub fn card(_theme: &Theme) -> container::Style {
 /// never got cleared and the shadow composited over itself on every hover
 /// until it went black (iced-rs/iced#2712). #2715 fixed it, and 0.14 has it.
 ///
-/// The brighter hairline stays alongside it. The two do different jobs — the
+/// The brighter hairline stays alongside it. The two do different jobs, the
 /// hairline draws the edge, the shadow separates the panel from what is
-/// behind it — and over bright artwork a shadow alone leaves the top edge
+/// behind it, and over bright artwork a shadow alone leaves the top edge
 /// indistinct, which is the case [`BORDER_OVER_ART`] exists for.
 pub fn floating(_theme: &Theme) -> container::Style {
     container::Style {
@@ -368,13 +368,13 @@ pub fn floating(_theme: &Theme) -> container::Style {
     }
 }
 
-/// A dropdown's own surface — the app menu, the overflow list, an addon row's
+/// A dropdown's own surface, the app menu, the overflow list, an addon row's
 /// menu.
 ///
 /// Opaque, where [`floating`] is not. The translucency is right for a panel
 /// that occupies the page: it keeps the artwork readable underneath and the
 /// panel is large enough that the text still has contrast. A dropdown is the
-/// opposite case — a small list of short words, drawn over whatever happens to
+/// opposite case, a small list of short words, drawn over whatever happens to
 /// be behind it, read once and dismissed. At [`PANEL`]'s alpha a bright patch
 /// of key art shows straight through a four-word entry.
 ///
@@ -418,10 +418,10 @@ pub fn dialog(_theme: &Theme) -> container::Style {
 /// card does the separating. Its own element because a [`Border`] applies to
 /// all four sides and only the bottom edge wants a line here.
 ///
-/// (There was a `ribbon` here — an edge-to-edge panel behind the whole header.
+/// (There was a `ribbon` here, an edge-to-edge panel behind the whole header.
 /// It went when the band moved out into a card of its own: the bar existed to
 /// give the band and the title a readable ground, and the card now carries its
-/// own. Worth remembering why it was there, though — the header sits directly
+/// own. Worth remembering why it was there, though, the header sits directly
 /// on product artwork, and loose text over a bright sky is the thing to watch.)
 pub fn ribbon_edge(_theme: &Theme) -> container::Style {
     container::Style {
@@ -460,7 +460,7 @@ pub fn scrollbar_shape() -> scrollable::Scrollbar {
 /// A scrollbar: no rail, and a scroller that is a hairline made solid.
 ///
 /// Unstyled, iced draws a light grey rail that belongs to a light theme. The
-/// rail is dropped entirely — the gutter is already empty space — and the
+/// rail is dropped entirely, the gutter is already empty space, and the
 /// scroller is [`BORDER`]'s white at an alpha that reads over both a panel and
 /// artwork, brightening under the pointer the way the buttons do.
 pub fn scrollbar(_theme: &Theme, status: scrollable::Status) -> scrollable::Style {
@@ -504,14 +504,14 @@ pub fn badge(color: Color) -> impl Fn(&Theme) -> container::Style {
 
 /// A state worn at a button's size: same height, same corners, no press.
 ///
-/// [`badge`] is for a mark inside a line of text — a provider name beside an
+/// [`badge`] is for a mark inside a line of text, a provider name beside an
 /// addon's title. This is for a state that stands where a button would and has
 /// to hold that space: "installed" next to Install, a build recommendation
 /// beside the picker that sets it. A pill in that position reads as a stray
 /// label rather than as the answer to the button next to it.
 ///
 /// Deliberately not a disabled button: iced greys a button out by status, and
-/// grey is the one thing this must not be — the colour is the message.
+/// grey is the one thing this must not be, the colour is the message.
 pub fn tag(color: Color) -> impl Fn(&Theme) -> container::Style {
     move |_theme| container::Style {
         background: Some(Background::Color(Color { a: 0.18, ..color })),
@@ -551,7 +551,7 @@ pub fn filled(color: Color) -> impl Fn(&Theme, button::Status) -> button::Style 
 ///
 /// Rounded on their outer edges only, so the pair reads as one control rather
 /// than as two buttons that happen to touch. The tab is shaded a little darker
-/// than the action so the divide is visible without a border between them —
+/// than the action so the divide is visible without a border between them,
 /// a border would read as a seam, which is exactly what a split button is
 /// trying not to be.
 pub fn filled_left(color: Color) -> impl Fn(&Theme, button::Status) -> button::Style {
@@ -592,7 +592,7 @@ fn filled_base(color: Color, status: button::Status) -> button::Style {
     }
 }
 
-/// Outlined button — secondary actions that still deserve a border.
+/// Outlined button, secondary actions that still deserve a border.
 pub fn outlined(_theme: &Theme, status: button::Status) -> button::Style {
     let (fill, border) = match status {
         button::Status::Hovered | button::Status::Pressed => {
@@ -612,7 +612,7 @@ pub fn outlined(_theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-/// Borderless button — navigation and low-stakes actions.
+/// Borderless button, navigation and low-stakes actions.
 pub fn ghost(_theme: &Theme, status: button::Status) -> button::Style {
     let alpha = match status {
         button::Status::Hovered | button::Status::Pressed => 0.10,
@@ -629,7 +629,7 @@ pub fn ghost(_theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-/// A whole card that is also a link — the News page's headlines.
+/// A whole card that is also a link, the News page's headlines.
 ///
 /// [`card`] as a button rather than a container: the card *is* the click
 /// target, so the hover has to happen on the card itself. A row-sized hover
@@ -637,13 +637,13 @@ pub fn ghost(_theme: &Theme, status: button::Status) -> button::Style {
 /// the rest of the card looking like it is not.
 ///
 /// Translucent, and wearing [`BORDER_OVER_ART`], because these sit over the
-/// page's backdrop — the same pair [`floating`] uses and for the same reason.
+/// page's backdrop, the same pair [`floating`] uses and for the same reason.
 /// A hundred opaque cards would cover the picture entirely and leave it
 /// showing only in the margins, which is a background nobody can see.
 pub fn card_button(_theme: &Theme, status: button::Status) -> button::Style {
     let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
     button::Style {
-        // [`RAISED`] on hover — the existing "a panel on a panel" step, so a
+        // [`RAISED`] on hover, the existing "a panel on a panel" step, so a
         // hovered card lifts by the same amount as every other surface in the
         // app rather than by a brightness invented here. Both carry PANEL's
         // alpha, so hovering changes the colour and not the transparency.
@@ -718,7 +718,7 @@ pub fn picker_menu(_theme: &Theme) -> overlay::menu::Style {
         selected_background: Background::Color(Color { a: 0.18, ..ACCENT }),
         selected_text_color: TEXT,
         // 0.14 fixed the software renderer's shadow damage (iced-rs/iced#2715),
-        // so a shadow here is safe again — but the menu never had one, and
+        // so a shadow here is safe again, but the menu never had one, and
         // adding one is a design decision rather than part of this port.
         shadow: iced::Shadow::default(),
     }
@@ -744,7 +744,7 @@ pub fn field(_theme: &Theme, status: text_input::Status) -> text_input::Style {
 
 /// The multi-line twin of [`field`], for prose rather than a value.
 ///
-/// Same surface, same border states — a report's description should look like
+/// Same surface, same border states, a report's description should look like
 /// the field above it and simply be taller.
 pub fn editor(_theme: &Theme, status: text_editor::Status) -> text_editor::Style {
     let border = match status {
@@ -812,7 +812,7 @@ mod tests {
     }
 
     /// Equal area is the rule; the box is the exception to it, and StarCraft
-    /// is the one mark that meets the exception — see [`LOGO_BOX_WIDTH`].
+    /// is the one mark that meets the exception; see [`LOGO_BOX_WIDTH`].
     #[test]
     fn the_one_mark_too_wide_for_the_page_is_cut_back() {
         let (sw, sh) = logo_size(704.0 / 127.0, 1.0);

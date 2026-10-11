@@ -1,6 +1,6 @@
 //! Archive indices: which archive holds a file, and where inside it.
 //!
-//! Ordinary content is not fetchable by its own key — the CDN answers 403 for
+//! Ordinary content is not fetchable by its own key, the CDN answers 403 for
 //! a file that lives in an archive. Instead each of a build's archives (1362
 //! of them for 12.1.0) publishes a `<hash>.index` next to itself, and the
 //! archive answers HTTP range requests. Downloading one file therefore means:
@@ -18,7 +18,7 @@
 //! and footer must account for every byte, which is a strong check that the
 //! widths were read correctly rather than merely plausible.
 //!
-//! Entry layout, `size` before `offset` — the order matters and is easy to
+//! Entry layout, `size` before `offset`: the order matters and is easy to
 //! get backwards, since both are 4-byte big-endian:
 //!
 //! ```text
@@ -46,7 +46,7 @@ impl Located {
     /// The value of an HTTP `Range` header that fetches exactly this file.
     pub fn range(&self) -> String {
         // Inclusive on both ends, which is what RFC 9110 specifies and what
-        // an off-by-one here would silently violate — a short read only shows
+        // an off-by-one here would silently violate, a short read only shows
         // up later as a BLTE decode failure.
         format!("bytes={}-{}", self.offset, self.offset as u64 + u64::from(self.size) - 1)
     }
@@ -117,14 +117,14 @@ impl ArchiveIndex {
 pub struct Loose {
     pub ekey: EKey,
     /// Bytes the CDN serves for this key. There is no CASC entry header on a
-    /// loose file — that header is a property of being inside an archive.
+    /// loose file, that header is a property of being inside an archive.
     pub size: u32,
 }
 
 /// The build's file index: the keys that are *not* in any archive.
 ///
 /// Named by `file-index` in the CDN config and fetched like any other index,
-/// but its footer declares `offset_bytes = 0` — there is no offset column,
+/// but its footer declares `offset_bytes = 0`: there is no offset column,
 /// because there is nothing to be offset into. These ~25k keys are the only
 /// content fetchable by a plain GET; everything else answers 403 loose and
 /// must be range-requested out of its archive.
@@ -247,7 +247,7 @@ impl Footer {
         let f = &bytes[bytes.len() - FOOTER_SIZE..];
 
         // 0..8 is the toc hash, 20..28 the footer's own checksum; neither is
-        // verified here — the content itself is verified by its encoding key
+        // verified here, the content itself is verified by its encoding key
         // after the range request, which is the check that actually matters.
         let version = f[8];
         if version != 1 {
@@ -455,7 +455,7 @@ mod tests {
     #[test]
     fn entries_round_trip_with_size_before_offset() {
         // Both fields are 4-byte big-endian, so swapping them parses cleanly
-        // and yields nonsense — a 786-byte file at offset 186 MB rather than
+        // and yields nonsense, a 786-byte file at offset 186 MB rather than
         // the other way round.
         let entries = [(key(1), 786u32, 186_722_006u32), (key(2), 12_345, 2_803_136)];
         let parsed = ArchiveIndex::parse(&index(&entries, 4096), "0017a402").unwrap();

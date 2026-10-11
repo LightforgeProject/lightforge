@@ -2,7 +2,7 @@
 //!
 //! The inverse of [`super::storage`]. A downloader hands BLTE payloads in,
 //! this lays them out the way Agent would, and the result has to be
-//! indistinguishable from an install Blizzard produced — anything else and
+//! indistinguishable from an install Blizzard produced. Anything else and
 //! Agent decides the install is damaged and starts the repair scan the whole
 //! project exists to avoid.
 //!
@@ -34,8 +34,8 @@ pub const MAX_ARCHIVE_SIZE: u64 = 1 << 30;
 
 /// Generation a bucket's first index is written at when the store has none.
 ///
-/// **Never zero.** A real install's generations sit around 0x32-0x38 — the
-/// counter has advanced once per update since the install was created — and
+/// **Never zero.** A real install's generations sit around 0x32-0x38, the
+/// counter has advanced once per update since the install was created, and
 /// generation 0 is not a shape the client ever produces. Starting there was a
 /// real bug, caught only by a live run, so the floor lives here rather than in
 /// whichever caller happens to remember.
@@ -43,7 +43,7 @@ pub const FIRST_GENERATION: u32 = 0x32;
 
 /// Writes files into a CASC store.
 ///
-/// Nothing is durable until [`StoreWriter::finish`] runs — it is what writes
+/// Nothing is durable until [`StoreWriter::finish`] runs. It is what writes
 /// the indices, and an archive nothing indexes is unreachable bytes.
 #[derive(Debug)]
 pub struct StoreWriter {
@@ -70,7 +70,7 @@ impl StoreWriter {
     ///
     /// **Any index already in `data_dir` is loaded first.** A store's index is
     /// the union of everything ever written to its archives, and this writer
-    /// replaces a bucket's index wholesale when it writes one — so starting
+    /// replaces a bucket's index wholesale when it writes one, so starting
     /// from empty would publish an index that knows only about this run and
     /// strand every file written before it. A resumed Classic Era download did
     /// exactly that, cutting a 146,662-file store down to 131,129 with the
@@ -137,12 +137,12 @@ impl StoreWriter {
 
     /// Write one BLTE payload under its encoding key.
     ///
-    /// `blte` is the encoded file exactly as the CDN serves it — no CASC
+    /// `blte` is the encoded file exactly as the CDN serves it, no CASC
     /// header, which this adds. Returns where it landed, or where it already
     /// was: a key written twice is stored once.
     ///
     /// Deduplication is not an optimisation here, it is required. WoW shares
-    /// content aggressively — many file ids resolve to one encoding key — so a
+    /// content aggressively, many file ids resolve to one encoding key, so a
     /// caller walking file ids hands the same payload over repeatedly. Writing
     /// each copy would append bytes that the index, which holds one entry per
     /// key, then has no way to reach: dead weight in the archive forever.
@@ -193,7 +193,7 @@ impl StoreWriter {
     /// it and fetches only what is missing.
     ///
     /// Each checkpoint writes the next generation and removes the previous
-    /// one, which is exactly what a real install looks like — sixteen `.idx`
+    /// one, which is exactly what a real install looks like, sixteen `.idx`
     /// files, one per bucket, nothing older kept.
     pub fn checkpoint(&mut self) -> Result<Vec<PathBuf>, WriteError> {
         // Flush and sync the open archive without closing it: the indices
@@ -315,8 +315,8 @@ pub struct Summary {
 
 /// Delete every generation of `bucket` except the one just written.
 ///
-/// Agent keeps exactly one index per bucket — a real install has sixteen
-/// `.idx` files and no history — so a store that accumulated a generation per
+/// Agent keeps exactly one index per bucket, a real install has sixteen
+/// `.idx` files and no history, so a store that accumulated a generation per
 /// checkpoint would be visibly not one of its own.
 fn prune_old_generations(data_dir: &Path, bucket: u8, keep: u32) -> Result<(), WriteError> {
     let entries = match std::fs::read_dir(data_dir) {
@@ -643,7 +643,7 @@ mod tests {
             .collect();
         assert!(names.contains(&"0000000035.idx".to_owned()), "{names:?}");
         assert!(names.contains(&"0100000038.idx".to_owned()), "{names:?}");
-        // A bucket with no pin starts at the floor, never at generation 0 —
+        // A bucket with no pin starts at the floor, never at generation 0,
         // pinning some buckets used to leave the rest writing 0000000000.idx.
         assert!(names.contains(&"0200000032.idx".to_owned()), "{names:?}");
         assert!(!names.iter().any(|n| n.ends_with("00000000.idx")), "{names:?}");

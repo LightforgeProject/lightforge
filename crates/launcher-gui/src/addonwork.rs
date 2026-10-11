@@ -21,7 +21,7 @@ pub struct Row {
     pub folder: String,
     pub title: String,
     pub version: String,
-    /// Set when Lightforge installed it — only these can be updated or removed.
+    /// Set when Lightforge installed it, only these can be updated or removed.
     pub managed: Option<Managed>,
     /// Folders belonging to a managed addon other than its first are shown as
     /// children rather than as separate addons.
@@ -64,7 +64,7 @@ impl Managed {
     /// that is the order of usefulness rather than the order of specificity:
     /// a repository usually carries a Sponsor button, where a provider's
     /// author page is a list of their projects. No catalogue publishes a
-    /// donation link as such — the CurseForge schema has no such field — so
+    /// donation link as such, the CurseForge schema has no such field, so
     /// this is the closest honest thing to one.
     pub fn support_url(&self) -> Option<&str> {
         self.source_url.as_deref().or(self.author_url.as_deref())
@@ -79,7 +79,7 @@ pub struct Listing {
     pub managed: usize,
     /// Ledger entries whose folders are gone. Reconciled away on every scan
     /// of a readable directory, so this is only ever non-zero for a library
-    /// we cannot reach — where claiming to manage something that is not there
+    /// we cannot reach, where claiming to manage something that is not there
     /// is how "0 installed · 3 managed" happens.
     pub stale: usize,
     pub dir: PathBuf,
@@ -140,7 +140,7 @@ pub async fn list(layout: Layout, code: ProductCode) -> Listing {
 /// separate addons with eleven Remove buttons, each of which would delete the
 /// other ten.
 pub fn rows_from(installed: &[Installed], ledger: &Ledger) -> Vec<Row> {
-    // The record itself, plus which folder heads the package it came in —
+    // The record itself, plus which folder heads the package it came in,
     // empty for the package's own first folder. Carrying the record rather
     // than a widening tuple keeps a new per-addon setting to one line below.
     type Owner<'a> = (&'a Record, &'a str);
@@ -346,8 +346,8 @@ mod tests {
         });
 
         let rows = rows_from(&[installed("BigWigs", "1.0")], &ledger);
-        // `None` and `Some(false)` mean different things to the row — one
-        // follows the app's default, the other overrides it — so the row has
+        // `None` and `Some(false)` mean different things to the row, one
+        // follows the app's default, the other overrides it, so the row has
         // to carry the choice itself rather than a resolved boolean.
         assert_eq!(rows[0].managed.as_ref().unwrap().auto_update, Some(false));
         assert!(manage::auto_update_requests(&ledger, Channel::Stable, true).is_empty());
@@ -427,7 +427,7 @@ pub struct Progress {
 }
 
 /// The same options the work functions build, for a caller that only needs to
-/// read or write the ledger — setting one addon's channel, say.
+/// read or write the ledger, setting one addon's channel, say.
 pub fn manage_options(layout: &Layout, code: &ProductCode, channel: Channel) -> Option<Options> {
     options(layout, code, false, channel)
 }
@@ -688,7 +688,7 @@ pub async fn versions(
 ///
 /// Fetched as one unit because the view has nothing to show until all three
 /// are in, and three separate spinners on one card is worse than one. The two
-/// rich-text halves are each `Option`, though — a missing changelog is
+/// rich-text halves are each `Option`, though, a missing changelog is
 /// ordinary (plenty of authors never write one) and must not cost the rest of
 /// the card.
 #[derive(Debug, Clone)]
@@ -717,7 +717,7 @@ pub async fn detail(
         return Err("no addon catalog is configured".to_owned());
     };
 
-    // The project is the only part that must succeed — it carries the name,
+    // The project is the only part that must succeed, it carries the name,
     // the author and the link out. The rest is enrichment.
     let project = catalog.project(&http, &id).await.map_err(|e| e.to_string())?;
 

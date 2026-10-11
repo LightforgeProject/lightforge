@@ -16,7 +16,7 @@ use super::{blank, missing, ProviderResult};
 use crate::addons::catalog::Request;
 use crate::net::Http;
 
-/// Several ids can be fetched in one request, comma-separated — verified
+/// Several ids can be fetched in one request, comma-separated, verified
 /// against the live API.
 const BATCH: usize = 25;
 

@@ -7,14 +7,14 @@
 //!
 //! The ordering is not arbitrary and is the part worth preserving:
 //!
-//! 1. Archive indices are cached first — nothing can be *located* without them.
+//! 1. Archive indices are cached first. Nothing can be *located* without them.
 //! 2. Whatever the store already holds is subtracted from the plan, which is
 //!    what makes an interrupted download resume rather than start over.
 //! 3. `.build.info` is written **last, and only on a genuinely complete run**.
 //!    [`crate::state::Local`] treats its presence as proof that a download
 //!    finished, so writing it after a partial run would offer PLAY on a broken
 //!    game. Every way a run can fall short is accounted for in
-//!    [`Summary::complete`] — failures, cancellation, unlocatable keys, an
+//!    [`Summary::complete`], failures, cancellation, unlocatable keys, an
 //!    incomplete install-file extraction, and the limit options, which
 //!    truncate the plan deliberately.
 
@@ -42,7 +42,7 @@ use crate::tact::writer::{StoreWriter, Summary as StoreSummary};
 /// The locales a WoW build ships, as the download manifest spells them, with
 /// something to call each one in a picker.
 ///
-/// Not every product has every one — a Classic Era build ships fewer — but the
+/// Not every product has every one, a Classic Era build ships fewer, but the
 /// manifest decides that at plan time: a tag nothing defines selects nothing
 /// rather than failing, so offering the full list is safe and the alternative
 /// is reading a manifest before the user can pick a language.
@@ -72,7 +72,7 @@ pub fn locale_name(code: &str) -> &str {
 }
 
 /// How a run is tuned. The limits exist for development slices and must never
-/// be set by a real install — each of them makes the result deliberately
+/// be set by a real install, each of them makes the result deliberately
 /// partial, which is why [`Summary::complete`] refuses `.build.info` when any
 /// is in play.
 #[derive(Debug, Clone)]
@@ -80,7 +80,7 @@ pub struct Options {
     pub region: Region,
     /// Client locale, e.g. `enUS`. Selects which of a build's files are wanted.
     pub locale: String,
-    /// Optional content to opt in to, by tag name — e.g. `HighRes`.
+    /// Optional content to opt in to, by tag name, e.g. `HighRes`.
     ///
     /// Empty matches Battle.net, which installs optional content only when
     /// asked. See [`crate::tact::manifest::TagSet::with_optional`].
@@ -91,7 +91,7 @@ pub struct Options {
     /// Cap on download speed in bytes per second; `0` is no cap.
     ///
     /// Bytes rather than a friendlier unit because this is the layer that
-    /// spends them — the UI converts from whatever it shows the user.
+    /// spends them, the UI converts from whatever it shows the user.
     pub limit_bytes_per_second: u64,
     /// Ranges this far apart are merged into one request.
     pub gap_bytes: u32,
@@ -99,11 +99,11 @@ pub struct Options {
     pub checkpoint_bytes: u64,
     /// Extract the install manifest's files (the game executable and friends).
     pub install_files: bool,
-    /// Stop after this many archive indices — development only.
+    /// Stop after this many archive indices, development only.
     pub limit_archives: Option<usize>,
-    /// Truncate the plan to this many coalesced runs — development only.
+    /// Truncate the plan to this many coalesced runs, development only.
     pub limit_runs: Option<usize>,
-    /// Skip the loose (unarchived) files — development only.
+    /// Skip the loose (unarchived) files, development only.
     pub skip_loose: bool,
     /// The install's path as Windows sees it, e.g.
     /// `C:/Program Files (x86)/World of Warcraft`. `None` skips writing
@@ -112,7 +112,7 @@ pub struct Options {
     /// Agent's own directory, whose `product.db` decides whether Battle.net
     /// shows `Play` or `Install` for a product Lightforge downloaded.
     ///
-    /// `None` skips the registration — there is nothing to merge into on a
+    /// `None` skips the registration. There is nothing to merge into on a
     /// machine with no Battle.net, and a CLI run against a bare directory has
     /// no prefix to speak of.
     pub agent_dir: Option<PathBuf>,
@@ -244,7 +244,7 @@ pub struct Summary {
     pub store: StoreSummary,
     /// Keys the plan could not locate in any archive or the file index.
     pub missing: usize,
-    /// True only if this run produced a whole, launchable install — the same
+    /// True only if this run produced a whole, launchable install, the same
     /// condition that gates `.build.info`.
     pub complete: bool,
     /// Present when `complete`; the version `.build.info` now names.
@@ -258,14 +258,14 @@ pub struct Summary {
 /// download, and so the GUI can present sizes before asking the user.
 pub struct Prepared {
     pub plan: Plan,
-    /// Optional content this build offers, opted in or not — what a UI can
+    /// Optional content this build offers, opted in or not, what a UI can
     /// offer the user. Only knowable once the manifest has been read.
     pub optional: Vec<String>,
     /// The build's download manifest, kept so a report can attribute the
     /// selection back to the tags that produced it.
     pub download: DownloadManifest,
     /// Every file this build wants for the selected tags, before the store is
-    /// consulted — the input the plan is a subtraction from.
+    /// consulted, the input the plan is a subtraction from.
     pub wanted: Vec<DownloadEntry>,
     /// The probe that decided what the store already holds.
     pub probe: StoreProbe,
@@ -293,7 +293,7 @@ pub struct Prepared {
 pub struct StoreProbe {
     present: HashSet<EKey>,
     /// False when the store could not be opened at all, which is a fresh
-    /// install — every key is absent, and legitimately so.
+    /// install: every key is absent, and legitimately so.
     opened: bool,
 }
 
@@ -351,12 +351,12 @@ pub struct Offerings {
     /// all of it without a store, only what the store lacks with one.
     pub base_bytes: u64,
     /// What each optional download adds on top of [`Offerings::base_bytes`],
-    /// counted the same way, in the order of [`Offerings::optional`] — so an
+    /// counted the same way, in the order of [`Offerings::optional`], so an
     /// install dialog can price a switch before it is flipped.
     pub optional_bytes: Vec<(String, u64)>,
 }
 
-/// Resolve a build and read its download manifest — nothing else.
+/// Resolve a build and read its download manifest. Nothing else.
 ///
 /// Deliberately much cheaper than [`prepare`]: no encoding manifest, no
 /// install manifest, and none of the ~1400 archive indices. That is the
@@ -368,7 +368,7 @@ pub struct Offerings {
 /// this the settings panel has nothing to list until a download has run.
 ///
 /// With a `store`, the base and optional sizes leave out what it already
-/// holds — the files another WoW version sharing the folder stored — by the
+/// holds, the files another WoW version sharing the folder stored, by the
 /// same test a real plan applies. The local indices are all it reads.
 pub async fn offerings(
     http: &Http,
@@ -528,7 +528,7 @@ pub async fn prepare(
     }
     on_event(Event::Located { located: locations.len(), wanted: wanted.len() });
 
-    // Skip whatever the store already holds — this is what makes an
+    // Skip whatever the store already holds. This is what makes an
     // interrupted download resume instead of starting over.
     let probe = StoreProbe::open(dest);
     let have = |ekey: &EKey| probe.has(ekey);
@@ -689,7 +689,7 @@ pub async fn execute(
 
             // And into Agent's own registry, which is the list the client
             // builds its library from. Without this the tile reads `Install`
-            // until the user asks Battle.net to locate the game — it adopts
+            // until the user asks Battle.net to locate the game, it adopts
             // fine, but only after a scan nobody should have to trigger.
             //
             // Skipped silently when there is no registry to merge into, or
@@ -710,7 +710,7 @@ pub async fn execute(
     Ok(Summary { outcome, store, missing: plan.missing.len(), complete, version })
 }
 
-/// Prepare and execute in one call — the ordinary path.
+/// Prepare and execute in one call, the ordinary path.
 pub async fn run(
     http: &Http,
     dest: &Path,

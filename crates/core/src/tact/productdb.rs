@@ -1,8 +1,8 @@
-//! `.product.db` — Agent's record of what is installed where.
+//! `.product.db`: Agent's record of what is installed where.
 //!
 //! **Why this exists:** Battle.net refuses to adopt an install without it. Its
 //! "Locate the game" flow reads `<install>/.product.db` and, finding none,
-//! answers `error 2800` in the same millisecond — with no message beyond "This
+//! answers `error 2800` in the same millisecond, with no message beyond "This
 //! folder doesn't contain the correct version of this game". Every other file a
 //! real install has, Lightforge already writes; this was the last one, and it
 //! is the difference between an install the launcher owns and one Battle.net
@@ -10,7 +10,7 @@
 //!
 //! The format is protocol-buffer wire format with no schema published by
 //! Blizzard, so the layout below was read field by field out of a real
-//! install's file. Only what is observed is written — no invented fields.
+//! install's file. Only what is observed is written, no invented fields.
 //!
 //! ```text
 //! 1  ProductInstall            (repeated: one per installed product)
@@ -50,7 +50,7 @@ use crate::product::ProductCode;
 pub struct ProductInstall {
     /// Product code, written to both the `uid` and `product_code` fields.
     ///
-    /// The two coincide for every product Lightforge writes a record for —
+    /// The two coincide for every product Lightforge writes a record for,
     /// they only differ for Hearthstone, which Battle.net installs itself.
     /// On the reading side they are kept apart: see [`Installed`].
     pub product: String,
@@ -115,7 +115,7 @@ impl ProductInstall {
     /// Rewrite the tags the way Agent writes them.
     ///
     /// Agent's own records read
-    /// `Windows x86_64 EU? acct-AUT? geoip-AT? enUS speech?:… text?` — the `?`
+    /// `Windows x86_64 EU? acct-AUT? geoip-AT? enUS speech?:… text?`: the `?`
     /// marks a tag as advisory, and the account/GeoIP tags are present even
     /// though no manifest defines them. Our downloader writes the plain form,
     /// which selects identical files (`TagSet` strips `?` and ignores names the
@@ -222,8 +222,8 @@ pub fn encode(installs: &[ProductInstall]) -> Vec<u8> {
 /// exactly as it was found.
 ///
 /// **Why splicing rather than decode-and-re-encode.** Agent's registry holds
-/// products Lightforge has nothing to do with — the client itself, Agent, a
-/// Hearthstone somebody installed through Battle.net — and [`decode`] reads
+/// products Lightforge has nothing to do with, the client itself, Agent, a
+/// Hearthstone somebody installed through Battle.net, and [`decode`] reads
 /// four fields out of a record that has dozens. Rebuilding the file from what
 /// we understood would quietly drop the rest, and a Battle.net that has
 /// forgotten an install is a far worse outcome than a tile that says Install.
@@ -240,7 +240,7 @@ pub fn splice(existing: &[u8], installs: &[ProductInstall]) -> Option<Vec<u8>> {
 }
 
 /// Drop `product`'s record from an existing `product.db`, leaving every other
-/// record exactly as it was found — the same byte-preserving rules as
+/// record exactly as it was found, the same byte-preserving rules as
 /// [`splice`], for the same reason.
 pub fn without(existing: &[u8], product: &str) -> Option<Vec<u8>> {
     rewrite(existing, &[], Some(product))
@@ -257,7 +257,7 @@ fn rewrite(existing: &[u8], installs: &[ProductInstall], remove: Option<&str>) -
 
 /// The byte-preserving merge behind [`splice`], [`without`] and [`graft`].
 ///
-/// `records` are record *payloads* — field 1's contents — paired with the
+/// `records` are record *payloads*: field 1's contents, paired with the
 /// product code they are for. A payload replaces the record of the same code
 /// and is appended when there is none.
 fn merge(
@@ -319,7 +319,7 @@ fn merge(
 /// One field of a message, as the exact bytes it arrived as.
 struct Raw<'a> {
     field: u32,
-    /// Key, length and value — everything this field occupied.
+    /// Key, length and value. Everything this field occupied.
     bytes: &'a [u8],
     /// The value alone, for a length-delimited field.
     payload: Option<&'a [u8]>,
@@ -375,10 +375,10 @@ pub struct Record {
 /// For a game Lightforge does not manage. A Diablo that Battle.net installed in
 /// a Lutris prefix can be made visible to the Battle.net in Lightforge's prefix
 /// without reinstalling it, but only if the record our registry gains is one
-/// Agent will accept — and that means a build key, an install-state block and a
+/// Agent will accept, and that means a build key, an install-state block and a
 /// tag expression that nothing here knows how to invent. The record Agent wrote
 /// itself has all of them right, so it is copied rather than rebuilt, and only
-/// the install path — the one thing that genuinely changed — is replaced.
+/// the install path, the one thing that genuinely changed, is replaced.
 ///
 /// `None` when the file holds no record for `product`, or is not a registry.
 pub fn lift(bytes: &[u8], product: &str, install_path: &str) -> Option<Record> {
@@ -461,7 +461,7 @@ fn read_varint(bytes: &[u8]) -> Option<(u64, usize)> {
 /// `Install`: the per-install `.product.db` is only read once the user asks
 /// Battle.net to locate a game, while this file is read at startup.
 ///
-/// Must run with nothing alive in the prefix — Agent rewrites this file as it
+/// Must run with nothing alive in the prefix, Agent rewrites this file as it
 /// exits, so a write while it is up is simply lost.
 ///
 /// A file that cannot be parsed is left untouched and reported as `false`,
@@ -499,7 +499,7 @@ pub fn unregister(agent_dir: &Path, product: &str) -> Result<bool, ProductDbErro
     replace(&path, &existing, &trimmed)
 }
 
-/// Write a rewritten registry over the old one, atomically — or do nothing at
+/// Write a rewritten registry over the old one, atomically, or do nothing at
 /// all when the rewrite changed nothing.
 ///
 /// Agent reads this file while it runs, so the new bytes go to a temporary file
@@ -523,7 +523,7 @@ fn replace(path: &Path, existing: &[u8], merged: &[u8]) -> Result<bool, ProductD
 /// Write `.product.db` into an install root, atomically.
 ///
 /// Agent reads this file while it runs, so it is written to a temporary file in
-/// the same directory and renamed — a half-written `.product.db` would be worse
+/// the same directory and renamed, a half-written `.product.db` would be worse
 /// than none at all.
 pub fn write(install_root: &Path, installs: &[ProductInstall]) -> Result<PathBuf, ProductDbError> {
     let path = install_root.join(".product.db");
@@ -828,7 +828,7 @@ mod tests {
         assert_eq!(out, [0xac, 0x02]);
 
         // Field 21's key is itself a two-byte varint (21 << 3 = 168), so the
-        // value does not start at offset 1 — read the key first.
+        // value does not start at offset 1, read the key first.
         let mut out = Vec::new();
         varint_field(&mut out, 21, 1_789_676_802_000);
         let (key, after_key) = read_varint(&out, 0);
@@ -846,17 +846,17 @@ mod tests {
 /// install Lightforge does not manage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Installed {
-    /// The client's install key — field 1, e.g. `hs_beta`.
+    /// The client's install key, field 1, e.g. `hs_beta`.
     ///
     /// This is what Battle.net calls the product, which is **not always what
     /// the CDN calls it**: see [`Installed::product_code`].
     pub product: String,
-    /// The TACT product code — field 2, e.g. `hsb`.
+    /// The TACT product code, field 2, e.g. `hsb`.
     ///
     /// The two are the same string for every product but Hearthstone, which
     /// Battle.net records as `hs_beta` and Blizzard's CDN publishes as `hsb`.
     /// Lightforge's catalog is keyed by the CDN's name, so a caller matching
-    /// a tile against this file has to accept either — matching only on
+    /// a tile against this file has to accept either, matching only on
     /// [`Installed::product`] leaves Hearthstone reading as "not installed"
     /// however many times someone installs it. Empty on a record that omits
     /// the field rather than assumed equal to `product`.
@@ -877,7 +877,7 @@ impl Installed {
     }
 }
 
-/// Read Agent's `product.db` — what Battle.net has installed, and where.
+/// Read Agent's `product.db`: what Battle.net has installed, and where.
 ///
 /// The counterpart to [`encode`], against the same layout documented at the
 /// top of this module. Written separately rather than derived from a schema
@@ -1035,7 +1035,7 @@ mod read_tests {
     use super::*;
 
     /// The two directions must agree, since neither has a schema to check
-    /// against — only each other and a real file.
+    /// against, only each other and a real file.
     #[test]
     fn what_we_write_is_what_we_read_back() {
         let install = ProductInstall {
@@ -1102,7 +1102,7 @@ mod read_tests {
     /// The one product whose two names disagree, taken from a real registry.
     ///
     /// Agent records Hearthstone as uid `hs_beta` in field 1 and TACT code
-    /// `hsb` in field 2, with no family at all — where every other product
+    /// `hsb` in field 2, with no family at all, where every other product
     /// repeats one string in both fields. A reader that kept only field 1
     /// made an installed Hearthstone read as "not installed" forever, because
     /// the tile asking the question holds the CDN's name.
@@ -1276,7 +1276,7 @@ mod read_tests {
 
     }
 
-    /// A real registry carries top-level fields after the records — field 5
+    /// A real registry carries top-level fields after the records, field 5
     /// and field 6 in Gabriel's. Treating those as corruption refused to
     /// register anything at all, which is how this was found.
     #[test]

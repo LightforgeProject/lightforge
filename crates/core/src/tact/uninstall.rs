@@ -8,7 +8,7 @@
 //! The rule that shapes everything here: **products share one install.** The
 //! CASC store under `Data/` holds every product's files interleaved in the same
 //! archives, and `.build.info` holds a row per product. So removing one product
-//! means its flavor directory, its row, and its `.product.db` record — and the
+//! means its flavor directory, its row, and its `.product.db` record, and the
 //! store survives untouched *unless it was the last product*, at which point
 //! the store is orphaned and goes too.
 
@@ -23,7 +23,7 @@ use crate::tact::productdb;
 pub struct Plan {
     /// The product's flavor directory, e.g. `_classic_era_`.
     pub flavor_dir: Option<PathBuf>,
-    /// The shared CASC store — present only when this is the last product and
+    /// The shared CASC store, present only when this is the last product and
     /// the store would otherwise be left behind with nothing to read it.
     pub store: Option<PathBuf>,
     /// `.build.info` row to drop, and whether the file itself would go.
@@ -84,12 +84,12 @@ pub struct Removed {
 
 /// Carry out a plan.
 ///
-/// Every path is checked to be inside `install` before it is deleted — a plan
+/// Every path is checked to be inside `install` before it is deleted, a plan
 /// is data, and data that escaped the install root would be a very expensive
 /// bug.
 ///
 /// `windows_path` is how Battle.net addresses this install, which differs per
-/// library — see [`crate::library::Library::windows_wow_path`]. It is only
+/// library; see [`crate::library::Library::windows_wow_path`]. It is only
 /// used to rewrite `.product.db` for the products that remain, and getting it
 /// wrong there is what makes the client reject an install it was happy with.
 pub fn execute(

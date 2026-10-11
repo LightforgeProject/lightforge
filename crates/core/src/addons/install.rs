@@ -2,7 +2,7 @@
 //!
 //! An addon package is a zip whose top level is one or more addon folders,
 //! which are extracted straight into `Interface/AddOns`. Several folders per
-//! package is normal, not exotic — BigWigs ships eleven — so an install is
+//! package is normal, not exotic, BigWigs ships eleven, so an install is
 //! tracked as a *set* of folders, and removing it removes exactly that set.
 //!
 //! Two rules here are safety rather than bookkeeping:
@@ -47,17 +47,17 @@ pub struct Record {
     pub provider: String,
     pub id: String,
     pub name: String,
-    /// Catalog file id currently installed — what an update compares against.
+    /// Catalog file id currently installed, what an update compares against.
     pub file_id: Option<String>,
     /// Every folder the package wrote. Removal deletes exactly these.
     pub folders: Vec<String>,
     /// Which builds this addon accepts, overriding the global default.
     ///
-    /// `None` means "follow the default", not "stable" — so changing the
+    /// `None` means "follow the default", not "stable", so changing the
     /// default moves every addon that was never given an opinion of its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<super::Channel>,
-    /// What kind of build is actually installed — a *fact*, where
+    /// What kind of build is actually installed, a *fact*, where
     /// [`Record::channel`] is a *preference*.
     ///
     /// Without it, moving an addon from alpha back to stable looks exactly
@@ -69,7 +69,7 @@ pub struct Record {
     ///
     /// For an addon kept at a version on purpose, or one a parent package
     /// drags along: without it, every "Update all" quietly undoes the choice.
-    /// An explicit Update on the addon itself still works — this is about what
+    /// An explicit Update on the addon itself still works. This is about what
     /// happens *without* being asked.
     #[serde(default, skip_serializing_if = "is_false")]
     pub ignored: bool,
@@ -93,14 +93,14 @@ pub struct Record {
     /// Ours to record, because no provider knows it: the catalogue can say
     /// when a build was *published*, which is a different question from when
     /// this machine took it. `None` on anything installed before this was
-    /// recorded — an absent fact, not a zero.
+    /// recorded, an absent fact, not a zero.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed_at: Option<String>,
     /// The project page at its provider.
     ///
     /// Recorded here rather than read from an update check, because
     /// [`crate::addons::manage::check_updates`] deliberately asks nothing
-    /// for a pinned or ignored addon — and those rows want the link as much
+    /// for a pinned or ignored addon, and those rows want the link as much
     /// as any other. `None` on anything installed before this was recorded,
     /// which only costs the menu entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,7 +130,7 @@ pub fn today() -> String {
 /// Days since the epoch to a civil date, by Howard Hinnant's `civil_from_days`.
 ///
 /// Written out rather than pulled in: one date, one direction, no timezones
-/// and no formatting — a calendar crate for this would be a dependency to
+/// and no formatting, a calendar crate for this would be a dependency to
 /// audit and update forever in exchange for nine lines.
 fn civil_from_unix(secs: u64) -> (i64, u32, u32) {
     let z = (secs / 86_400) as i64 + 719_468;
@@ -207,7 +207,7 @@ impl Ledger {
         }
     }
 
-    /// Write atomically — temp file beside it, then rename.
+    /// Write atomically, temp file beside it, then rename.
     pub fn save(&self, path: &Path) -> Result<(), InstallError> {
         let dir = path.parent().unwrap_or_else(|| Path::new("."));
         std::fs::create_dir_all(dir).map_err(|source| InstallError::Io {
@@ -250,8 +250,8 @@ impl Ledger {
     /// even one of its folders is left alone: a partly deleted package is
     /// still ours to repair.
     ///
-    /// Callers must only reconcile against a directory they can actually read
-    /// — an AddOns directory that is missing because the library is offline
+    /// Callers must only reconcile against a directory they can actually read,
+    /// an AddOns directory that is missing because the library is offline
     /// says nothing about what is installed.
     pub fn prune_missing(&mut self, addons_dir: &Path) -> Vec<String> {
         let mut dropped = Vec::new();
@@ -415,7 +415,7 @@ pub fn remove(
 
 /// Delete addon folders, and report which were actually there.
 ///
-/// Only ever called with folders a [`Record`] names — the rule that nothing
+/// Only ever called with folders a [`Record`] names, the rule that nothing
 /// Lightforge did not install is ever deleted lives in the callers, and the
 /// path check here is the second lock on it.
 pub fn delete_folders(addons_dir: &Path, folders: &[String]) -> Result<Vec<String>, InstallError> {

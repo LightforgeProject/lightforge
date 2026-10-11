@@ -2,7 +2,7 @@
 //!
 //! CDN archives store bare BLTE files; local storage puts this header in front
 //! of each one. Writing an install therefore means synthesising these, and
-//! both of their checksums have to be right — which is the part that cannot be
+//! both of their checksums have to be right, which is the part that cannot be
 //! guessed, since neither is a plain hash of the header.
 //!
 //! ```text
@@ -15,7 +15,7 @@
 //!
 //! Checksum A is `hashlittle` over the first 0x16 bytes with the seed
 //! `0x3D6BE971`. Checksum B is a table-driven XOR fold that mixes in **where
-//! the entry sits** — its archive number and offset — so the same file written
+//! the entry sits**: its archive number and offset, so the same file written
 //! to a different place gets a different checksum, and a header cannot be
 //! copied from one location to another.
 //!
@@ -24,8 +24,8 @@
 //! rebuild byte-for-byte from nothing but their index entry.
 //!
 //! The other 20 are worth knowing about. The key field is 16 bytes wide, and
-//! a minority of entries — around 9% of those in `data.000`, none elsewhere in
-//! the sample — fill all sixteen rather than padding a 9-byte key with zeros.
+//! a minority of entries, around 9% of those in `data.000`, none elsewhere in
+//! the sample, fill all sixteen rather than padding a 9-byte key with zeros.
 //! Every file reachable through the manifest chain uses the padded form: of
 //! 357 checked by resolving file ids through root and encoding, 357 were
 //! 9-byte padded and none were full-width. Since the downloader only ever
@@ -66,13 +66,13 @@ pub struct Header {
 impl Header {
     /// Build the header for a file about to be written at a known location.
     ///
-    /// `size` counts this header plus the BLTE payload — the same number the
+    /// `size` counts this header plus the BLTE payload, the same number the
     /// index entry records.
     pub fn build(key: &[u8; KEY_BYTES], size: u32, archive_id: u16, offset: u32) -> [u8; CASC_ENTRY_HEADER] {
         let mut out = [0u8; CASC_ENTRY_HEADER];
 
         // The key occupies a 16-byte field, right-padded with zeros and then
-        // reversed — so it reads as a little-endian big integer and the
+        // reversed, so it reads as a little-endian big integer and the
         // significant bytes land at the end rather than the start.
         for (i, byte) in key.iter().enumerate() {
             out[15 - i] = *byte;
@@ -117,7 +117,7 @@ impl Header {
     }
 
     /// The full 16-byte encoding key this entry's truncated key came from,
-    /// as far as the header records it — the remaining 7 bytes are not stored.
+    /// as far as the header records it, the remaining 7 bytes are not stored.
     pub fn key_prefix_matches(&self, ekey: &EKey) -> bool {
         ekey[..KEY_BYTES] == self.key
     }
@@ -203,7 +203,7 @@ mod tests {
         assert_ne!(a, b);
         assert_eq!(&a[..0x1a], &b[..0x1a], "only checksum B may differ");
 
-        // And on the archive number, but only its low two bits — that is what
+        // And on the archive number, but only its low two bits. That is what
         // the index packs alongside the offset.
         let c = Header::build(&REAL_KEY, 18_355, 31, 1_049_269_890);
         assert_eq!(a, c, "archives 27 and 31 agree in their low two bits");
@@ -240,7 +240,7 @@ mod tests {
         let built = Header::build(&REAL_KEY, 18_355, 27, 1_049_269_890);
         assert_eq!(&built[..7], &[0u8; 7]);
 
-        // A wide entry — seen in data.000 — parses fine and verifies fine; it
+        // A wide entry, seen in data.000, parses fine and verifies fine; it
         // simply is not a shape we produce. Parsing must not assume padding.
         let mut wide = REAL_HEADER;
         wide[..7].copy_from_slice(&[0x76, 0xa0, 0x3d, 0xbd, 0xd7, 0x10, 0x73]);

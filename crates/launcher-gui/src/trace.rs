@@ -1,8 +1,8 @@
 //! Startup timing, printed only when `LIGHTFORGE_TRACE` is set.
 //!
-//! How fast the dashboard *feels* is a sequence of moments — the window
+//! How fast the dashboard *feels* is a sequence of moments, the window
 //! appearing, the cache answering, the network answering, the first frame that
-//! actually has art in it — and which of those is slow is not something a user
+//! actually has art in it, and which of those is slow is not something a user
 //! can report from the outside. This stamps each one with milliseconds since
 //! process start.
 //!
@@ -44,7 +44,7 @@ pub fn mark(what: impl std::fmt::Display) {
     eprintln!("[trace] {ms:>9.1} ms  {what}");
 }
 
-/// Stamp a moment that can only be interesting the first time it happens —
+/// Stamp a moment that can only be interesting the first time it happens,
 /// the first frame drawn, the first frame drawn with branding.
 pub fn once(slot: &'static std::sync::atomic::AtomicBool, what: impl std::fmt::Display) {
     use std::sync::atomic::Ordering;

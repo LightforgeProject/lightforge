@@ -10,7 +10,7 @@
 //!
 //! Phase 2 needs the unusual completion rule: `Battle.net-Setup.exe` is a
 //! bootstrapper. It unpacks a launcher, hands off to `Battle.net.exe`/`Agent`
-//! and exits — or doesn't exit at all, since the client it spawned keeps the
+//! and exits, or doesn't exit at all, since the client it spawned keeps the
 //! Wine session alive. Waiting on the child's exit status therefore either
 //! returns far too early or never returns, so completion is detected from the
 //! filesystem and the session is torn down with `wineserver -k`.
@@ -37,7 +37,7 @@ pub const INSTALLER_URL: &str =
 pub const INSTALLER_FILE: &str = "Battle.net-Setup.exe";
 
 /// Windows-side install path handed to the installer. It has to be the Windows
-/// spelling, not the Linux one — the installer writes it into `.product.db`.
+/// spelling, not the Linux one, the installer writes it into `.product.db`.
 const WINDOWS_BATTLE_NET_DIR: &str = r"C:\Program Files (x86)\Battle.net";
 
 /// Where Battle.net should propose installing games. The WoW symlink lives
@@ -79,7 +79,7 @@ const STDERR_TAIL: usize = 8 * 1024;
 /// Capturing generously and displaying briefly are different jobs: the tail is
 /// kept in full for a debug bundle, while the message goes into a banner in
 /// the GUI, where eight kilobytes of Wine chatter would bury the one line that
-/// matters. The last lines are the right ones — a failing process says why
+/// matters. The last lines are the right ones, a failing process says why
 /// just before it stops.
 const STDERR_LINES_SHOWN: usize = 8;
 
@@ -141,8 +141,8 @@ impl Installer {
         self
     }
 
-    /// Shorten the polling gap — used by tests, and by nothing else.
-    /// How long to keep watching after the installer exits — cleanly, then
+    /// Shorten the polling gap, used by tests, and by nothing else.
+    /// How long to keep watching after the installer exits, cleanly, then
     /// with a failure. Exists for the same reason [`Installer::with_timeout`]
     /// does: so a test does not have to wait a real minute.
     pub fn with_exit_grace(mut self, clean: Duration, failed: Duration) -> Self {
@@ -194,8 +194,8 @@ impl Installer {
             .command("run", &self.installer, self.args())
             .stdin(Stdio::null())
             // stdout is noise nobody reads. stderr is the one thing worth
-            // having when this goes wrong — it is where Proton's dynamic
-            // loader names a missing 32-bit library — so it is piped and
+            // having when this goes wrong. It is where Proton's dynamic
+            // loader names a missing 32-bit library, so it is piped and
             // drained on a thread. Piping without a reader would eventually
             // block the child on a full pipe, which is why the drain exists
             // rather than a plain `.stderr(piped())`.
@@ -240,8 +240,8 @@ impl Installer {
     /// Poll the filesystem until the install settles, the installer gives up,
     /// or the timeout expires.
     ///
-    /// Watching the files is still the primary signal — the installer stays
-    /// alive after a successful install, having launched the client — but
+    /// Watching the files is still the primary signal, the installer stays
+    /// alive after a successful install, having launched the client, but
     /// watching *only* the files means a process that died in the first
     /// second is indistinguishable from one still downloading, and the user
     /// waits the full ten minutes to be told it "timed out". It did not time
@@ -278,8 +278,8 @@ impl Installer {
                 }
             }
 
-            // An exit is not itself a failure — the files may still be
-            // landing — but it bounds how long waiting can be worthwhile.
+            // An exit is not itself a failure, the files may still be
+            // landing, but it bounds how long waiting can be worthwhile.
             if let Some((at, code)) = exit {
                 let grace = match code {
                     Some(0) | None => self.exit_grace,
@@ -319,7 +319,7 @@ fn last_lines(text: &str, n: usize) -> String {
 /// Read a pipe to the end, keeping only the last [`STDERR_TAIL`] bytes.
 ///
 /// Reads everything so the writer never blocks on a full pipe, but retains a
-/// bounded tail — the end is where the error is.
+/// bounded tail, the end is where the error is.
 fn tail_of(mut pipe: impl Read) -> String {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
@@ -370,7 +370,7 @@ fn has_versioned_client(dir: &Path) -> bool {
 pub struct Tweak {
     pub path: Vec<String>,
     pub value: Value,
-    /// Why it's set — surfaced by the CLI so the config isn't a pile of magic.
+    /// Why it's set, surfaced by the CLI so the config isn't a pile of magic.
     pub reason: &'static str,
 }
 
@@ -524,14 +524,14 @@ pub fn account_tweaks() -> Vec<Tweak> {
 ///
 /// Qt's own `WindowState` flags, written by the client when it exits and read
 /// when it starts: `0` is a normal window, `1` is minimized. Setting it is the
-/// only lever there is for starting the client out of the way — Wine cannot
+/// only lever there is for starting the client out of the way, Wine cannot
 /// minimize a window for us, and nothing on Wayland can do it from outside.
 pub const WINDOW_STATE_KEY: &str = "User.Client.Windows.BrowserMainWindow.WindowState";
 
 /// The client's own "launch minimized to the system tray" preference.
 ///
 /// Its settings panel calls this *Launch Battle.net minimized to the system
-/// tray*, and it is the key the checkbox writes — `AutoStartMinimized`, beside
+/// tray*, and it is the key the checkbox writes, `AutoStartMinimized`, beside
 /// `HideOnClose` and `DisplayExitPrompt` in `battle.net.dll`, so it lives in
 /// the per-account config with the rest of the window preferences.
 pub const AUTOSTART_MINIMIZED_KEY: &str = "User.Client.AutoStartMinimized";
@@ -547,14 +547,14 @@ pub const AUTOSTART_MINIMIZED_KEY: &str = "User.Client.AutoStartMinimized";
 /// needToMinimize=false …
 /// ```
 ///
-/// `isMinimizedOnStartup` is the Qt window state below — what the client wrote
+/// `isMinimizedOnStartup` is the Qt window state below, what the client wrote
 /// out of its own window when it last exited. `shouldMainWindowShow…` is the
 /// preference above, and it is only consulted when `varAutoStarted` is set,
 /// which is what [`Launch::Autostart`] is for. Setting the preference without
 /// that flag changes nothing, which is why the window kept appearing.
 ///
 /// Both have to be re-applied before each start, because the client writes the
-/// window state back from its live window every time it exits — the same reason
+/// window state back from its live window every time it exits, the same reason
 /// the game's CVars are re-asserted per launch rather than set once.
 pub fn window_state_tweaks(minimized: bool) -> Vec<Tweak> {
     vec![
@@ -616,7 +616,7 @@ pub enum Readiness {
     /// Signed in and idle: a launch command sent now will be acted on.
     SignedIn,
     /// Still not signed in when the wait ran out. Two-factor, an outage, a
-    /// pending client update — all of them need a person, and none of them
+    /// pending client update: all of them need a person, and none of them
     /// are ours to drive.
     NeedsAttention,
 }
@@ -625,7 +625,7 @@ pub enum Readiness {
 const SIGNED_IN: &str = "Logged into Battle.net successfully";
 
 // There is deliberately no "the window has drawn" marker here. The obvious
-// candidate — `End recording load sequence for browser content_browser` — is
+// candidate, `End recording load sequence for browser content_browser`: is
 // missing from one full-client log in six, so waiting for it stalls for the
 // whole grace period on a client that is perfectly ready, long enough for
 // someone to close the window out from under the launch. Anything that must
@@ -639,7 +639,7 @@ const READY_POLL: Duration = Duration::from_millis(250);
 ///
 /// Watches the newest log in [`Layout::battle_net_logs`] that the client
 /// wrote *after* `since`, so a previous session's log cannot answer for this
-/// one. Reading a log file is the whole mechanism — nothing is injected,
+/// one. Reading a log file is the whole mechanism. Nothing is injected,
 /// nothing is scraped out of the client's memory, and the marker is a line
 /// the client prints for its own benefit:
 ///
@@ -733,7 +733,7 @@ pub fn apply_tweaks(config: &mut Value, tweaks: &[Tweak]) {
 
 /// Read, merge, and atomically rewrite `Battle.net.config`.
 ///
-/// A missing file is normal — Battle.net only writes one on first launch — and
+/// A missing file is normal, Battle.net only writes one on first launch, and
 /// is treated as an empty config rather than an error, so setup can seed the
 /// values before the client has ever run.
 pub fn configure(layout: &Layout, user: &str, tweaks: &[Tweak]) -> Result<PathBuf, BattleNetError> {
@@ -750,7 +750,7 @@ pub fn configure(layout: &Layout, user: &str, tweaks: &[Tweak]) -> Result<PathBu
 /// `product.db` both say `hs_beta`. This is the client's own answer, so it is
 /// the one that matches everywhere else on the machine.
 ///
-/// An absent or unreadable file yields nothing rather than an error — the
+/// An absent or unreadable file yields nothing rather than an error, the
 /// client writes it on first launch, and a machine that has not run it yet is
 /// not a broken one.
 pub fn known_product_codes(layout: &Layout, user: &str) -> Vec<String> {
@@ -771,8 +771,8 @@ pub fn known_product_codes(layout: &Layout, user: &str) -> Vec<String> {
 /// returning the files changed.
 ///
 /// These files are named after an account hash the client invents on first
-/// login, so there is nothing to write before the user has signed in once — an
-/// empty result is the normal outcome of a fresh setup, not a failure. M3's
+/// login, so there is nothing to write before the user has signed in once, an
+/// empty result is the normal outcome of a fresh setup, not a failure. The
 /// pre-flight pass is what applies them on later runs.
 pub fn configure_accounts(
     layout: &Layout,
@@ -934,7 +934,7 @@ pub fn registry_tweaks() -> Vec<RegValue> {
         },
         // Subpixel font smoothing, the four values `winetricks fontsmooth=rgb`
         // writes. Wine ships with smoothing off, and the storefront is a CEF
-        // browser rendering text under Wine's font stack — unsmoothed it is
+        // browser rendering text under Wine's font stack, unsmoothed it is
         // the thing that most obviously looks broken next to the same page in
         // a native browser.
         //
@@ -944,7 +944,7 @@ pub fn registry_tweaks() -> Vec<RegValue> {
         RegValue {
             key: r"HKEY_CURRENT_USER\Control Panel\Desktop",
             name: "FontSmoothing",
-            // A string, not a DWORD — Windows stores this one as text, and a
+            // A string, not a DWORD, Windows stores this one as text, and a
             // DWORD here is silently ignored.
             kind: "REG_SZ",
             data: "2",
@@ -990,12 +990,12 @@ pub fn apply_registry(runner: &ProtonRunner, values: &[RegValue]) -> Result<(), 
 /// How to open Battle.net.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Launch {
-    /// Just the client window — the app-level "other Blizzard titles" path.
+    /// Just the client window, the app-level "other Blizzard titles" path.
     Client,
     /// The same client start, told that it was started automatically.
     ///
-    /// `--autostarted` is the flag Blizzard's own Run entry passes — the
-    /// client writes it as `"%1" --autostarted` — and it is the only condition
+    /// `--autostarted` is the flag Blizzard's own Run entry passes, the
+    /// client writes it as `"%1" --autostarted`: and it is the only condition
     /// under which the client honours
     /// [`AUTOSTART_MINIMIZED_KEY`]: its startup decision reads
     /// `needToMinimize` from `shouldMainWindowShowMinimizedAtAutoStartup &&
@@ -1026,7 +1026,7 @@ pub enum Launch {
     /// ```
     ///
     /// This is how Blizzard's own web buttons drive the client, which makes
-    /// it the one documented way to say "show me this game" — and unlike a
+    /// it the one documented way to say "show me this game", and unlike a
     /// tile selection it is a command the client acts on rather than view
     /// state its own startup can overwrite.
     Uri(String),
@@ -1109,7 +1109,7 @@ pub fn game_uri(family: &str) -> String {
 /// W3   -> W3_retail
 /// ```
 ///
-/// Passing a TACT code here is not a no-op — it is worse. The client fails to
+/// Passing a TACT code here is not a no-op. It is worse. The client fails to
 /// resolve it and **falls back to the first family it knows, which is
 /// Warcraft III**, so the user lands on a game they may not even own. That was
 /// a real bug: `launch wow_classic_era` put Gabriel on the W3 page every time.
@@ -1117,7 +1117,7 @@ pub fn game_uri(family: &str) -> String {
 /// to the client's own catalogue.
 ///
 /// That order, not the other way round: the WoW families were read out of a
-/// real log and carry decisions the catalogue cannot express — a PTR and a
+/// real log and carry decisions the catalogue cannot express, a PTR and a
 /// beta live in the retail tile's version list, and Forever is a tile of its
 /// own. Everything else comes from [`crate::families`], which knows every
 /// title Blizzard publishes rather than the two that were observed.
@@ -1161,8 +1161,8 @@ pub fn launch(
 /// [`launch`], run under `wrappers` (outermost first).
 ///
 /// Separate because almost nothing wants them. A wrapper belongs on the
-/// invocation that *becomes* the client — the one whose process the games
-/// inherit from — and not on the invocations that only hand arguments to a
+/// invocation that *becomes* the client, the one whose process the games
+/// inherit from, and not on the invocations that only hand arguments to a
 /// client already running: those exit at once, so a power profile or a
 /// GameMode session held around them would be held for nothing.
 pub fn launch_wrapped(
@@ -1189,13 +1189,13 @@ pub struct SetupReport {
     pub install: InstallOutcome,
     pub registry_values: usize,
     pub config_path: PathBuf,
-    /// Per-account configs found and updated — empty until the first login.
+    /// Per-account configs found and updated, empty until the first login.
     pub account_configs: Vec<PathBuf>,
 }
 
-/// Install Battle.net and configure it: the whole of M2 step 4 in one call.
+/// Install Battle.net and configure it, in one call.
 ///
-/// Assumes the prefix already exists — [`crate::prefix::provision`] is the
+/// Assumes the prefix already exists, [`crate::prefix::provision`] is the
 /// step before this one, not part of it.
 pub fn provision(
     runner: &ProtonRunner,
@@ -1290,7 +1290,7 @@ mod tests {
     #[test]
     fn the_window_state_key_is_qts_own_and_is_written_as_a_string() {
         // The client stores every one of these as a string, and a real
-        // integer here is a value it reads back as zero — the booleans
+        // integer here is a value it reads back as zero, the booleans
         // included, which is why `"true"` is quoted below.
         let minimized = window_state_tweaks(true);
         assert_eq!(minimized.len(), 2);
@@ -1371,7 +1371,7 @@ mod tests {
         std::fs::create_dir_all(&logs).unwrap();
 
         // A previous session's log, saying it signed in, must not answer for
-        // this start — that is how a hand-off fires at a client that is
+        // this start. That is how a hand-off fires at a client that is
         // still booting.
         let old = logs.join("battle.net-20260101T000000.000000.log");
         std::fs::write(&old, format!("I [BNLogin] {SIGNED_IN}. |bnet=1:0:x\n")).unwrap();
@@ -1750,7 +1750,7 @@ mod tests {
         assert_eq!(by_name("FontSmoothingOrientation").data, "1");
         assert_eq!(by_name("FontSmoothingGamma").data, "1400");
 
-        // DPI is deliberately not written — see the comment beside the list.
+        // DPI is deliberately not written; see the comment beside the list.
         assert!(registry_tweaks().iter().all(|v| v.name != "LogPixels"));
     }
 
@@ -1764,7 +1764,7 @@ mod tests {
         assert!(keys.contains(&"Games.wow_classic_era.AutoUpdate".to_owned()));
         assert!(tweaks.iter().all(|t| t.value == json!("false")));
 
-        // Nothing is generated for a product nobody asked about — the caller
+        // Nothing is generated for a product nobody asked about, the caller
         // decides what is managed, and a hand-off title never reaches here.
         assert!(product_tweaks(&[]).is_empty());
     }
@@ -1788,7 +1788,7 @@ mod tests {
         set_download_limit(&layout, "steamuser", Some(5_000_000)).unwrap();
         assert_eq!(download_limit(&layout, "steamuser"), Some(5_000_000));
 
-        // Cleared means the key is gone, not zero — and the neighbours stay.
+        // Cleared means the key is gone, not zero, and the neighbours stay.
         set_download_limit(&layout, "steamuser", None).unwrap();
         assert_eq!(download_limit(&layout, "steamuser"), None);
         let text = std::fs::read_to_string(&path).unwrap();

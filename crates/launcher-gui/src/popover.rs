@@ -3,7 +3,7 @@
 //! Every attempt to place the cog menu with ordinary layout traded one problem
 //! for another: inside the action panel's column it sized the card, and
 //! floating on the spacer above it the card's own top edge and padding fell
-//! between the menu and the button. Neither is a spacing mistake — a column
+//! between the menu and the button. Neither is a spacing mistake, a column
 //! cannot put a child *over* its sibling, and a `Stack` clips to its own
 //! bounds.
 //!
@@ -13,7 +13,7 @@
 //! a second widget can be pinned directly above it, over whatever is behind.
 //!
 //! The anchor's bounds are known when the overlay is laid out, so the position
-//! is computed rather than configured — there is no offset to keep in step
+//! is computed rather than configured. There is no offset to keep in step
 //! with the panel's padding or the window's size.
 
 use iced::advanced::layout::{self, Layout};
@@ -179,7 +179,7 @@ where
         let panel = self.panel.as_mut()?;
         let (anchor_tree, panel_tree) = tree.children.split_at_mut(1);
 
-        // The anchor may have an overlay of its own — a pick_list inside it,
+        // The anchor may have an overlay of its own, a pick_list inside it,
         // say. Dropping it here would be a silent bug, so it is kept and the
         // two are grouped.
         let beneath = self.anchor.as_widget_mut().overlay(
@@ -227,8 +227,8 @@ where
 
         // Above the anchor, lined up by whichever edge [`Edge`] names. The
         // anchor's bounds come from this layout pass, so a panel pinned to a
-        // button that moves — the band's buttons shift as games are added and
-        // removed — follows it without anything being recomputed.
+        // button that moves, the band's buttons shift as games are added and
+        // removed, follows it without anything being recomputed.
         let x = match self.edge {
             Edge::Right => self.anchor.x + self.anchor.width - size.width,
             Edge::Left => self.anchor.x,
@@ -290,8 +290,8 @@ where
         );
 
         // The panel owns its rectangle, including the gaps between its rows.
-        // Without this a pointer event that no entry wanted — a click in the
-        // spacing, a scroll — carried on to whatever the panel is covering,
+        // Without this a pointer event that no entry wanted, a click in the
+        // spacing, a scroll, carried on to whatever the panel is covering,
         // so clicking between two menu entries pressed the game tile beneath.
         // The panel has already had the event by this point; capturing only
         // stops it travelling further.
@@ -316,7 +316,7 @@ where
         // the page beneath an unavailable cursor only while an overlay reports
         // *some* interaction (`iced_runtime`'s `user_interface`). Reporting
         // `None` anywhere over the panel would leave the widgets under it
-        // live — hovering and highlighting through a menu that covers them.
+        // live, hovering and highlighting through a menu that covers them.
         match (interaction, cursor.is_over(bounds)) {
             (mouse::Interaction::None, true) => mouse::Interaction::Idle,
             (interaction, _) => interaction,

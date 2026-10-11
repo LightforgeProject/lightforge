@@ -1,15 +1,15 @@
 //! Giving back the shared store's space when one WoW version is uninstalled.
 //!
 //! Every version in one install writes into the same CASC store, so deleting
-//! a version's folder frees only its executables — its game data stays in
+//! a version's folder frees only its executables, its game data stays in
 //! `Data/`, interleaved with the others'. This finds the store entries only
 //! the departing version uses, drops them from the indices, and deletes any
 //! `data.NNN` archive that leaves with nothing live in it.
 //!
 //! Two rules keep it from ever touching another version's files:
 //!
-//! * The keep-set comes from the builds that are **installed** — each row's
-//!   `Build Key` in `.build.info` — not from what the CDN serves today. A
+//! * The keep-set comes from the builds that are **installed**: each row's
+//!   `Build Key` in `.build.info`: not from what the CDN serves today. A
 //!   version a patch behind still needs files its newer build dropped.
 //! * If any remaining version's manifest cannot be read, there is no plan.
 //!   Nothing is reclaimed on a guess.
@@ -68,7 +68,7 @@ pub struct Reclaim {
 #[derive(Debug, Clone)]
 pub struct Build {
     pub product: ProductCode,
-    /// The build config's hash — `.build.info`'s `Build Key`.
+    /// The build config's hash, `.build.info`'s `Build Key`.
     pub build_key: String,
     pub cdn: Cdn,
 }
@@ -163,7 +163,7 @@ fn select<'a>(
 /// Carry out `reclaim` against the store under `install`, returning the
 /// bytes freed.
 ///
-/// Refuses if the store changed since the plan was made — its entries are
+/// Refuses if the store changed since the plan was made, its entries are
 /// positions in files, and a store that moved may hold something else there
 /// now. An archive is deleted only if, after the indices are rewritten,
 /// nothing at all points into it. Never call against a live client.
@@ -197,7 +197,7 @@ pub fn execute(install: &Path, reclaim: &Reclaim) -> Result<u64, ReclaimError> {
 }
 
 /// Every file an installed build's download manifest lists, as the 9-byte
-/// keys the indices store — all of them, regardless of tags, since a keep-set
+/// keys the indices store: all of them, regardless of tags, since a keep-set
 /// that is too large only costs space, and one too small costs files.
 async fn manifest_keys(http: &Http, build: &Build) -> Result<HashSet<[u8; 9]>, ReclaimError> {
     let name = build.product.as_str().to_owned();
@@ -301,13 +301,13 @@ mod tests {
     #[test]
     fn only_unshared_entries_go_and_only_emptied_archives_are_freed() {
         let files = [
-            // Archive 5: all MoP-only — emptied, freed whole.
+            // Archive 5: all MoP-only, emptied, freed whole.
             entry(1, 5, 100),
             entry(2, 5, 100),
-            // Archive 6: one MoP-only file beside a shared one — stranded.
+            // Archive 6: one MoP-only file beside a shared one, stranded.
             entry(3, 6, 40),
             entry(4, 6, 60),
-            // Archive 7: retail only — untouched.
+            // Archive 7: retail only, untouched.
             entry(9, 7, 500),
         ];
         let departing = keys(&[1, 2, 3, 4]);

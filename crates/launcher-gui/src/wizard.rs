@@ -5,7 +5,7 @@
 //! where things go, what is already here, provisioning, which games to keep in
 //! the band, done.
 //!
-//! It is a layer over the app rather than a screen of its own — the same
+//! It is a layer over the app rather than a screen of its own, the same
 //! [`Lightforge`] state, the same messages where they already exist. The Place
 //! step *is* Settings' install-location field and the Storage page's drive
 //! list, the Install step *is* [`crate::provision`], and the Games step is the
@@ -51,7 +51,7 @@ pub enum Step {
 }
 
 impl Step {
-    /// Every step, in order — the dots across the top count these.
+    /// Every step, in order, the dots across the top count these.
     pub const ALL: [Step; 6] =
         [Step::Welcome, Step::Place, Step::Found, Step::Install, Step::Games, Step::Done];
 
@@ -93,7 +93,7 @@ pub struct Row {
 pub enum RowKind {
     /// A WoW install Lightforge can adopt and then patch itself.
     Wow(WowInstall),
-    /// A game only Battle.net can install — ours can be pointed at it.
+    /// A game only Battle.net can install, ours can be pointed at it.
     Game(HandOff),
 }
 
@@ -114,7 +114,7 @@ pub struct Wizard {
     /// not two seconds of empty card. `None` until it finishes.
     pub prefetched: Option<usize>,
     pub scanning: bool,
-    /// Whether the scan has run at all — an empty `rows` means something quite
+    /// Whether the scan has run at all, an empty `rows` means something quite
     /// different before and after.
     pub scanned: bool,
     pub rows: Vec<Row>,
@@ -174,7 +174,7 @@ pub enum Msg {
     /// Take a drive back off the list. Nothing on it is deleted.
     RemoveDrive(String),
     WantBattleNet(bool),
-    /// Done — write the config and get out of the way.
+    /// Done, write the config and get out of the way.
     Finish,
 }
 
@@ -426,7 +426,7 @@ fn advance(app: &mut Lightforge) -> iced::Task<Message> {
 ///
 /// In place, in the time it takes to write a marker file: the install's parent
 /// directory becomes a storage library and the products in it are assigned to
-/// it. Nothing is copied and nothing is verified — the files are already there,
+/// it. Nothing is copied and nothing is verified, the files are already there,
 /// and `.build.info` says what they are.
 ///
 /// Hand-offs cannot be done here. Linking one needs a prefix to link into and a
@@ -517,7 +517,7 @@ fn link_hand_offs(app: &mut Lightforge, pending: &[(HandOff, PathBuf)]) {
     for (game, prefix) in pending {
         match discover::link_hand_off(game, prefix, &app.layout, &library) {
             Ok(true) => linked.push(game.label.clone()),
-            // Linked, but Battle.net was not told — it will offer to find the
+            // Linked, but Battle.net was not told, it will offer to find the
             // game itself, which works and is not worth an error.
             Ok(false) => missed.push(game.label.clone()),
             Err(e) => missed.push(format!("{} ({e})", game.label)),

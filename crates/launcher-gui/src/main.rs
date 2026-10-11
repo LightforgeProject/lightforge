@@ -1,4 +1,4 @@
-//! Lightforge GUI — the dashboard.
+//! Lightforge GUI, the dashboard.
 //!
 //! One product at a time: its branding, one primary action whose label and
 //! color *are* the state machine in [`lightforge_core::state`], and the
@@ -67,7 +67,7 @@ const ACCOUNT_URL: &str = "https://account.battle.net/games";
 /// The cog on the split Play button.
 ///
 /// Bundled rather than themed: it is Lightforge's own chrome, not a product's
-/// branding, so it must render before any asset pipeline has answered — and
+/// branding, so it must render before any asset pipeline has answered, and
 /// the UI font has no gear glyph to fall back on.
 const GEAR_ICON: &[u8] = include_bytes!("../assets/gear.png");
 
@@ -80,10 +80,10 @@ fn gear_icon() -> image::Handle {
 
 /// The arrow on the band's overflow button. Bundled for the same reasons as
 /// the cog: it is Lightforge's chrome, and the UI font has no dependable
-/// chevron — U+2304 is missing from most of them and renders as a tofu box.
+/// chevron, U+2304 is missing from most of them and renders as a tofu box.
 const CHEVRON_ICON: &[u8] = include_bytes!("../assets/chevron-down.png");
 
-/// The chevron's one handle — see [`gear_icon`] for why it is cached.
+/// The chevron's one handle; see [`gear_icon`] for why it is cached.
 fn chevron_icon() -> image::Handle {
     static CHEVRON: OnceLock<image::Handle> = OnceLock::new();
     CHEVRON.get_or_init(|| image::Handle::from_bytes(CHEVRON_ICON)).clone()
@@ -92,7 +92,7 @@ fn chevron_icon() -> image::Handle {
 /// Manage Addons. A box of parts, which is what an addon set is.
 const PACKAGE_ICON: &[u8] = include_bytes!("../assets/package.png");
 
-/// The package's one handle — see [`gear_icon`] for why it is cached.
+/// The package's one handle; see [`gear_icon`] for why it is cached.
 fn package_icon() -> image::Handle {
     static PACKAGE: OnceLock<image::Handle> = OnceLock::new();
     PACKAGE.get_or_init(|| image::Handle::from_bytes(PACKAGE_ICON)).clone()
@@ -103,7 +103,7 @@ fn package_icon() -> image::Handle {
 /// game's.
 const SLIDERS_ICON: &[u8] = include_bytes!("../assets/sliders-horizontal.png");
 
-/// The sliders' one handle — see [`gear_icon`] for why it is cached.
+/// The sliders' one handle; see [`gear_icon`] for why it is cached.
 fn sliders_icon() -> image::Handle {
     static SLIDERS: OnceLock<image::Handle> = OnceLock::new();
     SLIDERS.get_or_init(|| image::Handle::from_bytes(SLIDERS_ICON)).clone()
@@ -111,21 +111,21 @@ fn sliders_icon() -> image::Handle {
 
 /// Manage Subscription. The bill, not the browser: every one of the three
 /// links goes somewhere, so an outbound arrow said nothing about which one
-/// this is — and game time is a card on file.
+/// this is, and game time is a card on file.
 const CARD_ICON: &[u8] = include_bytes!("../assets/credit-card.png");
 
-/// The card's one handle — see [`gear_icon`] for why it is cached.
+/// The card's one handle; see [`gear_icon`] for why it is cached.
 fn card_icon() -> image::Handle {
     static CARD: OnceLock<image::Handle> = OnceLock::new();
     CARD.get_or_init(|| image::Handle::from_bytes(CARD_ICON)).clone()
 }
 
 /// Lightforge's own wordmark, which stands where the app's name used to be
-/// set in type. It is drawn art — the letterforms are outlines, not the UI
-/// font — so it is bundled as a picture rather than composed at run time.
+/// set in type. It is drawn art, the letterforms are outlines, not the UI
+/// font, so it is bundled as a picture rather than composed at run time.
 const WORDMARK: &[u8] = include_bytes!("../assets/wordmark.png");
 
-/// The wordmark's one handle — see [`gear_icon`] for why it is cached.
+/// The wordmark's one handle; see [`gear_icon`] for why it is cached.
 fn wordmark_image() -> image::Handle {
     static WORDMARK_HANDLE: OnceLock<image::Handle> = OnceLock::new();
     WORDMARK_HANDLE.get_or_init(|| image::Handle::from_bytes(WORDMARK)).clone()
@@ -137,7 +137,7 @@ fn wordmark_image() -> image::Handle {
 /// same width so the pair looks like one control.
 const PLUS_ICON: &[u8] = include_bytes!("../assets/plus.png");
 
-/// The plus's one handle — see [`gear_icon`] for why it is cached.
+/// The plus's one handle; see [`gear_icon`] for why it is cached.
 fn plus_icon() -> image::Handle {
     static PLUS: OnceLock<image::Handle> = OnceLock::new();
     PLUS.get_or_init(|| image::Handle::from_bytes(PLUS_ICON)).clone()
@@ -147,7 +147,7 @@ fn plus_icon() -> image::Handle {
 /// and the two social squares.
 ///
 /// Spelled as a macro because each one is the same four lines as [`gear_icon`]
-/// above — bytes in, one cached handle out — and ten copies of it would bury
+/// above, bytes in, one cached handle out, and ten copies of it would bury
 /// the three that have something of their own to say.
 macro_rules! bundled_icons {
     ($($name:ident => $file:literal),+ $(,)?) => {
@@ -192,7 +192,7 @@ const NEWS_SCRIM: f32 = 0.70;
 /// How far it is darkened across the header and the page title.
 ///
 /// The navigation row has no backdrop of its own, and this artwork is pale
-/// sky across its top third — the one combination that leaves white text
+/// sky across its top third, the one combination that leaves white text
 /// sitting on white. Held, not ramped, so the whole row is on even cover.
 const NEWS_SCRIM_TOP: f32 = 0.88;
 
@@ -201,22 +201,22 @@ const NEWS_SCRIM_TOP: f32 = 0.88;
 /// Bundled rather than fetched from the asset manifest, unlike every product
 /// background: that manifest is keyed by product, and this is chrome for one
 /// page that belongs to no game. Kept at [`art::BACKGROUND_MAX_WIDTH`]'s 2560,
-/// the same ceiling product art gets, which lands it at about half a megabyte
-/// — see `assets/README.md` for how it was prepared.
+/// the same ceiling product art gets, which lands it at about half a megabyte;
+/// see `assets/README.md` for how it was prepared.
 const NEWS_BACKGROUND: &[u8] = include_bytes!("../assets/news-background.jpg");
 
 /// The desktop entry's basename, the Wayland `app_id` and the AppStream
-/// component id, which are required to be the same string — see
+/// component id, which are required to be the same string, see
 /// `packaging/README.md`.
 const APP_ID: &str = "pro.tuxcore.Lightforge";
 
-/// Opening size, and the floor for resizing — deliberately the same number.
+/// Opening size, and the floor for resizing, deliberately the same number.
 ///
 /// The header sets the width: the title, the product picker (whose longest
 /// entry is a user-supplied display name) and four navigation buttons, none of
 /// which wrap. The dashboard sets the rest. Its action panel is a fixed 240pt
 /// column of controls beside a column that fills, and a `Row` does not wrap
-/// either — so once the window is narrower than both together, the fixed
+/// either, so once the window is narrower than both together, the fixed
 /// column is simply not drawn. That is not a squeeze, it is PLAY disappearing
 /// entirely, which is why the floor is the opening size rather than something
 /// smaller that still technically renders.
@@ -227,22 +227,22 @@ const APP_ID: &str = "pro.tuxcore.Lightforge";
 /// width and a little over half the height.
 ///
 /// Because the floor is the same value, this is also the smallest screen
-/// Lightforge is usable on — a 1366x768 laptop cannot fit 820pt of client
+/// Lightforge is usable on, a 1366x768 laptop cannot fit 820pt of client
 /// plus a title bar, and would get a window taller than its display.
 ///
-/// A Wayland compositor is free to ignore all of it — a tiling one will hand
+/// A Wayland compositor is free to ignore all of it, a tiling one will hand
 /// the window whatever its slot is, and below this width the dashboard will
 /// lose its right-hand column. Nothing here can prevent that.
 const WINDOW: iced::Size = iced::Size::new(1280.0, 820.0);
 const WINDOW_MIN: iced::Size = WINDOW;
 
-/// The splash card — the only thing painted while a start's artwork is
+/// The splash card, the only thing painted while a start's artwork is
 /// fetched. Small enough to read as a loading screen rather than as a
 /// launcher that has come up broken, which is the complaint it answers: a
 /// cold start used to show the full window with an empty card for a second or
 /// two per game, while that game's background and wordmark came down.
 ///
-/// The *window* is the launcher's size throughout — see [`main`]. Only this
+/// The *window* is the launcher's size throughout; see [`main`]. Only this
 /// card is drawn, on a transparent background, so what anyone sees is a small
 /// panel floating in the middle of the screen.
 const SPLASH: iced::Size = iced::Size::new(460.0, 280.0);
@@ -251,12 +251,12 @@ const SPLASH: iced::Size = iced::Size::new(460.0, 280.0);
 ///
 /// A warm cache answers in milliseconds, and a card that appears and vanishes
 /// inside two frames reads as a glitch rather than as a start. Short enough
-/// that "nothing to fetch" still feels instant — a start is never *slower*
+/// that "nothing to fetch" still feels instant, a start is never *slower*
 /// than it was, only less ugly.
 const SPLASH_FLOOR: Duration = Duration::from_millis(350);
 
-/// A ceiling on the fetch, so a machine with no network — or one behind a
-/// captive portal that never answers — still reaches its launcher. Whatever
+/// A ceiling on the fetch, so a machine with no network, or one behind a
+/// captive portal that never answers, still reaches its launcher. Whatever
 /// landed inside the budget is kept; the rest is fetched on demand as it
 /// always was.
 const SPLASH_BUDGET: Duration = Duration::from_secs(12);
@@ -264,7 +264,7 @@ const SPLASH_BUDGET: Duration = Duration::from_secs(12);
 // We used to force the software renderer here. Through iced 0.13, `wgpu`
 // lagged badly when resizing a window on native Wayland: the client kept up
 // (a resize was serviced in well under a millisecond) but the buffer reached
-// the compositor late, so the window crawled behind the pointer —
+// the compositor late, so the window crawled behind the pointer,
 // iced-rs/iced#2750. Retested on 0.14 (KDE, native Wayland, radv on a Navi 48)
 // and it is gone: wgpu is now the smoother of the two, and the software
 // renderer is the one that stutters under a drag.
@@ -280,7 +280,7 @@ const SPLASH_BUDGET: Duration = Duration::from_secs(12);
 ///
 /// Decoding pictures is this app's one big allocator load: a news thumbnail
 /// is 320px wide but its source is often 2560 or 3840, and the decode happens
-/// at full size before the resize. Those buffers are freed correctly — but
+/// at full size before the resize. Those buffers are freed correctly, but
 /// glibc raises its own mmap threshold as it watches large blocks come and go
 /// (up to 32 MiB), after which such allocations come off the heap instead,
 /// and freed heap pages stay resident. Across 48 threads, each with its own
@@ -338,7 +338,7 @@ fn main() -> iced::Result {
     .theme(|_state: &Lightforge| theme::base())
     // What the surface is cleared to, which is the other half of the splash
     // being a small window. `transparent: true` only gives the surface an
-    // alpha channel — iced still clears it to the theme's background, so
+    // alpha channel, iced still clears it to the theme's background, so
     // without this the "transparent" window is an opaque rectangle with a
     // card in the middle of it. Measured: it dimmed everything behind it.
     .style(|state: &Lightforge, theme| iced::theme::Style {
@@ -351,14 +351,14 @@ fn main() -> iced::Result {
     // The window is the launcher's size from the first frame and is never
     // resized. While the artwork is fetched it paints nothing but the
     // [`SPLASH`] card on a transparent background, so what anyone sees is a
-    // small panel in the middle of the screen — and the frame is off for the
+    // small panel in the middle of the screen, and the frame is off for the
     // same reason, because a loading screen with a title bar is a window, not
     // a splash.
     //
     // **The window must not be resized to do this**, which an earlier version
-    // did and three bugs came out of. A Wayland client cannot place itself —
-    // winit's `set_outer_position` is literally `// Not possible on Wayland.`
-    // — so the compositor centres the window once, at the size it is mapped
+    // did and three bugs came out of. A Wayland client cannot place itself,
+    // winit's `set_outer_position` is literally `// Not possible on Wayland.`,
+    // so the compositor centres the window once, at the size it is mapped
     // at, and a client-side resize afterwards grows it from its top-left
     // corner and leaves it off-centre for good. Mapping at the final size is
     // the only way the window is ever centred. It also costs nothing: no
@@ -410,7 +410,7 @@ struct Splash {
 enum Message {
     Refreshed(ProductCode, Box<Refreshed>),
     Themed(ProductCode, Box<tasks::Themed>),
-    /// Open the Battle.net client on its own — the other-titles path.
+    /// Open the Battle.net client on its own, the other-titles path.
     OpenBattleNet,
     /// Show or hide the download manager.
     ToggleManager,
@@ -537,7 +537,7 @@ enum Message {
     RefreshNews,
     /// Quit.
     Exit,
-    /// A click that no widget consumed — close whatever is open, the way
+    /// A click that no widget consumed, close whatever is open, the way
     /// every other context menu on the desktop behaves.
     Dismiss,
     /// A click *inside* an open panel. Does nothing, and that is the point:
@@ -551,7 +551,7 @@ enum Message {
     /// checking what is there is not damaged.
     ScanAndRepair,
     Scanned(Box<Result<tasks::Scanned, String>>),
-    /// Hash every stored byte against its checksums — or, while that runs,
+    /// Hash every stored byte against its checksums, or, while that runs,
     /// stop it.
     DeepScan,
     DeepScanned(Box<Result<lightforge_core::tact::verify::Report, String>>),
@@ -562,7 +562,7 @@ enum Message {
     Show(Screen),
     SetupStatus(Option<Box<SetupStatus>>),
     RunSetup,
-    /// The first-run wizard — see [`wizard`].
+    /// The first-run wizard; see [`wizard`].
     Wizard(wizard::Msg),
     /// Take back a declined Battle.net and install it after all.
     InstallBattleNet,
@@ -796,7 +796,7 @@ enum ReportStage {
 /// How long the same report is refused for after it is sent.
 ///
 /// Aimed at the person pressing Send again because nothing visibly happened,
-/// not at an attacker — the DSN ships in the binary, so real abuse is a
+/// not at an attacker, the DSN ships in the binary, so real abuse is a
 /// server-side limit, not a client-side one.
 const REPORT_COOLDOWN: Duration = Duration::from_secs(300);
 
@@ -806,7 +806,7 @@ const REPORT_COOLDOWN: Duration = Duration::from_secs(300);
 /// is neither, because it owns a laid-out buffer rather than a string.
 struct ReportDialog {
     kind: ReportKind,
-    /// What the user is typing. A multi-line editor rather than a field —
+    /// What the user is typing. A multi-line editor rather than a field,
     /// "what were you doing" is a paragraph, and a one-line box that scrolls
     /// sideways invites a one-line answer.
     note: iced::widget::text_editor::Content,
@@ -818,7 +818,7 @@ struct ReportDialog {
     tags: Vec<(String, String)>,
     /// A screenshot dropped on the dialog, if there is one.
     shot: Option<art::Shot>,
-    /// The debug bundle, rendered when the dialog opened — that is where the
+    /// The debug bundle, rendered when the dialog opened. That is where the
     /// four things [`DebugInfo::gather`] needs are in scope. Empty for
     /// feedback, which sends none of it. Already scrubbed of the account
     /// name: every rendered bundle is.
@@ -840,8 +840,8 @@ struct UninstallDialog {
 /// The confirmation before a launch that would open the shared prefix with an
 /// older Proton than the one that last built it.
 ///
-/// Shown rather than refused. The pin is a choice the user made — an older
-/// build is sometimes the only one a title runs under — and Lightforge is not
+/// Shown rather than refused. The pin is a choice the user made, an older
+/// build is sometimes the only one a title runs under, and Lightforge is not
 /// in a position to know that this particular pair breaks. What it can do is
 /// say what is about to happen to the prefix every other game shares.
 #[derive(Debug, Clone)]
@@ -901,7 +901,7 @@ impl SettingsTab {
 /// care about, and saying nothing is different from saying no.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShopBuild {
-    /// Not a WoW product — nothing to recommend.
+    /// Not a WoW product. Nothing to recommend.
     NotWow,
     /// Already on it.
     Running,
@@ -928,7 +928,7 @@ enum Screen {
     Dashboard,
     /// Live news, once there is something to show. A placeholder for now: the
     /// tab is in the ribbon so the shape of the app is settled, and what fills
-    /// it — Wowhead, sales, patch notes — is still being decided.
+    /// it, Wowhead, sales, patch notes, is still being decided.
     News,
     /// Lightforge's own release notes. Placeholder, like [`Screen::News`], and
     /// separate from it: what Lightforge changed is not what Blizzard did.
@@ -947,7 +947,7 @@ enum Screen {
 /// only obscure that.
 /// Which row of the Game Optimizations grid a height is for.
 ///
-/// The two rows hold different amounts, so they are measured apart — see
+/// The two rows hold different amounts, so they are measured apart, see
 /// [`Lightforge::card_height`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CardRow {
@@ -959,7 +959,7 @@ enum CardRow {
 
 /// Which profile a Game Optimizations control edits.
 ///
-/// The same switches appear twice — on a product's own page, and in
+/// The same switches appear twice, on a product's own page, and in
 /// Settings › Battle.net for the shared profile that Battle.net and every
 /// game it launches run under. Routed by an explicit scope rather than by
 /// whichever screen happens to be open: the second is the kind of implicit
@@ -968,7 +968,7 @@ enum CardRow {
 enum Scope {
     /// The product the launcher is showing.
     Product,
-    /// `Config::battle_net_tweaks` — shared, because the mechanism cannot be
+    /// `Config::battle_net_tweaks`: shared, because the mechanism cannot be
     /// per-game. See that field for why.
     BattleNet,
 }
@@ -1013,7 +1013,7 @@ impl std::fmt::Display for ApiChoice {
 struct ProtonChoice(Option<String>, Unpinned);
 
 /// What a picker's "no pin of my own" entry falls through to, which is not the
-/// same on every row — and the entry has to say which, or it reads as a build
+/// same on every row, and the entry has to say which, or it reads as a build
 /// the user never chose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Unpinned {
@@ -1066,7 +1066,7 @@ impl std::fmt::Display for Choice {
 /// One entry in the branch dropdown: a build of the selected line.
 ///
 /// Carries whether the product is configured so the list can offer branches
-/// the user has never set up — picking one is how you add it, which beats
+/// the user has never set up, picking one is how you add it, which beats
 /// hand-editing `config.toml` to try a PTR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BranchChoice {
@@ -1128,7 +1128,7 @@ struct Download {
 struct Job {
     /// Bytes the first run planned. `None` until one has planned.
     total: Option<u64>,
-    /// Bytes done when the current run started — shown while a resumed run
+    /// Bytes done when the current run started, shown while a resumed run
     /// is still planning, so the bar holds rather than dropping to zero.
     reached: u64,
 }
@@ -1223,8 +1223,8 @@ impl HandoffAct {
 
     /// Blue means ready to play, and only that.
     ///
-    /// Installing is a filled button too — it is still the thing to press on
-    /// this panel — but a neutral one, so the blue is never spent on a game
+    /// Installing is a filled button too. It is still the thing to press on
+    /// this panel, but a neutral one, so the blue is never spent on a game
     /// that cannot be played yet. `None` draws outlined: opening the client
     /// is not an act on this game at all, so it does not dress as one.
     fn colour(self) -> Option<iced::Color> {
@@ -1272,12 +1272,12 @@ enum Launch {
     Game,
     /// Hand off to Battle.net, which starts the game itself.
     ///
-    /// Not for the shop's sake — that was the old assumption, disproven on
+    /// Not for the shop's sake. That was the old assumption, disproven on
     /// 2026-10-02: the shop is the game's own CEF and works from a direct
     /// launch. This is for a game only Battle.net can install and update.
     BattleNet,
     /// Open the Battle.net client itself, for everything outside the WoW
-    /// family. A pass-through, not a managed install — see `SPEC.md`.
+    /// family. A pass-through, not a managed install; see `SPEC.md`.
     Client,
     /// Put the client on a game's tile so its Install button can be pressed.
     ///
@@ -1303,7 +1303,7 @@ struct Lightforge {
     /// The branch last used in each line, so returning to a tile returns to
     /// the build you were on rather than snapping back to live.
     last_branch: HashMap<ProductLine, ProductCode>,
-    /// Which products exist and how they group — built in, then whatever the
+    /// Which products exist and how they group, built in, then whatever the
     /// manifest states over it.
     catalog: Catalog,
     choices: Vec<Choice>,
@@ -1320,7 +1320,7 @@ struct Lightforge {
     manager_open: bool,
     /// Whether the catalog panel is open.
     browse_open: bool,
-    /// The band's overflow menu — only ever reachable when something is in it.
+    /// The band's overflow menu, only ever reachable when something is in it.
     strip_open: bool,
     /// Whether the menu under the wordmark is open.
     app_menu_open: bool,
@@ -1329,7 +1329,7 @@ struct Lightforge {
     /// Two stacks rather than an index into one list, because that is exactly
     /// what back and forward are: going back moves the current page onto
     /// `forward`, going forward moves it onto `visited`, and visiting a new
-    /// page from anywhere clears `forward` — the branch you did not take.
+    /// page from anywhere clears `forward`: the branch you did not take.
     visited: Vec<Screen>,
     forward: Vec<Screen>,
     /// Whether the explanatory prose under the controls is drawn.
@@ -1337,9 +1337,9 @@ struct Lightforge {
     /// Off for the people who use Lightforge: the interface is meant to be
     /// readable without a paragraph under every switch, and a screen of grey
     /// sentences is what it looks like when it is not. On for whoever is
-    /// working on it — see [`HINTS_CHORD`].
+    /// working on it; see [`HINTS_CHORD`].
     hints: bool,
-    /// Battle.net's own mark, if the prefix has one — see
+    /// Battle.net's own mark, if the prefix has one, see
     /// [`Layout::battle_net_icon`]. Held as a path, not a handle: iced keys an
     /// image by its path, so rebuilding the header does not decode it again.
     bnet_icon: Option<PathBuf>,
@@ -1385,7 +1385,7 @@ struct Lightforge {
     /// Transfers paused for a play session, to be put back afterwards.
     resume_after_play: Vec<ProductCode>,
     /// Why `config.toml` could not be loaded. While set, the app shows only
-    /// that and writes nothing — see [`Lightforge::new`].
+    /// that and writes nothing; see [`Lightforge::new`].
     config_error: Option<String>,
     /// The queue as last written to disk, so an unchanged one is not
     /// rewritten on every message.
@@ -1395,7 +1395,7 @@ struct Lightforge {
     queue_frozen: bool,
     /// A cancelled transfer whose task has not reported back yet.
     ///
-    /// Pausing flips the UI at once, but the run keeps going for a moment —
+    /// Pausing flips the UI at once, but the run keeps going for a moment,
     /// it finishes the requests already in flight and checkpoints the store.
     /// Starting anything before it lands would put two writers on the same
     /// CASC store, which is the corruption pre-flight exists to prevent.
@@ -1421,7 +1421,7 @@ struct Lightforge {
     wizard: Option<wizard::Wizard>,
     /// The release notes for the version that has just started, while they
     /// are on screen. `None` once dismissed, or when this start is not the
-    /// first one after an update — see [`Lightforge::patch_notes_due`].
+    /// first one after an update; see [`Lightforge::patch_notes_due`].
     patch_notes: Option<PatchNotes>,
     /// The small window the app opens in. `None` once it has grown into the
     /// launcher, which happens exactly once per run.
@@ -1458,11 +1458,11 @@ struct Lightforge {
     /// Builds the user has already agreed to launch under this session.
     ///
     /// Per build rather than once for all: agreeing to one downgrade is not
-    /// agreeing to the next one. Not persisted — a new run of the launcher is
+    /// agreeing to the next one. Not persisted, a new run of the launcher is
     /// a fair moment to ask again, and the prefix may have moved since.
     downgrade_ok: HashSet<String>,
     /// Partitions that could become a library, as last scanned. Refreshed
-    /// when the Storage section opens rather than polled — a drive appearing
+    /// when the Storage section opens rather than polled, a drive appearing
     /// while the page is shut is not news.
     partitions: Vec<library::Partition>,
     /// What clearing one drive last freed, by library id.
@@ -1516,7 +1516,7 @@ struct Lightforge {
     /// Whether the environment-variable editor is expanded, per panel.
     ///
     /// Two flags rather than one because they want different defaults. On a
-    /// product's page the card is folded away — it is the escape hatch, below
+    /// product's page the card is folded away. It is the escape hatch, below
     /// four cards of switches. In Settings › Battle.net it is open from the
     /// start: a hand-off game has no client settings, so environment
     /// variables are not a last resort there but most of what the page is
@@ -1529,7 +1529,7 @@ struct Lightforge {
     families: lightforge_core::families::Families,
     /// Products whose unattended pass has already run this session. Addons
     /// are per product, so switching to Classic is the first chance to bring
-    /// Classic's up to date — but only the first chance: clicking back and
+    /// Classic's up to date, but only the first chance: clicking back and
     /// forth along the band must not re-ask CurseForge each time.
     addon_auto_done: Vec<ProductCode>,
     /// An unattended addon pass is in flight. Separate from `addons_busy`,
@@ -1537,7 +1537,7 @@ struct Lightforge {
     /// for, so it must not grey the page out.
     addon_auto_running: bool,
     /// What the unattended pass did, said once on the Addons page. `None`
-    /// when it has not run or had nothing to do — "0 addons updated" is noise.
+    /// when it has not run or had nothing to do, "0 addons updated" is noise.
     addon_auto_note: Option<String>,
     /// A launch waiting for that pass to finish. The game reads AddOns once,
     /// at login, and extracting into that directory while it does is how a
@@ -1571,8 +1571,8 @@ impl Lightforge {
         let dirs = AppDirs::discover().ok();
         // A missing file is a first run and gets defaults. A file that exists
         // but will not load is someone's settings with a problem in them: the
-        // app stops on it rather than quietly running on defaults — which
-        // point at the default library — and then saving those over it.
+        // app stops on it rather than quietly running on defaults, which
+        // point at the default library, and then saving those over it.
         let loaded = dirs.as_ref().map(|d| Config::load_or_default(&d.config_file()));
         let config_error = match (&loaded, dirs.as_ref()) {
             (Some(Err(e)), Some(dirs)) => Some(broken_config(e, &dirs.config_file())),
@@ -1586,7 +1586,7 @@ impl Lightforge {
         // Seeded here rather than lazily, because every path below this line
         // resolves through one. Deliberately *not* saved: starting the app is
         // not a reason to write to someone's config, and the seed does not
-        // need writing to be stable — see `Config::ensure_libraries`. It goes
+        // need writing to be stable; see `Config::ensure_libraries`. It goes
         // to disk with the first change the user makes.
         let _ = config.ensure_libraries();
         let config = config;
@@ -1740,7 +1740,7 @@ impl Lightforge {
         app.load_tweak_inputs();
         // Before anything resolves a path: a drive that came back at a
         // different mount point is found again here, so a game on it reads as
-        // installed rather than as missing. Cheap — one pass over
+        // installed rather than as missing. Cheap, one pass over
         // `/proc/self/mounts` and one marker file per absent library.
         app.refresh_drives();
         app.restore_queue();
@@ -1769,7 +1769,7 @@ impl Lightforge {
         let resume = app.pump();
         // Addons that update themselves do it now, so they are current by
         // the time anyone presses Play. Quiet, and nothing waits for it
-        // except a launch — see `preflight`.
+        // except a launch; see `preflight`.
         let addons = Task::done(Message::AutoUpdateAddons);
         // Which tile each product belongs to, for the games Battle.net runs.
         let families = Task::perform(
@@ -1778,14 +1778,14 @@ impl Lightforge {
         );
         // The first run, exactly once: the flag is written when the wizard is
         // finished or dismissed, so a machine that has seen it never sees it
-        // again by itself. Nothing is written here — starting the app is not a
+        // again by itself. Nothing is written here, starting the app is not a
         // reason to touch someone's config.
         if !app.config.setup_complete {
             app.wizard = Some(wizard::Wizard::default());
         }
         // Every tracked product's art into the cache before the launcher is
         // worth looking at, so the first visit to a panel is not two seconds
-        // of empty card. The splash *is* this fetch, made visible — and the
+        // of empty card. The splash *is* this fetch, made visible, and the
         // wizard's first slide reads its count off the same run rather than
         // starting a second one.
         let artwork = app.open_splash();
@@ -1856,7 +1856,7 @@ impl Lightforge {
     /// [`SPLASH_FLOOR`] or the floor outlasted the fetch. There is deliberately
     /// no second copy of this: when there were two, they drifted.
     ///
-    /// Nothing is resized or moved — the window has been the launcher's size
+    /// Nothing is resized or moved, the window has been the launcher's size
     /// and in the middle of the screen since it was mapped (see [`main`]).
     /// All that changes is that the frame goes on, the window starts taking
     /// clicks again, and `view` stops drawing the card.
@@ -1871,7 +1871,7 @@ impl Lightforge {
                 .chain(iced::window::disable_mouse_passthrough(id))
         });
         // Nobody ever *navigates* to the opening screen, so `arrived` has
-        // never run for it — and the news rail on it needs the headlines.
+        // never run for it, and the news rail on it needs the headlines.
         // Through the same function the navigation uses rather than a second
         // call to `fetch_news`, so the dashboard has one definition of what
         // it wants on the way in.
@@ -1976,8 +1976,8 @@ impl Lightforge {
     ///
     /// The window id has to be asked for rather than kept: this is a
     /// single-window application, so there is exactly one, but iced hands it
-    /// out at runtime and the only other place that needs it — the close
-    /// request — is given it by the event.
+    /// out at runtime and the only other place that needs it, the close
+    /// request, is given it by the event.
     ///
     /// Nothing un-minimizes when the game exits. A launcher that raises itself
     /// over whatever the user moved on to is the behaviour this kind of
@@ -1992,8 +1992,8 @@ impl Lightforge {
     fn preflight(&mut self, what: Launch) -> Task<Message> {
         // Before anything is told to start: the prefix is shared by every
         // product and one Battle.net login, and Proton only ever migrates it
-        // forward. Running an older build against it is allowed — somebody
-        // pinned it on purpose — but not silently.
+        // forward. Running an older build against it is allowed, somebody
+        // pinned it on purpose, but not silently.
         if let Some(dialog) = self.downgrade_ahead(what) {
             self.downgrade_dialog = Some(dialog);
             return Task::none();
@@ -2001,7 +2001,7 @@ impl Lightforge {
         // Checked again here, not just on the button: pre-flight relinks the
         // prefix, and relinking a library that is not there is what would
         // leave an empty install behind for the client to offer a repair on.
-        // A Battle.net hand-off is held too — the game it would start is on
+        // A Battle.net hand-off is held too, the game it would start is on
         // the same drive.
         if !matches!(what, Launch::Client) {
             if let Some(drive) = self.offline_drive(&self.selected.code) {
@@ -2016,7 +2016,7 @@ impl Lightforge {
 
         // An unattended addon pass is extracting into the directory the
         // client is about to read. Hold the launch until it is done rather
-        // than racing it — it is seconds, and the alternative is a half
+        // than racing it. It is seconds, and the alternative is a half
         // written addon loaded at login. Opening the Battle.net client reads
         // nothing of ours, so it does not wait.
         if self.addon_auto_running && !matches!(what, Launch::Client) {
@@ -2025,7 +2025,7 @@ impl Lightforge {
             return Task::none();
         }
 
-        // Pre-flight pauses the launched product's own download by itself —
+        // Pre-flight pauses the launched product's own download by itself,
         // that one is a correctness guard, since the client and the
         // downloader would share one CASC store. The rest of the queue shares
         // that store too, so it is paused here when asked, and resumed when
@@ -2080,7 +2080,7 @@ impl Lightforge {
         })
     }
 
-    /// Which workload an intent runs as — the game itself, or the client
+    /// Which workload an intent runs as, the game itself, or the client
     /// acting for it.
     fn runs_for(what: Launch) -> tasks::Runs {
         match what {
@@ -2102,7 +2102,7 @@ impl Lightforge {
     /// What Battle.net's install flow calls this product.
     ///
     /// The catalogue's install key where there is one, the product code
-    /// otherwise — they are the same for most titles, and differ where the
+    /// otherwise. They are the same for most titles, and differ where the
     /// CDN and the client disagree (`hsb` against `hs_beta`).
     fn install_uid_of(&self, code: &ProductCode) -> String {
         self.families
@@ -2148,7 +2148,7 @@ impl Lightforge {
 
         // Three things the button can honestly be, in order of how much is
         // known. Without a game family the client cannot be told which tile
-        // to open, and a guess lands on somebody else's game — so that case
+        // to open, and a guess lands on somebody else's game, so that case
         // promises nothing beyond opening the client.
         let family = self.family_of(&self.selected.code);
         let installed = self.installed_versions.contains_key(self.selected.code.as_str());
@@ -2160,7 +2160,7 @@ impl Lightforge {
         left = left.extend(self.hint(act.hint()).map(Element::from));
         // The managed panel has a row of links and this one had none, so a
         // hand-off game had no route to any optimization page. It is phrased
-        // for the shared profile on purpose — "its games", not "this game" —
+        // for the shared profile on purpose, "its games", not "this game",
         // because one environment covers every game the client starts.
         left = left.push(
             button(
@@ -2180,15 +2180,15 @@ impl Lightforge {
         let open = button(
             container(text(act.label()).size(theme::HEADING)).center_x(Length::Fill),
         )
-        // Dressed as the Play control on a game Lightforge runs itself —
-        // same 240 by CONTROL_HEIGHT, same heading, same filled face — because
+        // Dressed as the Play control on a game Lightforge runs itself,
+        // same 240 by CONTROL_HEIGHT, same heading, same filled face, because
         // it is the same act. The hand-off drives Battle.net end to end now,
         // so a quiet outlined button would be understating what it does.
         //
         // Blue rather than PLAY's gold: it starts through Battle.net, and
         // the colour is the one thing that can say so without a second line
         // of text. When there is no game family to ask for, the button only
-        // opens the client — not a launch, so it does not dress as one.
+        // opens the client, not a launch, so it does not dress as one.
         .style(move |base: &iced::Theme, status| match act.colour() {
             Some(colour) => theme::filled(colour)(base, status),
             None => theme::outlined(base, status),
@@ -2220,7 +2220,7 @@ impl Lightforge {
     /// The one thing decided here is the drive being away. That is a fact
     /// about the filesystem rather than about a build, and it outranks every
     /// other state: a product whose library is not mounted has nothing to
-    /// launch, nothing worth downloading, and must not be repaired — the
+    /// launch, nothing worth downloading, and must not be repaired, the
     /// files are intact somewhere else.
     fn action(&self) -> ActionState {
         if let Some(drive) = self.offline_drive(&self.selected.code) {
@@ -2291,7 +2291,7 @@ impl Lightforge {
         }
         // The panel holds this product when its drive is away, but the queue
         // is also restored from disk and resumed without anyone pressing
-        // anything — so the check that actually protects the files is here.
+        // anything, so the check that actually protects the files is here.
         if let Some(drive) = self.offline_drive(&code) {
             self.error = Some(format!("{drive} is not mounted"));
             return Task::none();
@@ -2300,7 +2300,7 @@ impl Lightforge {
         self.error = None;
 
         // Already in the queue: a queued entry stays put, a paused one is
-        // being resumed — as the same job, so its bar continues.
+        // being resumed, as the same job, so its bar continues.
         let mut job = Job::default();
         if let Some(existing) = self.queue.iter().position(|d| d.code == code) {
             if matches!(self.queue[existing].stage, Stage::Queued) {
@@ -2351,7 +2351,7 @@ impl Lightforge {
 
         self.downloads.register(code.clone(), cancel.clone());
         self.queue[next].stage = Stage::Running { rx, cancel: cancel.clone() };
-        // Whatever the line said before — "paused", most often — is over.
+        // Whatever the line said before, "paused", most often, is over.
         if code == self.selected.code {
             self.status = "downloading…".to_owned();
         }
@@ -2390,7 +2390,7 @@ impl Lightforge {
         match &entry.stage {
             Stage::Running { cancel, .. } => {
                 cancel.cancel();
-                // Shown as paused immediately — the click is answered now,
+                // Shown as paused immediately, the click is answered now,
                 // not when the run finishes winding down.
                 entry.stage = Stage::Paused(job_progress(entry.job, &entry.sample, 0));
                 self.winding_down = Some(code.clone());
@@ -2405,7 +2405,7 @@ impl Lightforge {
     /// Every message, with the status line watched on the way out.
     ///
     /// Lightforge only traces to stdout, so the status line is the closest
-    /// thing to a log it has — and whatever it said in the minute before a
+    /// thing to a log it has, and whatever it said in the minute before a
     /// bug report is usually the whole story. Recording it here rather than at
     /// the hundred-odd places that assign it means nothing can be forgotten.
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -2447,7 +2447,7 @@ impl Lightforge {
                 // band now, and the menu is answering a question already asked.
                 self.close_panels();
                 // The band is on News too, where choosing a game is a request
-                // to go and look at it — leaving you on a page that says
+                // to go and look at it, leaving you on a page that says
                 // nothing about the game you just picked would read as a dead
                 // click.
                 self.go_to(Screen::Dashboard);
@@ -2455,7 +2455,7 @@ impl Lightforge {
             }
 
             Message::BranchSelected(pick) => {
-                // An unconfigured branch is offered, not hidden — picking it
+                // An unconfigured branch is offered, not hidden, picking it
                 // is how it gets added, which beats hand-editing config.toml
                 // to try a PTR for an afternoon.
                 if !pick.configured {
@@ -2548,7 +2548,7 @@ impl Lightforge {
                 if code == self.selected.code {
                     // Only when it is actually different art. A revalidation
                     // that answered 304 resolves to the same files, already
-                    // decoded and on screen — but assigning it hands iced new
+                    // decoded and on screen, but assigning it hands iced new
                     // image handles, which it has to upload again, and the
                     // page blinks a second or two after a switch for no
                     // reason. [`Branding`] carries each asset's path and
@@ -2691,8 +2691,8 @@ impl Lightforge {
                 };
 
                 // Resumed while this run was still winding down: the entry is
-                // already a fresh, queued one. Marking it paused here — as
-                // this handler once did — swallowed the resume, and whether it
+                // already a fresh, queued one. Marking it paused here, as
+                // this handler once did, swallowed the resume, and whether it
                 // happened came down to how fast the old run stopped.
                 let resumed = entry.is_some_and(|at| matches!(self.queue[at].stage, Stage::Queued));
                 let complete = matches!(&result, Ok(done) if done.complete);
@@ -2754,7 +2754,7 @@ impl Lightforge {
                     Ok(note) => self.status = note,
                     Err(e) => self.error = Some(e),
                 }
-                // A launch may have paused transfers — its own product through
+                // A launch may have paused transfers, its own product through
                 // pre-flight's guard, and the rest of the queue through the
                 // setting. Both are owed a restart, and resuming means
                 // planning afresh.
@@ -2773,7 +2773,7 @@ impl Lightforge {
                     }
                 }
                 // A Battle.net session may have filled a cache that was
-                // empty when the app started — the first non-WoW install in
+                // empty when the app started, the first non-WoW install in
                 // a prefix is exactly when its catalogue first appears. It is
                 // 25 ms of reading, so it costs less than remembering not to.
                 Task::batch([
@@ -2800,7 +2800,7 @@ impl Lightforge {
                 match result {
                     // Found it. `busy` stays set and the queue stays paused
                     // for the length of the session, exactly as a direct
-                    // launch does — the whole point of watching.
+                    // launch does, the whole point of watching.
                     Ok(tasks::Handoff::Playing(game)) => {
                         self.status = format!(
                             "{} is running — this unlocks when it exits",
@@ -2816,11 +2816,11 @@ impl Lightforge {
                             self.minimize_if_asked(),
                         ])
                     }
-                    // The client is up and waiting on a person — two-factor,
+                    // The client is up and waiting on a person, two-factor,
                     // an outage, an update of its own. Said plainly, with the
                     // client left running so it can be finished there.
                     // Closed while we were waiting for it to sign in. Not a
-                    // failure to report as one — just nothing to hand off to.
+                    // failure to report as one, just nothing to hand off to.
                     Ok(tasks::Handoff::ClientClosed) => self.update(Message::Launched(Ok(
                         "Battle.net was closed before the game could start".to_owned(),
                     ))),
@@ -2902,7 +2902,7 @@ impl Lightforge {
 
             Message::RemoveProduct(code) => {
                 // A tile is a *line*, and its PTR and beta are branches behind
-                // its version picker rather than games of their own — so
+                // its version picker rather than games of their own, so
                 // Remove takes the line with it. Dropping the head alone left
                 // the tile on screen wearing whichever branch survived, which
                 // is what someone removing the game has just said they do not
@@ -2994,8 +2994,8 @@ impl Lightforge {
                     // Both ways out go through `finish_splash` and nothing
                     // else. An earlier version did the work here directly as
                     // well, and the two copies drifted: the one taken
-                    // whenever the fetch outlasts the floor — which is every
-                    // start with anything to fetch — missed a step the other
+                    // whenever the fetch outlasts the floor, which is every
+                    // start with anything to fetch, missed a step the other
                     // had.
                     _ => self.finish_splash(),
                 }
@@ -3058,7 +3058,7 @@ impl Lightforge {
                 match what {
                     Launch::Game => {
                         // Play unlocks when the *game* exits, not when the
-                        // prefix is quiet — the wind-down behind it is watched
+                        // prefix is quiet, the wind-down behind it is watched
                         // and reaped without holding the button. See
                         // `tasks::run_game`.
                         self.status = "running — Play unlocks when the game closes".to_owned();
@@ -3200,7 +3200,7 @@ impl Lightforge {
 
             Message::NewsImages(images) => {
                 // Only pictures the fetch found are in here, and only ones
-                // not already held — so this adds, never replaces. Replacing
+                // not already held, so this adds, never replaces. Replacing
                 // would hand the view a new handle for an identical picture
                 // and re-upload every texture on the page.
                 self.news_images.extend(images);
@@ -3228,7 +3228,7 @@ impl Lightforge {
                     None => Task::none(),
                 };
                 // Open on settings, whose first card is setup, when the machine
-                // cannot launch anything yet — but never yank the user out of
+                // cannot launch anything yet, but never yank the user out of
                 // a screen they chose.
                 if let Some(status) = &status {
                     // Not while the first run is up: it has a setup step of its
@@ -4061,7 +4061,7 @@ impl Lightforge {
             Message::SetDefaultDrive(id) => {
                 // The button is held for a drive that is away, but this also
                 // decides where the *next* install goes and what Battle.net is
-                // told — neither is worth pointing at a drive that is not here.
+                // told, neither is worth pointing at a drive that is not here.
                 if let Some(drive) = self
                     .config
                     .libraries
@@ -4079,8 +4079,8 @@ impl Lightforge {
                 self.save_config();
                 self.rebuild_layout();
                 // Battle.net's `DefaultInstallPath` follows the default drive,
-                // and it is only written where nothing in the prefix is running
-                // — so it is re-asserted by the next pre-flight, not here. The
+                // and it is only written where nothing in the prefix is running,
+                // so it is re-asserted by the next pre-flight, not here. The
                 // client itself does not move: it lives in the prefix.
                 self.status = "new installs will go to this drive".to_owned();
                 self.measure_storage()
@@ -4129,8 +4129,8 @@ impl Lightforge {
             Message::OpenDrive(id) => {
                 if let Some(library) = self.config.libraries.iter().find(|l| l.id == id) {
                     // A drive with nothing installed on it yet has no `games/`
-                    // folder, so this opens the nearest thing that does exist
-                    // — the place the folder would appear.
+                    // folder, so this opens the nearest thing that does exist,
+                    // the place the folder would appear.
                     let path = library
                         .games()
                         .ancestors()
@@ -4300,9 +4300,9 @@ impl Lightforge {
                 self.search_seq += 1;
                 let seq = self.search_seq;
 
-                // Typing is the search. The button stays — it is how you ask
+                // Typing is the search. The button stays. It is how you ask
                 // again after a provider was down, and pressing Enter has to
-                // do something — but nobody should have to reach for it.
+                // do something, but nobody should have to reach for it.
                 //
                 // Two letters is where a search stops matching half the
                 // catalogue, and the pause is long enough that a word typed at
@@ -4463,7 +4463,7 @@ impl Lightforge {
                         let tags = report_tags(&info);
                         // The recent status lines go into the shown block as
                         // well as into the breadcrumbs, because the card
-                        // promises that this is what gets sent — and they are
+                        // promises that this is what gets sent, and they are
                         // scrubbed like everything else, since a failure
                         // message can carry a path.
                         let mut text = info.render();
@@ -4515,7 +4515,7 @@ impl Lightforge {
                 //
                 // Spoken directly rather than through a file-dialog crate:
                 // `rfd` drives the portal through `libdbus` on a thread of its
-                // own, and inside this process that call never returns — the
+                // own, and inside this process that call never returns, the
                 // dialog does not appear and the thread sits in a futex. The
                 // same call from a bare test binary works, so it is this
                 // process it dislikes, not the machine. `ashpd` is pure Rust
@@ -4536,8 +4536,8 @@ impl Lightforge {
                     let files = request.send().await.ok()?.response().ok()?;
                     // Cancelling comes back as an empty list, which is not an
                     // error and means nothing happened. `to_file_path` rather
-                    // than the URL's own `path`, which is still percent-encoded
-                    // — and "Screenshot 2026-10-09.png" is the normal case.
+                    // than the URL's own `path`, which is still percent-encoded,
+                    // and "Screenshot 2026-10-09.png" is the normal case.
                     files.uris().first().and_then(|uri| uri.to_file_path().ok())
                 },
                 Message::ReportShotPicked,
@@ -4930,7 +4930,7 @@ impl Lightforge {
                 let Some(report) = self.owed_repair.clone() else {
                     return Task::none();
                 };
-                // Held only for the index rewrite — milliseconds — since that
+                // Held only for the index rewrite, milliseconds, since that
                 // is the one step a launching client must not overlap.
                 self.busy = true;
                 Task::perform(tasks::repair(self.layout.clone(), self.selected.code.clone(), *report), Message::Repaired)
@@ -4996,7 +4996,7 @@ impl Lightforge {
                     return Task::none();
                 };
                 // Per product, so this cannot take another product's shaders
-                // with it — the reason the cache is keyed that way at all.
+                // with it, the reason the cache is keyed that way at all.
                 let dir = dirs.shader_cache_dir(&self.selected.code);
                 match std::fs::remove_dir_all(&dir) {
                     Ok(()) => self.status = "shader cache cleared".to_owned(),
@@ -5017,7 +5017,7 @@ impl Lightforge {
     /// between the settings panel and a hardcoded guess, and a guess is what
     /// put a 37 GiB texture pack in a plan nobody asked for.
     /// The optional downloads a product is opted into, limited to the ones
-    /// Lightforge offers — see [`OFFERED_OPTIONAL`]. An opt-in to anything
+    /// Lightforge offers; see [`OFFERED_OPTIONAL`]. An opt-in to anything
     /// else, from before that list existed, is ignored rather than fetched
     /// behind a switch the user can no longer see.
     fn opted_optional(&self, code: &ProductCode) -> Vec<String> {
@@ -5170,7 +5170,7 @@ impl Lightforge {
         let code = self.selected.code.clone();
         let targets = self.install_targets(&code);
         // Opens on the drive this product is already assigned to, else the
-        // default one — not on the first row, which would silently re-target a
+        // default one, not on the first row, which would silently re-target a
         // product whose files are elsewhere.
         let assigned = self
             .config
@@ -5256,7 +5256,7 @@ impl Lightforge {
     /// Assign a product to a library and make the prefix able to see it.
     ///
     /// Writing the assignment is the cheap half. The other half is that the
-    /// library has to be set up — its folder and marker written — and linked
+    /// library has to be set up, its folder and marker written, and linked
     /// into the prefix under its own drive letters, or the download would land
     /// somewhere Wine cannot address and the in-game shop would have no drive
     /// root to start on.
@@ -5282,7 +5282,7 @@ impl Lightforge {
         Ok(())
     }
 
-    /// Rebuild the layout from the config — after a library is added, removed,
+    /// Rebuild the layout from the config, after a library is added, removed,
     /// made main, or assigned to a product.
     /// Re-read what is provisioned, off the UI thread.
     fn setup_status(&self) -> Task<Message> {
@@ -5294,9 +5294,9 @@ impl Lightforge {
 
     /// Bring the header's list back in line with the configured products.
     ///
-    /// Adoption can add a product nobody chose — a found install of Classic Era
+    /// Adoption can add a product nobody chose, a found install of Classic Era
     /// is a game the user has, whether or not they would have thought to add
-    /// the tile — so the two lists are reconciled rather than appended to.
+    /// the tile, so the two lists are reconciled rather than appended to.
     fn sync_choices(&mut self) {
         self.choices = self
             .config
@@ -5322,7 +5322,7 @@ impl Lightforge {
     ///
     /// The relocation is the half worth having. A drive that was mounted at
     /// `/run/media/user/games` and comes back at `/run/media/user/games1` is
-    /// still the same volume, and its marker says so — so the recorded path is
+    /// still the same volume, and its marker says so, so the recorded path is
     /// corrected rather than the library being declared lost.
     fn refresh_drives(&mut self) {
         let mut moved = false;
@@ -5371,7 +5371,7 @@ impl Lightforge {
         Ok(())
     }
 
-    /// Take a drive off Lightforge's list. Nothing on it is deleted — the
+    /// Take a drive off Lightforge's list. Nothing on it is deleted, the
     /// games are still there, and re-adding the drive picks them back up by
     /// its marker.
     fn remove_drive(&mut self, id: &str) -> Result<(), String> {
@@ -5432,7 +5432,7 @@ impl Lightforge {
     ///
     /// Only while nothing is installed in the current one: then it is a
     /// config change. With games or a prefix in it, it would be a data
-    /// migration — re-pointing the prefix's game symlink, moving 100+ GB —
+    /// migration, re-pointing the prefix's game symlink, moving 100+ GB,
     /// and leaving the old library behind unannounced is not an answer.
     fn relocate(&mut self) -> Result<(), String> {
         let path = parse_path(&self.location_input)?;
@@ -5454,7 +5454,7 @@ impl Lightforge {
             Some(root) if root == path => None,
             _ => Some(path.clone()),
         };
-        // The first library moves with the root when it was under it — which
+        // The first library moves with the root when it was under it, which
         // it is unless the user pointed `games_dir` somewhere else. Nothing is
         // installed (checked above), so this is a path change, not a move.
         let old = self.layout.games_root();
@@ -5572,7 +5572,7 @@ impl Lightforge {
         // that is exactly when you want to look at it. Its button is at the
         // end of the ribbon, so a stacked layer pinned to the top right lands
         // under it, padded clear of the ribbon it drops out of. (Add-a-game
-        // used to share this corner; it now hangs off the `+` itself — see
+        // used to share this corner; it now hangs off the `+` itself, see
         // [`Lightforge::strip`].)
         let overlay: Option<Element<Message>> =
             match self.manager_open && !self.queue.is_empty() {
@@ -5665,7 +5665,7 @@ impl Lightforge {
             let entry = button(text(label).size(TAB_LABEL).font(theme::BOLD))
                 .padding([theme::SM, theme::SM]);
             // Addons and Game Optimizations are a game's own pages, opened
-            // from its panel, so Play stays lit on them — and stays clickable,
+            // from its panel, so Play stays lit on them, and stays clickable,
             // since it is the way back.
             let within = match screen {
                 Screen::Dashboard => matches!(self.screen, Screen::Addons | Screen::Tweaks),
@@ -5681,7 +5681,7 @@ impl Lightforge {
         // A tab that leaves the app rather than changing the screen, so it
         // cannot go through `nav`: there is no `Screen` to compare against and
         // nothing behind it to light up. It wears the arrow for exactly that
-        // reason — it is the only thing in this row that opens a browser, and
+        // reason. It is the only thing in this row that opens a browser, and
         // without the mark it reads as a page that never arrives.
         let outbound = |label: &'static str, url: &'static str| {
             button(
@@ -5721,14 +5721,14 @@ impl Lightforge {
         .on_press(Message::ToggleAppMenu);
 
         // Title, then the pages, then everything that is not a page pushed to
-        // the far end. The band is no longer in this row at all — it has one
+        // the far end. The band is no longer in this row at all, it has one
         // of its own below, so the tiles answer "which game" where the tabs
         // answer "which page", instead of the two sharing a line.
         let mut bar = row![popover::popover(
             wordmark,
             // No `mouse_area` guard here: a popover captures the pointer over
             // its own bounds, which is what that guard is for on the stacked
-            // panels — see [`popover`].
+            // panels; see [`popover`].
             self.app_menu_open.then(|| self.app_menu()),
         )
         .align_left()]
@@ -5761,7 +5761,7 @@ impl Lightforge {
 
         // The pages in a row of their own rather than loose in `bar`, so
         // [`TAB_GAP`] sets the air between tabs and nothing else: the row above
-        // separates groups — wordmark, arrows, pages — and those two distances
+        // separates groups, wordmark, arrows, pages, and those two distances
         // are not the same distance.
         bar = bar.push(Space::new().width(Length::Fixed(GROUP_GAP)));
         bar = bar.push(
@@ -5800,13 +5800,13 @@ impl Lightforge {
 
         // No backdrop behind the tabs. The wordmark, the arrows and the pages
         // are chrome, and chrome over artwork needs no bar of its own to be
-        // legible — what made the old ribbon necessary was the band sharing
+        // legible, what made the old ribbon necessary was the band sharing
         // its line, and the band has moved out.
         let mut rows =
             column![container(bar).width(Length::Fill).padding([theme::SM, theme::LG])];
 
         // The band as a card of its own, inset from the window and detached
-        // from the row above — the same `floating` treatment as the action
+        // from the row above, the same `floating` treatment as the action
         // panel at the foot of the dashboard, so the two read as the same kind
         // of object: a surface laid over the art rather than a strip welded to
         // the window's edge. `responsive` hands `strip` the room it actually
@@ -5821,7 +5821,7 @@ impl Lightforge {
                             // band: the tiles are marks without words, and one
                             // quiet word says what the row is before you know
                             // them.
-                            // Centred on the letters, not on the line box —
+                            // Centred on the letters, not on the line box;
                             // see [`optically_centred`].
                             container(optically_centred(
                                 muted("GAMES".to_owned(), theme::LABEL).font(theme::BOLD),
@@ -5847,7 +5847,7 @@ impl Lightforge {
                     // Centred, not merely given the height: a container aligns
                     // its content to the top by default, so the row's slack
                     // all fell below the tiles and they sat against the card's
-                    // upper edge. The row's own `align_y` cannot fix that — it
+                    // upper edge. The row's own `align_y` cannot fix that, it
                     // centres the tiles within the row, which is exactly as
                     // tall as they are.
                     .align_y(Alignment::Center)
@@ -5937,8 +5937,8 @@ impl Lightforge {
                     .into(),
             };
             // The mark the band would wear, so a row and its tile are plainly
-            // the same game. The column is held even when there is no icon —
-            // hand-offs have none, and art arrives one product at a time — so
+            // the same game. The column is held even when there is no icon,
+            // hand-offs have none, and art arrives one product at a time, so
             // the labels stay in line instead of stepping in and out.
             let mark: Element<Message> = match self.icons.get(&entry.code) {
                 Some(mark) => image(mark.handle.clone())
@@ -6005,7 +6005,7 @@ impl Lightforge {
 
     /// The download manager: every transfer this session knows about.
     ///
-    /// One row each, with the controls that row can actually offer — a queued
+    /// One row each, with the controls that row can actually offer, a queued
     /// transfer has no progress to show and a running one cannot be resumed.
     fn manager(&self) -> Element<'_, Message> {
         let mut rows = column![
@@ -6103,7 +6103,7 @@ impl Lightforge {
     /// What to call a line on screen.
     ///
     /// The name the user gave it first, then the catalog's, and only then the
-    /// line's own — which for a line Lightforge does not model is the bare
+    /// line's own, which for a line Lightforge does not model is the bare
     /// product code, and `hs_beta` is not a thing to label a tile with.
     fn name_of(&self, line: &ProductLine) -> String {
         let head = line.head();
@@ -6191,7 +6191,7 @@ impl Lightforge {
     ///
     /// `room` is the width the header has left over once the title, the
     /// navigation and the buttons beside it have taken theirs, so the band
-    /// never has to know the window's size — see [`Self::header`].
+    /// never has to know the window's size; see [`Self::header`].
     fn strip(&self, room: f32) -> Element<'_, Message> {
         let lines = self.lines();
         let current = self.catalog.line_of(&self.selected.code);
@@ -6251,7 +6251,7 @@ impl Lightforge {
                     "Add a game".to_owned(),
                 ),
                 // The popover absorbs clicks inside the panel itself, so no
-                // `mouse_area` guard is needed here — see [`popover`].
+                // `mouse_area` guard is needed here; see [`popover`].
                 self.browse_open.then(|| self.browse()),
             )
             .align_left(),
@@ -6273,8 +6273,8 @@ impl Lightforge {
 
     /// Work a page needs on the way in.
     ///
-    /// Called from all three ways of getting somewhere — a tab, back, and
-    /// forward — because a page reached by the back button is just as opened
+    /// Called from all three ways of getting somewhere, a tab, back, and
+    /// forward, because a page reached by the back button is just as opened
     /// as one reached by clicking it. Doing this in `go_to` instead is not
     /// possible: that returns nothing, and this has to hand a `Task` back to
     /// the runtime.
@@ -6294,13 +6294,13 @@ impl Lightforge {
                 Task::batch([backdrop, self.fetch_news(false)])
             }
             // The dashboard needs them too now that the rail is on it. The
-            // same once-per-session fetch — `fetch_news` is idempotent — so
+            // same once-per-session fetch, `fetch_news` is idempotent, so
             // arriving here first and the News page second costs one request
             // between them, not two. With the rail switched off there is
             // nothing here to fill, and the News page asks for itself.
             Screen::Dashboard if self.config.news_on_play => self.fetch_news(false),
-            // Arriving back on Browse with nothing in it — by the back
-            // button, or on a first visit — is the same question the tab
+            // Arriving back on Browse with nothing in it, by the back
+            // button, or on a first visit, is the same question the tab
             // itself answers: what is there?
             Screen::Addons
                 if self.addon_tab == AddonTab::Browse
@@ -6362,7 +6362,7 @@ impl Lightforge {
 
     /// Which screens wear the game band under the tabs.
     ///
-    /// The pages you move between freely — the dashboard and News — keep the
+    /// The pages you move between freely, the dashboard and News, keep the
     /// same chrome, so switching tabs changes the content under a header that
     /// does not move. Settings and a game's own pages (Addons, Game
     /// Optimizations) are somewhere you went *into*: they are about one thing,
@@ -6376,7 +6376,7 @@ impl Lightforge {
     ///
     /// App-level, not per-product: everything outside the WoW family is a
     /// hand-off, so it belongs with the games rather than on a panel that
-    /// describes one of them — and the card is where games live now.
+    /// describes one of them, and the card is where games live now.
     ///
     /// The mark comes out of the prefix rather than the binary: see
     /// [`Layout::battle_net_icon`]. Before Battle.net is installed there is
@@ -6391,7 +6391,7 @@ impl Lightforge {
                     .height(Length::Fixed(BNET_GLYPH)),
             );
         }
-        // Same optical correction as the band's label — the word has no
+        // Same optical correction as the band's label, the word has no
         // descenders either, and it sits beside a mark that fills its box.
         let face = face.push(optically_centred(
             text("Battle.net").size(theme::LABEL).font(theme::BOLD),
@@ -6420,8 +6420,8 @@ impl Lightforge {
     /// clicking the page, so the two now read from the same place.
     /// Whether this provider/id pair is in the ledger for the open game.
     ///
-    /// Asked by the detail card twice over — once to pick the opening tab,
-    /// once to decide between Install and nothing — so it is one place.
+    /// Asked by the detail card twice over, once to pick the opening tab,
+    /// once to decide between Install and nothing, so it is one place.
     fn addon_is_installed(&self, provider: &str, id: &str) -> bool {
         self.addons
             .rows
@@ -6594,7 +6594,7 @@ impl Lightforge {
         }
 
         // Pinning names the version it will hold, because "pin" alone does
-        // not say *to what* — and after an update that is a different file.
+        // not say *to what*: and after an update that is a different file.
         // An addon whose file the ledger never recorded has nothing to hold.
         match (&managed.pinned, &managed.file_id) {
             (Some(_), _) => {
@@ -6620,7 +6620,7 @@ impl Lightforge {
         //
         // Each entry appears only when there is somewhere to go. A provider
         // that publishes no repository, and an addon installed before the
-        // ledger kept these, both leave the menu one line shorter — which is
+        // ledger kept these, both leave the menu one line shorter, which is
         // better than a line that opens nothing.
         let support = managed.support_url().map(str::to_owned);
         if managed.website_url.is_some() || support.is_some() {
@@ -6636,13 +6636,13 @@ impl Lightforge {
         // Source before author profile, because that is where the money can
         // actually go: a repository usually carries a Sponsor button, where a
         // provider's author page is a list of their projects. Neither is a
-        // donation link as such — no catalogue publishes one — so the label
+        // donation link as such, no catalogue publishes one, so the label
         // promises help, not a payment form.
         if let Some(url) = support {
             rows = rows.push(entry("Support the author…".to_owned(), Message::OpenUrl(url)));
         }
 
-        // An action, not a setting, so it sits under a rule of its own —
+        // An action, not a setting, so it sits under a rule of its own,
         // and busy means busy: a second fetch into the same directory while
         // one is running is the race the whole page guards against.
         rows = rows.push(
@@ -6705,7 +6705,7 @@ impl Lightforge {
 
     /// Every branch of the selected line, configured or not.
     ///
-    /// `None` when the line has exactly one branch to offer — a picker with a
+    /// `None` when the line has exactly one branch to offer, a picker with a
     /// single entry is furniture.
     fn branch_choices(&self) -> Option<(Vec<BranchChoice>, BranchChoice)> {
         let line = self.catalog.line_of(&self.selected.code);
@@ -6782,8 +6782,8 @@ impl Lightforge {
 
     /// Load the popular list, unless a search is already in flight.
     ///
-    /// Three things ask for it — opening Browse, clearing the box, switching
-    /// product — and all three can happen while a typed search is still out.
+    /// Three things ask for it, opening Browse, clearing the box, switching
+    /// product, and all three can happen while a typed search is still out.
     /// Its reply would be dropped by the query check anyway; not sending it is
     /// cheaper and keeps the spinner honest.
     fn popular_if_unasked(&mut self) -> Task<Message> {
@@ -6799,7 +6799,7 @@ impl Lightforge {
     /// wrong answer for Classic and a filter typed over Retail's installed
     /// list hides Classic's. An armed Remove is worse than wrong: it is a
     /// confirmation the user gave about an addon they are no longer looking
-    /// at. An in-flight search needs no cancelling — its reply is matched
+    /// at. An in-flight search needs no cancelling, its reply is matched
     /// against the current query and dropped.
     fn reset_addon_screen(&mut self) {
         self.search_input.clear();
@@ -6814,7 +6814,7 @@ impl Lightforge {
     /// A page with a title, optionally something at the far end of that line,
     /// and a scrolling body.
     ///
-    /// `aside` is for a fact about the page rather than a control — a count,
+    /// `aside` is for a fact about the page rather than a control, a count,
     /// a state. It rides on the title's line because that is where the eye
     /// already is, and because a figure like that under the title reads as a
     /// subtitle explaining the page, which it is not.
@@ -6857,8 +6857,8 @@ impl Lightforge {
         // A hand-off wears art only when the manifest names it *itself*.
         //
         // The `default` entry catches every code the manifest does not name,
-        // which is deliberate for a WoW product — a line released after this
-        // binary should look like WoW rather than like nothing — and wrong for
+        // which is deliberate for a WoW product, a line released after this
+        // binary should look like WoW rather than like nothing, and wrong for
         // a hand-off, where it would dress Hearthstone in Retail's logo and
         // key art. That was the whole reason hand-offs showed no art at all.
         //
@@ -6881,8 +6881,8 @@ impl Lightforge {
         // and a product logo reads as branding when it sits with Lightforge's
         // own rather than competing with the background for the middle.
         let logo: Element<Message> = match branding {
-            // Drawn at the size [`theme::logo_size`] gives it — equal area
-            // for every mark, however differently shaped — inside a box that
+            // Drawn at the size [`theme::logo_size`] gives it, equal area
+            // for every mark, however differently shaped, inside a box that
             // never moves.
             //
             // Near the box's left edge and centred down it. The marks are
@@ -6931,7 +6931,7 @@ impl Lightforge {
                 // Inset from the left, though, rather than flush with the
                 // panel below it. Each logo is trimmed to its own artwork, so
                 // flush meant *touching* the page edge with no margin of its
-                // own — alignment the eye reads as a mistake rather than as a
+                // own, alignment the eye reads as a mistake rather than as a
                 // column. How far in is [`theme::LOGO_INSET`].
                 // The art's own region: the wordmark and whatever space is
                 // left, with the headlines down the right of it. A row rather
@@ -6959,7 +6959,7 @@ impl Lightforge {
                 // A product Battle.net owns gets a panel that offers only what
                 // Lightforge can actually do for it. Running the normal one
                 // would put an INSTALL button on a game this launcher has no
-                // way to install — and, worse, one that would plan a CASC
+                // way to install, and, worse, one that would plan a CASC
                 // download into the WoW directory.
                 match kind {
                     Kind::Managed => self.action_panel(&action),
@@ -6971,7 +6971,7 @@ impl Lightforge {
             // the page's: that inset is right for the action panel against
             // the window edge and wrong for a wordmark, which should read as
             // hanging from the band directly above it. The logo box carries
-            // its own slack anyway — the mark is centred in it — so the gap
+            // its own slack anyway, the mark is centred in it, so the gap
             // under the band is real without being spent here.
             .padding(iced::Padding {
                 top: 0.0,
@@ -6992,7 +6992,7 @@ impl Lightforge {
                 // the controls at the bottom, and the navigation row at the
                 // top, which hangs straight over the picture with no backdrop
                 // of its own. That was a deliberate choice when the header was
-                // rebuilt — a bar behind it fought the art — and this is the
+                // rebuilt, a bar behind it fought the art, and this is the
                 // fix the note left in its place called for: not a bar, a
                 // gradient, so bright art loses contrast to the text instead
                 // of the other way round.
@@ -7000,7 +7000,7 @@ impl Lightforge {
                 // Offsets run bottom (0.0) to top (1.0). The top pair holds
                 // rather than ramps: the navigation row sits about 6% down, so
                 // a gradient that starts fading at the very edge leaves the
-                // text in the middle of the fade at roughly half strength —
+                // text in the middle of the fade at roughly half strength,
                 // legible on most art and marginal on a bright sky. Holding
                 // full strength across the row and fading below it puts the
                 // whole of the text on even cover, and the fade lands over the
@@ -7030,8 +7030,8 @@ impl Lightforge {
     /// `None` draws nothing at all, which is the right answer more often than
     /// it looks:
     ///
-    /// - **For a game Battle.net hands off** — Diablo, Hearthstone, Overwatch
-    ///   — there will never be an article. Every feed the proxy merges is
+    /// - **For a game Battle.net hands off**: Diablo, Hearthstone, Overwatch,
+    ///   there will never be an article. Every feed the proxy merges is
     ///   Wowhead, so an empty rail beside StarCraft would not be "nothing
     ///   today", it would be "nothing, ever". See [`news::Item::line`].
     /// - **Before the fetch has been asked for**, so the rail does not appear
@@ -7120,7 +7120,7 @@ impl Lightforge {
     /// One headline in the rail: the date, then the title, and nothing else.
     ///
     /// No summary and no picture, unlike [`Lightforge::news_card`] on the News
-    /// page. This is 260 points wide standing over artwork — a thumbnail
+    /// page. This is 260 points wide standing over artwork, a thumbnail
     /// would leave room for about four words, and the summary is the reason
     /// to click rather than something to read here.
     fn rail_item<'a>(&self, item: &'a news::Item) -> Element<'a, Message> {
@@ -7155,7 +7155,7 @@ impl Lightforge {
         let mut left = column![].spacing(theme::SM).width(Length::Fill);
 
         // The branch belongs here rather than in the header: it is not
-        // navigation, it decides what every line below it refers to — which
+        // navigation, it decides what every line below it refers to, which
         // version is "latest", which install "installed", which files "Open
         // Files" opens. Only shown where there is a choice to make.
         if let Some((branches, current)) = self.branch_choices() {
@@ -7192,8 +7192,8 @@ impl Lightforge {
             // Two jobs for one bar. While bytes are moving it reports them.
             // Before the total is known, and again after the last byte lands
             // while the install is still extracting and writing `.build.info`,
-            // there is no fraction to report but there is still work going on
-            // — so the bar sweeps instead of sitting at a number that would be
+            // there is no fraction to report but there is still work going on,
+            // so the bar sweeps instead of sitting at a number that would be
             // a lie in one direction or the other.
             let sweeping = progress.total_bytes == 0
                 || progress.downloaded_bytes >= progress.total_bytes;
@@ -7273,8 +7273,8 @@ impl Lightforge {
 
         left = left.push(
             row![
-                // Addons are already per-product — the screen titles itself
-                // with the selection and every task takes its code — so this
+                // Addons are already per-product, the screen titles itself
+                // with the selection and every task takes its code, so this
                 // is navigation, not a second copy of it. Disabled until
                 // there is an install to put an addon into.
                 link(
@@ -7322,7 +7322,7 @@ impl Lightforge {
         // Battle.net builds it. Zero spacing and complementary corner radii
         // are what make the pair read as one control.
         //
-        // The icon is an image, not a glyph — the UI font has no U+2699 and
+        // The icon is an image, not a glyph, the UI font has no U+2699 and
         // renders it as a tofu box.
         let gear = button(
             image(gear_icon())
@@ -7376,8 +7376,8 @@ impl Lightforge {
     ///
     /// Laid out as a preset row over a two-column grid, which is a change of
     /// shape rather than of content: the switches used to be grouped by the
-    /// *mechanism* that applies them — host binaries, DXVK, `Config.wtf`
-    /// lines, environment — so a card's height tracked how many cvars happened
+    /// *mechanism* that applies them, host binaries, DXVK, `Config.wtf`
+    /// lines, environment, so a card's height tracked how many cvars happened
     /// to share a plumbing detail. Six full-width cards of wildly different
     /// heights was the result. They are grouped by what somebody is trying to
     /// do instead, which balances them, and the grid pins the rest: four cards
@@ -7447,12 +7447,12 @@ impl Lightforge {
     /// How tall every card on the grid is.
     ///
     /// A pinned number, which is the price of boxes that are the same size
-    /// whatever is in them — and it has to clear the *fullest* card on the
+    /// whatever is in them, and it has to clear the *fullest* card on the
     /// *busiest* machine, because a card is a fixed box and content past its
     /// edge is content nobody can reach.
     ///
     /// **Sized per row, not per page.** The two cards you can see beside each
-    /// other still match exactly, which is the part that reads as a grid —
+    /// other still match exactly, which is the part that reads as a grid,
     /// but Performance and Looks are naturally shorter than Input and
     /// Advanced, and one number for all four reserved a band of nothing
     /// under the last switch of the top row. A row is the unit people
@@ -7465,13 +7465,13 @@ impl Lightforge {
     /// there left a visible band of nothing under the last switch in both
     /// rows of the grid. So the grid grows when they appear and shrinks when
     /// they go. **All four cards still match each other at any moment**,
-    /// which is the rule — it is the page that changes height, not one box
+    /// which is the rule. It is the page that changes height, not one box
     /// against its neighbour.
     ///
     /// Every number here was measured on screen at the state it names, not
     /// computed: a card that clips gives no sign of it.
     ///
-    /// If a card ever outgrows this, raise it here — it is the one number the
+    /// If a card ever outgrows this, raise it here. It is the one number the
     /// layout depends on.
     fn card_height(&self, row: CardRow, tweaks: &Tweaks) -> f32 {
         let (base, backend) = match (row, self.hints) {
@@ -7486,7 +7486,7 @@ impl Lightforge {
             (CardRow::Bottom, true) => (486.0, 80.0),
             (CardRow::Bottom, false) => (312.0, 66.0),
         };
-        // Those rows only exist once the backend is on — and only where the
+        // Those rows only exist once the backend is on, and only where the
         // backend can be offered at all.
         match self.tools.wayland && tweaks.wayland {
             true => base + backend,
@@ -7502,7 +7502,7 @@ impl Lightforge {
     /// **`height(Fill)` only works because the row is a fixed height.** iced's
     /// flex sizes cross-axis-fluid children against their non-fluid siblings
     /// (`layout/flex.rs`, the `cross_compress` path), so two fluid cards in a
-    /// Shrink-height row have nothing to measure against — inside a vertical
+    /// Shrink-height row have nothing to measure against, inside a vertical
     /// `scrollable`, where the height limit is unbounded, `cross` stays `0.0`
     /// and both cards draw as nothing at all. That was a real bug, not a
     /// hypothetical. Give the row a height or do not make the cards fluid.
@@ -7596,7 +7596,7 @@ impl Lightforge {
     /// Everything that buys frames.
     ///
     /// The host tools are detected, never assumed, so a switch missing here
-    /// means the binary is — which is said at the foot of the card rather than
+    /// means the binary is, which is said at the foot of the card rather than
     /// as a hint per switch, because three copies of the same caveat was a
     /// large part of what made this page ragged.
     fn performance_card(&self, tweaks: &Tweaks) -> Element<'_, Message> {
@@ -7697,8 +7697,8 @@ impl Lightforge {
 
         // Optional downloads used to be a card of its own, which put a storage
         // decision on an optimization page and left a 70px box next to a 300px
-        // one. It is the same trade as the two above — scenery for something
-        // else — so it sits with them, and says what it costs.
+        // one. It is the same trade as the two above, scenery for something
+        // else, so it sits with them, and says what it costs.
         let profile = self.config.product(&self.selected.code).map(|p| &p.profile);
         let known = profile.is_some_and(|p| !p.optional_available.is_empty());
         let available =
@@ -7750,7 +7750,7 @@ impl Lightforge {
     /// Four of the five are Wine or multi-monitor fixes rather than
     /// preferences, which is why they sit together: each one is the answer to
     /// a specific thing the game does wrong under Linux, and every name here
-    /// was read out of the client's own string table rather than a wiki —
+    /// was read out of the client's own string table rather than a wiki,
     /// `HardwareCursor` is real and `gxCursor`, which the widely-copied lists
     /// name, is not.
     fn input_card(&self, tweaks: &Tweaks) -> Element<'_, Message> {
@@ -7890,7 +7890,7 @@ impl Lightforge {
         }
 
         // An action rather than a setting, so it sits at the foot of the card
-        // under the switches — and it belongs with the graphics fork above it,
+        // under the switches, and it belongs with the graphics fork above it,
         // because changing the Direct3D version is the usual reason to want it.
         content = content.push(Space::new().height(Length::Fill));
         content = content
@@ -7909,7 +7909,7 @@ impl Lightforge {
     /// The Proton-side switches: which graphics backend the game runs on.
     ///
     /// A method of its own because the Battle.net profile in Settings offers
-    /// exactly these and nothing else — a hand-off game has no `Config.wtf`,
+    /// exactly these and nothing else, a hand-off game has no `Config.wtf`,
     /// so the environment is the only thing Lightforge can set for it, and
     /// two copies of these rows would be two chances to drift.
     ///
@@ -8180,7 +8180,7 @@ impl Lightforge {
             .into()
     }
 
-    /// News — headlines from the feeds the proxy merges.
+    /// News, headlines from the feeds the proxy merges.
     ///
     /// Every state of the fetch says which one it is. An empty page that
     /// looks broken is worse than one that explains itself, which was true of
@@ -8235,7 +8235,7 @@ impl Lightforge {
                 .into(),
             ]),
             // Before `dirs` exists there is nowhere to cache and nothing has
-            // been asked for — the setup screen is what the user is looking at.
+            // been asked for, the setup screen is what the user is looking at.
             None => centred(vec![muted("Nothing to show yet.".to_owned(), theme::BODY).into()]),
         };
 
@@ -8262,14 +8262,14 @@ impl Lightforge {
         };
 
         // Same shape as the dashboard: art underneath, a scrim between, the
-        // header inside the stack rather than above it — hoisting it out
+        // header inside the stack rather than above it, hoisting it out
         // would push the picture below the navigation row.
         //
         // The scrim holds dark across the top and settles lighter below, the
         // same shape the dashboard arrived at and for the same reason: the
         // navigation row hangs straight over the picture with no backdrop of
         // its own, and this artwork is pale sky exactly where that row lands.
-        // A single flat value cannot serve both ends — strong enough for the
+        // A single flat value cannot serve both ends, strong enough for the
         // nav row buries the art, weak enough to show the art leaves loose
         // white text on a bright sky.
         //
@@ -8300,7 +8300,7 @@ impl Lightforge {
         .into()
     }
 
-    /// Lightforge's own release notes — nothing here yet either.
+    /// Lightforge's own release notes. Nothing here yet either.
     fn updates_screen(&self) -> Element<'_, Message> {
         let version = env!("CARGO_PKG_VERSION");
         let releases = lightforge_core::releases::all();
@@ -8430,7 +8430,7 @@ impl Lightforge {
             AddonTab::Export => self.addons_export(),
         });
 
-        // Parent folders only, so the count matches the rows you can see —
+        // Parent folders only, so the count matches the rows you can see,
         // BigWigs is one addon here and eleven folders on disk.
         let installed = self.addons.rows.iter().filter(|r| r.child_of.is_none()).count();
         let aside = muted(
@@ -8585,8 +8585,8 @@ impl Lightforge {
         }
 
         // Ordered and filtered before drawing, rather than in the order the
-        // folder scan happened to return. Outdated first — that is the reason
-        // to open this page — then by name, so a list of forty is something
+        // folder scan happened to return. Outdated first. That is the reason
+        // to open this page, then by name, so a list of forty is something
         // you can read down instead of search through.
         let needle = self.addon_filter.trim().to_lowercase();
         let mut shown: Vec<&_> = self
@@ -8646,7 +8646,7 @@ impl Lightforge {
                 _ => {}
             }
             if let Some(status) = status.filter(|s| s.has_update()) {
-                // What is on offer, named the way the provider names it — a
+                // What is on offer, named the way the provider names it, a
                 // version people recognise, not the opaque file id the
                 // ledger trades in. A channel switch says so instead, because
                 // "→ 1.4.26" beside an alpha looks like going forwards.
@@ -8693,7 +8693,7 @@ impl Lightforge {
 
             // The three facts, in the columns the header names. A dash
             // rather than a blank for a fact we do not have: an empty cell
-            // reads as a layout bug, where "—" reads as "not known", which
+            // reads as a layout bug, where ", " reads as "not known", which
             // is what it is for an addon installed before this was recorded
             // or a provider that publishes no dates.
             let managed_row = addon.managed.as_ref();
@@ -8715,7 +8715,7 @@ impl Lightforge {
             // float: a row with an Update button pushes them left of a row
             // without one, and both sit left of the header that is supposed
             // to name them. The box is pushed for an addon installed by hand
-            // too, which has no controls at all — otherwise its columns would
+            // too, which has no controls at all, otherwise its columns would
             // be the ones out of step.
             let mut actions = row![].spacing(theme::SM).align_y(Alignment::Center);
             if let Some(managed) = &addon.managed {
@@ -8756,7 +8756,7 @@ impl Lightforge {
                 // this is the same path "Update all" takes for every row.
                 //
                 // A pin is a statement about which version this addon is on,
-                // so the row stops offering to move it — unlike Ignore, which
+                // so the row stops offering to move it, unlike Ignore, which
                 // only means "not in bulk". Unpinning brings the button back.
                 let pinned = managed.pinned.is_some();
                 if let Some(status) = status.filter(|s| s.has_update() && !pinned) {
@@ -9136,7 +9136,7 @@ impl Lightforge {
     /// The command is offered to copy rather than run. Installing system
     /// packages needs root, and a launcher invoking a package manager as root
     /// on a guess about someone's distribution is a trust escalation worth
-    /// avoiding — the more so because the systems that most need help
+    /// avoiding, the more so because the systems that most need help
     /// (read-only SteamOS, rpm-ostree, NixOS) are exactly the ones no such
     /// button could serve.
     fn runtime_row() -> Element<'static, Message> {
@@ -9225,7 +9225,7 @@ impl Lightforge {
 
         // Where all three steps below install to. Only offered while nothing
         // is installed: after that, moving it is a data migration rather than
-        // a setting — see `relocate`. Once the prefix is built, the Wine
+        // a setting; see `relocate`. Once the prefix is built, the Wine
         // prefix step below says where it is, so nothing is lost by hiding it.
         if self.library_empty && !in_wizard {
             body = body.push(field_row(
@@ -9379,7 +9379,7 @@ impl Lightforge {
         body = body.push(
             row![start]
                 // The same steps, walked through with the questions a first run
-                // asks — region, language, drives, and the installs that were
+                // asks, region, language, drives, and the installs that were
                 // here first. Kept here because this is where someone who
                 // dismissed it comes looking for it; inside the wizard it would
                 // be a button that reopens the thing you are looking at.
@@ -9431,13 +9431,13 @@ impl Lightforge {
             }
 
             // Only managed builds are ours to delete, and only when nothing
-            // points at them — the reason is shown instead of a dead button,
+            // points at them, the reason is shown instead of a dead button,
             // since "why can't I remove this" is the whole question here.
             //
             // The count, not the list. Spelled out it ran to two lines of
-            // full product names — "pinned by the app default, Battle.net,
+            // full product names, "pinned by the app default, Battle.net,
             // World of Warcraft, World of Warcraft Classic, World of
-            // Warcraft: Forever — Beta" — which is a paragraph where a row
+            // Warcraft: Forever, Beta", which is a paragraph where a row
             // wants a word. The names are still there on hover, because the
             // count alone does not tell you what to go and unpin.
             let action: Element<Message> = match (managed, pinned_by.is_empty()) {
@@ -9474,7 +9474,7 @@ impl Lightforge {
 
         // While a build is coming down, in this card. It used to throw the
         // user to Settings > Setup, because that was the only place a
-        // progress bar existed — pressing Install and landing on a different
+        // progress bar existed, pressing Install and landing on a different
         // page reads as a misclick.
         if self.setup_running {
             let mut working = column![].spacing(theme::XS);
@@ -9577,8 +9577,8 @@ impl Lightforge {
             content =
                 content.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
         }
-        // Storage and Proton name each of their own groups — Drives and Add
-        // a drive; Games and their Proton, and Builds — so an outer heading
+        // Storage and Proton name each of their own groups, Drives and Add
+        // a drive; Games and their Proton, and Builds, so an outer heading
         // above the first of them is a title for a title.
         content = content.push(match self.settings_tab {
             SettingsTab::Storage | SettingsTab::Proton => body,
@@ -9617,7 +9617,7 @@ impl Lightforge {
     ///
     /// Judged the way that product actually starts: a WoW version under its
     /// own pin or the app default, a hand-off title under its pin or
-    /// Battle.net's. Only the fallback differs — a pin wins on either path.
+    /// Battle.net's. Only the fallback differs, a pin wins on either path.
     fn row_build(&self, code: &ProductCode) -> Option<&proton::ProtonRelease> {
         let pin = match Kind::of(code) {
             Kind::Managed => self.config.effective_proton(code),
@@ -9644,7 +9644,7 @@ impl Lightforge {
     /// Installed rather than configured, because the list is otherwise
     /// fourteen rows of which three can launch. Read from Battle.net's own
     /// `product.db`, which is the one place that knows about every install in
-    /// the prefix — Lightforge's own and the client's alike.
+    /// the prefix, Lightforge's own and the client's alike.
     fn installed_products(&self) -> Vec<(ProductCode, String)> {
         self.config
             .products
@@ -9658,7 +9658,7 @@ impl Lightforge {
     ///
     /// Every installed game, not the one the Play page is showing: Settings is
     /// about the install as a whole, and a row that renamed itself as you
-    /// switched tiles read as a bug — correctly, since nothing on the page
+    /// switched tiles read as a bug, correctly, since nothing on the page
     /// said which game it meant.
     fn proton_section(&self) -> Element<'_, Message> {
         // Built per row rather than once: the first entry is "no pin of my
@@ -9708,12 +9708,12 @@ impl Lightforge {
         let games = self.installed_products();
         let mut pins = column![].spacing(theme::SM);
 
-        // One row per installed game, in the order the config lists them —
+        // One row per installed game, in the order the config lists them,
         // the same order as the Play page's tiles, so the two read alike.
         for (code, label) in &games {
             // Every game, a title Battle.net launches included. Its pin is
-            // honoured on the hand-off path too, so the control is not a lie
-            // — the client is told to start *that* game, and that game is
+            // honoured on the hand-off path too, so the control is not a lie,
+            // the client is told to start *that* game, and that game is
             // what the pin is about. What it cannot do is give the title a
             // prefix of its own: there is one, shared, which is what the
             // downgrade sign is for.
@@ -9724,8 +9724,8 @@ impl Lightforge {
             let for_code = code.clone();
 
             // Both signs now, where the old row had space for one and the
-            // shop always won. They say different things — one names a build
-            // to move to, the other warns about the prefix this one shares —
+            // shop always won. They say different things, one names a build
+            // to move to, the other warns about the prefix this one shares,
             // and a game can be in both states at once.
             let mut tags: Vec<Element<'_, Message>> = Vec::new();
             match self.shop_build_state(code) {
@@ -9992,11 +9992,11 @@ impl Lightforge {
     /// its own IPC queue, where there is no new process to hand an
     /// environment to. Two games started from one client session therefore
     /// cannot have different environments, so a per-game control here would
-    /// be a lie — `Config::battle_net_tweaks` and `SPEC.md` both say so.
+    /// be a lie, `Config::battle_net_tweaks` and `SPEC.md` both say so.
     ///
     /// There is no client-settings half: a hand-off game has no `Config.wtf`.
     /// So this is the host tools, the runtime switches and the escape hatch,
-    /// and no preset row — a preset decides the frames-versus-scenery trade,
+    /// and no preset row, a preset decides the frames-versus-scenery trade,
     /// and none of these are a point on that axis.
     fn battle_net_section(&self) -> Element<'_, Message> {
         let tweaks = self.tweaks_of(Scope::BattleNet);
@@ -10241,7 +10241,7 @@ impl Lightforge {
                     + if dialog.high_res { extra.unwrap_or(0) } else { 0 };
                 // Exact: priced against the store, the same test the plan
                 // applies, so shared files are already left out. Download
-                // size, not disk size — the extracted install files (the
+                // size, not disk size, the extracted install files (the
                 // executables and the like) come on top, which is most of
                 // why Battle.net's "required" reads a little higher.
                 body = body.push(field_row(
@@ -10477,8 +10477,8 @@ impl Lightforge {
     /// you would get.
     ///
     /// The two halves are tabs rather than one long scroll because they
-    /// answer different questions and a description can be thousands of words
-    /// — the changelog would never be found under it.
+    /// answer different questions and a description can be thousands of words,
+    /// the changelog would never be found under it.
     fn detail_card<'a>(&'a self, detail: &'a AddonDetail) -> Element<'a, Message> {
         let title = detail
             .loaded
@@ -10540,7 +10540,7 @@ impl Lightforge {
             footer = footer.push(secondary("Open the page", Message::OpenUrl(url)).enabled(true));
         }
         // The same offer the installed row's menu makes, in the panel someone
-        // reads *before* installing — where a project's own repository is
+        // reads *before* installing, where a project's own repository is
         // often the thing they came to find.
         if let Some(url) = detail
             .loaded
@@ -10656,11 +10656,11 @@ impl Lightforge {
     /// A dialog rather than a page, because it is the one thing in the app
     /// that opens itself: it has to be read and closed, and every other
     /// screen stays reachable afterwards from the navigation. The same notes
-    /// live on the Lightforge Updates page for anyone who wants them again —
+    /// live on the Lightforge Updates page for anyone who wants them again,
     /// including after the checkbox has been ticked.
     fn patch_notes_card<'a>(&'a self, notes: &'a PatchNotes) -> Element<'a, Message> {
-        // The notes are as long as the release was — this one is fifteen
-        // wrapped paragraphs — and a card that grows with them runs off the
+        // The notes are as long as the release was. This one is fifteen
+        // wrapped paragraphs, and a card that grows with them runs off the
         // top and bottom of the window, taking the button with it.
         //
         // Only the notes scroll. The heading says what the card is and the
@@ -10672,7 +10672,7 @@ impl Lightforge {
         //
         // `theme::scrollbar_shape` sets a spacing, which is what makes iced
         // reserve room for the bar beside the text rather than draw it over
-        // the words — and only while it is actually needed, so a short
+        // the words, and only while it is actually needed, so a short
         // release is laid out exactly as before.
         const NOTES_MAX: f32 = 480.0;
 
@@ -10818,8 +10818,8 @@ impl Lightforge {
     // (`report_tags` sits below the impl, since it needs nothing from `self`.)
     ///
     /// They differ in three things: the prompt, whether the diagnostic bundle
-    /// is shown, and whether it is sent. Everything else — the stages, the
-    /// outcome line, the two buttons — is the same, and splitting them in two
+    /// is shown, and whether it is sent. Everything else, the stages, the
+    /// outcome line, the two buttons, is the same, and splitting them in two
     /// would mean maintaining that twice.
     fn report_card<'a>(&'a self, dialog: &'a ReportDialog) -> Element<'a, Message> {
         let (title, prompt) = match dialog.kind {
@@ -10912,7 +10912,7 @@ impl Lightforge {
             _ => row![
                 Space::new().width(Length::Fill),
                 // Only once there is something to lose. The screenshot is not
-                // in it — the clipboard carries text — which the Discord
+                // in it, the clipboard carries text, which the Discord
                 // route solves on its own, since an image is pasted there.
                 match dialog.stage {
                     ReportStage::Failed => Element::from(
@@ -10956,7 +10956,7 @@ impl Lightforge {
     /// The screenshot line of the bug report card.
     ///
     /// A button rather than a drop target: iced has no file dialog of its own,
-    /// so this opens the desktop's through the XDG portal — which is also the
+    /// so this opens the desktop's through the XDG portal, which is also the
     /// only one that works when the launcher is sandboxed.
     fn shot_row<'a>(&self, dialog: &'a ReportDialog) -> Element<'a, Message> {
         let choose = |label: &'static str| {
@@ -11255,7 +11255,7 @@ impl Lightforge {
             .spacing(theme::SM)
             .align_y(Alignment::Center);
         // `is_present` rather than `is_ready`: a drive with nothing of ours on
-        // it yet can still be opened and can still be made the default — it is
+        // it yet can still be opened and can still be made the default, it is
         // set up by the first install, not before. Only a drive that is *away*
         // can do neither.
         actions = actions.push(
@@ -11266,8 +11266,8 @@ impl Lightforge {
             secondary("Make default", Message::SetDefaultDrive(id.clone()))
                 .enabled(!library.is_default && library.state.is_present()),
         );
-        // The default drive cannot be removed while another exists — make a
-        // different one the default first — and the last one cannot be
+        // The default drive cannot be removed while another exists, make a
+        // different one the default first, and the last one cannot be
         // removed at all, since every path resolves through it.
         actions = actions.push(
             secondary("Remove", Message::RemoveDrive(id.clone()))
@@ -11295,7 +11295,7 @@ impl Lightforge {
     }
 }
 
-/// How wide a centred message card gets — the broken-config screen. A measure
+/// How wide a centred message card gets, the broken-config screen. A measure
 /// rather than the full window: this one is prose, and prose set across a wide
 /// monitor is unreadable.
 const MESSAGE_WIDTH: f32 = 720.0;
@@ -11311,7 +11311,7 @@ const SIZE_COLUMN: f32 = 96.0;
 /// Width of the action slot beside a size, kept even where there is no button.
 const ACTION_COLUMN: f32 = 76.0;
 
-/// One "name — size — maybe a button" line, as the Storage page draws them.
+/// One "name, size, maybe a button" line, as the Storage page draws them.
 fn usage_row<'a>(
     name: Element<'a, Message>,
     bytes: u64,
@@ -11333,7 +11333,7 @@ fn usage_row<'a>(
 ///
 /// This lists what is *shown*, not what is gated: every optional tag a build
 /// carries stays off unless opted in, named here or not, so a tag Blizzard
-/// adds tomorrow is still excluded — hardcoding the gate is what once put a
+/// adds tomorrow is still excluded, hardcoding the gate is what once put a
 /// 37 GiB texture pack in every plan. `Alternate` and `Talebound` exist in
 /// the manifests but are not something to offer a player a switch for.
 const OFFERED_OPTIONAL: &[&str] = &[HIGH_RES];
@@ -11365,7 +11365,7 @@ fn muted<'a>(content: String, size: f32) -> iced::widget::Text<'a> {
 /// Centre a line of text on its *letters* rather than on its line box.
 ///
 /// A line box is ascent plus descent plus leading, so centring it puts the
-/// empty descent space — the room for a `g` or a `y` — below the letters and
+/// empty descent space, the room for a `g` or a `y`: below the letters and
 /// lifts them above the middle. On a word that has no descenders at all, like
 /// `GAMES` or `Battle.net`, every bit of that space is empty and the word
 /// reads as sitting high beside something that fills its box, such as a tile.
@@ -11416,7 +11416,7 @@ fn hints_chord(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) 
 /// Height of the game band's own row.
 ///
 /// Pinned rather than left to the tiles: the band fills its cross axis, and a
-/// widget that does that is handed the height of its siblings — the buttons,
+/// widget that does that is handed the height of its siblings, the buttons,
 /// which are shorter than a tile. The padding is [`theme::SM`] rather than
 /// `XS` now that the row is the band's alone, so the tiles sit in it instead
 /// of filling it edge to edge: [`theme::LG`] of air, split above and below.
@@ -11459,7 +11459,7 @@ const WORDMARK_HEIGHT: f32 = 28.0;
 /// [`WORDMARK_HEIGHT`]: the mark is the row's voice and the tabs are its
 /// index, and setting them anywhere near the mark's size gives the row two
 /// things shouting at once. The air around them, not their size, is what
-/// keeps them readable — see [`TAB_GAP`].
+/// keeps them readable; see [`TAB_GAP`].
 const TAB_LABEL: f32 = theme::LABEL;
 
 /// The air between two tabs in the navigation row.
@@ -11467,14 +11467,14 @@ const TAB_LABEL: f32 = theme::LABEL;
 /// All of it lives here rather than in the tabs' own padding, and that is the
 /// point. A tab's padding is what the selected pill is drawn around, so air
 /// spent there is air you see on three sides of "Play" and nowhere beside
-/// "News" — which is why the gap to "Battle.net Shop" used to look wider than
+/// "News", which is why the gap to "Battle.net Shop" used to look wider than
 /// the gap back to "Play" although both measured the same. Keeping the tabs'
 /// padding at the minimum a pill needs leaves the two gaps within a few
 /// pixels of each other.
 const TAB_GAP: f32 = theme::LG;
 
 /// Extra air on top of the row's own spacing where one group of controls in
-/// the navigation row ends and the next begins — wordmark, then the arrows,
+/// the navigation row ends and the next begins, wordmark, then the arrows,
 /// then the pages. It only has to say "different kind of thing"; the groups
 /// are already told apart by what they look like, so a gap wide enough to
 /// read as a break is wider than the job needs.
@@ -11488,7 +11488,7 @@ const WORDMARK_ASPECT: f32 = 563.0 / 72.0;
 /// The wordmark as drawn, from its height and the artwork's aspect.
 const WORDMARK_WIDTH: f32 = WORDMARK_HEIGHT * WORDMARK_ASPECT;
 
-/// The chevron beside the wordmark — the app menu's own arrow.
+/// The chevron beside the wordmark, the app menu's own arrow.
 const APP_MENU_CHEVRON: f32 = BAND_GLYPH * 0.75;
 
 /// Width of the Settings sidebar.
@@ -11512,7 +11512,7 @@ const SETTINGS_NAV_WIDTH: f32 =
 ///
 /// Tighter than [`theme::XS`] on purpose. Every tab in the navigation row is
 /// separated by the same [`TAB_GAP`], but only this one carries anything after
-/// its label, and that padding is *inside* the button — so air there widens
+/// its label, and that padding is *inside* the button, so air there widens
 /// the space between "News" and "Battle.net Shop" without the row's spacing
 /// changing at all. Keeping the arrow against its word is what makes the two
 /// gaps match by eye as well as in the arithmetic.
@@ -11525,7 +11525,7 @@ const DIMMED: f32 = 0.35;
 /// How many status lines a bug report carries.
 ///
 /// Twenty is about a minute of a busy launcher and three screens of a quiet
-/// one — enough to show what led up to the problem, short enough that nobody
+/// one, enough to show what led up to the problem, short enough that nobody
 /// has to scroll the card to read what they are sending.
 const HISTORY: usize = 20;
 
@@ -11533,11 +11533,11 @@ const HISTORY: usize = 20;
 ///
 /// `None` is a destination that does not exist yet, and the entry draws itself
 /// dimmed and unclickable rather than opening a browser on nothing. Fill one
-/// in and that entry comes alive — no other change is needed.
+/// in and that entry comes alive, no other change is needed.
 /// Blizzard's own shop, which redirects to the viewer's region on its own, so
 /// one address serves every account without Lightforge guessing at a locale.
 ///
-/// One outbound mark as a square button — Discord and X.
+/// One outbound mark as a square button, Discord and X.
 ///
 /// Shared by the logo menu and the first run's last slide, under the same rule
 /// as the menu's entries: no destination yet means no press and a dimmed face,
@@ -11576,7 +11576,7 @@ const PAYPAL_URL: Option<&str> = Some("https://paypal.me/simplykenny");
 /// The handful of facts worth filtering a pile of issues by.
 ///
 /// Every one of them is already in the rendered bundle the card shows, so this
-/// sends nothing new — it only puts them where GlitchTip can group on them,
+/// sends nothing new, it only puts them where GlitchTip can group on them,
 /// which reading a text blob per issue does not allow.
 fn report_tags(info: &DebugInfo) -> Vec<(String, String)> {
     let mut tags = vec![
@@ -11642,7 +11642,7 @@ fn band_button<'a>(
 ///
 /// Pure, so the rules can be tested without a window: `widths` is what each
 /// tile needs, `room` what the band has for tiles, and the answer is indices
-/// into `widths` — shown first, hidden second, both in the order given.
+/// into `widths`: shown first, hidden second, both in the order given.
 ///
 /// Nothing is hidden while everything fits. Once something must be, the
 /// overflow button costs room too, and the selected line is never what
@@ -11691,7 +11691,7 @@ fn divide_strip(widths: &[f32], selected: usize, room: f32) -> (Vec<usize>, Vec<
     (shown, hidden)
 }
 
-/// Machine text — versions, paths, ids. Monospaced so a version number cannot
+/// Machine text, versions, paths, ids. Monospaced so a version number cannot
 /// be mistaken for prose, and so columns line up without a table.
 fn mono<'a>(content: String) -> iced::widget::Text<'a> {
     text(content)
@@ -11754,7 +11754,7 @@ fn rich_block(block: &richtext::Block) -> Element<'_, Message> {
 /// A block's text with its links clickable.
 ///
 /// The link offsets come from the proxy precisely so this can cut the string
-/// without searching it — a search picks the wrong occurrence as soon as one
+/// without searching it, a search picks the wrong occurrence as soon as one
 /// block links the same words twice, which changelogs do constantly.
 fn rich_paragraph(block: &richtext::Block) -> Element<'_, Message> {
     let inline = block.inline_links();
@@ -11839,7 +11839,7 @@ fn empty<'a>(headline: &str, hint: &str) -> Element<'a, Message> {
     .into()
 }
 
-/// A button that is disabled rather than absent when it cannot be used —
+/// A button that is disabled rather than absent when it cannot be used,
 /// buttons appearing and disappearing makes a UI feel unstable.
 struct Action<'a> {
     inner: button::Button<'a, Message>,
@@ -11871,8 +11871,8 @@ fn action_button(label: &str, color: iced::Color, message: Message) -> Action<'s
 
 /// The quieter button: same size as [`action_button`], different colour.
 ///
-/// Padded identically on purpose. These two sit side by side all over the app
-/// — Page next to Install, Keep next to Delete — and a pair of buttons that
+/// Padded identically on purpose. These two sit side by side all over the app,
+/// Page next to Install, Keep next to Delete, and a pair of buttons that
 /// disagree about their height reads as a mistake rather than as a hierarchy.
 /// What separates them is colour, which is the thing that carries meaning.
 fn secondary(label: &str, message: Message) -> Action<'static> {
@@ -11884,7 +11884,7 @@ fn secondary(label: &str, message: Message) -> Action<'static> {
     }
 }
 
-/// A heading over a hairline, then its body — Settings' unit of grouping.
+/// A heading over a hairline, then its body, Settings' unit of grouping.
 fn section<'a>(title: impl Into<String>, body: Element<'a, Message>) -> Element<'a, Message> {
     column![
         text(title.into()).size(theme::HEADING),
@@ -12007,7 +12007,7 @@ fn dot<'a>() -> Element<'a, Message> {
     text("·").size(theme::CAPTION).color(theme::MUTED).into()
 }
 
-/// Place a transfer sample within its job — see [`Job`].
+/// Place a transfer sample within its job; see [`Job`].
 fn job_progress(job: Job, sample: &TransferState, bytes_per_second: u64) -> state::Progress {
     let stored = sample.progress.bytes_stored;
     let (downloaded, total) = match (job.total, sample.remaining) {
@@ -12029,7 +12029,7 @@ fn job_progress(job: Job, sample: &TransferState, bytes_per_second: u64) -> stat
 ///
 /// iced's progress bar has no indeterminate mode, and a moving segment would
 /// need a widget of its own; a fill that restarts is the older idiom for the
-/// same thing and reads correctly — something is happening, nobody knows for
+/// same thing and reads correctly, something is happening, nobody knows for
 /// how long. Driven straight off the clock rather than off a counter in the
 /// model because the 100 ms tick already redraws the window whenever a
 /// transfer is live, which is exactly when this is on screen.
@@ -12086,7 +12086,7 @@ impl canvas::Program<Message> for Spinner {
         };
 
         // The track it runs on, so the ring is a ring even where the arc is
-        // not — without it the arc reads as a stray mark rather than as
+        // not, without it the arc reads as a stray mark rather than as
         // something going round something.
         frame.stroke(
             &canvas::Path::circle(centre, radius),
@@ -12217,7 +12217,7 @@ fn downloads_of(n: u64) -> String {
     let scaled = |n: u64, unit: f64, suffix: &str| {
         let value = n as f64 / unit;
         // The rounded value decides how many decimals to print, or 99,950,000
-        // renders as "100.0M" — a decimal place that is only ever ".0". The
+        // renders as "100.0M", a decimal place that is only ever ".0". The
         // raw value is what gets printed, because rounding twice turns
         // 999,499,999 into "1000M".
         let rounded = (value * 10.0).round() / 10.0;
@@ -12446,7 +12446,7 @@ mod tests {
 
     #[test]
     fn a_wide_name_tile_costs_more_of_the_band_than_an_icon() {
-        // Not a layout assertion — just that the estimate scales with the
+        // Not a layout assertion, just that the estimate scales with the
         // name, since that is what keeps a long label from being cut off.
         let widths = [54.0, 200.0, 54.0];
         let (shown, hidden) = divide_strip(&widths, 0, room_for(4));
@@ -12522,7 +12522,7 @@ mod tests {
     }
 
     /// A game whose drive is away is held, whatever the last refresh thought
-    /// of it — and held in a way that cannot turn into a download. Resolving
+    /// of it, and held in a way that cannot turn into a download. Resolving
     /// a missing drive by re-fetching 150 GB onto the system disk is the one
     /// outcome this whole mechanism exists to prevent.
     #[test]
@@ -12565,7 +12565,7 @@ mod tests {
 
     /// A tile is a line. Removing Classic Era with its PTR tracked used to
     /// leave the PTR behind, so the game stayed in the band under a branch
-    /// name — the bug Gabriel reported as "it will still be here but only the
+    /// name, the bug Gabriel reported as "it will still be here but only the
     /// ptr".
     #[test]
     fn removing_a_game_takes_its_ptr_and_beta_with_it() {
@@ -12596,11 +12596,11 @@ mod tests {
             "the config still tracks a branch of the removed line",
         );
         // Only the save complains, and only because this harness has no
-        // config directory — the removal itself was not refused.
+        // config directory, the removal itself was not refused.
         assert_ne!(app.error.as_deref(), Some("that is the only game left — add another first"));
     }
 
-    /// The header cannot be emptied, and a line is now the unit — so the last
+    /// The header cannot be emptied, and a line is now the unit, so the last
     /// *line* is held even when it has branches that would keep `choices`
     /// from going to zero.
     #[test]
@@ -12651,7 +12651,7 @@ mod tests {
             Some(version.to_owned()),
         );
 
-        // Dismissed, and the version recorded — so a second start is quiet.
+        // Dismissed, and the version recorded, so a second start is quiet.
         let _ = app.update(Message::DismissPatchNotes);
         assert!(app.patch_notes.is_none());
         assert_eq!(app.config.patch_notes_seen.as_deref(), Some(version));

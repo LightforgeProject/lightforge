@@ -8,7 +8,7 @@
 //!
 //! The build config bootstraps the chain by naming the encoding manifest with
 //! *both* of its keys. Encoding is therefore the one manifest reachable
-//! without encoding, and everything else — root included — resolves through it
+//! without encoding, and everything else, root included, resolves through it
 //! afterwards.
 //!
 //! Both manifests are large: encoding decodes to ~190 MB on a current retail
@@ -28,7 +28,7 @@ use super::storage::{EKey, Storage, StorageError};
 /// as a correctness one: keeping all of them on a current build costs hundreds
 /// of megabytes of entries the client will never ask for.
 ///
-/// Exists so callers never handle a `tact_parser` type — the boundary this
+/// Exists so callers never handle a `tact_parser` type, the boundary this
 /// module is here to hold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Locale {
@@ -128,7 +128,7 @@ impl Content {
         build: BuildConfig,
         locale: Locale,
     ) -> Result<Self, ContentError> {
-        // Encoding first, and by ekey — it is the only manifest that can be
+        // Encoding first, and by ekey. It is the only manifest that can be
         // found without already having encoding loaded.
         let ekey = build.encoding.ekey.ok_or(ContentError::EncodingHasNoEKey)?;
         let raw = storage.read(&ekey).map_err(|source| ContentError::Read {
@@ -177,7 +177,7 @@ impl Content {
     }
 
     /// Decoded size of a file, from the encoding manifest rather than the
-    /// index — the index only knows the compressed size.
+    /// index, the index only knows the compressed size.
     pub fn size_of(&self, ckey: &CKey) -> Option<u64> {
         self.encoding.size_of(ckey)
     }
@@ -199,7 +199,7 @@ impl Content {
     /// Resolve a game-relative path such as `Interface/FrameXML/GlobalStrings.lua`.
     ///
     /// Paths are matched by a Jenkins hash of the normalized path, not by
-    /// string comparison, and modern roots omit most of them — a `None` here
+    /// string comparison, and modern roots omit most of them, a `None` here
     /// usually means the build ships no name for that file, not that the file
     /// is absent. Prefer a file id where one is known.
     pub fn fdid_for_path(&self, path: &str) -> Option<u32> {

@@ -1,20 +1,20 @@
 //! Keyless addon providers, resolved client-side.
 //!
 //! CurseForge needs a key and therefore a server (see [`super::catalog`]).
-//! These three do not, so Lightforge talks to them directly — which means addon
+//! These three do not, so Lightforge talks to them directly, which means addon
 //! management keeps working when the Tuxcore proxy is down, and works at all
 //! before a CurseForge key exists.
 //!
 //! Each provider answers with the same [`Resolved`] shape the catalog does, so
-//! everything downstream — download, extract, ledger — is provider-agnostic.
+//! everything downstream, download, extract, ledger, is provider-agnostic.
 //!
 //! What each one is for:
 //!
-//! - [`wowinterface`] — a large back catalogue, and it hands back an MD5, so
+//! - [`wowinterface`], a large back catalogue, and it hands back an MD5, so
 //!   its downloads are the only ones we can verify.
-//! - [`tukui`] — the *only* source for ElvUI, which is not on CurseForge at
+//! - [`tukui`], the *only* source for ElvUI, which is not on CurseForge at
 //!   all. It also declares its folder list up front.
-//! - [`github`] — where many authors release first, and the BigWigs packager's
+//! - [`github`], where many authors release first, and the BigWigs packager's
 //!   `release.json` makes per-flavor selection exact rather than guessed.
 
 pub mod github;

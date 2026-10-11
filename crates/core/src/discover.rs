@@ -3,7 +3,7 @@
 //! A first run should not ask someone to download 120 GB they already have.
 //! Almost everyone arriving here has played WoW on this machine through Lutris,
 //! Bottles, Heroic or a hand-made prefix, and every one of those put a
-//! Battle.net in a Wine prefix — which means Agent's own registry, `product.db`,
+//! Battle.net in a Wine prefix, which means Agent's own registry, `product.db`,
 //! is already on disk saying which products are installed and exactly where.
 //! That file is the whole discovery mechanism: no filesystem crawl, no
 //! guessing, and it answers for games on other disks because the paths it holds
@@ -12,7 +12,7 @@
 //! The scan is deliberately bounded. It looks only where a Battle.net prefix is
 //! actually put ([`hints`]), reads two files per prefix, and never walks a
 //! drive it was not pointed at. Nothing leaves the machine and nothing is
-//! written — [`adopt`] is a separate call the user has to ask for.
+//! written, [`adopt`] is a separate call the user has to ask for.
 
 use std::path::{Path, PathBuf};
 
@@ -30,7 +30,7 @@ use crate::tact::productdb;
 const MAX_DEPTH: usize = 2;
 
 /// Directories read per level. A guard against being pointed at something
-/// enormous, not a real limit — no launcher keeps hundreds of prefixes.
+/// enormous, not a real limit, no launcher keeps hundreds of prefixes.
 const MAX_ENTRIES: usize = 128;
 
 /// Which launcher left a prefix behind, for a sentence the user can recognise.
@@ -40,7 +40,7 @@ pub enum Origin {
     Bottles,
     Heroic,
     Steam,
-    /// A prefix made by hand — `~/.wine` and friends.
+    /// A prefix made by hand, `~/.wine` and friends.
     Wine,
     /// Somewhere the user pointed us at themselves.
     Pointed,
@@ -62,12 +62,12 @@ impl Origin {
 /// One Battle.net prefix found on this machine, and what is installed in it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Found {
-    /// The Wine prefix itself — the directory holding `drive_c`.
+    /// The Wine prefix itself, the directory holding `drive_c`.
     pub prefix: PathBuf,
     pub origin: Origin,
     /// Battle.net's own install directory, when the prefix has one.
     pub battle_net: Option<PathBuf>,
-    /// WoW installs, one per install root — several flavours share one.
+    /// WoW installs, one per install root, several flavours share one.
     pub wow: Vec<WowInstall>,
     /// Everything else Battle.net has installed in there.
     pub hand_offs: Vec<HandOff>,
@@ -80,7 +80,7 @@ impl Found {
     }
 }
 
-/// One WoW install root — `World of Warcraft/`, with its flavours inside.
+/// One WoW install root, `World of Warcraft/`, with its flavours inside.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WowInstall {
     pub path: PathBuf,
@@ -96,7 +96,7 @@ impl WowInstall {
     ///
     /// A library installs its games as `<games>/World of Warcraft`, so a folder
     /// called anything else cannot be adopted in place without moving it. The
-    /// rename is within one directory, which costs nothing — but it is still a
+    /// rename is within one directory, which costs nothing, but it is still a
     /// change to someone's existing install, so it is said out loud rather than
     /// done quietly.
     pub fn needs_rename(&self) -> bool {
@@ -109,7 +109,7 @@ impl WowInstall {
 pub struct HandOff {
     /// Agent's product code, e.g. `hs_beta`.
     pub code: String,
-    /// The install folder's own name — "Hearthstone". Agent's codes name
+    /// The install folder's own name, "Hearthstone". Agent's codes name
     /// nothing to anyone, and the folder is what the user recognises.
     pub label: String,
     pub path: PathBuf,
@@ -139,7 +139,7 @@ pub fn hints(home: &Path) -> Vec<(PathBuf, Origin)> {
         (home.join(".wine"), Origin::Wine),
         (home.join(".local").join("share").join("wineprefixes"), Origin::Wine),
     ];
-    // Steam's own compat data, in every library folder it has — a Battle.net
+    // Steam's own compat data, in every library folder it has, a Battle.net
     // added as a non-Steam game lives in one of these.
     if let Some(steam) = crate::steam::SteamRoot::discover_in(home) {
         for library in steam.library_paths() {
@@ -213,7 +213,7 @@ pub fn inspect(prefix: &Path, origin: Origin) -> Option<Found> {
     if !paths::is_prefix(prefix) {
         return None;
     }
-    // Someone else's prefix has no [`Layout`] — Lightforge does not own it and
+    // Someone else's prefix has no [`Layout`], Lightforge does not own it and
     // its root is not laid out like ours. What is the same in every prefix is
     // the inside of `drive_c`, which is what these three free functions read.
     let dosdevices = prefix.join("dosdevices");
@@ -240,8 +240,8 @@ pub fn inspect(prefix: &Path, origin: Origin) -> Option<Found> {
             continue;
         }
         // Through the symlinks, deliberately. A Windows path inside a prefix
-        // routinely resolves to a link pointing at the real install elsewhere —
-        // Lightforge's own `C:\Program Files (x86)\World of Warcraft` is one —
+        // routinely resolves to a link pointing at the real install elsewhere,
+        // Lightforge's own `C:\Program Files (x86)\World of Warcraft` is one,
         // and adopting the link would make a library out of `drive_c` instead
         // of the directory the games are actually in.
         let path = std::fs::canonicalize(&path).unwrap_or(path);
@@ -337,8 +337,8 @@ pub fn wow_install_at(path: &Path) -> Option<WowInstall> {
 
 /// Whether an Agent record describes a WoW flavour rather than another game.
 ///
-/// The family field is the honest answer — Agent writes `wow` for every
-/// flavour — but it is empty in records written by older clients, so the code
+/// The family field is the honest answer, Agent writes `wow` for every
+/// flavour, but it is empty in records written by older clients, so the code
 /// prefix is the fallback. Both are needed: `w1r` (Warcraft I Remastered)
 /// starts with `w` and is nobody's WoW.
 fn is_wow(record: &productdb::Installed) -> bool {
@@ -404,7 +404,7 @@ pub fn plan(install: &WowInstall, existing: &[Library]) -> Result<Plan, AdoptErr
 /// Battle.net where the install now is.
 ///
 /// Returns the library to add to the config. The caller assigns the products to
-/// it, saves, and relinks the prefix — the same three steps adding a drive
+/// it, saves, and relinks the prefix, the same three steps adding a drive
 /// takes, because that is what this is.
 ///
 /// Battle.net is told twice, as it is after a download: `.product.db` in the
@@ -452,7 +452,7 @@ fn drive(letter: &str) -> String {
 /// Lightforge's prefix, without moving it.
 ///
 /// The game folder is symlinked into the default library's `games/` directory,
-/// which the prefix already maps as a drive — so the install gets a Windows
+/// which the prefix already maps as a drive, so the install gets a Windows
 /// path (`E:\Hearthstone`) with no new drive letter and no copying. Then its
 /// record is lifted out of the other prefix's registry **as raw bytes**, with
 /// only the install path rewritten, and grafted into ours: Agent wants a build
@@ -624,7 +624,7 @@ mod tests {
         let games = dir.join("games");
         let prefix = foreign_prefix(&dir, &games);
         // The record names a directory that does not exist at all, so it never
-        // reaches the flavour check — and the one that does exist is listed
+        // reaches the flavour check, and the one that does exist is listed
         // only because `.build.info` and the disk agree about it.
         let found = inspect(&prefix, Origin::Lutris).unwrap();
         assert_eq!(found.wow.len(), 1);

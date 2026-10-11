@@ -1,23 +1,23 @@
-//! Addon management — **Milestone 6**.
+//! Addon management.
 //!
 //! Two halves, both offline:
 //!
 //! - **What is installed**, read from the `.toc` files in a product's `AddOns`
-//!   directory. A `.toc` carries the addon's title, version, and — crucially —
+//!   directory. A `.toc` carries the addon's title, version, and, crucially,
 //!   the provider ids its author published under (`X-Curse-Project-ID`,
 //!   `X-Wago-ID`, `X-WoWI-ID`).
 //! - **A WoWUp import token**, which is base64 over a JSON object listing the
 //!   provider ids of someone else's addon list.
 //!
 //! Because both sides speak provider ids, an import can be reconciled against
-//! an install **without asking any API anything** — what is already there, what
+//! an install **without asking any API anything**: what is already there, what
 //! is missing, and what is a different version. Only actually fetching an addon
 //! needs the network.
 //!
 //! The token format here was read off a real WoWUp export rather than assumed:
 //! it is an object (not an array), its keys are snake_case, its provider string
 //! is `Curse` rather than `curseforge`, its ids are strings, and every entry
-//! pins an exact `version_id` — a *file* id, not just a project.
+//! pins an exact `version_id`: a *file* id, not just a project.
 
 pub mod browse;
 pub mod catalog;
@@ -41,13 +41,13 @@ use crate::product::ProductCode;
 
 /// Which builds of an addon are acceptable.
 ///
-/// A **floor, not a filter** — the same semantics WoWUp settled on. Asking for
+/// A **floor, not a filter**: the same semantics WoWUp settled on. Asking for
 /// [`Channel::Alpha`] does not mean "only alphas": it means alphas are
 /// allowed, and the newest acceptable build still wins, which is usually the
 /// stable one. Anything else would pin a user to a stale alpha the day the
 /// author shipped a release.
 ///
-/// Only providers that publish pre-release builds can honour this — of ours,
+/// Only providers that publish pre-release builds can honour this, of ours,
 /// CurseForge and GitHub. WoWInterface and Tukui publish one build, so a
 /// channel there is inert rather than wrong.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -150,7 +150,7 @@ impl Provider {
 /// One addon named by an import token.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
-    /// Provider's project id, as a string — WoWUp writes these quoted.
+    /// Provider's project id, as a string, WoWUp writes these quoted.
     pub id: String,
     pub name: String,
     #[serde(rename = "provider_name")]
@@ -173,7 +173,7 @@ impl Entry {
 pub struct Collection {
     #[serde(default)]
     pub collection_name: String,
-    /// WoWUp's own flavor name — `Retail`, `Classic`, `ClassicEra`, …
+    /// WoWUp's own flavor name, `Retail`, `Classic`, `ClassicEra`, …
     #[serde(default)]
     pub client_type: String,
     #[serde(default)]
@@ -191,8 +191,8 @@ impl Collection {
     /// Encode this list as a token, in the same shape [`Collection::parse`]
     /// reads: base64 over JSON.
     ///
-    /// The point is that it travels — to WoWUp, to another machine, to someone
-    /// being handed a setup — so it is the format other tools already read
+    /// The point is that it travels, to WoWUp, to another machine, to someone
+    /// being handed a setup, so it is the format other tools already read
     /// rather than one of Lightforge's own.
     pub fn to_token(&self) -> Result<String, AddonError> {
         let json = serde_json::to_vec(self).map_err(AddonError::Token)?;
@@ -245,7 +245,7 @@ impl Collection {
     /// carry provider ids.
     ///
     /// Ids are tried first because they are exact, but plenty of addons omit
-    /// them — on a real 84-addon install, `!BugGrabber` and
+    /// them, on a real 84-addon install, `!BugGrabber` and
     /// `HandyNotes_Midnight` were both present with no `X-Curse-Project-ID` in
     /// their `.toc` at all, and an id-only match reported them missing. So the
     /// title and then the folder name are tried after, each requiring an exact
@@ -393,7 +393,7 @@ impl Toc {
             .filter(|v| !v.is_empty())
     }
 
-    /// `## Interface: 120100, 120105` — a multi-version line in modern addons.
+    /// `## Interface: 120100, 120105`: a multi-version line in modern addons.
     pub fn interfaces(&self) -> Vec<u32> {
         self.get("Interface")
             .map(|v| v.split(',').filter_map(|p| p.trim().parse().ok()).collect())
@@ -422,7 +422,7 @@ impl Installed {
     }
 
     /// Whether this looks like part of a larger addon rather than its own
-    /// thing — `BigWigs_Options` next to `BigWigs`, for example.
+    /// thing, `BigWigs_Options` next to `BigWigs`, for example.
     ///
     /// A guess, and named as one: it only matters for grouping in a list, never
     /// for deciding what to install or delete.
@@ -485,8 +485,8 @@ pub fn scan(addons_dir: &Path) -> Result<Vec<Installed>, AddonError> {
 
 /// Pick the `.toc` for a folder.
 ///
-/// Modern addons ship one per flavor — `BigWigs.toc`, `BigWigs_Vanilla.toc`,
-/// `BigWigs_Mists.toc` — where the bare name is the mainline (retail) one. The
+/// Modern addons ship one per flavor, `BigWigs.toc`, `BigWigs_Vanilla.toc`,
+/// `BigWigs_Mists.toc`: where the bare name is the mainline (retail) one. The
 /// bare file is preferred, then an explicit `_Mainline`, then any `.toc` at
 /// all, since the metadata we read is the same across them.
 fn toc_for(dir: &Path, folder: &str) -> Option<PathBuf> {
@@ -526,7 +526,7 @@ fn strip_color_codes(text: &str) -> String {
             continue;
         }
         match chars.next() {
-            // |cAARRGGBB — the escape plus eight hex digits.
+            // |cAARRGGBB, the escape plus eight hex digits.
             Some('c') | Some('C') => {
                 for _ in 0..8 {
                     if chars.peek().is_some_and(|c| c.is_ascii_hexdigit()) {
@@ -615,7 +615,7 @@ pub enum AddonError {
 mod tests {
     use super::*;
 
-    /// A trimmed copy of a real WoWUp export — structure verified against the
+    /// A trimmed copy of a real WoWUp export, structure verified against the
     /// genuine article, not assumed.
     const TOKEN: &str = concat!(
         "eyJjb2xsZWN0aW9uX25hbWUiOiJXb3dVcF9leHBvcnRfMSIsImNsaWVudF90eXBlIjoiUmV0YWlsIiwi",
@@ -629,7 +629,7 @@ mod tests {
         // Asking for alpha accepts a stable build; asking for stable does not
         // accept an alpha. This is WoWUp's rule, and the reason for it is that
         // "alpha" means "I'll take risky builds", not "never give me a
-        // release" — the newest acceptable build still wins.
+        // release", the newest acceptable build still wins.
         assert!(Channel::Alpha.accepts(Channel::Stable));
         assert!(Channel::Alpha.accepts(Channel::Beta));
         assert!(Channel::Alpha.accepts(Channel::Alpha));
@@ -701,7 +701,7 @@ mod tests {
                     version_id: Some("5309821".to_owned()),
                 },
                 // No pinned file, and a name with a character JSON has to
-                // escape — both of which an encoder can quietly mangle.
+                // escape: both of which an encoder can quietly mangle.
                 Entry {
                     id: "weakauras/WeakAuras2".to_owned(),
                     name: "WeakAuras \"2\"".to_owned(),

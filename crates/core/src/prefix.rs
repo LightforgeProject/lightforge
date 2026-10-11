@@ -1,9 +1,9 @@
 //! Prefix lifecycle: creation via Proton, and the POSIX symlink that puts the
 //! game inside a Windows-shaped path.
 //!
-//! Everything here runs Proton the way Steam does — the `proton` entry-point
+//! Everything here runs Proton the way Steam does, the `proton` entry-point
 //! script with `STEAM_COMPAT_DATA_PATH` and `STEAM_COMPAT_CLIENT_INSTALL_PATH`
-//! in the environment — rather than reaching for a system `wine` binary. That
+//! in the environment, rather than reaching for a system `wine` binary. That
 //! keeps the prefix byte-identical to one Steam would have produced, which is
 //! what makes an imported install and a Lightforge-created one interchangeable.
 //!
@@ -44,7 +44,7 @@ impl ProtonRunner {
     /// Run `release` against the prefix described by `layout`.
     ///
     /// `steam_client` is what Proton is told to treat as the Steam client
-    /// install — the user's real Steam root when they have one, otherwise a
+    /// install, the user's real Steam root when they have one, otherwise a
     /// Lightforge-owned stub directory (see
     /// [`ProtonRunner::steam_client_path`]). Proton only consults it for
     /// `steamclient.dll` plumbing that Lightforge never exercises, but the
@@ -65,7 +65,7 @@ impl ProtonRunner {
     /// installed, else a Lightforge-owned stub under its data directory.
     ///
     /// Proton is not a Steam dependency for Lightforge's purposes, so a missing
-    /// Steam install must not be fatal — but the variable still has to point
+    /// Steam install must not be fatal, but the variable still has to point
     /// somewhere that exists.
     pub fn steam_client_path(
         steam: Option<&crate::steam::SteamRoot>,
@@ -130,7 +130,7 @@ impl ProtonRunner {
     }
 
     /// Run a program in the prefix and wait for it, failing on a non-zero exit.
-    /// Proton's runtime directory — `files` or `dist`, whichever this build
+    /// Proton's runtime directory, `files` or `dist`, whichever this build
     /// ships. The wine binaries and `wineserver` live under its `bin`.
     pub fn dist(&self) -> &Path {
         &self.dist
@@ -255,11 +255,11 @@ pub enum LinkState {
     Correct,
     /// Nothing at the link path.
     Missing,
-    /// A symlink whose target doesn't exist — what a wiped `games/` leaves.
+    /// A symlink whose target doesn't exist, what a wiped `games/` leaves.
     Dangling(PathBuf),
     /// A symlink pointing somewhere else entirely.
     Mislinked(PathBuf),
-    /// A real, empty directory — typically created by an installer that ran
+    /// A real, empty directory, typically created by an installer that ran
     /// before the link existed. Safe to replace.
     OccupiedEmpty,
     /// A real directory with contents, or a file. Never touched automatically:
@@ -311,7 +311,7 @@ pub fn inspect_link(link: &Path, target: &Path) -> LinkState {
 
 /// Create or repair the symlink, returning the state found beforehand.
 ///
-/// The target directory is created if absent — a symlink into a not-yet-
+/// The target directory is created if absent, a symlink into a not-yet-
 /// downloaded install is the normal pre-install state, and Wine resolves it
 /// the moment the directory appears.
 pub fn ensure_link(link: &Path, target: &Path) -> Result<LinkState, PrefixError> {
@@ -344,14 +344,14 @@ pub fn ensure_link(link: &Path, target: &Path) -> Result<LinkState, PrefixError>
 pub struct PrefixStatus {
     pub compat_data: PathBuf,
     pub prefix: PathBuf,
-    /// Wine has written its registry hives — the prefix is usable.
+    /// Wine has written its registry hives, the prefix is usable.
     pub initialized: bool,
     /// The Proton build that last created or upgraded this prefix, as Proton
     /// itself recorded it. `None` before the prefix exists.
     ///
     /// Worth carrying next to `initialized`: the prefix is shared by every
     /// product, and which build made it is what says whether a pin is a
-    /// routine upgrade or a downgrade of everything — see
+    /// routine upgrade or a downgrade of everything, see
     /// [`crate::proton::prefix_fit`].
     pub built_by: Option<String>,
     pub link: LinkState,
@@ -398,7 +398,7 @@ pub fn provision(runner: &ProtonRunner, layout: &Layout) -> Result<PrefixStatus,
 /// Three links per library, and each for its own reason:
 ///
 /// * the `games/` drive letter, so Battle.net has a Windows directory it can
-///   install a title *into* — this is what `DefaultInstallPath` names;
+///   install a title *into*: this is what `DefaultInstallPath` names;
 /// * the WoW drive letter, because the in-game shop's browser only starts when
 ///   the install is a drive *root* (see [`Layout::wow_drive`]);
 /// * for the default library only, the `C:\Program Files (x86)` symlink, which is
@@ -408,14 +408,14 @@ pub fn provision(runner: &ProtonRunner, layout: &Layout) -> Result<PrefixStatus,
 /// all. This is the whole reason the function exists rather than being three
 /// lines in [`provision`]: `ensure_link` creates its target, so relinking an
 /// unmounted drive would conjure an empty games directory on whatever
-/// filesystem holds the mount point — and an empty install is what makes the
+/// filesystem holds the mount point, and an empty install is what makes the
 /// client offer a repair and Battle.net offer a reinstall.
 pub fn link_libraries(layout: &Layout) -> Result<(), PrefixError> {
     for library in layout.libraries().all() {
         // A library that has never been set up is set up here, which is what
         // makes a first run work: the first library comes out of the config
         // migration unclaimed, and setup is the moment it becomes real. Only
-        // ever from `New`, which means there is no marker to adopt — so the
+        // ever from `New`, which means there is no marker to adopt, so the
         // id stays the one the config holds, and the `claimed` flag the clone
         // gains is redundant rather than lost: a marker that matches reads as
         // `Ready` whatever the flag says.
@@ -619,7 +619,7 @@ mod tests {
     }
 
     /// The drive is what makes the in-game shop render, so it is worth a test
-    /// of its own rather than being assumed from `provision` — which cannot be
+    /// of its own rather than being assumed from `provision`: which cannot be
     /// tested here, since it runs Proton.
     #[test]
     fn the_wow_drive_is_a_dosdevices_link_to_the_install() {
@@ -641,7 +641,7 @@ mod tests {
             LinkState::Correct,
         );
 
-        // The `games/` letter is a second, separate mapping — Battle.net needs
+        // The `games/` letter is a second, separate mapping, Battle.net needs
         // a directory it can install *into*, the shop needs a drive root.
         ensure_link(&layout.games_drive(&main), main.games()).unwrap();
         assert_eq!(layout.games_drive(&main).file_name().unwrap(), "e:");
@@ -651,7 +651,7 @@ mod tests {
     /// The reason [`link_libraries`] exists: a drive that is not mounted must
     /// not have anything created under it. `ensure_link` creates its target,
     /// so a relink of an absent library would leave an empty games directory
-    /// on whatever filesystem holds the mount point — and an empty install is
+    /// on whatever filesystem holds the mount point, and an empty install is
     /// what makes the client offer a repair.
     #[test]
     fn a_missing_library_is_not_linked_or_created() {
@@ -721,7 +721,7 @@ mod tests {
             std::fs::read_link(layout.wow_drive(&second)).unwrap(),
             layout.wow_install_in(&second),
         );
-        // One `C:` path, and it is the default library's — the string an install
+        // One `C:` path, and it is the default library's, the string an install
         // Battle.net has already adopted has recorded on disk.
         assert_eq!(std::fs::read_link(layout.wow_symlink()).unwrap(), layout.wow_install_in(&main));
         assert_ne!(second.wow_letter, main.wow_letter);

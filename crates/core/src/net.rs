@@ -5,9 +5,9 @@
 //! system OpenSSL, so behavior doesn't drift with the distribution's crypto
 //! policy or library version.
 //!
-//! The [`ETagCache`] built here is shared by Proton-GE release polling and, in
-//! Milestone 5, the themed asset pipeline — both revalidate a small document on
-//! every launch and want a `304` to cost nothing.
+//! The [`ETagCache`] built here is shared by Proton-GE release polling and
+//! the themed asset pipeline: both revalidate a small document on every
+//! launch and want a `304` to cost nothing.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -49,7 +49,7 @@ impl Http {
             // Deliberately no overall request timeout: a Proton tarball is
             // ~400 MB and a slow link is not an error. A *silent* one is: this
             // resets on every chunk, so it only fires on a server that keeps
-            // the connection open and stops sending — which, without it,
+            // the connection open and stops sending, which, without it,
             // stalled a download (and any pause waiting on it) forever.
             .read_timeout(READ_TIMEOUT)
             .build()
@@ -107,7 +107,7 @@ impl Http {
     /// The one thing the launcher ever *sends*: the screenshot that goes with
     /// a bug report, which is uploaded so the report can carry a link rather
     /// than a megabyte of base64. It has its own timeout because, unlike a
-    /// download, there is somebody watching a dialog wait for it — and
+    /// download, there is somebody watching a dialog wait for it, and
     /// because the whole call is optional: a failure here means the picture
     /// travels inside the report instead, so it must fail quickly rather than
     /// sit on the read timeout.
@@ -130,7 +130,7 @@ impl Http {
     /// report's event goes to our own Sentry server, which authenticates it
     /// with an `X-Sentry-Auth` header. Sending it through this client rather
     /// than through the one the sentry crate brings with it is what keeps a
-    /// second HTTP stack — and a second TLS verifier — out of the release.
+    /// second HTTP stack, and a second TLS verifier, out of the release.
     pub async fn post(
         &self,
         url: &str,
@@ -228,7 +228,7 @@ impl Http {
     /// POST JSON and deserialize the reply.
     ///
     /// The addon catalog resolves a whole import list in one request, which is
-    /// a body rather than a query string — twenty round trips to answer one
+    /// a body rather than a query string, twenty round trips to answer one
     /// paste is not a design.
     pub async fn post_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(
         &self,
@@ -279,7 +279,7 @@ impl Http {
     /// SHA-512 digest.
     ///
     /// The digest is computed during the transfer rather than by re-reading the
-    /// file afterwards — for a 400 MB tarball that saves a full pass over disk.
+    /// file afterwards, for a 400 MB tarball that saves a full pass over disk.
     /// `on_progress` is called as bytes arrive; keep it cheap.
     /// Fetch a whole response into memory.
     ///
@@ -442,7 +442,7 @@ impl ETagCache {
 
     /// The saved ETag, if the cached body is actually present.
     ///
-    /// Both must exist — sending `If-None-Match` without a body to fall back on
+    /// Both must exist, sending `If-None-Match` without a body to fall back on
     /// would turn a `304` into a failure.
     pub fn etag(&self) -> Option<String> {
         if !self.body_path.is_file() {

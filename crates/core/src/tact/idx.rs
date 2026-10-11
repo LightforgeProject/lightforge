@@ -2,7 +2,7 @@
 //!
 //! One `.idx` holds every entry whose truncated encoding key falls in one of
 //! 16 buckets, mapping that key to a location inside a `data.NNN` archive.
-//! Without a correct index the archives are unreadable — the bytes are there,
+//! Without a correct index the archives are unreadable, the bytes are there,
 //! but nothing can find them.
 //!
 //! Lightforge writes these itself because `casc-storage` cannot: its
@@ -12,7 +12,7 @@
 //!
 //! The format below was verified against a real 12.1.0 retail install: all 16
 //! of its index files round-trip through this module byte for byte, hashes
-//! included. That is the only standard worth holding a writer to here — Agent
+//! included. That is the only standard worth holding a writer to here, Agent
 //! treats an index it doesn't like as a damaged install and starts the repair
 //! scan this whole project exists to avoid.
 //!
@@ -58,7 +58,7 @@ const OFFSET_MASK: u32 = (1 << SEGMENT_BITS) - 1;
 /// header Blizzard ships (`data_size` 16 → body ends at 0x18 → pad to 0x20).
 const DATA_SECTION_ALIGN: usize = 16;
 
-/// Byte size a fresh index file is padded out to — 28 × 64 KiB, the shape a
+/// Byte size a fresh index file is padded out to, 28 × 64 KiB, the shape a
 /// real install ships.
 ///
 /// It is a *floor*, not a cap. Sizes in the wild vary with the store: retail's
@@ -68,14 +68,14 @@ const DATA_SECTION_ALIGN: usize = 16;
 /// bucket, so that is the rule [`Index::to_bytes`] follows.
 pub const DEFAULT_FILE_SIZE: usize = 1_835_008;
 
-/// Index files are allocated in whole 64 KiB units. Every real file observed —
-/// Agent's and the client's — is a multiple of this.
+/// Index files are allocated in whole 64 KiB units. Every real file observed,
+/// Agent's and the client's, is a multiple of this.
 pub const SIZE_GRANULARITY: usize = 65_536;
 
 /// Free space left after the entries, for the client's own use.
 ///
 /// **This is not padding.** The running client appends incremental index
-/// updates into the tail of the file — its "KMT update section" — and it must
+/// updates into the tail of the file, its "KMT update section", and it must
 /// fit. Size a file to just past its entries and the client reports
 ///
 /// ```text
@@ -136,7 +136,7 @@ impl Entry {
     /// its head: sixteen bare 30-byte entry headers, one per bucket, with no
     /// BLTE payload behind any of them. Each bucket's index records its own
     /// slot, so the marker for bucket `b` sits at `offset = b * 30`. A real
-    /// install therefore holds exactly `archives * 16` of these — 123 * 16 =
+    /// install therefore holds exactly `archives * 16` of these, 123 * 16 =
     /// 1968 here, 123 in every bucket.
     ///
     /// They matter twice over: they are why a naive "decode every index entry"
@@ -192,8 +192,8 @@ impl Entry {
 
 /// A parsed `.idx`, faithful enough to write back unchanged.
 ///
-/// Fields Lightforge never interprets — the block table, the unused header
-/// byte, the file's padded size — are preserved rather than regenerated,
+/// Fields Lightforge never interprets, the block table, the unused header
+/// byte, the file's padded size, are preserved rather than regenerated,
 /// because an index that differs from Blizzard's in any byte is an index we
 /// cannot prove Agent accepts.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,7 +203,7 @@ pub struct Index {
     unused: u8,
     /// Verbatim `(start, end)` pairs. Purpose undocumented; preserved as-is.
     blocks: Vec<(u32, u32)>,
-    /// In file order, which is key-ascending — verified across a real
+    /// In file order, which is key-ascending, verified across a real
     /// install's 1.5 M entries, where nothing is out of order. Duplicate keys
     /// do occur there (57 of them), so this is a `Vec` in file order rather
     /// than a map: collapsing them would change bytes Blizzard wrote.
@@ -375,8 +375,8 @@ impl Index {
         }
 
         // Grow to fit rather than refusing. A store this writer resumes was
-        // very likely last written by someone else — the client rewrites
-        // indices at its own size — so the size a file happened to have when
+        // very likely last written by someone else, the client rewrites
+        // indices at its own size, so the size a file happened to have when
         // it was loaded is not a budget the next generation has to live within.
         let total = data_offset(self.blocks.len()) + 8 + entries.len();
         // Reserve before rounding: the client needs the tail free, so a file
@@ -512,7 +512,7 @@ fn data_offset(block_count: usize) -> usize {
 /// The data section's checksum: `hashlittle2` applied to each entry in turn
 /// with the state carried across, taking the final `pc`.
 ///
-/// Deliberately not a single hash over the whole region — that produces a
+/// Deliberately not a single hash over the whole region, that produces a
 /// different value, and it is the mistake that would make every index we write
 /// look corrupt to Agent while passing any test we wrote against ourselves.
 fn entries_hash(entries: &[u8]) -> u32 {
@@ -543,7 +543,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), IdxError> {
     tmp.persist(path).map_err(|e| IdxError::Io { path: path.to_path_buf(), source: e.error })?;
 
     // A real install's indices are 0644. tempfile creates at 0600, which would
-    // hand Agent and the client an index only this user can read — the same
+    // hand Agent and the client an index only this user can read, the same
     // silent tightening `buildinfo::save` guards against.
     std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o644))
         .map_err(io(path))?;
@@ -730,7 +730,7 @@ mod tests {
         // The failure this guards against is concrete: a store the WoW client
         // last wrote has small indices (196,608 bytes on a real one), and a
         // resumed download that adds entries must grow the file rather than
-        // refuse to checkpoint — refusing loses everything the run fetched.
+        // refuse to checkpoint, refusing loses everything the run fetched.
         let mut idx = Index::new(0);
         let capacity = idx.remaining_capacity();
         for i in 0..=capacity {
@@ -793,7 +793,7 @@ mod tests {
     fn archive_markers_are_recognised_and_excluded_from_files() {
         // Shapes taken verbatim from a real install. The marker's offset is
         // its bucket's slot in the archive's reserved head, so the same
-        // archive appears at a different offset in each of the 16 indices —
+        // archive appears at a different offset in each of the 16 indices,
         // checking only bucket 00's offset of 0 misses 15/16 of them.
         let real = entry([0x00, 0x05, 0x00, 0x7e, 0xc0, 0x16, 0xa8, 0x90, 0x21], 5, 0, 30);
         assert!(real.is_archive_marker());
@@ -809,7 +809,7 @@ mod tests {
         assert_eq!(ARCHIVE_RESERVED, 480);
 
         // A file entry that happens to start with the same two bytes is not a
-        // marker — the suffix, offset and size all have to agree.
+        // marker, the suffix, offset and size all have to agree.
         let file = entry([0x00, 0x05, 0x52, 0xe5, 0x14, 0xf8, 0x9d, 0x30, 0x2b], 27, 4096, 18_355);
         assert!(!file.is_archive_marker());
 

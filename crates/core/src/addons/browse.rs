@@ -1,7 +1,7 @@
 //! Searching for addons to install.
 //!
 //! The import-token flow answers "give me this exact list". This answers the
-//! other question — "what is there?" — which is what makes Lightforge an addon
+//! other question, "what is there?", which is what makes Lightforge an addon
 //! manager rather than an importer.
 //!
 //! Each provider is searched the cheapest way it allows:
@@ -38,7 +38,7 @@ const TUKUI_ADDONS: &str = "https://api.tukui.org/v1/addons";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Listing {
     pub provider: Provider,
-    /// The id to install by — a numeric id, a slug, or `owner/repo`.
+    /// The id to install by, a numeric id, a slug, or `owner/repo`.
     pub id: String,
     pub name: String,
     #[serde(default)]
@@ -64,7 +64,7 @@ struct WowiEntry {
     #[serde(default)]
     downloads: u64,
     /// `gameVersions` is **null** for 3,510 of WoWInterface's 7,702 entries,
-    /// and `#[serde(default)]` covers a *missing* key, not an explicit null —
+    /// and `#[serde(default)]` covers a *missing* key, not an explicit null,
     /// so this must be an `Option` or the whole catalogue fails to parse.
     #[serde(rename = "gameVersions", default)]
     game_versions: Option<Vec<String>>,
@@ -108,7 +108,7 @@ pub async fn search(
     // A pasted project page is the same question as a typed name, so it is
     // answered by rewriting it into one rather than by a second code path:
     // every provider below already knows how to find an addon by the thing
-    // its URL carries — a slug, an `owner/repo`, a numeric id.
+    // its URL carries, a slug, an `owner/repo`, a numeric id.
     let from_url = query_from_url(query);
     let query = from_url.as_ref().map(|(_, text)| text.as_str()).unwrap_or(query);
 
@@ -168,7 +168,7 @@ pub async fn search(
 ///
 /// Tukui is deliberately absent. It publishes no download counts at all, so
 /// its two addons would either sit at the bottom of a popularity list as
-/// zeroes or have to be given a rank they did not earn — and ElvUI belongs
+/// zeroes or have to be given a rank they did not earn, and ElvUI belongs
 /// nowhere near the bottom. It is one search away.
 ///
 /// A provider that cannot answer is dropped rather than reported, unlike in
@@ -209,7 +209,7 @@ pub async fn popular(
 /// The most-downloaded WoWInterface entries that support a flavor.
 ///
 /// Same flavor rule as [`search_wowi`], including the entries that declare no
-/// game versions at all — half the catalogue does, and excluding them here
+/// game versions at all: half the catalogue does, and excluding them here
 /// would mean the popular list and a search for the same addon disagreed
 /// about whether it exists.
 fn top_wowi(entries: &[WowiEntry], flavor: &str, limit: usize) -> Vec<Listing> {
@@ -273,7 +273,7 @@ fn score(name: &str, needle: &str) -> u8 {
 ///
 /// Addon names are typed from memory, not copied: "big wigs", "BigWigs" and
 /// "Big-Wigs" are one query, and "ElvUI" is often typed "Elv UI". Folding
-/// also strips the decoration real titles carry — "BigWigs (Boss Timers &
+/// also strips the decoration real titles carry, "BigWigs (Boss Timers &
 /// Tools)" still begins with the query once the punctuation is gone.
 fn fold(text: &str) -> String {
     text.chars()
@@ -325,7 +325,7 @@ fn search_tukui(entries: &[TukuiEntry], query: &str) -> Vec<Listing> {
 /// What a pasted addon page URL means, as a query the search already handles.
 ///
 /// Returns `None` for anything that is not one of these, including a URL from
-/// a provider Lightforge does not install from — searching the text of a
+/// a provider Lightforge does not install from, searching the text of a
 /// Wago link finds nothing, which is the honest answer, where guessing at an
 /// id from it would install something else.
 ///
@@ -363,7 +363,7 @@ pub fn query_from_url(input: &str) -> Option<(Provider, String)> {
             }
             _ => None,
         },
-        // wowinterface.com/downloads/info24608-SomeAddon.html — the id is the
+        // wowinterface.com/downloads/info24608-SomeAddon.html, the id is the
         // only part that is stable, so it is the part that is kept.
         "wowinterface.com" => segments.iter().find_map(|segment| {
             let digits: String = segment
@@ -408,7 +408,7 @@ fn github_direct(query: &str) -> Option<Listing> {
 ///
 /// Version *lines* rather than exact patches: retail is the 10+ major series,
 /// Classic Era is the 1.x line, and the progression Classic realms move through
-/// 2.x-5.x. Coarse on purpose — a hard match on the live patch would hide every
+/// 2.x-5.x. Coarse on purpose, a hard match on the live patch would hide every
 /// addon whose author has not yet bumped their `.toc`.
 fn supports(game_versions: &[String], flavor: &str) -> bool {
     game_versions.iter().any(|version| {
@@ -495,7 +495,7 @@ mod tests {
         let hits = top_wowi(&entries, "retail", 10);
         let names: Vec<&str> = hits.iter().map(|l| l.name.as_str()).collect();
         // The 5,000-download Classic addon is not a retail answer, and the
-        // one that declares no versions is kept — half the catalogue is like
+        // one that declares no versions is kept: half the catalogue is like
         // that, and a search would find it.
         assert_eq!(names, ["Everywhere", "Retail Only", "Says Nothing"]);
 
@@ -606,7 +606,7 @@ mod tests {
     #[test]
     fn a_null_game_versions_does_not_kill_the_whole_catalogue() {
         // 3,510 of 7,702 real entries send `"gameVersions": null`. Parsing must
-        // survive them, or searching finds nothing at all — which is exactly
+        // survive them, or searching finds nothing at all, which is exactly
         // what happened before this was caught.
         let json = br#"[{"id":1,"title":"Nulled","author":"x","version":"1",
                          "downloads":5,"gameVersions":null,"fileInfoUri":"u"},
@@ -653,7 +653,7 @@ mod tests {
     fn a_decorated_title_is_found_by_the_bare_name() {
         // Real catalogue titles carry parentheticals. Folding reaches past
         // them; it cannot, however, tell "BigWigs (Boss Timers)" apart from
-        // "BigWigs_Voice" on name alone — both are prefix matches, and
+        // "BigWigs_Voice" on name alone: both are prefix matches, and
         // downloads are the only honest signal left to separate them.
         let entries = vec![wowi(1, "BigWigs (Boss Timers & Tools)", 500, &["12.0.7"])];
 

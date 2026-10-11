@@ -1,6 +1,6 @@
 //! Headless consumer of `lightforge-core`.
 //!
-//! Exists to exercise and inspect core without the GUI in the loop — useful
+//! Exists to exercise and inspect core without the GUI in the loop, useful
 //! when debugging a prefix or a `.build.info` on a machine with no display.
 
 use std::path::PathBuf;
@@ -92,7 +92,7 @@ enum Command {
         #[arg(long)]
         skip_preflight: bool,
     },
-    /// Launch the game directly under Proton — the `[ PLAY ]` path.
+    /// Launch the game directly under Proton, the `[ PLAY ]` path.
     ///
     /// Runs pre-flight first, then starts `Wow.exe` through the prefix's
     /// Windows-visible path. Battle.net is not involved.
@@ -231,7 +231,7 @@ enum Command {
         /// extract, and where each would land.
         #[arg(long)]
         show_install: bool,
-        /// Trip the cancel token after this many seconds — the same path the
+        /// Trip the cancel token after this many seconds, the same path the
         /// GUI's pause button takes. For measuring how long a pause takes to
         /// come to rest.
         #[arg(long)]
@@ -370,7 +370,7 @@ enum Command {
         /// Install to check. Defaults to the configured one.
         path: Option<PathBuf>,
         /// Also hash every stored byte against its chunk table and key. Reads
-        /// the whole store — minutes rather than seconds — and is safe while
+        /// the whole store, minutes rather than seconds, and is safe while
         /// the game runs.
         #[arg(long)]
         deep: bool,
@@ -384,7 +384,7 @@ enum Command {
     /// Rewrite a store's `.idx` files without touching its archives.
     ///
     /// Repairs an install whose indices were written with too little free
-    /// space for the client's update section — the `NeedsRepair` case — in
+    /// space for the client's update section, the `NeedsRepair` case, in
     /// seconds, instead of re-downloading the whole product.
     Reindex {
         /// Install root. Defaults to the managed WoW install.
@@ -405,7 +405,7 @@ enum Command {
     /// files no other installed product uses. Prints the plan unless `--yes`.
     ///
     /// Uninstalling from the GUI does this itself. This is for a product
-    /// removed before it could — pass the `--build-key` it had installed.
+    /// removed before it could, pass the `--build-key` it had installed.
     Reclaim {
         #[arg(long)]
         product: String,
@@ -551,7 +551,7 @@ enum Command {
 /// Die quietly when output is piped into something that stops reading.
 ///
 /// Rust sets `SIGPIPE` to `SIG_IGN` before `main`, so once the reader of a
-/// pipe goes away — `lightforge idx … | head` being the obvious case — every
+/// pipe goes away, `lightforge idx … | head` being the obvious case, every
 /// subsequent `println!` hits `EPIPE` and panics. Restoring the default
 /// disposition makes the process exit the way every other Unix tool does,
 /// with no backtrace and no partial-looking failure.
@@ -561,7 +561,7 @@ enum Command {
 /// The install a store-level command works on when `--path` was not given:
 /// the default library's.
 ///
-/// Store-level commands — `verify`, `reindex`, `product-db` — address a whole
+/// Store-level commands, `verify`, `reindex`, `product-db`: address a whole
 /// `World of Warcraft/` folder rather than one product, and with libraries
 /// there can be more than one. The default library is the useful answer, and
 /// `--path` is how you name another.
@@ -573,7 +573,7 @@ fn default_install(layout: &Layout) -> std::path::PathBuf {
 }
 
 /// How Battle.net addresses a product's install, which depends on the library
-/// it is in — see [`lightforge_core::library::Library::windows_wow_path`].
+/// it is in; see [`lightforge_core::library::Library::windows_wow_path`].
 fn windows_wow_path(layout: &Layout, code: &ProductCode) -> String {
     layout
         .library(code)
@@ -640,7 +640,7 @@ async fn main() -> Result<()> {
             }
         }
         Command::Config => {
-            // Milestone 1 has no loader yet; show what a fresh install writes.
+            // No loader here; show what a fresh install writes.
             print!("{}", Config::with_default_products().to_toml()?);
         }
         Command::Proton => {
@@ -963,7 +963,7 @@ async fn main() -> Result<()> {
             }
 
             println!("running {}{}", exe.display(), if args.is_empty() { String::new() } else { format!(" {}", args.join(" ")) });
-            // The shared Battle.net profile, the same one the GUI applies —
+            // The shared Battle.net profile, the same one the GUI applies,
             // a launcher that honoured it from one entry point and not the
             // other would make every measurement unreproducible. Unlike the
             // GUI this always *is* the client (the CLI has no running-client
@@ -1004,7 +1004,7 @@ async fn main() -> Result<()> {
             let code: ProductCode = product.parse().expect("product codes are infallible");
 
             // The game is launched through the symlink, so Wine sees the
-            // conventional Windows path — the same thing that keeps CEF happy
+            // conventional Windows path, the same thing that keeps CEF happy
             // for the in-game store.
             let flavor_dir = layout.wow_symlink().join(&*code.install_dir());
             let exe = lightforge_core::paths::game_executable(&flavor_dir, &code);
@@ -1506,7 +1506,7 @@ async fn main() -> Result<()> {
             println!("archived        {:.1} MB", index.bytes() as f64 / 1e6);
 
             // Range-request real files and verify each against its CONTENT
-            // key — the encoding key names the bytes but cannot check them.
+            // key, the encoding key names the bytes but cannot check them.
             let Some(install) = verify_with else {
                 println!("\npass --verify-with <install> to fetch and verify entries");
                 return Ok(());
@@ -1733,7 +1733,7 @@ async fn main() -> Result<()> {
             );
             // Normally only the tags doing work are worth printing. When
             // *nothing* is selected the interesting question is the opposite
-            // one — what vocabulary does this manifest even have — and that
+            // one, what vocabulary does this manifest even have, and that
             // is exactly the case where the filtered table is empty and says
             // nothing at all.
             let selects_nothing = by_tag.rows.iter().all(|r| r.selected.files == 0);
@@ -2417,7 +2417,7 @@ async fn main() -> Result<()> {
                 .with_context(|| format!("reading {}/.build.info", install.display()))?;
 
             // Every product the install actually has a row for, unless told
-            // otherwise — a `.product.db` naming a product that is not there is
+            // otherwise, a `.product.db` naming a product that is not there is
             // exactly the inconsistency Agent refuses.
             let codes: Vec<ProductCode> = match products.is_empty() {
                 false => products
@@ -2755,7 +2755,7 @@ async fn main() -> Result<()> {
             let locale: Locale = locale.parse().context("parsing --locale")?;
 
             // The build key is already recorded in .build.info, which is the
-            // file M3's writer maintains — this is where the two halves meet.
+            // file M3's writer maintains. This is where the two halves meet.
             let info = BuildInfo::load(path.join(".build.info"))
                 .with_context(|| format!("reading {}", path.join(".build.info").display()))?;
             let build_key = info.get(&code, lightforge_core::buildinfo::COL_BUILD_KEY)?;
@@ -2933,7 +2933,7 @@ async fn main() -> Result<()> {
             let path = layout.build_info(&code);
 
             // Read-modify-write, atomically. The caller is responsible for
-            // having run pre-flight first — this is the file Agent watches.
+            // having run pre-flight first. This is the file Agent watches.
             let info = BuildInfo::update(&path, |info| {
                 info.set_build(&code, &build_key, &cdn_key, &version)
             })
@@ -3009,7 +3009,7 @@ fn print_tweaks(tweaks: &[lightforge_core::battlenet::Tweak]) {
 /// The build a Battle.net verb should use: `--proton` if given, else the pin
 /// from `config.toml`, else the newest installed.
 ///
-/// With a product named, that product's own pin comes first — the client is
+/// With a product named, that product's own pin comes first, the client is
 /// being told to start that game, and a pin set for it means it. Without one,
 /// the verb is about the client itself and takes Battle.net's pin.
 ///
@@ -3093,7 +3093,7 @@ fn proton_runner(
     Ok((runner, build.clone()))
 }
 
-/// A token given inline, or `@path` to read it from a file — export strings
+/// A token given inline, or `@path` to read it from a file, export strings
 /// are long enough that pasting one into a shell is its own hazard.
 fn read_token(token: &str) -> Result<String> {
     match token.strip_prefix('@') {

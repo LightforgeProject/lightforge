@@ -1,13 +1,13 @@
 //! Why a plan is the size it is.
 //!
-//! A plan's headline numbers — wanted, already present, still to fetch — say
+//! A plan's headline numbers, wanted, already present, still to fetch, say
 //! *how much* without saying *what*, and when the answer looks wrong there is
 //! nothing to argue with. This breaks the same numbers down four ways, each
 //! chosen to separate one wrong explanation from another:
 //!
 //! * **by priority**, because the download manifest's priority is what
 //!   separates the files a client needs to start from the ones it can live
-//!   without — a shortfall concentrated in the high numbers is optional
+//!   without, a shortfall concentrated in the high numbers is optional
 //!   content nobody fetched, not a broken install;
 //! * **by bucket**, because the store is 16 hash-keyed indices and a single
 //!   unreadable one would hide about a sixteenth of the store uniformly;
@@ -52,7 +52,7 @@ pub struct Split {
 /// Where the missing keys could be fetched from, if anywhere.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Sources {
-    /// Locatable in an archive index — the normal case, fetched by range.
+    /// Locatable in an archive index, the normal case, fetched by range.
     pub archived: u64,
     /// In the file index, fetched whole.
     pub loose: u64,
@@ -75,7 +75,7 @@ pub struct Explanation {
     pub store_by_bucket: BTreeMap<u8, u64>,
     pub sources: Sources,
     /// Keys the planner called missing that [`Storage::contains`] finds
-    /// anyway. Always zero unless the planner's probe is broken — which is
+    /// anyway. Always zero unless the planner's probe is broken, which is
     /// exactly the thing worth knowing.
     pub false_missing: u64,
     /// A few of those, for a report that has to name names.
@@ -168,7 +168,7 @@ pub struct TagRow {
 /// The blind spot this exists to close: [`TagSet`] drops names the manifest
 /// does not define, and the selection rule only requires the tags that are
 /// left. A category the expression says *nothing* about is therefore not
-/// narrowed at all — every value of it passes — and nothing in the plan's
+/// narrowed at all: every value of it passes, and nothing in the plan's
 /// numbers shows that happening. A build that introduces a new category is
 /// exactly the case where a launcher quietly starts wanting several times
 /// what it should.
@@ -211,7 +211,7 @@ pub fn by_tag(
         }
     }
 
-    // Walked by index, because a tag's mask addresses manifest positions —
+    // Walked by index, because a tag's mask addresses manifest positions,
     // the selected list has been sorted by then and cannot be indexed back.
     let selected = manifest.selected_indices(tags);
     for index in selected {

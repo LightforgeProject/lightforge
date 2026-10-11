@@ -8,6 +8,8 @@
 //! else stays synchronous and directly testable. `core` never depends on iced
 //! or clap.
 
+pub mod addons;
+pub mod assets;
 pub mod battlenet;
 pub mod buildinfo;
 pub mod config;
@@ -30,13 +32,9 @@ pub mod setup;
 pub mod state;
 pub mod steam;
 pub mod storage;
+pub mod tact;
 pub mod transfers;
 pub mod tweaks;
-
-// Milestone placeholders — see the module docs for what lands where.
-pub mod addons;
-pub mod assets;
-pub mod tact;
 
 pub use error::{CoreError, Result};
 pub use paths::Layout;

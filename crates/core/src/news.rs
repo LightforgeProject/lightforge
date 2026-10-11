@@ -54,7 +54,7 @@ impl Item {
     ///
     /// **Classic and Classic Era are not separable from this data.** Wowhead
     /// tags both `Classic`, so both lines see the same articles. That is a
-    /// limit of the source, not a bug here — the alternative is guessing, and
+    /// limit of the source, not a bug here, the alternative is guessing, and
     /// a wrong headline under a game is worse than a shared one.
     ///
     /// Nothing maps to a non-WoW game, because nothing in the feed is about
@@ -143,7 +143,7 @@ impl Origin {
 
 /// Fetch the headlines, falling back to the last good copy.
 ///
-/// Never returns an error for a network problem — only for a cache that is
+/// Never returns an error for a network problem, only for a cache that is
 /// both absent and unreachable, which is the one case where there is genuinely
 /// nothing to show. A `304` is not a failure and is not reported as stale: the
 /// cached copy *is* the current one.
@@ -181,7 +181,7 @@ pub async fn image(http: &Http, dir: &Path, url: &str) -> Option<PathBuf> {
     match http.get_bytes_cached(url, &cache).await {
         // Downloaded, and already written to `path` by the cache.
         Ok(Some(_)) => Some(path),
-        // 304 — what is on disk is current.
+        // 304, what is on disk is current.
         Ok(None) => path.is_file().then_some(path),
         // Unreachable: a copy from an earlier run is still worth drawing.
         Err(_) => path.is_file().then_some(path),
@@ -190,8 +190,8 @@ pub async fn image(http: &Http, dir: &Path, url: &str) -> Option<PathBuf> {
 
 /// Delete cached pictures no current headline names.
 ///
-/// Called after a fetch, so the directory holds one feed's worth — about
-/// forty files — rather than growing for the life of the install. Wowhead
+/// Called after a fetch, so the directory holds one feed's worth, about
+/// forty files, rather than growing for the life of the install. Wowhead
 /// publishes these at full article size (250-800 KB each), which is the
 /// difference between a bounded cache and a slow leak nobody notices.
 ///
@@ -323,7 +323,7 @@ mod tests {
     }
 
     /// A base without the trailing slash must not produce a doubled one, and
-    /// one with several must not either — both have reached the addon catalog
+    /// one with several must not either: both have reached the addon catalog
     /// from hand-edited config before.
     #[test]
     fn a_base_url_is_joined_exactly_once() {
@@ -453,7 +453,7 @@ mod tests {
     }
 
     /// Nothing cached and nothing reachable is the one case with genuinely
-    /// nothing to show — and it must be `None`, not a panic or an empty feed
+    /// nothing to show, and it must be `None`, not a panic or an empty feed
     /// the page would render as "no news today".
     #[tokio::test]
     async fn an_unreachable_proxy_with_no_cache_has_nothing_to_say() {

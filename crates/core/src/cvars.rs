@@ -1,11 +1,11 @@
-//! `Config.wtf` — the client's startup settings file.
+//! `Config.wtf`: the client's startup settings file.
 //!
 //! The file is a flat list of `SET name "value"` lines that the client
 //! rewrites from memory every time it exits. That has two consequences this
 //! module is built around:
 //!
 //! * Unknown lines must survive untouched. The client puts everything it knows
-//!   about in here — resolution, locale, account name — and a writer that
+//!   about in here, resolution, locale, account name, and a writer that
 //!   rebuilt the file from a managed set would silently reset the user's
 //!   entire client configuration.
 //! * A value written here is authoritative only until the next exit. Anything
@@ -27,7 +27,7 @@ pub struct ConfigWtf {
 enum Line {
     /// `SET name "value"`, split so the value can be replaced in place.
     Set { name: String, value: String },
-    /// Anything else — blank lines, comments, malformed entries — kept verbatim.
+    /// Anything else, blank lines, comments, malformed entries, kept verbatim.
     Other(String),
 }
 
@@ -40,7 +40,7 @@ impl ConfigWtf {
     /// Read the file, treating a missing one as empty.
     ///
     /// A product that has never been launched has no `Config.wtf` yet, and
-    /// writing the settings ahead of the first run is both valid and useful —
+    /// writing the settings ahead of the first run is both valid and useful,
     /// the client merges what it finds.
     pub fn read(path: &Path) -> Result<Self, CvarError> {
         match std::fs::read_to_string(path) {
@@ -64,7 +64,7 @@ impl ConfigWtf {
 
     /// Set a CVar, returning whether the file actually changed.
     ///
-    /// An existing entry keeps its position *and its spelling* — rewriting
+    /// An existing entry keeps its position *and its spelling*: rewriting
     /// `gxApi` as `gxapi` would leave the client with two entries for one
     /// setting and no guarantee which one wins.
     pub fn set(&mut self, name: &str, value: &str) -> bool {
@@ -134,7 +134,7 @@ fn parse_line(raw: &str) -> Line {
 /// Apply `settings` to the `Config.wtf` at `path`, removing `unset`.
 ///
 /// Returns how many entries changed, so a caller can stay quiet when a
-/// re-assertion before launch found nothing to do — the common case.
+/// re-assertion before launch found nothing to do, the common case.
 pub fn apply(
     path: &Path,
     settings: &[(&str, String)],

@@ -10,8 +10,8 @@
 //!
 //! **No invented values.** Every CVar here either wins CPU back, cuts input
 //! latency, or fixes a documented Linux-specific problem. The widely-copied
-//! "hidden CVar" lists are mostly the opposite — `shadowMode 4`, `SSAO 4`,
-//! `waterDetail 3` *cost* frames — so the ones that maximise visuals are
+//! "hidden CVar" lists are mostly the opposite, `shadowMode 4`, `SSAO 4`,
+//! `waterDetail 3` *cost* frames, so the ones that maximise visuals are
 //! collected behind a single toggle that says so, well away from the rest.
 //! `processAffinityMask` is deliberately absent: Blizzard has asked people not
 //! to set it.
@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 /// Everything the "Game Optimizations" panel can set for one product.
 ///
-/// Defaults are all-off except where a default of on is the point — see
+/// Defaults are all-off except where a default of on is the point, see
 /// [`Tweaks::game_performance`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -51,7 +51,7 @@ pub struct Tweaks {
     /// Foreground frame cap. `None` leaves it uncapped.
     ///
     /// The client's own `maxFPS` rather than `DXVK_FRAME_RATE`, because it
-    /// applies under VKD3D too — a DXVK-only cap would silently stop working
+    /// applies under VKD3D too, a DXVK-only cap would silently stop working
     /// the moment someone switched the API above to D3D12.
     pub fps_cap: Option<u32>,
     /// Stop the client profiling addon execution.
@@ -60,7 +60,7 @@ pub struct Tweaks {
     pub reduce_raid_effects: bool,
     /// Skip non-critical world preloading, which shortens zone loads.
     pub faster_zone_loads: bool,
-    /// Raw mouse input — also the fix for the cursor recentering under Wine.
+    /// Raw mouse input, also the fix for the cursor recentering under Wine.
     pub raw_mouse: bool,
     /// Turn off the full-screen glow and the death desaturation filter.
     pub no_screen_effects: bool,
@@ -69,7 +69,7 @@ pub struct Tweaks {
     /// This one costs frames rather than winning them. It is here because
     /// people do want it, not because it is an optimization.
     pub max_draw_distance: bool,
-    /// Background frame cap — the client's `maxFPSBk`. `None` leaves the
+    /// Background frame cap, the client's `maxFPSBk`. `None` leaves the
     /// client's own default, which is 30.
     ///
     /// Wins CPU back for everything else on the machine while the window is
@@ -96,13 +96,13 @@ pub struct Tweaks {
     pub no_mouse_acceleration: bool,
     /// Show the cursor in relative mode (`MouseHiddenInRelativeMode 0`).
     ///
-    /// The client offers this as a workaround in its own words — "disabling
+    /// The client offers this as a workaround in its own words, "disabling
     /// may work around issues in relative mode in some rare cases".
     pub show_cursor_in_relative_mode: bool,
     /// Run on Proton's Wayland backend instead of through XWayland.
     ///
     /// Proton itself ignores this unless `WAYLAND_DISPLAY` is set, and so
-    /// does [`Tweaks::environment`] — see [`HostTools::wayland`].
+    /// does [`Tweaks::environment`]; see [`HostTools::wayland`].
     pub wayland: bool,
     /// Ask for HDR output, which Proton turns into `DXVK_HDR`.
     ///
@@ -195,7 +195,7 @@ const MANAGED: &[&str] = &[
 const RETIRED: &[&str] = &["addonProfilerEnabled", "SpellQueueWindow"];
 
 /// The lowest frame cap the client accepts, from its own help text: "Set FPS
-/// limit. Min 8". A smaller number is clamped rather than refused — the panel
+/// limit. Min 8". A smaller number is clamped rather than refused, the panel
 /// should not be able to write a value the client will throw away.
 pub const FPS_FLOOR: u32 = 8;
 
@@ -215,7 +215,7 @@ impl Tweaks {
     /// The CVars to write, and the ones to take back out.
     ///
     /// Both halves come from [`MANAGED`], so the result is a complete
-    /// description of this product's client settings as Lightforge sees them —
+    /// description of this product's client settings as Lightforge sees them,
     /// which is what makes re-asserting it before every launch safe.
     pub fn cvars(&self) -> (Vec<(&'static str, String)>, Vec<&'static str>) {
         let mut set: Vec<(&'static str, String)> = Vec::new();
@@ -224,8 +224,8 @@ impl Tweaks {
             set.push(("gxApi", api.cvar().to_owned()));
         }
         // Both halves, or neither does anything. The client has a separate
-        // flag per cap — "Enables or disables FPS limit" beside "Set FPS
-        // limit. Min 8" — and writing the number alone is what an earlier
+        // flag per cap, "Enables or disables FPS limit" beside "Set FPS
+        // limit. Min 8", and writing the number alone is what an earlier
         // version did, which is why the cap never took effect.
         if let Some(cap) = self.fps_cap {
             set.push(("maxFPS", cap.max(FPS_FLOOR).to_string()));
@@ -307,7 +307,7 @@ impl Tweaks {
         }
         if self.big_shader_cache {
             // Mesa's variable, verified against the installed RADV rather
-            // than taken from a wiki — it is also the one Mesa itself names
+            // than taken from a wiki. It is also the one Mesa itself names
             // when it deprecates `MESA_GLSL_CACHE_MAX_SIZE`. There is no
             // confirmed equivalent for the proprietary NVIDIA driver, so
             // this covers Mesa drivers and says nothing about the rest.
@@ -404,7 +404,7 @@ fn is_executable(path: &Path) -> bool {
 /// Rebuild `cmd` to run under `wrappers`, outermost first.
 ///
 /// A wrapper has to *become* the program with the original command as its
-/// arguments, which no method on [`Command`] can do in place — hence a rebuild
+/// arguments, which no method on [`Command`] can do in place, hence a rebuild
 /// carrying the program, arguments and environment across.
 pub fn wrapped(cmd: Command, wrappers: &[PathBuf]) -> Command {
     let Some((outer, rest)) = wrappers.split_first() else {
@@ -436,12 +436,12 @@ pub fn wrapped(cmd: Command, wrappers: &[PathBuf]) -> Command {
 /// switches that sit on this axis, and every one of them stays individually
 /// reachable afterwards.
 ///
-/// **What a preset governs is deliberately narrow** — only the switches that
+/// **What a preset governs is deliberately narrow**: only the switches that
 /// trade frames against scenery. It never touches the cursor and mouse
 /// settings (personal feel, or a Wine workaround, not speed), nor
 /// [`Tweaks::graphics_api`], the two frame caps, [`Tweaks::mangohud`] or
 /// [`Tweaks::env`] (a genuine fork, two ceilings, an overlay and an escape
-/// hatch — none of them a point on this axis). It leaves the runtime switches
+/// hatch, none of them a point on this axis). It leaves the runtime switches
 /// alone for the same reason: which graphics backend Proton uses is not a
 /// position on the frames-versus-scenery axis either. A preset that silently
 /// cleared somebody's environment variables would be a data-loss bug wearing
@@ -519,7 +519,7 @@ impl Preset {
 impl Tweaks {
     /// Clear every switch a [`Preset`] governs.
     ///
-    /// What the panel's "Custom" button does. Custom is not a fourth preset —
+    /// What the panel's "Custom" button does. Custom is not a fourth preset,
     /// it is the *absence* of one, which is why it cannot be a [`Preset`]
     /// variant: pressing it empties the managed switches, and setting any of
     /// them afterwards still matches no preset, so the panel stays on Custom
@@ -531,7 +531,7 @@ impl Tweaks {
     /// Every switch it clears is one that *writes* something when set, so a
     /// cleared profile is also a silent one: nothing in `Config.wtf`, no
     /// wrapper, nothing. That equivalence is why no switch on this panel may
-    /// be drawn inverted — a box whose empty state wrote a cvar would make
+    /// be drawn inverted, a box whose empty state wrote a cvar would make
     /// "Custom" change the game while claiming to set nothing.
     pub fn clear_managed(&mut self) {
         self.gamemode = false;
@@ -546,7 +546,7 @@ impl Tweaks {
     /// Which preset these settings are currently on, or `None` for "Custom".
     ///
     /// Compares only the governed switches, so changing the frame cap or
-    /// adding an environment variable does not move a profile off its preset —
+    /// adding an environment variable does not move a profile off its preset,
     /// those were never part of what the preset decided.
     pub fn preset(&self) -> Option<Preset> {
         Preset::ALL.into_iter().find(|preset| {
@@ -650,7 +650,7 @@ mod tests {
         }
     }
 
-    // Custom has to leave nothing behind — including the switches a previous
+    // Custom has to leave nothing behind, including the switches a previous
     // preset turned on.
     #[test]
     fn clearing_empties_every_governed_switch() {
@@ -736,7 +736,7 @@ mod tests {
         let tweaks = Tweaks { skip_addon_profiling: true, ..Tweaks::default() };
         let (set, unset) = tweaks.cvars();
         assert!(set.contains(&("scriptProfile", "0".to_owned())));
-        // `addonProfilerEnabled` is not a console variable in any casing —
+        // `addonProfilerEnabled` is not a console variable in any casing;
         // see [`RETIRED`]. It is offered for removal, never written.
         assert!(!set.iter().any(|(n, _)| *n == "addonProfilerEnabled"));
         assert!(unset.contains(&"addonProfilerEnabled"));
@@ -774,7 +774,7 @@ mod tests {
         };
         let (set, unset) = all.cvars();
         // Only the retired names are left, because nothing sets them any
-        // more — and they must still be cleaned out of `Config.wtf`.
+        // more, and they must still be cleaned out of `Config.wtf`.
         assert_eq!(unset, RETIRED, "only the retired names are left to unset");
         for (name, _) in &set {
             assert!(MANAGED.contains(name), "{name} is written but not managed");
@@ -865,7 +865,7 @@ mod tests {
 
     // The shape a config written before this batch has on disk. Every new
     // field has to default, or an upgrade silently discards settings somebody
-    // chose — including an explicit `game_performance = false`, which is not
+    // chose, including an explicit `game_performance = false`, which is not
     // the same as the default and cannot be re-derived.
     #[test]
     fn a_config_from_before_this_batch_still_loads() {
@@ -894,7 +894,7 @@ DXVK_HUD = "fps"
         assert_eq!(tweaks.fps_cap, Some(144));
         assert_eq!(tweaks.env.get("DXVK_HUD").map(String::as_str), Some("fps"));
 
-        // Defaulted, not refused — an unknown key from a newer or older
+        // Defaulted, not refused, an unknown key from a newer or older
         // build must never fail the load, which is what `serde(default)` on
         // the struct buys. `spell_queue_ms` above is exactly that case now.
         assert_eq!(tweaks.fps_cap_background, None);
@@ -1027,7 +1027,7 @@ DXVK_HUD = "fps"
         assert!(set.is_empty());
     }
 
-    // Only the Frames preset gives up cloth physics — it is a frames-for-
+    // Only the Frames preset gives up cloth physics. It is a frames-for-
     // detail trade, which is exactly what the axis is.
     #[test]
     fn only_the_frames_preset_turns_cloth_physics_off() {
@@ -1061,7 +1061,7 @@ DXVK_HUD = "fps"
         };
         let tools = HostTools { wayland: true, ..HostTools::default() };
         assert!(tweaks.environment(&tools).is_empty());
-        // And they are not silently dropped — they are simply the other half.
+        // And they are not silently dropped. They are simply the other half.
         assert!(!tweaks.cvars().0.is_empty());
     }
 

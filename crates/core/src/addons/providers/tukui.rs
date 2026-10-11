@@ -7,7 +7,7 @@
 //!
 //! Two details, both read off the live API:
 //!
-//! - **Download URLs are tokenised** — `/v1/download/elvui/<opaque>` changes
+//! - **Download URLs are tokenised**: `/v1/download/elvui/<opaque>` changes
 //!   per request. They must be fetched fresh at install time and must never be
 //!   cached or stored in the ledger.
 //! - One package covers every game version (its `patch` list names all of

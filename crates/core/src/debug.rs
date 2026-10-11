@@ -47,7 +47,7 @@ pub struct DebugInfo {
     /// The proprietary NVIDIA module's version, when that is what is loaded.
     pub nvidia: Option<String>,
     /// What the renderer actually picked, and over which API. Filled in by the
-    /// GUI, which is the only half of Lightforge that has a renderer — the CLI
+    /// GUI, which is the only half of Lightforge that has a renderer, the CLI
     /// leaves it empty rather than opening a window to find out.
     pub graphics: Option<String>,
     pub graphics_backend: Option<String>,
@@ -297,7 +297,7 @@ fn gpu_driver() -> Option<String> {
 /// open-stack machine, which is itself the answer.
 fn nvidia_version() -> Option<String> {
     let text = std::fs::read_to_string("/proc/driver/nvidia/version").ok()?;
-    // "NVRM version: NVIDIA UNIX x86_64 Kernel Module  580.82.07  ..." — the
+    // "NVRM version: NVIDIA UNIX x86_64 Kernel Module  580.82.07  ...", the
     // first dotted number on the line is the one anybody quotes.
     text.split_whitespace()
         .find(|word| word.split('.').count() >= 3 && word.starts_with(|c: char| c.is_ascii_digit()))

@@ -3,7 +3,7 @@
 //! A build's wanted files are scattered across ~1400 archives, and asking for
 //! each one separately would mean 1.57 million range requests for a single
 //! retail install. Asking for whole archives instead would mean transferring
-//! 174.5 GiB where 123.0 GiB is wanted — every locale and platform, discarded
+//! 174.5 GiB where 123.0 GiB is wanted: every locale and platform, discarded
 //! on arrival. Neither is acceptable, so the plan sits between them:
 //!
 //! 1. locate every wanted key in its archive index,
@@ -14,7 +14,7 @@
 //!
 //! The cost of merging is the padding between files, which is transferred and
 //! thrown away; the benefit is one request instead of many. The defaults are
-//! measured against the real 12.1.0 install rather than guessed — see
+//! measured against the real 12.1.0 install rather than guessed, see
 //! [`Options`].
 //!
 //! Keys the file index lists are not in any archive and are fetched whole, by
@@ -33,8 +33,8 @@ use super::storage::EKey;
 
 /// How aggressively neighbouring files are merged into one request.
 ///
-/// Measured over the whole of 12.1.0 — 1,574,027 wanted files, 123.0 GiB
-/// across 1406 archives — so the default is a reading of the curve rather
+/// Measured over the whole of 12.1.0, 1,574,027 wanted files, 123.0 GiB
+/// across 1406 archives, so the default is a reading of the curve rather
 /// than a guess:
 ///
 /// ```text
@@ -51,19 +51,19 @@ use super::storage::EKey;
 /// 64 KiB is where the curve stops paying: it buys a 41% cut in requests for
 /// 0.6% more bytes, while every step past it trades roughly a gigabyte for a
 /// tenth of the requests. At 60,717 requests the average is already 2.1 MB of
-/// payload each, a comfortable size for HTTP — so the remaining win is small
+/// payload each, a comfortable size for HTTP, so the remaining win is small
 /// and the bytes are real.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options {
     /// Merge two files if the unwanted bytes between them are fewer than this.
     ///
-    /// Zero merges only files that are exactly adjacent — already a 15x
+    /// Zero merges only files that are exactly adjacent, already a 15x
     /// reduction, because wanted content sits densely inside an archive.
     pub max_gap: u32,
     /// Never let a run exceed this many bytes.
     ///
     /// Bounds the memory one response needs and keeps progress and
-    /// cancellation granular — a paused download should not have to discard a
+    /// cancellation granular, a paused download should not have to discard a
     /// quarter-gigabyte of transfer.
     pub max_run: u32,
 }
@@ -81,7 +81,7 @@ pub struct Piece {
     /// Content key, which is what actually verifies the decoded bytes.
     ///
     /// Absent when encoding does not map this key back to a content key. That
-    /// is rare but real — 2 of 12.1.0's 1,574,027 wanted files — and both of
+    /// is rare but real, 2 of 12.1.0's 1,574,027 wanted files, and both of
     /// them are present in the store Agent built, so the right response is to
     /// store the file unverified rather than refuse it. Refusing would diverge
     /// from a real install over two small files.
@@ -142,7 +142,7 @@ pub struct Plan {
     pub loose: Vec<Loose>,
     /// Wanted, but in no archive index and not loose. Nothing can fetch these.
     pub missing: Vec<EKey>,
-    /// Wanted, but already in the local store — the resume path.
+    /// Wanted, but already in the local store, the resume path.
     pub already_present: usize,
 }
 

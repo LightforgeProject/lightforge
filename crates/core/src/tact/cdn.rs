@@ -22,7 +22,7 @@
 //! because "EKey is the MD5 of the encoded file" is the usual description and
 //! it does not hold here. The root manifest is served loose at
 //! `data/d1/75/d175f4af…`, decodes correctly, and its bytes hash to
-//! `c95b92c6…` — nothing like the key it is published under. The same is true
+//! `c95b92c6…`: nothing like the key it is published under. The same is true
 //! of every archived file checked.
 //!
 //! So a BLTE download is verified by decoding it and checking the result
@@ -30,7 +30,7 @@
 //! the bytes the game will actually read rather than one particular encoding
 //! of them. BLTE's own per-chunk MD5s catch transport damage before that.
 //!
-//! This is why the transport is a convenience and not the security boundary —
+//! This is why the transport is a convenience and not the security boundary,
 //! but the boundary still holds, because content only becomes usable after it
 //! matches a content key that came from a manifest chain rooted in the build
 //! config.
@@ -43,9 +43,9 @@ use super::version::Cdn;
 /// Where a hash is fetched from within a CDN path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
-    /// Build and CDN configs — plain text.
+    /// Build and CDN configs, plain text.
     Config,
-    /// Archives, loose files and manifests — BLTE-encoded.
+    /// Archives, loose files and manifests, BLTE-encoded.
     Data,
     /// Patch archives.
     Patch,
@@ -77,7 +77,7 @@ impl Endpoint {
     /// (`https://level3.ssl.blizzard.com/?maxhosts=8&fallback=1`), which are
     /// hints to Blizzard's own client and not part of the content path, so
     /// they are stripped. TLS entries are ordered first, and the plain-HTTP
-    /// ones are kept as fallbacks rather than discarded — a download that
+    /// ones are kept as fallbacks rather than discarded, a download that
     /// verifies by hash is safe over either, and refusing to fall back would
     /// strand users whose networks block the TLS host.
     pub fn from_cdn(cdn: &Cdn) -> Vec<Self> {
@@ -168,7 +168,7 @@ impl Client {
     ///
     /// Each endpoint is tried in turn, so a host that is down or
     /// rate-limiting falls through to the next. Callers are expected to verify
-    /// by whichever rule applies to what they asked for — see the module docs,
+    /// by whichever rule applies to what they asked for; see the module docs,
     /// because the rule is not the same for every kind of name.
     pub async fn fetch(&self, http: &Http, kind: Kind, hash: &str) -> Result<Vec<u8>, CdnError> {
         let mut last: Option<CdnError> = None;
@@ -185,8 +185,8 @@ impl Client {
     /// Fetch a file whose name really is the MD5 of its bytes, and check it.
     ///
     /// Only correct for [`Kind::Config`]. A mismatch falls through to the next
-    /// endpoint rather than failing outright — one bad mirror should not make
-    /// the content unreachable — but if every endpoint disagrees the error
+    /// endpoint rather than failing outright, one bad mirror should not make
+    /// the content unreachable, but if every endpoint disagrees the error
     /// reports the mismatch, since that is the more alarming explanation.
     pub async fn fetch_md5_verified(
         &self,
@@ -227,7 +227,7 @@ impl Client {
 
     /// Fetch an index, checking it against the size its CDN config declares.
     ///
-    /// That size is the only external check an index gets — an index is not
+    /// That size is the only external check an index gets, an index is not
     /// named by the hash of its own bytes the way a config is. A response of
     /// the wrong length falls through to the next endpoint, since a truncated
     /// mirror is the likeliest cause and the next one may be fine.
@@ -283,7 +283,7 @@ impl Client {
 
     /// Fetch a loose file, decode it, and verify it against its content key.
     ///
-    /// Loose files are the ones the file index lists — too large to archive,
+    /// Loose files are the ones the file index lists, too large to archive,
     /// so served whole at their own URL. Everything else answers 403 here and
     /// must come out of an archive by range request.
     pub async fn fetch_loose(

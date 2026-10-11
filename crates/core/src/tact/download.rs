@@ -2,7 +2,7 @@
 //!
 //! Fetches overlap, writes do not. Runs and loose files are requested
 //! concurrently, but every byte goes into the store through one
-//! [`StoreWriter`] in the order it arrives — the writer appends to an archive
+//! [`StoreWriter`] in the order it arrives, the writer appends to an archive
 //! and owns the offsets, so there is exactly one of it and no lock to get
 //! wrong.
 //!
@@ -12,20 +12,20 @@
 //!    between them; each file is sliced back out at the offset the plan
 //!    recorded.
 //! 2. **Verify.** The bytes are decoded and checked against the content key.
-//!    The encoding key names the encoded bytes but cannot check them — only
+//!    The encoding key names the encoded bytes but cannot check them, only
 //!    `md5(decoded) == ckey` says the file is what the build says it is.
 //! 3. **Store.** The *encoded* bytes are written, because that is what an
 //!    archive holds. Decoding is for verification only; the decoded copy is
 //!    dropped.
 //!
-//! Encrypted content (about 2% of a build — unreleased material) cannot be
+//! Encrypted content (about 2% of a build, unreleased material) cannot be
 //! decoded without a key this machine does not have. Those files are stored
 //! unverified rather than refused, which is what Agent does, and the outcome
 //! counts them so the caller can say so honestly.
 //!
 //! Durability is the store's own: every [`Options::checkpoint_bytes`] the
 //! writer flushes and rewrites its indices, leaving a store that opens and
-//! reads. Resume is then nothing more than re-planning against it — there is
+//! reads. Resume is then nothing more than re-planning against it, there is
 //! no progress file to get out of step with the bytes on disk.
 
 use std::pin::pin;
@@ -96,11 +96,11 @@ pub struct RateLimit {
 struct Bucket {
     /// Tokens available now, in bytes.
     tokens: f64,
-    /// Most tokens the bucket may hold — one second of the limit, so a quiet
+    /// Most tokens the bucket may hold, one second of the limit, so a quiet
     /// moment buys a short burst and no more.
     capacity: f64,
     /// Read from tokio's clock, not the system one: it is the clock
-    /// [`tokio::time::sleep`] obeys, so the two cannot drift apart — and it
+    /// [`tokio::time::sleep`] obeys, so the two cannot drift apart, and it
     /// makes the limiter testable without spending real seconds.
     last: tokio::time::Instant,
 }
@@ -122,7 +122,7 @@ impl RateLimit {
     ///
     /// A request larger than the bucket holds is allowed through once the
     /// bucket is full rather than deadlocking against a capacity it can never
-    /// reach — it simply overdraws, and the negative balance is repaid before
+    /// reach, it simply overdraws, and the negative balance is repaid before
     /// the next request starts.
     pub async fn acquire(&self, bytes: u64) {
         let want = bytes as f64;
@@ -158,7 +158,7 @@ pub struct Options {
     /// An *upper* bound, not the interval: a plan smaller than this would
     /// otherwise never checkpoint at all, and a download with no intermediate
     /// index write is one an interrupt costs entirely. Classic Era is 4.5 GiB
-    /// against this 4 GiB default — 3.2 GB of it was orphaned by a restart
+    /// against this 4 GiB default, 3.2 GB of it was orphaned by a restart
     /// before the first checkpoint was ever due. The effective interval is
     /// [`Options::interval_for`].
     pub checkpoint_bytes: u64,
@@ -223,7 +223,7 @@ pub struct Outcome {
     pub files_stored: usize,
     pub bytes_stored: u64,
     /// Stored without a content-key check: encrypted, or not listed by
-    /// encoding. Expected to be non-zero — about 2% of a build is encrypted.
+    /// encoding. Expected to be non-zero, about 2% of a build is encrypted.
     pub unverified: usize,
     /// Files that could not be fetched or failed verification.
     pub failed: Vec<Failure>,
@@ -252,15 +252,15 @@ pub struct Failure {
 pub struct Source<'a> {
     pub http: &'a Http,
     pub client: &'a Client,
-    /// Keys for encrypted content. `None` is normal — most machines have none,
+    /// Keys for encrypted content. `None` is normal: most machines have none,
     /// and the files that need them are stored unverified.
     pub keys: Option<&'a KeyService>,
 }
 
 /// A key service loaded the way [`super::storage::Storage`] loads one.
 ///
-/// Every caller wants this, and the one that did not — the first Classic Era
-/// download, which passed `None` — logged its encrypted files as corruption.
+/// Every caller wants this, and the one that did not, the first Classic Era
+/// download, which passed `None`: logged its encrypted files as corruption.
 /// Exposed here so a front-end never has to name a cascette type to build one.
 ///
 /// A machine with no key files is the normal case and not an error: the
@@ -406,7 +406,7 @@ impl Downloader {
         outcome.files_stored = sink.state.files_stored;
         outcome.bytes_stored = sink.state.bytes_stored;
 
-        // Whatever happened — finished, failed or cancelled — leave the store
+        // Whatever happened, finished, failed or cancelled, leave the store
         // readable, so the next run re-plans against real bytes.
         sink.writer.checkpoint()?;
 
@@ -422,7 +422,7 @@ impl Downloader {
 /// launch pauses any download first and the store is left valid before
 /// Battle.net is allowed to start.
 ///
-/// "Resume" here does not restart a transfer — there is no suspended socket to
+/// "Resume" here does not restart a transfer. There is no suspended socket to
 /// revive. A cancelled download checkpointed its store on the way out, so
 /// resuming is re-planning against it, which needs the network and the
 /// manifests and therefore belongs to the caller. [`Downloads::resume`]
@@ -513,8 +513,8 @@ impl InstallReport {
 
 /// Write the install manifest's files into the flavor directory.
 ///
-/// These are the files that exist as real files rather than as CASC content —
-/// `Wow.exe`, `wow_loader.dll`, CEF and its `.pak` resources — and without
+/// These are the files that exist as real files rather than as CASC content,
+/// `Wow.exe`, `wow_loader.dll`, CEF and its `.pak` resources, and without
 /// them there is nothing to launch. They are **not** written into the store:
 /// measured against a real install, only 12 of the 36 are in Agent's store,
 /// and those 12 are there because the download manifest lists them
@@ -629,8 +629,8 @@ pub fn write_flavor_info(
 
 /// Join `relative` onto `root`, reusing directories that differ only by case.
 ///
-/// The install manifest is internally inconsistent about case — `Utils\cef.pak`
-/// sits beside `UTILS\LOCALES\EN-US.PAK` in the same file — and Agent lands
+/// The install manifest is internally inconsistent about case, `Utils\cef.pak`
+/// sits beside `UTILS\LOCALES\EN-US.PAK` in the same file, and Agent lands
 /// both in one `Utils` directory because Windows filesystems are
 /// case-insensitive. On Linux they are not, so joining the paths verbatim
 /// creates `Utils/` **and** `UTILS/`, splitting the directory in two.
@@ -640,7 +640,7 @@ pub fn write_flavor_info(
 /// resolves one of the two and the client can fail to find CEF at all.
 ///
 /// So each component reuses an existing entry that matches ignoring ASCII
-/// case, and otherwise keeps the spelling the manifest used — which is what
+/// case, and otherwise keeps the spelling the manifest used, which is what
 /// Windows gives Agent for free, first writer deciding the case. File name
 /// case is preserved either way: the real install really does hold
 /// `LIBCEF.DLL` next to `cef.pak`.
@@ -773,7 +773,7 @@ fn verify(encoded: &[u8], ckey: Option<&CKey>, keys: Option<&KeyService>) -> Ver
 ///   takes the key-name size as a little-endian **u64** where the format
 ///   stores a single byte, so it consumes the size plus seven bytes of the key
 ///   name and reports nonsense: "Invalid key name size: 9560733477763426568".
-///   That value is `0829466e718cae84` little-endian — low byte `0x08`, the
+///   That value is `0829466e718cae84` little-endian, low byte `0x08`, the
 ///   real size. Verified against two different real files.
 ///
 /// Unreleased content ships encrypted with the key withheld until it goes
@@ -1031,7 +1031,7 @@ mod tests {
         let second = resolve_windows_path(&dir, std::path::Path::new("UTILS/LIBCEF.DLL"));
         write_file(&second, b"libcef").unwrap();
 
-        // One directory, not two — the split left a real install's Utils/
+        // One directory, not two, the split left a real install's Utils/
         // without LIBCEF.DLL and Wine could not find CEF.
         let dirs: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
         assert_eq!(dirs.len(), 1, "{dirs:?}");
@@ -1110,7 +1110,7 @@ mod tests {
         assert!(!downloads.is_running(&code));
         assert_eq!(downloads.pending().count(), 1);
 
-        // After Battle.net exits, the caller is told to start it again — once.
+        // After Battle.net exits, the caller is told to start it again, once.
         assert!(downloads.resume(&code).unwrap());
         assert!(!downloads.resume(&code).unwrap());
         assert_eq!(downloads.pending().count(), 0);
@@ -1213,7 +1213,7 @@ mod limit_tests {
 
     #[tokio::test(start_paused = true)]
     async fn the_average_converges_on_the_limit() {
-        // 1 MB/s, so ten 1 MB requests must take about ten seconds — minus
+        // 1 MB/s, so ten 1 MB requests must take about ten seconds, minus
         // the first, which the full bucket pays for outright.
         let limit = RateLimit::new(1_000_000).unwrap();
         let started = tokio::time::Instant::now();
@@ -1240,7 +1240,7 @@ mod limit_tests {
         assert!(earned.elapsed().as_secs_f64() >= 0.9, "a second burst was let through");
     }
 
-    /// A single run can be larger than the bucket holds — 8 MiB against a
+    /// A single run can be larger than the bucket holds, 8 MiB against a
     /// 1 MB/s cap. It has to go through anyway, or the download deadlocks
     /// against a capacity it can never reach.
     #[tokio::test(start_paused = true)]
@@ -1264,7 +1264,7 @@ mod pause_tests {
     use crate::tact::plan::Loose;
 
     /// A CDN that starts a response and then goes quiet with the connection
-    /// held open — the stall a pause used to wait on forever.
+    /// held open, the stall a pause used to wait on forever.
     fn stalling_server() -> String {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());

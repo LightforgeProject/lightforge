@@ -3,7 +3,7 @@
 //! Same shape as the download plumbing: the work runs off the UI thread and
 //! publishes into a `watch` channel the dashboard samples on its timer. Setup
 //! is chattier than it is frequent, so the channel carries the whole log rather
-//! than one line — it is a handful of strings, and a UI that samples can
+//! than one line. It is a handful of strings, and a UI that samples can
 //! otherwise miss a line entirely.
 
 use lightforge_core::net::Http;
@@ -107,7 +107,7 @@ pub async fn status(layout: Layout, config: Config) -> Option<Status> {
 /// What one trip to GitHub tells us: whether a newer build exists, and every
 /// build that could be installed.
 ///
-/// Both come out of the same release list, so they are fetched together — the
+/// Both come out of the same release list, so they are fetched together, the
 /// request is ETag-revalidated and asking twice would buy nothing.
 #[derive(Debug, Clone, Default)]
 pub struct ProtonReleases {
@@ -151,7 +151,7 @@ pub async fn check_proton(
 /// Measure every installed build, off the UI thread.
 ///
 /// A Proton build is ~400 MB across thousands of files, so this is a task and
-/// its answer is kept — walking it from `view` would cost that on every frame.
+/// its answer is kept, walking it from `view` would cost that on every frame.
 pub async fn measure(builds: Vec<std::path::PathBuf>) -> Vec<(std::path::PathBuf, u64)> {
     tokio::task::spawn_blocking(move || {
         builds

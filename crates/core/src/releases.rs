@@ -1,7 +1,7 @@
 //! Release notes, compiled in.
 //!
 //! The notes describe the version that is running, which the binary knows
-//! better than any server does — so they ship with it rather than being
+//! better than any server does, so they ship with it rather than being
 //! fetched. That also means they are there on a machine with no network, which
 //! is exactly the machine someone has just updated and restarted.
 //!
@@ -18,8 +18,8 @@
 //! ```
 //!
 //! The file is hard-wrapped, so a line under a bullet that is not itself a
-//! bullet continues it. Anything before the first heading — a title, an
-//! explanation — belongs to no release and is dropped, as is a release with
+//! bullet continues it. Anything before the first heading, a title, an
+//! explanation, belongs to no release and is dropped, as is a release with
 //! no bullets under it: a popup with an empty body is worse than none.
 
 /// The notes as they are written in the repository.
@@ -34,7 +34,7 @@ pub struct Release {
     pub notes: Vec<String>,
 }
 
-/// Every release in the file, newest first — which is the order it is written
+/// Every release in the file, newest first, which is the order it is written
 /// in. The order is the file's, not a parsed comparison of version numbers:
 /// sorting would need a semver dependency to tell `0.10.0` from `0.9.0`, and
 /// the file is hand-written in order anyway.
@@ -42,7 +42,7 @@ pub fn all() -> Vec<Release> {
     parse(SOURCE)
 }
 
-/// The notes for one version, or `None` when the file says nothing about it —
+/// The notes for one version, or `None` when the file says nothing about it,
 /// which is the normal state of a development build between releases.
 pub fn notes_for(version: &str) -> Option<Release> {
     parse(SOURCE).into_iter().find(|r| r.version == version)

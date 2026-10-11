@@ -1,7 +1,7 @@
 //! Which *game family* a product belongs to, read from Blizzard's own data.
 //!
-//! The client works in game families, one per tile in its library — `WTCG`,
-//! `Fen`, `Pro` — and `--exec="launch <uid>"` wants that, not the TACT product
+//! The client works in game families, one per tile in its library, `WTCG`,
+//! `Fen`, `Pro`: and `--exec="launch <uid>"` wants that, not the TACT product
 //! code. Getting it wrong is not a no-op: the client falls back to the first
 //! family it knows, which is Warcraft III, and the user lands on a game they
 //! may not even own. That is why [`crate::battlenet::game_uid`] only ever
@@ -23,7 +23,7 @@
 //! are.
 //!
 //! The cache is Blizzard's data in Lightforge's hands, so it is read the way
-//! any foreign input is — a fragment that will not parse, or that has a shape
+//! any foreign input is, a fragment that will not parse, or that has a shape
 //! this does not recognise, is skipped rather than trusted or fatal. An empty
 //! result is the normal state of a prefix whose client has never run, and the
 //! caller falls back to the families that are compiled in.
@@ -109,7 +109,7 @@ impl Families {
         self.by_code.get(&code.to_ascii_lowercase()).map(String::as_str)
     }
 
-    /// The client's install key for a product code — what its install flow
+    /// The client's install key for a product code, what its install flow
     /// is addressed by, as opposed to the family its tile belongs to.
     pub fn install_uid(&self, code: &str) -> Option<&str> {
         self.uids.get(&code.to_ascii_lowercase()).map(String::as_str)
@@ -171,8 +171,8 @@ fn parse(path: &Path) -> Option<Fragment> {
 
 /// One catalogue fragment, reduced to the two parts that answer the question.
 ///
-/// Everything else the client caches — artwork ids, storefront copy, regional
-/// permissions — is left unparsed on purpose: a shape we do not read cannot
+/// Everything else the client caches, artwork ids, storefront copy, regional
+/// permissions, is left unparsed on purpose: a shape we do not read cannot
 /// break when Blizzard changes it.
 #[derive(Debug, Deserialize)]
 struct Fragment {

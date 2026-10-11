@@ -32,8 +32,8 @@ const BACKGROUND_MAX_WIDTH: u32 = 2560;
 /// Twice the tile rather than exactly the tile: a 2x display then maps one
 /// texel to one device pixel, and a 1x display gets a 2:1 reduction, which is
 /// the one ratio bilinear filtering handles cleanly. Measured against 64, 96
-/// and 128 at the drawn size, the differences past this point are not visible
-/// — what remains is the artwork, not the scaling.
+/// and 128 at the drawn size, the differences past this point are not visible,
+/// what remains is the artwork, not the scaling.
 const MARK_MAX_WIDTH: u32 = (crate::theme::TILE * 2.0) as u32;
 
 /// Widest a logo is kept. It is drawn at most a couple of hundred pixels tall.
@@ -47,14 +47,14 @@ pub struct Art {
     /// The trimmed wordmark's width over its height.
     ///
     /// Carried because the dashboard sizes the logo by *area* rather than by
-    /// a bounding box — see [`crate::theme::logo_size`]. `1.0` for a logo
+    /// a bounding box; see [`crate::theme::logo_size`]. `1.0` for a logo
     /// that could not be measured, which is a square box and no worse than
     /// any other guess.
     pub logo_aspect: f32,
     /// How much of the trimmed wordmark is the mark, and how much is glow.
     ///
-    /// Some logos are drawn with a wide soft halo — Retail's is a third of
-    /// its own bounding box — and a halo is not something the eye measures a
+    /// Some logos are drawn with a wide soft halo, Retail's is a third of
+    /// its own bounding box, and a halo is not something the eye measures a
     /// logo by. Sizing those by their outer bounds makes the mark inside
     /// come out visibly smaller than everything else, which is exactly what
     /// Retail looked like. This is the fraction of the bounding box the solid
@@ -67,7 +67,7 @@ pub struct Art {
 }
 
 impl Art {
-    /// Decode both images. Blocking and CPU-bound — call it off the UI thread.
+    /// Decode both images. Blocking and CPU-bound, call it off the UI thread.
     pub fn decode(branding: Branding) -> Self {
         let (logo, logo_aspect, logo_ink) = logo(&branding.logo.path);
         let background = load(&branding.background.path, BACKGROUND_MAX_WIDTH);
@@ -83,8 +83,8 @@ impl Art {
 
 /// A product mark, decoded and scaled for the size it is actually drawn at.
 ///
-/// Unlike [`load`]'s backgrounds this is a large reduction — 256px down to
-/// 128 — so it is worth the sharper filter. The image is tiny and this runs
+/// Unlike [`load`]'s backgrounds this is a large reduction, 256px down to
+/// 128, so it is worth the sharper filter. The image is tiny and this runs
 /// once per product per session.
 pub fn mark(path: &Path) -> Handle {
     scale(path, MARK_MAX_WIDTH, FilterType::Lanczos3)
@@ -92,8 +92,8 @@ pub fn mark(path: &Path) -> Handle {
 
 /// A headline's picture, at the size the News card draws it.
 ///
-/// A large reduction — Wowhead publishes these around 800px wide and the card
-/// shows them at [`crate::theme::NEWS_THUMB_WIDTH`] — so it takes the sharper
+/// A large reduction, Wowhead publishes these around 800px wide and the card
+/// shows them at [`crate::theme::NEWS_THUMB_WIDTH`], so it takes the sharper
 /// filter for the same reason [`mark`] does: handing the renderer eight times
 /// the pixels and letting it reduce them is what reads as "pixelated".
 ///
@@ -110,7 +110,7 @@ pub fn thumbnail(path: &Path) -> Handle {
 /// decoded by the renderer, which keeps the result only while it is drawing
 /// and throws it away at the end of the frame. A 2560px JPEG re-decoded on
 /// every return to the page is exactly the pause this module exists to
-/// remove. Blocking and CPU-bound — call it off the UI thread.
+/// remove. Blocking and CPU-bound, call it off the UI thread.
 pub fn decode_bundled(bytes: &'static [u8]) -> Handle {
     match image::load_from_memory(bytes) {
         Ok(decoded) => {
@@ -130,7 +130,7 @@ pub fn decode_bundled(bytes: &'static [u8]) -> Handle {
 /// that canvas is not the same size from one game to the next: StarCraft's
 /// wordmark is 127px tall inside it, retail WoW's is the full 440. Fitting
 /// the *canvas* into a box therefore makes them all the same rectangle of
-/// mostly-nothing and leaves the visible marks at wildly different sizes —
+/// mostly-nothing and leaves the visible marks at wildly different sizes,
 /// which is what the dashboard did, and what a per-product height hint in the
 /// manifest was being hand-tuned to paper over.
 ///
@@ -196,7 +196,7 @@ fn logo(path: &Path) -> (Handle, f32, f32) {
 ///
 /// An eighth of full opacity. Above it the pixel is something you would point
 /// at; below it, on these logos, it is the outer half of a halo. The exact
-/// number matters less than it sounds — Retail's bounds move 25px between an
+/// number matters less than it sounds, Retail's bounds move 25px between an
 /// eighth and two thirds, and every other logo in the catalogue moves less
 /// than 5.
 const SOLID_ALPHA: u8 = 32;
@@ -204,7 +204,7 @@ const SOLID_ALPHA: u8 = 32;
 /// The smallest rectangle holding every pixel more opaque than `alpha`, as
 /// `(x, y, width, height)`.
 ///
-/// `None` when there is no such pixel — an all-transparent image, or one whose
+/// `None` when there is no such pixel, an all-transparent image, or one whose
 /// every pixel is fainter than the threshold, neither of which has anything to
 /// measure.
 ///
@@ -242,13 +242,13 @@ fn load(path: &Path, max_width: u32) -> Handle {
 ///
 /// The ordinary path decodes at full size and resizes afterwards, which for a
 /// 3840x2160 headline picture means a 33 MB buffer to produce a 320px
-/// thumbnail — 665 MB of decoding across one news feed, for 22 MB of pictures.
+/// thumbnail, 665 MB of decoding across one news feed, for 22 MB of pictures.
 /// JPEG can do better: the format is built on 8x8 blocks, so a decoder can
 /// emit at 1/2, 1/4 or 1/8 scale almost free, and `scale` asks for the
 /// smallest of those that still covers the width wanted. The resize below
 /// then takes it the rest of the way, so the result is the same picture.
 ///
-/// Only JPEG — 88 of the 97 images in a real news cache, and the format every
+/// Only JPEG, 88 of the 97 images in a real news cache, and the format every
 /// large one arrives in. PNG has no such trick and is decoded whole.
 /// Recognised by its magic bytes rather than its extension: these files are
 /// named by the hash of their URL, and a `.jpg` from a CDN is not always one.
@@ -422,7 +422,7 @@ mod tests {
         let (handle, aspect, ink) = logo(&path);
         let _ = std::fs::remove_file(&path);
         // The wash reaches the edges, so nothing is cropped and the aspect is
-        // the canvas's — but only a quarter of it is the mark.
+        // the canvas's, but only a quarter of it is the mark.
         assert_eq!(rgba_size(&handle), Some((200, 100)));
         assert!((aspect - 2.0).abs() < 0.01, "{aspect}");
         assert!((ink - 0.25).abs() < 0.01, "{ink}");
@@ -451,7 +451,7 @@ const SHOT_STEPS: [(u32, u8); 4] = [(1280, 75), (1280, 55), (960, 55), (720, 45)
 /// What an embedded screenshot may weigh before it is squeezed again.
 ///
 /// It is embedded rather than attached because **GlitchTip throws envelope
-/// attachments away** — `attachment` is in its hard-coded `IgnoredItemType`
+/// attachments away**: `attachment` is in its hard-coded `IgnoredItemType`
 /// list, so an attached image is parsed and dropped with no error. So the
 /// image rides inside the event as base64, and the event has to stay a size
 /// the server will accept: 400 KiB of JPEG is about 533 KiB of base64.

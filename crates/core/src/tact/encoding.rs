@@ -6,7 +6,7 @@
 //!
 //! Written here rather than taken from `tact-parser` because that crate reads
 //! the two page tables back to back and only then the pages. The real layout
-//! interleaves them — each table is immediately followed by *its own* pages:
+//! interleaves them, each table is immediately followed by *its own* pages:
 //!
 //! ```text
 //! header               22 bytes
@@ -18,8 +18,8 @@
 //! ```
 //!
 //! Reading the tables consecutively lands the page cursor 564 KB early, mid
-//! entry. The parse does not fail — it walks garbage, finds a zero byte a few
-//! entries into each page, and moves on — so the result is a manifest that
+//! entry. The parse does not fail, it walks garbage, finds a zero byte a few
+//! entries into each page, and moves on, so the result is a manifest that
 //! looks plausible and is missing 95% of its contents. On a real 12.1.0
 //! install it yields 138,096 entries where there are 2,874,085, and the root
 //! manifest's own key is not among them.
@@ -48,7 +48,7 @@ const PAGE_TABLE_ENTRY: usize = 32;
 pub struct Encoded {
     pub ckey: CKey,
     /// The first encoding key listed. A content key occasionally has more than
-    /// one — the same bytes encoded differently — and any of them decodes to
+    /// one, the same bytes encoded differently, and any of them decodes to
     /// the same file, so the first is taken.
     pub ekey: EKey,
     /// Decoded size in bytes. The index only knows the compressed size, so
@@ -60,7 +60,7 @@ pub struct Encoded {
 ///
 /// Held as one sorted `Vec` rather than a hash map: entries arrive in content
 /// key order already, lookups are binary searches, and on a current retail
-/// build this is 2.9 M entries — where a `HashMap`'s per-entry overhead is
+/// build this is 2.9 M entries, where a `HashMap`'s per-entry overhead is
 /// tens of megabytes of pure waste.
 #[derive(Debug, Clone, Default)]
 pub struct Encoding {

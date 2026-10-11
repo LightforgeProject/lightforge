@@ -48,7 +48,7 @@ pub enum Event {
     Installed { name: String, folders: Vec<String> },
     /// Already at this version; nothing fetched.
     UpToDate { name: String },
-    /// Could not be installed, and why — opt-out, missing, or a failed fetch.
+    /// Could not be installed, and why, opt-out, missing, or a failed fetch.
     Unavailable { name: String, reason: String },
 }
 
@@ -274,7 +274,7 @@ async fn fetch_and_install(
 ///
 /// `asked` is the file this request named, which only counts as a pin when
 /// the run is reproducing an export (`importing`). Otherwise whatever pin was
-/// already held carries over — but either way only while it still describes
+/// already held carries over, but either way only while it still describes
 /// what is on disk: an explicit install of a different file has moved the
 /// addon off its pin, and a pin naming a file that is not there would be a
 /// lie the next pass would act on.
@@ -294,7 +294,7 @@ fn pin_after_install(
 ///
 /// Only WoWInterface publishes one today. A mismatch means a truncated or
 /// tampered package, and extracting it would overwrite a working addon folder
-/// with a broken one — so it fails before anything is written.
+/// with a broken one, so it fails before anything is written.
 fn verify_md5(package: &[u8], expected: Option<&str>, name: &str) -> Result<(), ManageError> {
     let Some(expected) = expected else {
         return Ok(());
@@ -324,7 +324,7 @@ pub struct UpdateStatus {
     pub installed_build: Option<super::Channel>,
     /// What kind of build is on offer.
     pub available_build: Option<super::Channel>,
-    /// How the offered build calls itself — a version, not a file id, for
+    /// How the offered build calls itself, a version, not a file id, for
     /// showing to someone.
     pub available_name: Option<String>,
     /// When the offered build was published, as the provider states it.
@@ -335,7 +335,7 @@ pub struct UpdateStatus {
 
 impl UpdateStatus {
     /// True when the offered build is a different *kind* from the installed
-    /// one — moving between channels rather than forward on one.
+    /// one, moving between channels rather than forward on one.
     ///
     /// Calling that an update is how "Update" ends up installing an older
     /// version: switching back to stable from an alpha is a different file,
@@ -365,7 +365,7 @@ impl UpdateStatus {
 /// not been ignored.
 ///
 /// Both front-ends and both operations share this, because the set is a rule
-/// rather than a detail — an ignored addon that one of them still asked about
+/// rather than a detail, an ignored addon that one of them still asked about
 /// would be ignored everywhere except the one place it mattered.
 ///
 /// An ignored addon can still be asked for by name. `install_all` takes
@@ -534,7 +534,7 @@ pub struct Adopted {
 /// Recognise hand-installed addons and take them into the ledger.
 ///
 /// An addon Lightforge did not install has no provider and no id, so it can
-/// be listed and nothing else — no update, no channel, no removal. Hashing
+/// be listed and nothing else, no update, no channel, no removal. Hashing
 /// each unmanaged folder the way CurseForge does (see
 /// [`crate::addons::fingerprint`]) and asking the catalog whose it is turns
 /// it into an ordinary managed addon.
@@ -571,8 +571,8 @@ pub async fn adopt(
         .map(|addon| addon.folder)
         .collect();
 
-    // Fingerprint to folder, so the catalog's answer — which is keyed by the
-    // hashes we sent — can be read back as "this folder is that addon".
+    // Fingerprint to folder, so the catalog's answer, which is keyed by the
+    // hashes we sent, can be read back as "this folder is that addon".
     let mut by_print: std::collections::BTreeMap<u32, String> = Default::default();
     for folder in present.iter().filter(|f| !claimed.contains(*f)) {
         if let Some(print) = fingerprint::of_folder(&options.addons_dir.join(folder)) {
@@ -593,7 +593,7 @@ pub async fn adopt(
     let mut adopted = Vec::new();
     for (id, (found, matched)) in by_project {
         // The package's folders, limited to what is here and not already
-        // somebody else's — plus every folder that actually matched, which
+        // somebody else's, plus every folder that actually matched, which
         // is the stronger evidence of the two.
         let mut folders: Vec<String> = found
             .folders
@@ -632,8 +632,8 @@ pub async fn adopt(
 
 /// Gather fingerprint matches into one entry per project.
 ///
-/// Every folder of a package matches separately — BigWigs answers twelve
-/// times, EllesmereUI twenty-two — and each answer names the same project.
+/// Every folder of a package matches separately, BigWigs answers twelve
+/// times, EllesmereUI twenty-two, and each answer names the same project.
 /// Writing one record per match records one addon a dozen times over, and
 /// reports it a dozen times to the user, which is how this was noticed.
 fn group_by_project(
@@ -928,7 +928,7 @@ mod tests {
             folders: vec!["EllesmereUI".to_owned()],
         };
 
-        // Three hashes, three answers, two addons — which is exactly the
+        // Three hashes, three answers, two addons, which is exactly the
         // shape that produced twelve BigWigs rows before this was grouped.
         let matches = std::collections::BTreeMap::from([
             ("10".to_owned(), bigwigs.clone()),
@@ -976,7 +976,7 @@ mod tests {
         };
 
         // The whole package, because a match on one folder identifies all of
-        // it — adopting Details and leaving Details_Streamer unmanaged would
+        // it, adopting Details and leaving Details_Streamer unmanaged would
         // be worse than adopting neither.
         assert_eq!(claim("Details", &["Details", "Details_Streamer"]), ["Details", "Details_Streamer"]);
 
@@ -1136,7 +1136,7 @@ mod tests {
             provider: "curse".into(),
             id: "1682733".into(),
             name: "Naowh Smart Reminders".into(),
-            // Different files, so `has_update` is true either way — which is
+            // Different files, so `has_update` is true either way, which is
             // exactly why the label cannot be decided from that alone.
             installed: Some("8986554".into()),
             available: Some("8986546".into()),

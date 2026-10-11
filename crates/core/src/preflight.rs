@@ -1,7 +1,7 @@
 //! Pre-flight: everything that has to be true before Battle.net is spawned.
 //!
 //! The problem this solves is the "Initializing Data…" deadlock. A previous
-//! session leaves `Agent.exe` — or the whole client — alive inside the prefix;
+//! session leaves `Agent.exe`, or the whole client, alive inside the prefix;
 //! the next launch finds Agent's directory cache describing a world that no
 //! longer exists, and Agent responds by scanning 126 GB of CASC storage.
 //!
@@ -11,26 +11,24 @@
 //! 2. `wineserver -k` for a graceful, prefix-scoped shutdown,
 //! 3. re-scan and signal the stragglers, `SIGTERM` then `SIGKILL`,
 //! 4. with nothing alive: delete Agent's directory *cache* and the installer's
-//!    staging directory — never Agent's own directory, which holds the
+//!    staging directory, never Agent's own directory, which holds the
 //!    `product.db` registry of installed games,
 //! 5. re-apply the Battle.net config defaults,
 //! 6. pause any download writing to CASC storage.
 //!
-//! **Ownership is proven, never guessed.** A process is only ever signalled
-//! when its own environment names Lightforge's prefix — `WINEPREFIX` or
-//! `STEAM_COMPAT_DATA_PATH`. A user running Battle.net out of Lutris or Steam
-//! at the same time has processes with identical names and a different prefix,
-//! and killing those would be a data-loss bug, not a cleanup. A process whose
-//! environment cannot be read is left alone for the same reason.
+//! A process is only ever signalled when its own environment names
+//! Lightforge's prefix (`WINEPREFIX` or `STEAM_COMPAT_DATA_PATH`). Someone
+//! running Battle.net out of Lutris or Steam has processes with identical
+//! names and a different prefix, so killing on name alone would be a
+//! data-loss bug. A process whose environment cannot be read is left alone.
 //!
-//! Steps 4 and 5 are gated on step 3 having actually succeeded. The client
-//! rewrites its configs on exit and Agent memory-maps its cache, so writing
-//! into a live prefix loses the write at best and corrupts it at worst.
+//! Steps 4 and 5 are gated on step 3 succeeding: the client rewrites its
+//! configs on exit and Agent memory-maps its cache, so writing into a live
+//! prefix loses the write at best.
 //!
 //! The same process table answers the question at the *other* end of a
-//! launch — see [`wait_for_game_start`]. Handing a game to Battle.net gives
-//! nothing back to wait on, because the client exits as soon as the game is
-//! up, so the only way to know a session is running is to watch for it.
+//! launch; see [`wait_for_game_start`]. Handing a game to Battle.net gives
+//! nothing to wait on, because the client exits as soon as the game is up.
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -62,7 +60,7 @@ const PREFIX_VARS: [&str; 2] = ["WINEPREFIX", "STEAM_COMPAT_DATA_PATH"];
 pub enum ProcKind {
     /// `Battle.net.exe` or `Battle.net Launcher.exe`.
     BattleNet,
-    /// `Agent.exe` — the update/repair service.
+    /// `Agent.exe`: the update/repair service.
     Agent,
     /// A CEF or crash-handler child of the client.
     Helper,
@@ -74,7 +72,7 @@ impl ProcKind {
     /// Classify a process from its command line.
     ///
     /// `argv[0]` is the only dependable source here. Linux reports a process's
-    /// name from `comm`, which is the *thread* name, and the client is CEF —
+    /// name from `comm`, which is the *thread* name, and the client is CEF,
     /// so a live `Battle.net.exe` shows up as `CrBrowserMain`, `CrGpuMain` or
     /// `CrRendererMain` and a name-based match misses the one process this
     /// whole module exists to clean up. `argv[0]` is the Windows path Wine was
@@ -196,7 +194,7 @@ fn collect(system: &System, layout: &Layout) -> Vec<PrefixProcess> {
         .iter()
         .filter_map(|(pid, proc)| {
             // Threads share their process's environment and command line, so
-            // they match every test below — and signalling one is not how a
+            // they match every test below, and signalling one is not how a
             // process is stopped. Only thread-group leaders are candidates.
             if proc.thread_kind().is_some() {
                 return None;
@@ -237,8 +235,8 @@ fn owned_prefixes(layout: &Layout) -> HashSet<PathBuf> {
 
 /// Whether a process's environment names one of `prefixes`.
 ///
-/// Unreadable or absent — the case for a process owned by another user, or one
-/// that exited mid-scan — means "not ours". Refusing to signal a process we
+/// Unreadable or absent, the case for a process owned by another user, or one
+/// that exited mid-scan, means "not ours". Refusing to signal a process we
 /// cannot attribute is the whole safety property of this module.
 fn belongs_to(environ: &[std::ffi::OsString], prefixes: &HashSet<PathBuf>) -> bool {
     environ.iter().any(|entry| {
@@ -265,9 +263,9 @@ fn strip_var<'a>(entry: &'a OsStr, var: &str) -> Option<&'a OsStr> {
 /// Shut the prefix down: `wineserver -k` first, then signals for whatever
 /// ignored it.
 ///
-/// `wineserver -k` is preferred because it is the shutdown Wine itself defines
-/// — the client gets to flush `Battle.net.config` instead of being killed
-/// mid-write — and because it is scoped to one `WINEPREFIX` by construction.
+/// `wineserver -k` is preferred because it is the shutdown Wine itself defines,
+/// the client gets to flush `Battle.net.config` instead of being killed
+/// mid-write, and because it is scoped to one `WINEPREFIX` by construction.
 /// Signals are the fallback for a genuinely orphaned process whose wineserver
 /// is already gone, which is precisely the case that produces the deadlock.
 pub fn shutdown(
@@ -379,8 +377,7 @@ fn remove_dir(dir: &Path) -> Result<Option<u64>, PreflightError> {
 
 /// A downloader that pre-flight can pause before Battle.net starts.
 ///
-/// The native downloader lands in Milestone 4; this is the seam it plugs into,
-/// defined now so the launch ordering never has to be revisited. Both the
+/// This is the seam the native downloader plugs into. Both the
 /// downloader and an `Agent.exe` verification pass write the same
 /// `data.NNN`/`.idx` files, and letting them overlap corrupts CASC storage.
 ///
@@ -395,8 +392,8 @@ pub trait DownloadGuard {
     fn resume(&mut self, code: &ProductCode) -> Result<bool, PreflightError>;
 }
 
-/// The Milestone 3 implementation: there is no downloader yet, so there is
-/// never anything to pause.
+/// For callers with no downloader of their own: there is never anything
+/// to pause.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoDownloads;
 
@@ -416,7 +413,7 @@ pub struct Preflight {
     /// Windows user inside the prefix, for locating the config files.
     user: String,
     /// Products Lightforge downloads itself, whose Battle.net auto-update is
-    /// re-disabled on every pass — the client rewrites its config on exit, so
+    /// re-disabled on every pass, the client rewrites its config on exit, so
     /// setting this once at install time does not hold.
     managed: Vec<ProductCode>,
     grace: Duration,
@@ -574,8 +571,8 @@ const HANDOFF_POLL: Duration = Duration::from_millis(500);
 
 /// Wine's own processes, which live in every prefix and are nobody's game.
 ///
-/// The before-snapshot is the primary filter — these are already running when
-/// the hand-off starts — but Wine spawns services on demand too, and a
+/// The before-snapshot is the primary filter, these are already running when
+/// the hand-off starts, but Wine spawns services on demand too, and a
 /// `winedevice.exe` that appears two seconds after the click would otherwise
 /// be reported as the game and "played" for a quarter of a second.
 const WINE_SERVICES: [&str; 12] = [
@@ -668,7 +665,7 @@ fn names_a_game(argv: &[std::ffi::OsString], fallback: &str) -> Option<String> {
 ///
 /// `before` is what [`games_running`] returned *prior* to the hand-off, so a
 /// game already playing does not count as this launch's. `None` means nothing
-/// started in time — almost always a client sitting at its login screen,
+/// started in time, almost always a client sitting at its login screen,
 /// which is not an error, but is the point at which the launcher has to stop
 /// claiming a launch is in progress.
 ///
@@ -820,7 +817,7 @@ mod tests {
             Some(ProcKind::WineServer)
         );
 
-        // The game itself is never touched — that is the legal guardrail, and
+        // The game itself is never touched. That is the legal guardrail, and
         // it is enforced here rather than by remembering not to.
         assert_eq!(
             ProcKind::classify(&argv(&[r"C:\...\_retail_\Wow.exe"]), "Wow.exe"),
@@ -835,7 +832,7 @@ mod tests {
     #[test]
     fn the_client_is_recognised_despite_cef_renaming_its_threads() {
         // Live finding: Linux reports `comm`, and the Battle.net client is
-        // CEF — every one of its processes is named after a Chromium thread,
+        // CEF: every one of its processes is named after a Chromium thread,
         // never after the executable. Classifying on the name alone silently
         // misses the client entirely, which is the one process pre-flight
         // exists to clear.
@@ -951,8 +948,8 @@ mod tests {
     fn clearing_the_cache_never_touches_agents_product_registry() {
         // The bug this guards against cost a real user their install
         // registration on every launch: `agent_cache_dir` pointed at Agent's
-        // whole directory, so clearing it deleted `product.db` — the list of
-        // games Battle.net knows are installed — and the client then asked to
+        // whole directory, so clearing it deleted `product.db`: the list of
+        // games Battle.net knows are installed, and the client then asked to
         // locate the game again, every single time.
         let root = scratch("agent-registry");
         let layout = Layout::with_root(&root);

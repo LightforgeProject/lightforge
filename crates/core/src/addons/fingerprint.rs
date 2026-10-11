@@ -1,14 +1,14 @@
 //! Recognising an addon by its bytes, so a hand-installed one can be adopted.
 //!
 //! An addon Lightforge did not install has no provider and no id, so it can
-//! be listed and nothing more — no update, no channel, no removal. CurseForge
+//! be listed and nothing more, no update, no channel, no removal. CurseForge
 //! solves this for its own client by publishing a **fingerprint** for every
 //! module (every addon folder) of every file it hosts: hash what is on disk,
 //! ask which project those hashes belong to, and an unmanaged folder becomes
 //! a managed one.
 //!
 //! The hash is MurmurHash2 (32-bit, Austin Appleby's original) with seed `1`,
-//! over the file's bytes **with whitespace removed** — tab, line feed,
+//! over the file's bytes **with whitespace removed**: tab, line feed,
 //! carriage return and space are dropped before hashing. That last part is
 //! what makes the fingerprint survive a checkout that rewrote line endings,
 //! which is the whole reason it is not a plain checksum.
@@ -16,7 +16,7 @@
 //! **The algorithm is exact or it is useless.** There is no partial credit: a
 //! fingerprint that is one byte off matches nothing at all, and the failure
 //! looks identical to "this addon is not on CurseForge". So the two decisions
-//! it rests on are separated deliberately — [`murmur2`] is the published
+//! it rests on are separated deliberately, [`murmur2`] is the published
 //! algorithm and is tested against its own reference, while [`of_file`] is
 //! the part that says *which bytes go in*, verified against fingerprints
 //! CurseForge itself published for an addon we installed from it.
@@ -32,7 +32,7 @@ const SEED: u32 = 1;
 /// Bytes dropped before hashing: tab, line feed, carriage return, space.
 const WHITESPACE: [u8; 4] = [9, 10, 13, 32];
 
-/// MurmurHash2, 32-bit, as published — no normalisation of its own.
+/// MurmurHash2, 32-bit, as published, no normalisation of its own.
 ///
 /// Transcribed from Appleby's reference so the constants are his: `m` and
 /// `r` are the published mixing values, and the tail switch falls through on
@@ -102,8 +102,8 @@ pub fn of_file(path: &Path) -> Option<u32> {
 ///
 /// 1. **Not every file counts.** The set is the folder's `.toc` files, the
 ///    paths those tocs *load*, and the files the client loads implicitly.
-///    Only unconditionally, though: a line carrying a `[...]` clause —
-///    `BossPrototype.lua [ExcludeLoadGameType vanilla]` — is out, and so is
+///    Only unconditionally, though: a line carrying a `[...]` clause,
+///    `BossPrototype.lua [ExcludeLoadGameType vanilla]`: is out, and so is
 ///    a file nothing references. BigWigs has 338 files on disk and a
 ///    fingerprint over 19.
 /// 2. **Each file is hashed, then the hashes are hashed.** Per file it is
@@ -112,7 +112,7 @@ pub fn of_file(path: &Path) -> Option<u32> {
 /// 3. **Sorted by value, not by name.** Ascending numeric order of the file
 ///    hashes themselves, which is why no filename ordering ever matched.
 ///
-/// `None` when the folder declares nothing — no toc, or a toc that loads
+/// `None` when the folder declares nothing, no toc, or a toc that loads
 /// nothing that exists. An addon with no fingerprint cannot be adopted,
 /// which is the honest outcome rather than hashing an arbitrary subset.
 pub fn of_folder(dir: &Path) -> Option<u32> {
@@ -201,13 +201,13 @@ mod tests {
     use super::*;
 
     /// Reference values for MurmurHash2, computed from Appleby's own C with
-    /// the same inputs. These pin the transcription — the constants, the
-    /// little-endian read, the fall-through tail and the final avalanche —
+    /// the same inputs. These pin the transcription, the constants, the
+    /// little-endian read, the fall-through tail and the final avalanche,
     /// independently of what CurseForge then does with it.
     #[test]
     fn murmur2_matches_the_reference_implementation() {
         // Seed zero over nothing is the one input that falls through every
-        // multiply unchanged, so it is zero — and the only case where a
+        // multiply unchanged, so it is zero, and the only case where a
         // transcription can look right by doing nothing at all.
         assert_eq!(murmur2(b"", 0), 0);
         assert_eq!(murmur2(b"", 1), 0x5bd1_5e36);

@@ -2,7 +2,7 @@
 //!
 //! A "product" is one independently-managed WoW install: Retail, Classic, PTR,
 //! or a user-added custom entry. Each carries its own Proton-GE pin, its own
-//! realmlist/CDN overrides, and its own prefix state — switching one must never
+//! realmlist/CDN overrides, and its own prefix state, switching one must never
 //! disturb another.
 
 use std::borrow::Cow;
@@ -21,24 +21,24 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum ProductCode {
-    /// Retail — `wow`
+    /// Retail, `wow`
     Retail,
-    /// Classic progression — `wow_classic`
+    /// Classic progression, `wow_classic`
     Classic,
-    /// Classic Era — `wow_classic_era`
+    /// Classic Era, `wow_classic_era`
     ClassicEra,
-    /// Retail PTR — `wowt`
+    /// Retail PTR, `wowt`
     Ptr,
-    /// The second retail PTR realm — `wowxptr`. Blizzard runs two at once
+    /// The second retail PTR realm, `wowxptr`. Blizzard runs two at once
     /// during a patch cycle, and they carry different builds.
     Ptr2,
-    /// Classic PTR — `wow_classic_ptr`
+    /// Classic PTR, `wow_classic_ptr`
     ClassicPtr,
-    /// Classic Era PTR — `wow_classic_era_ptr`
+    /// Classic Era PTR, `wow_classic_era_ptr`
     EraPtr,
-    /// Retail beta — `wow_beta`
+    /// Retail beta, `wow_beta`
     Beta,
-    /// Classic-line beta — `wow_classic_beta`. Currently the "World of
+    /// Classic-line beta, `wow_classic_beta`. Currently the "World of
     /// Warcraft: Forever" beta, which ships on the 1.x line.
     ClassicBeta,
     /// Any code Lightforge doesn't model explicitly, including custom entries.
@@ -83,7 +83,7 @@ impl ProductCode {
     }
 
     /// A few characters that identify this product in a space too small for
-    /// its display name — the dashboard's product bar, before a product has
+    /// its display name, the dashboard's product bar, before a product has
     /// artwork of its own.
     ///
     /// Distinguishing, not descriptive: every one of these is a World of
@@ -108,7 +108,7 @@ impl ProductCode {
 
     /// The game binary this product is expected to ship, by name only.
     ///
-    /// A hint, not an authority — see [`crate::paths::Layout::wow_exe`], which
+    /// A hint, not an authority; see [`crate::paths::Layout::wow_exe`], which
     /// prefers what is actually on disk. One real install carries three
     /// different names: `_retail_/Wow.exe`, `_classic_era_/WowClassic.exe` and
     /// `_classic_beta_/WowB.exe`, so a table alone would be guessing for any
@@ -128,7 +128,7 @@ impl ProductCode {
     /// `_retail_`.
     ///
     /// Borrowed for every code with a fixed answer, owned only for the custom
-    /// `wow_*` codes whose directory is derived — which is why this is a
+    /// `wow_*` codes whose directory is derived, which is why this is a
     /// [`Cow`] rather than a `&str`.
     pub fn install_dir(&self) -> Cow<'_, str> {
         Cow::Borrowed(match self {
@@ -206,7 +206,7 @@ impl fmt::Display for ProductCode {
 
 /// Which game a product is, with the branch factored out.
 ///
-/// PTR and beta are *versions of* a game, not games beside it — Blizzard's own
+/// PTR and beta are *versions of* a game, not games beside it, Blizzard's own
 /// launcher presents one tile per line with a version picker behind it, and
 /// showing five World of Warcrafts in a row implies five different games.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -217,7 +217,7 @@ pub enum ProductLine {
     /// "World of Warcraft: Forever", currently beta-only. Its own line rather
     /// than a branch of Era: Battle.net gives it its own game family (`WoWF`,
     /// see [`crate::battlenet`]) and its own tile, and this bar is modelled on
-    /// that one. Its *addons* are still Era addons — compatibility and
+    /// that one. Its *addons* are still Era addons, compatibility and
     /// identity are different questions.
     Forever,
     /// A code Lightforge doesn't model. Its own line of one, since nothing
@@ -237,7 +237,7 @@ impl ProductLine {
         }
     }
 
-    /// The line's own name — no branch in it.
+    /// The line's own name, no branch in it.
     pub fn label(&self) -> &str {
         match self {
             Self::Retail => "Retail",
@@ -250,7 +250,7 @@ impl ProductLine {
 
     /// The product this line *is* when nobody has picked a branch: its live
     /// one. Also what the UI themes a branch from when the branch has no art
-    /// of its own — Classic's PTR should look like Classic, not like whatever
+    /// of its own, Classic's PTR should look like Classic, not like whatever
     /// the manifest happens to default to.
     pub fn head(&self) -> ProductCode {
         match self {
@@ -265,7 +265,7 @@ impl ProductLine {
     /// Every branch of this line Lightforge knows, live first.
     ///
     /// Knowing about a branch is not the same as having it installed or even
-    /// configured — this is the menu, not the inventory.
+    /// configured. This is the menu, not the inventory.
     pub fn branches(&self) -> Vec<ProductCode> {
         match self {
             Self::Retail => vec![ProductCode::Retail, ProductCode::Ptr, ProductCode::Ptr2, ProductCode::Beta],
@@ -402,7 +402,7 @@ impl Kind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogEntry {
     pub code: ProductCode,
-    /// Stable display name. Never an expansion name — see [`ProductLine`].
+    /// Stable display name. Never an expansion name; see [`ProductLine`].
     pub label: String,
     pub line: ProductLine,
     pub branch: Branch,
@@ -412,8 +412,8 @@ pub struct CatalogEntry {
 /// Which products exist, what they are called, and how they group.
 ///
 /// Built into the binary, then overridden by the hosted manifest. The split
-/// matters: Blizzard publishes no product listing — `tact::version` documents
-/// the dead `summary` endpoint — so the set of products is something someone
+/// matters: Blizzard publishes no product listing, `tact::version` documents
+/// the dead `summary` endpoint, so the set of products is something someone
 /// has to *state*, and stating it in a document that revalidates on every
 /// launch beats stating it in a binary that ships every few weeks.
 ///
@@ -447,8 +447,8 @@ impl Catalog {
         // catalog are one list rather than two that drift.
         //
         // Filtered by what is already covered rather than by kind: the table
-        // holds WoW products that are not `ProductCode` variants —
-        // `wow_anniversary` is one — and dropping those would lose them from
+        // holds WoW products that are not `ProductCode` variants,
+        // `wow_anniversary` is one, and dropping those would lose them from
         // the catalog altogether.
         let rest = crate::tact::version::KNOWN_PRODUCTS
             .iter()
@@ -498,7 +498,7 @@ impl Catalog {
     ///
     /// `version::KNOWN_PRODUCTS` carries `hsb` for Hearthstone; the client and
     /// `product.db` both say `hs_beta`. Nothing lines up while the catalog
-    /// holds one and the machine holds the other — the browse panel adds a
+    /// holds one and the machine holds the other, the browse panel adds a
     /// code that never matches what is installed.
     ///
     /// Two codes are the same game when they resolve to the same Battle.net
@@ -523,8 +523,8 @@ impl Catalog {
             }
         }
         // Two keys can name one game. The asset manifest carries both `hsb`
-        // and `hs_beta` on purpose — artwork is looked up by whichever code
-        // the machine reports — and every manifest key becomes a catalog
+        // and `hs_beta` on purpose, artwork is looked up by whichever code
+        // the machine reports, and every manifest key becomes a catalog
         // entry, so Hearthstone arrives twice and the rewrite above makes the
         // two identical. Keeping the first is what collapses the duplicate
         // row in Add a game.
@@ -586,7 +586,7 @@ pub struct ProductProfile {
     /// app-wide default applies.
     pub proton_ge_version: Option<String>,
     /// Id of the storage library this product is installed in. `None` means
-    /// the default one, which is also what a fresh product gets — the
+    /// the default one, which is also what a fresh product gets, the
     /// assignment is written when the install is queued, not before.
     pub library: Option<String>,
     /// Contents written to the product's `realmlist`/portal config, if set.
@@ -596,7 +596,7 @@ pub struct ProductProfile {
     /// Performance settings for this product: launch wrappers, environment,
     /// and the client CVars Lightforge re-asserts before each launch.
     pub tweaks: crate::tweaks::Tweaks,
-    /// Optional content opted in to, by download-manifest tag name — e.g.
+    /// Optional content opted in to, by download-manifest tag name, e.g.
     /// `HighRes`. Empty matches Battle.net, which installs none of it unless
     /// asked.
     pub optional_content: Vec<String>,

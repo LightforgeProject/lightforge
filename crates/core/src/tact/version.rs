@@ -1,6 +1,6 @@
 //! What Blizzard currently ships: the remote half of the update check.
 //!
-//! Two endpoints, both returning BPSV — the same pipe-delimited table grammar
+//! Two endpoints, both returning BPSV, the same pipe-delimited table grammar
 //! as `.build.info`:
 //!
 //! ```text
@@ -49,7 +49,7 @@ impl Region {
         [Region::Eu, Region::Us, Region::Kr, Region::Tw, Region::Cn, Region::Sg];
 
     /// What to call this region to someone choosing one. The codes are
-    /// Blizzard's and several of them name the wrong thing — `us` serves the
+    /// Blizzard's and several of them name the wrong thing, `us` serves the
     /// whole of the Americas and Oceania.
     pub fn label(self) -> &'static str {
         match self {
@@ -99,7 +99,7 @@ impl std::str::FromStr for Region {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Version {
     pub region: String,
-    /// Hash of the build config — the value `.build.info` stores as `Build Key`
+    /// Hash of the build config, the value `.build.info` stores as `Build Key`
     /// and the one an update check actually compares.
     pub build_config: String,
     pub cdn_config: String,
@@ -223,7 +223,7 @@ impl ProductStatus {
 /// answer rather than a failure; anything else is a real error.
 ///
 /// There is no product *listing* to ask for. Blizzard's `summary` endpoint is
-/// gone from this host (404), and port 1119 no longer speaks Ribbit at all —
+/// gone from this host (404), and port 1119 no longer speaks Ribbit at all,
 /// it answers HTTP 400 to both protocol versions, which is the same wall
 /// documented at the top of this module. So enumeration is probing a list of
 /// candidate codes, and [`KNOWN_PRODUCTS`] is that list.
@@ -291,7 +291,7 @@ pub fn for_region<T>(rows: &[T], region: Region, name: impl Fn(&T) -> &str) -> O
 /// How a local install compares to what the service currently ships.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
-    /// No local `.build.info` row — the product has never been installed.
+    /// No local `.build.info` row, the product has never been installed.
     NotInstalled,
     /// Local build config matches the service's.
     Current { build: String, version: String },
@@ -299,7 +299,7 @@ pub enum Status {
     ///
     /// Deliberately not "newer": the comparison is hash equality, not an
     /// ordering. A downgrade, a region switch, or a PTR flip all land here,
-    /// and all of them mean the same thing to the downloader — local content
+    /// and all of them mean the same thing to the downloader, local content
     /// no longer matches the build the service names.
     Behind {
         local_build: String,
@@ -336,7 +336,7 @@ impl Status {
     /// The button this maps to.
     ///
     /// `Current` becomes [`crate::ActionState::Play`] only as far as the
-    /// version check can tell — whether the files are actually intact is a
+    /// version check can tell, whether the files are actually intact is a
     /// separate question, and one pre-flight and the downloader answer.
     pub fn action(&self) -> crate::ActionState {
         match self {
@@ -353,7 +353,7 @@ impl Status {
 /// A BPSV table: typed header row, optional `##` comments, then data rows.
 ///
 /// Deliberately separate from [`crate::buildinfo`], which parses the same
-/// grammar under a much stricter contract — it has to round-trip byte for byte
+/// grammar under a much stricter contract, it has to round-trip byte for byte
 /// because Agent reads what it writes. This one only ever reads a response, so
 /// it can skip comments and ignore column types instead of preserving them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -591,7 +591,7 @@ eu|tpr/wow|level3.blizzard.com|http://level3.blizzard.com/?maxhosts=8 https://le
         );
 
         // A rollback is still "does not match", which is what matters to the
-        // downloader — the comparison is equality, never an ordering.
+        // downloader, the comparison is equality, never an ordering.
         let older = remote("11110000111100001111000011110000", "12.0.5.60000");
         assert!(Status::compare(Some("9712ae9c84cc54111e9e3ddf9a6b8019"), None, &older).needs_update());
     }

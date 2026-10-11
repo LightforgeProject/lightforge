@@ -14,10 +14,10 @@
 //! 2. **Only the target product's row is ever mutated.** Retail, Classic and
 //!    PTR share one file, so a whole-file rewrite would clobber siblings.
 //!
-//! Milestone 1 provided the parser and the in-memory model; Milestone 3 adds
-//! the atomic temp-file-and-rename writer. Writing is never in-place: Agent
-//! memory-maps this file and a torn write is exactly the corruption that
-//! triggers the full repair scan Lightforge exists to avoid.
+//! Writes go through an atomic temp-file-and-rename writer, never in
+//! place: Agent memory-maps this file and a torn write is exactly the
+//! corruption that triggers the full repair scan Lightforge exists to
+//! avoid.
 //!
 //! Nothing here checks whether Agent is running. That gate belongs to
 //! [`crate::preflight`], which every caller must pass through first.
@@ -105,7 +105,7 @@ impl BuildInfo {
 
     /// Every product this file has a row for.
     ///
-    /// The `Product` column is the last one, and it is what Agent keys on — a
+    /// The `Product` column is the last one, and it is what Agent keys on, a
     /// file can carry several products sharing one install root.
     pub fn products(&self) -> impl Iterator<Item = ProductCode> + '_ {
         self.rows().iter().filter_map(|row| {
@@ -124,7 +124,7 @@ impl BuildInfo {
     }
 
     /// Mutable access to a single product's row. Every other row is untouched
-    /// by construction — this is the row-isolation guarantee.
+    /// by construction. This is the row-isolation guarantee.
     pub fn row_mut(&mut self, code: &ProductCode) -> Result<&mut Row, BuildInfoError> {
         let product_col = self.index[COL_PRODUCT];
         self.rows
@@ -178,7 +178,7 @@ impl BuildInfo {
 
     /// Atomically replace `path` with this document.
     ///
-    /// Temp file in the destination directory, `fsync`, then `rename` — the
+    /// Temp file in the destination directory, `fsync`, then `rename`: the
     /// rename is the only step an observer can see, so the file is either the
     /// old bytes or the new ones and never a prefix of either. The directory
     /// is synced afterwards so the rename itself survives a power loss, which
@@ -209,7 +209,7 @@ impl BuildInfo {
                 let _ = tmp.as_file().set_permissions(meta.permissions());
             }
             // A fresh install would otherwise keep tempfile's 0600, where a
-            // real `.build.info` is 0644 — the same tightening the indices had.
+            // real `.build.info` is 0644, the same tightening the indices had.
             Err(_) => {
                 let _ = tmp
                     .as_file()
@@ -228,8 +228,8 @@ impl BuildInfo {
     /// Load, mutate, and atomically write back in one call.
     ///
     /// The read-modify-write is deliberately not held open across the
-    /// mutation: `.build.info` has no lock protocol, and pre-flight — not a
-    /// file handle — is what guarantees nobody else is writing.
+    /// mutation: `.build.info` has no lock protocol, and pre-flight, not a
+    /// file handle, is what guarantees nobody else is writing.
     pub fn update<E>(
         path: impl AsRef<Path>,
         edit: impl FnOnce(&mut Self) -> Result<(), E>,
@@ -284,7 +284,7 @@ impl BuildInfo {
     /// Add or replace a product's row, taking cells by column name.
     ///
     /// Columns not named are left empty, which is what Agent itself writes for
-    /// the ones it does not use on a fresh install — `Install Key`, `IM Size`,
+    /// the ones it does not use on a fresh install, `Install Key`, `IM Size`,
     /// `Armadillo`, `Last Activated`. Naming a column the schema does not have
     /// is an error rather than a silently dropped value.
     pub fn set_product(
@@ -364,9 +364,9 @@ mod tests {
 
     /// A real single-product `.build.info` from a live 12.1.0 retail install.
     ///
-    /// Account and geoip tags are neutralized; everything else — column set,
+    /// Account and geoip tags are neutralized; everything else, column set,
     /// `!TYPE:N` suffixes, empty `HEX:16`/`DEC:4` cells, the `?`/`:` tag
-    /// grammar, trailing newline — is verbatim, because that is exactly the
+    /// grammar, trailing newline, is verbatim, because that is exactly the
     /// shape hand-written fixtures get wrong.
     const REAL_RETAIL: &str = concat!(
         "Branch!STRING:0|Active!DEC:1|Build Key!HEX:16|CDN Key!HEX:16|Install Key!HEX:16|",

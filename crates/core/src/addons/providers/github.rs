@@ -1,7 +1,7 @@
 //! GitHub releases. No key required, though unauthenticated calls are rate
 //! limited to 60/hour per IP.
 //!
-//! Ids are `owner/repo`. Many authors release here first — RaiderIO's own
+//! Ids are `owner/repo`. Many authors release here first, RaiderIO's own
 //! `.toc` declares `X-AddonProvider: github`.
 //!
 //! **Flavor selection uses `release.json` when it is present.** The BigWigs
@@ -15,7 +15,7 @@
 //!
 //! Without it there is nothing to go on but the file name, so a single zip is
 //! taken as universal and a multi-zip release picks the one whose name matches
-//! the flavor — a guess, and marked as one in the note.
+//! the flavor, a guess, and marked as one in the note.
 
 use serde::Deserialize;
 
@@ -81,7 +81,7 @@ pub async fn resolve(http: &Http, requests: &[Request], flavor: &str) -> Provide
                 match http.get_json::<Release>(&url).await {
                     Ok(release) => Some(release),
                     // A repo with no releases at all is the common case, not a
-                    // fault — ElvUI's own repo has none.
+                    // fault, ElvUI's own repo has none.
                     Err(e) => {
                         resolved
                             .push(missing(&request.id, format!("no GitHub release found ({e})")));

@@ -132,7 +132,7 @@ async fn search_parses_the_results_envelope() {
         .expect("search must read `{\"results\": [...]}`, not a bare array");
 
     // Two: the project the proxy pinned from an exact slug, then the text
-    // hit. The pin is the contract — a search for an addon by name must
+    // hit. The pin is the contract, a search for an addon by name must
     // contain that addon, which CurseForge's own text search does not
     // guarantee.
     assert_eq!(hits.len(), 2);
@@ -166,7 +166,7 @@ async fn project_parses() {
 ///
 /// This is the exact payload the proxy used to emit. serde rejects an integer
 /// for `Option<String>`, and because the field sits inside a list element the
-/// failure takes the whole batch down — forty working addons reported as
+/// failure takes the whole batch down, forty working addons reported as
 /// nothing at all, not thirty-nine plus one bad entry.
 ///
 /// Deliberately *not* fixed by making the field lenient: the strictness is

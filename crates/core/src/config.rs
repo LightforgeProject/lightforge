@@ -2,7 +2,7 @@
 //!
 //! TOML at `~/.config/lightforge/config.toml`, deliberately outside
 //! `~/Games/Blizzard` so wiping the game root never destroys the user's
-//! per-product pins and overrides. The format is hand-editable on purpose —
+//! per-product pins and overrides. The format is hand-editable on purpose,
 //! realmlist and CDN overrides are exactly the fields people poke manually.
 
 use std::path::PathBuf;
@@ -40,7 +40,7 @@ pub struct Config {
     pub default_proton: ProtonPin,
     /// An override for where themed branding is read from: a base URL, or a
     /// local directory for trying out new art. Deliberately absent from the
-    /// UI — `None` means [`DEFAULT_ASSETS_SOURCE`], which is what everyone
+    /// UI, `None` means [`DEFAULT_ASSETS_SOURCE`], which is what everyone
     /// but whoever is making the art should be on.
     pub assets_source: Option<String>,
     /// Base URL of the addon catalog proxy, or a local fixture directory.
@@ -54,11 +54,11 @@ pub struct Config {
     /// for an addon that has no opinion of its own.
     ///
     /// On by default: keeping addons current is what an addon manager is for,
-    /// and an addon that should not move has two ways to say so — its own
+    /// and an addon that should not move has two ways to say so, its own
     /// auto-update choice, or being ignored outright.
     #[serde(default = "yes")]
     pub addon_auto_update: bool,
-    /// Where the person can be reached about a bug report — an address, a
+    /// Where the person can be reached about a bug report, an address, a
     /// Discord name, whatever they chose to type. Optional, kept only so the
     /// report dialog can offer it back rather than asking twice, and never
     /// sent anywhere except with a report they pressed Send on.
@@ -73,7 +73,7 @@ pub struct Config {
     pub download_limit_mbps: Option<u64>,
     /// Whether launching a game also pauses downloads for *other* products.
     ///
-    /// The launched product's own download is always paused — that one is a
+    /// The launched product's own download is always paused. That one is a
     /// correctness guard, not a preference, since the client and the
     /// downloader would be reading and writing one CASC store. This governs
     /// the rest of the queue, which shares that same store and the same
@@ -83,7 +83,7 @@ pub struct Config {
     ///
     /// Off by default: a window that disappears without being asked is
     /// startling, and the launcher is where the download queue and the status
-    /// line live. Nothing is restored when the game exits — the window is in
+    /// line live. Nothing is restored when the game exits, the window is in
     /// the taskbar, and a launcher that raises itself over whatever came next
     /// is the behaviour people disable this kind of setting to avoid.
     #[serde(default)]
@@ -92,7 +92,7 @@ pub struct Config {
     /// hand a game over.
     ///
     /// On by default, and still only honoured where the client can sign itself
-    /// in — see [`crate::battlenet::signs_in_by_itself`]. A sign-in form
+    /// in; see [`crate::battlenet::signs_in_by_itself`]. A sign-in form
     /// nobody can see is a launch that quietly never happens.
     #[serde(default = "yes")]
     pub battle_net_minimized: bool,
@@ -104,7 +104,7 @@ pub struct Config {
     /// the launch over its own IPC queue, where there is no new process to
     /// give an environment to. Two games started from one client session
     /// therefore cannot have different environments, so offering a per-game
-    /// control would be a lie — see `SPEC.md`, "Per-product pinning".
+    /// control would be a lie; see `SPEC.md`, "Per-product pinning".
     ///
     /// Only the host and runtime half of [`crate::tweaks::Tweaks`] is read
     /// here. A hand-off game has no `Config.wtf`, so
@@ -114,7 +114,7 @@ pub struct Config {
     /// Which of Blizzard's regions products are downloaded from.
     ///
     /// Asked once, during the first run. It decides which version service is
-    /// read, and it is written into `.build.info` and `product.db` — the client
+    /// read, and it is written into `.build.info` and `product.db`: the client
     /// and Battle.net both expect the install to say where it came from.
     #[serde(default)]
     pub region: crate::tact::version::Region,
@@ -160,7 +160,7 @@ pub struct Config {
     /// The version whose notes have already been shown.
     ///
     /// Without this the popup would open on every start rather than once per
-    /// update. `None` on a machine that has never seen it — which includes
+    /// update. `None` on a machine that has never seen it, which includes
     /// every install from before the popup existed, and those *should* see the
     /// notes for what they just updated to.
     #[serde(default)]
@@ -177,7 +177,7 @@ pub const DEFAULT_ASSETS_SOURCE: &str = "https://lightforge.tuxcore.pro/assets/"
 /// The CurseForge API needs a key, and a key cannot live in a GPL binary, so
 /// CurseForge is reachable only through a proxy that holds one. Defaulting to
 /// ours means addon search works out of the box; pointing `addon_catalog` at
-/// your own proxy — or at a fixture directory — replaces it.
+/// your own proxy, or at a fixture directory, replaces it.
 ///
 /// The keyless providers (WoWInterface, Tukui, GitHub) never come through
 /// here, so addon management keeps working whatever this says.
@@ -249,7 +249,7 @@ impl Config {
 
     /// Read `config.toml`, or fall back to the seeded defaults when it does
     /// not exist yet. A file that exists but does not parse is an error, not a
-    /// silent reset — overwriting someone's hand-edited pins is worse than
+    /// silent reset, overwriting someone's hand-edited pins is worse than
     /// refusing to start.
     pub fn load_or_default(path: &std::path::Path) -> Result<Self, ConfigError> {
         match std::fs::read_to_string(path) {
@@ -270,7 +270,7 @@ impl Config {
 
     /// Write `config.toml` atomically: temp file in the same directory, then
     /// rename. A settings screen saves on every change, so a crash mid-write
-    /// must not be able to leave a half-written file behind — losing the user's
+    /// must not be able to leave a half-written file behind, losing the user's
     /// Proton pins to a truncated table would be worse than losing the edit.
     pub fn save(&self, path: &std::path::Path) -> Result<(), ConfigError> {
         let text = self.to_toml()?;
@@ -343,7 +343,7 @@ impl Config {
     ///
     /// The first library keeps the games directory the install already used and
     /// the drive letters it already had, so a 150 GB install Battle.net has
-    /// adopted stays recognised. It is *not* claimed here — writing a marker
+    /// adopted stays recognised. It is *not* claimed here, writing a marker
     /// file is a side effect on the user's disk, and this runs on every start;
     /// [`crate::library::Library::claim`] happens where a library is set up.
     ///
@@ -402,7 +402,7 @@ impl Config {
     /// Same shape as [`Config::asset_origin`]: a URL is a proxy, anything else
     /// is a fixture directory, and absent means [`DEFAULT_ADDON_CATALOG`].
     ///
-    /// This used to be `Option`, with `None` disabling CurseForge entirely —
+    /// This used to be `Option`, with `None` disabling CurseForge entirely,
     /// written before the proxy existed, and the reason a stock install could
     /// not find a single CurseForge addon.
     pub fn catalog_origin(&self) -> crate::addons::catalog::Origin {
@@ -421,7 +421,7 @@ impl Config {
     /// The same base as [`Config::catalog_origin`], with no knob of its own:
     /// one proxy serves both namespaces, and a second URL to keep in step
     /// would only be a second thing to point somewhere wrong. A fixture
-    /// directory works here too — it reads `news.json` beside the catalog's
+    /// directory works here too, it reads `news.json` beside the catalog's
     /// fixtures.
     pub fn news_origin(&self) -> crate::news::Origin {
         match self.catalog_origin() {
@@ -462,8 +462,8 @@ impl Config {
     /// The Proton build Battle.net and Agent launch under.
     ///
     /// Its own pin rather than the selected product's: the client and Agent
-    /// are a different workload from the game — CEF, an updater, a storefront
-    /// — and `SPEC.md` notes that "latest" is not always best for them. Falls
+    /// are a different workload from the game, CEF, an updater, a storefront,
+    /// and `SPEC.md` notes that "latest" is not always best for them. Falls
     /// back to the app default, so the pin only has to be set when it differs.
     pub fn battle_net_proton_version(&self) -> Option<&str> {
         self.battle_net_proton
@@ -480,7 +480,7 @@ impl Config {
     /// belongs, and then to the app default.
     ///
     /// The prefix is shared, so a pin that is *older* than the build which
-    /// last ran in it is a downgrade of everything — see
+    /// last ran in it is a downgrade of everything, see
     /// [`crate::proton::prefix_fit`]. Resolved here all the same; refusing a
     /// pin silently would be the worse answer.
     pub fn handoff_proton(&self, code: &ProductCode) -> Option<&str> {
@@ -563,7 +563,7 @@ mod tests {
         // Unset, so it follows the default like everything else.
         assert_eq!(config.battle_net_proton_version(), Some("GE-Proton11-7"));
 
-        // Set, and it wins — that is the entire point of the field.
+        // Set, and it wins. That is the entire point of the field.
         config.battle_net_proton = ProtonPin::Pinned("GE-Proton10-34".into());
         assert_eq!(config.battle_net_proton_version(), Some("GE-Proton10-34"));
         // And it does not disturb what the games launch under.
@@ -829,7 +829,7 @@ mod tests {
             CatalogOrigin::Dir(PathBuf::from("/tmp/fixtures"))
         );
 
-        // Blank is "unset", not "disabled" — same rule as assets_source.
+        // Blank is "unset", not "disabled", same rule as assets_source.
         config.addon_catalog = Some("   ".into());
         assert_eq!(
             config.catalog_origin(),

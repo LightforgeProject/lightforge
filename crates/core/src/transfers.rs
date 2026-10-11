@@ -1,6 +1,6 @@
 //! The download queue as it stood, kept across restarts.
 //!
-//! Only the queue's shape is kept — what is in it, in what order, and how far
+//! Only the queue's shape is kept, what is in it, in what order, and how far
 //! each job had got. The bytes themselves are the store's business: it is
 //! checkpointed as it goes, and a restored transfer re-plans against it like
 //! any resume.
@@ -44,7 +44,7 @@ pub struct Saved {
     /// Bytes the job's first plan asked for, if it had planned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_bytes: Option<u64>,
-    /// Bytes done when it was paused. Not tracked while running — the store
+    /// Bytes done when it was paused. Not tracked while running, the store
     /// knows that better, and the next plan reads it back.
     #[serde(default)]
     pub reached: u64,

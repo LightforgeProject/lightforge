@@ -3,8 +3,8 @@
 //!
 //! This is the read side of [`crate::tact`]. `casc-storage` is deliberately
 //! not used for any of it. Its `read` returns an empty `Vec` for every entry
-//! in a real install — the BLTE *streaming* reader it calls yields nothing
-//! where the one-shot decoder returns correct data — and its index support is
+//! in a real install, the BLTE *streaming* reader it calls yields nothing
+//! where the one-shot decoder returns correct data, and its index support is
 //! read-only anyway, so [`super::idx`] already replaces the other half. What
 //! is left after removing both is small enough to own outright: find the
 //! newest index per bucket, seek into an archive, decode one BLTE payload.
@@ -78,8 +78,8 @@ impl Storage {
             return Err(StorageError::NoIndices(data_dir));
         }
 
-        // Encrypted blocks are normal — Blizzard ships unreleased content in
-        // the same archives — so a missing key file is not an error here. The
+        // Encrypted blocks are normal, Blizzard ships unreleased content in
+        // the same archives, so a missing key file is not an error here. The
         // read that needs a key is where it becomes one.
         let mut keys = KeyService::new();
         let _ = keys.load_from_standard_dirs();
@@ -99,7 +99,7 @@ impl Storage {
     }
 
     /// Entries naming real files, across every bucket. Archive markers are
-    /// excluded — see [`Entry::is_archive_marker`].
+    /// excluded; see [`Entry::is_archive_marker`].
     pub fn files(&self) -> impl Iterator<Item = &Entry> {
         self.indices().into_iter().flat_map(|i| i.files())
     }
@@ -200,7 +200,7 @@ pub struct Stats {
 /// Almost every entry points at a 30-byte CASC header followed by the payload.
 /// A few point straight at the payload instead: a real install has 57 pairs of
 /// entries that share a key, where the second of the pair has both its offset
-/// advanced by 30 and its size reduced by 30 — the same file, described
+/// advanced by 30 and its size reduced by 30, the same file, described
 /// without its header. Assuming the header is always present makes those
 /// aliases look like a corrupt archive.
 pub(crate) fn blte_payload(raw: &[u8]) -> Option<&[u8]> {
@@ -214,7 +214,7 @@ pub(crate) fn blte_payload(raw: &[u8]) -> Option<&[u8]> {
     None
 }
 
-/// `data.027` — always three digits, matching what Blizzard writes.
+/// `data.027`: always three digits, matching what Blizzard writes.
 pub fn archive_name(archive_id: u16) -> String {
     format!("data.{archive_id:03}")
 }
@@ -367,7 +367,7 @@ mod tests {
             Err(StorageError::NotFound(_))
         ));
         // Reading a marker is a caller mistake, not a corrupt install, and the
-        // message has to say which — this is the case that made a naive
+        // message has to say which. This is the case that made a naive
         // "decode every entry" sweep look like 1968 failures.
         assert!(matches!(
             storage.read_entry(&marker),

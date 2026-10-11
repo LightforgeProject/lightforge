@@ -4,10 +4,10 @@
 //! belongs to, but neither says whether this machine should hold it at all.
 //! That is what these two manifests decide, and they decide it by tag:
 //!
-//! - **install** (`IN`) — the ~266 loose files that must exist on disk as real
+//! - **install** (`IN`), the ~266 loose files that must exist on disk as real
 //!   files for the client to start: `Wow.exe`, `wow_loader.dll`, CEF and its
 //!   `.pak` resources. Listed by path and content key.
-//! - **download** (`DL`) — every file the CASC store should hold, ~2.87M of
+//! - **download** (`DL`): every file the CASC store should hold, ~2.87M of
 //!   them for 12.1.0, listed by encoding key with a size and a priority.
 //!
 //! Both end in a tag section: a name, a type, and one bit per entry.
@@ -26,7 +26,7 @@
 //! ```
 //!
 //! Colon-separated groups are alternatives; within a group every tag must
-//! match. Names the manifest does not define (`acct-AUT`, `geoip-AT` — account
+//! match. Names the manifest does not define (`acct-AUT`, `geoip-AT`: account
 //! and geoip facts, not file tags) are ignored rather than required, since
 //! requiring them would select nothing. Against the real install that rule
 //! yields 1,574,027 files and 123.0 GiB, matching the store Agent built.
@@ -78,7 +78,7 @@ impl Tag {
 pub struct TagSet {
     /// Alternatives. An entry is selected if it satisfies any one of them.
     groups: Vec<Vec<String>>,
-    /// Optional content the user has asked for by name — see
+    /// Optional content the user has asked for by name, see
     /// [`TagSet::with_optional`].
     allow: Vec<String>,
 }
@@ -157,7 +157,7 @@ impl TagSet {
     /// Bind this expression to one manifest's tag table.
     ///
     /// `entries` is how many entries that manifest holds, which decides
-    /// whether a tag can be optional content at all — see the gate rule
+    /// whether a tag can be optional content at all; see the gate rule
     /// below.
     pub fn against<'a>(&self, tags: &'a [Tag], entries: usize) -> Selection<'a> {
         let groups = self
@@ -174,7 +174,7 @@ impl TagSet {
         // A category is constrained when the expression names any one of its
         // values: naming `enUS` narrows locale even though every other locale
         // tag goes unnamed. A category it names nothing in constrains nothing,
-        // so every value of it would otherwise pass — which is how a 37 GiB
+        // so every value of it would otherwise pass, which is how a 37 GiB
         // texture pack ends up in a plan nobody asked for. Those become gates:
         // tags that must *not* cover an entry, unless opted in by name.
         //
@@ -203,7 +203,7 @@ impl TagSet {
     }
 
     /// The optional content a manifest offers that this expression is silent
-    /// about — the names a user could opt in to.
+    /// about, the names a user could opt in to.
     pub fn optional_names(&self, tags: &[Tag], entries: usize) -> Vec<String> {
         let mut names: Vec<String> = self
             .against(tags, entries)
@@ -231,7 +231,7 @@ pub struct Selection<'a> {
     gates: Vec<usize>,
     tags: &'a [Tag],
     /// An empty expression states no constraints, and the honest reading of
-    /// that is "everything" — gates included.
+    /// that is "everything", gates included.
     unconstrained: bool,
 }
 
@@ -248,7 +248,7 @@ impl Selection<'_> {
             .any(|group| group.iter().all(|&t| self.tags[t].covers(index)))
     }
 
-    /// The tags acting as gates, by name — the optional content being held
+    /// The tags acting as gates, by name, the optional content being held
     /// back.
     pub fn gated(&self) -> Vec<&str> {
         self.gates.iter().map(|&i| self.tags[i].name.as_str()).collect()
@@ -268,7 +268,7 @@ pub struct InstallEntry {
 impl InstallEntry {
     /// The path as a relative POSIX path, for joining onto the flavor dir.
     ///
-    /// Case is left exactly as the manifest spells it — the manifest is
+    /// Case is left exactly as the manifest spells it, the manifest is
     /// internally inconsistent (`Utils\cef.pak` beside `UTILS\LOCALES\EN-US.PAK`)
     /// and normalising it would be inventing a convention Blizzard does not
     /// have. Under Wine the filesystem is case-insensitive by configuration,
@@ -753,7 +753,7 @@ mod tests {
         // Warcraft I Remastered, reduced: its download manifest tags *every*
         // entry `Debug` and *every* entry `Release`, and a WoW-shaped tag
         // expression names neither. Gating on an unnamed category then
-        // removed all 746 files and the plan came out empty — a complete
+        // removed all 746 files and the plan came out empty, a complete
         // install reported as nothing to do.
         //
         // The rule that fixes it is the one that keeps `HighRes` gated in the
@@ -784,7 +784,7 @@ mod tests {
     #[test]
     fn optional_content_is_excluded_unless_it_is_asked_for_by_name() {
         // The 2026-09 defect: `HighRes` is a category of its own, and a
-        // `.build.info` Tags column never mentions it — Battle.net only lists
+        // `.build.info` Tags column never mentions it, Battle.net only lists
         // the tags you opted into. Constraining nothing on that category let
         // every entry in it through, which on the Forever beta was a 37 GiB
         // texture pack the client neither had nor wanted.

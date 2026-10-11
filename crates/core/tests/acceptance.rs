@@ -41,7 +41,7 @@ fn scratch(name: &str) -> PathBuf {
 
 /// Agent's registry, seeded with records Lightforge does not own.
 ///
-/// The point is not that it looks real — it is that these records must come
+/// The point is not that it looks real. It is that these records must come
 /// back out untouched. Registering into a registry we cannot read, or one
 /// whose other products we quietly drop, is the failure mode that would cost
 /// someone their library.
@@ -83,7 +83,7 @@ fn http() -> Http {
 /// A download that is cut short, which is the common case: a launcher gets
 /// closed, a network drops, someone hits pause.
 ///
-/// What must hold afterwards is that the store is still a store — readable,
+/// What must hold afterwards is that the store is still a store, readable,
 /// and re-indexable without touching an archive. An interrupted run that
 /// leaves an unreadable store is the `NeedsRepair` this project already hit
 /// once.
@@ -130,7 +130,7 @@ async fn bounded_run_leaves_a_readable_store() {
 /// The whole chain, on a complete install: store, `.build.info`,
 /// `.product.db`, Agent's registry, and then removing it again.
 ///
-/// Slow — Classic Era is a few GiB — and the only test that proves the thing
+/// Slow, Classic Era is a few GiB, and the only test that proves the thing
 /// the user actually cares about, which is that Battle.net says `Play`.
 #[tokio::test]
 #[ignore = "downloads all of Classic Era from Blizzard's CDN"]
@@ -160,7 +160,7 @@ async fn a_complete_install_produces_every_artifact() {
     let stats = Storage::open(&root).expect("a readable store").stats();
     assert!(stats.files > 0);
 
-    // 2. `.build.info` — the completion marker, and what the resolver reads
+    // 2. `.build.info`: the completion marker, and what the resolver reads
     //    to decide between Install, Update and Play.
     let info = lightforge_core::buildinfo::BuildInfo::load(root.join(".build.info"))
         .expect("a complete install writes .build.info");

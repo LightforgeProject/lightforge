@@ -1,13 +1,13 @@
 //! Addon descriptions and changelogs, as blocks rather than markup.
 //!
 //! CurseForge publishes both as HTML fragments. The proxy reduces them to a
-//! short list of blocks before they reach us, so this module holds no parser —
+//! short list of blocks before they reach us, so this module holds no parser,
 //! the same division of labour as [`crate::news`], and for the same reason: a
 //! site changing its markup is a redeploy, not a release.
 //!
 //! What arrives is deliberately lossy. Bold, italics, tables and inline
 //! styling are already flattened to text upstream; what survives is the
-//! structure that carries meaning in a changelog — the heading, the bullet,
+//! structure that carries meaning in a changelog, the heading, the bullet,
 //! the link and the image.
 
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ pub struct Link {
     ///
     /// The proxy sends offsets rather than leaving us to search for `text`,
     /// because a search picks the wrong occurrence the moment one block links
-    /// the same words twice — "see here" and "here", which changelogs do
+    /// the same words twice, "see here" and "here", which changelogs do
     /// constantly. `start == end` means the proxy could not re-find the span
     /// and the link should be drawn as a reference after the text.
     #[serde(default)]

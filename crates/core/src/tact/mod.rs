@@ -1,4 +1,4 @@
-//! TACT/NGDP/Ribbit and CASC storage — **Milestone 4**.
+//! TACT/NGDP/Ribbit and CASC storage.
 //!
 //! This module is the boundary around `cascette-rs`. Its types stay inside
 //! here; the rest of `core` and both front-ends see Lightforge types only.
@@ -7,7 +7,7 @@
 //! 1. `casc-storage` 0.4.3 cannot write an index, so [`idx`] is ours. If that
 //!    changes upstream, the swap happens here and nowhere else.
 //! 2. `CascStorage::read` returns an empty `Vec` for every entry in a real
-//!    install — its BLTE streaming reader yields nothing where the one-shot
+//!    install, its BLTE streaming reader yields nothing where the one-shot
 //!    `blte::decompress_blte` returns correct data. Working around that in one
 //!    place beats discovering it in five.
 //!

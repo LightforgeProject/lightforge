@@ -18,11 +18,11 @@ const DSN: &str = "https://788f3511837f42abade303476cdeef11@bugs.k3nny.tech/1";
 
 /// How long to wait for the event to actually leave the machine. The dialog
 /// tells someone their report was sent, so that has to be true rather than
-/// hopeful — `capture` alone only queues it.
+/// hopeful, `capture` alone only queues it.
 const FLUSH: Duration = Duration::from_secs(15);
 
 /// Where a screenshot is uploaded, so the issue carries a link instead of a
-/// megabyte of base64 — GlitchTip drops envelope attachments, so this is the
+/// megabyte of base64, GlitchTip drops envelope attachments, so this is the
 /// only way the picture gets to be a picture. Our own host, the same one the
 /// artwork manifest comes from.
 ///
@@ -64,8 +64,8 @@ static SENDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 ///
 /// sentry's own transport is a `reqwest` of a different major version than
 /// the workspace's, which drags in a second HTTP client, `tower-http`, a
-/// platform certificate verifier and — through feature unification on the
-/// shared `rustls` — **a second crypto provider**, `aws-lc-sys`, built from C
+/// platform certificate verifier and, through feature unification on the
+/// shared `rustls`: **a second crypto provider**, `aws-lc-sys`, built from C
 /// for a client we already have. This is the whole of what that bought:
 /// serialize the envelope, post it with the auth header, say whether it
 /// worked.
@@ -75,7 +75,7 @@ static SENDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// truthfully with nothing queued.
 ///
 /// What it deliberately does not do: honour `x-sentry-rate-limits` or retry.
-/// Nothing here sends by itself — a report exists because somebody filled in
+/// Nothing here sends by itself, a report exists because somebody filled in
 /// a dialog and pressed Send, and the dialog already refuses the same report
 /// twice in five minutes.
 struct Ours {
@@ -147,7 +147,7 @@ impl sentry::TransportFactory for OursFactory {
 fn client(http: Option<Http>, runtime: tokio::runtime::Handle) -> Option<Arc<sentry::Client>> {
     CLIENT
         .get_or_init(|| {
-            // The launcher's client when there is one — it is the same stack
+            // The launcher's client when there is one. It is the same stack
             // with the same roots either way, this only shares the pool.
             let http = http.or_else(|| Http::new().ok())?;
             // Assembled field by field rather than with a struct literal
@@ -176,7 +176,7 @@ fn client(http: Option<Http>, runtime: tokio::runtime::Handle) -> Option<Arc<sen
             // release carries one HTTP client and one crypto provider.
             options.transport = Some(Arc::new(OursFactory { http, runtime }));
 
-            // `apply_defaults` still, for the `contexts` integration — and
+            // `apply_defaults` still, for the `contexts` integration, and
             // because without it a client reports `is_enabled()` as false and
             // `flush` cheerfully returns true on an empty queue, which looks
             // exactly like a working client that cannot reach the network.
@@ -200,7 +200,7 @@ pub struct Report {
     /// An address, a Discord name, or nothing. The one piece of personal data
     /// in either report, and it is here because they typed it.
     pub contact: String,
-    /// Facts worth filtering issues by — product, Proton build, distro. Every
+    /// Facts worth filtering issues by, product, Proton build, distro. Every
     /// one of them is already in the bundle the card showed; they are repeated
     /// here only so GlitchTip can group and search on them.
     pub tags: Vec<(String, String)>,
@@ -213,7 +213,7 @@ pub struct Report {
 enum Picture {
     /// It was uploaded and this is where it lives.
     Link(String),
-    /// It could not be, so it rides inside the event as a data URI — a wall
+    /// It could not be, so it rides inside the event as a data URI, a wall
     /// of base64 on the issue page, and still better than losing it.
     Embedded(String),
 }
@@ -259,7 +259,7 @@ pub async fn send(report: Report, http: Option<Http>) -> bool {
     let runtime = tokio::runtime::Handle::current();
 
     // Before the blocking half, because it is the one part that is actually
-    // asynchronous — and because what it answers decides what the event says.
+    // asynchronous, and because what it answers decides what the event says.
     let picture = match &report.shot {
         Some(shot) => Some((shot.name.clone(), upload(shot, http.as_ref()).await)),
         None => None,
@@ -309,7 +309,7 @@ pub async fn send(report: Report, http: Option<Http>) -> bool {
         if !contact.is_empty() {
             // An address goes in `email` and anything else in `username`, so
             // GlitchTip shows it in the place a reply would be looked for.
-            // The test is deliberately crude — it only decides which of two
+            // The test is deliberately crude, it only decides which of two
             // fields the same string lands in.
             let mut user = sentry::protocol::User::default();
             match contact.contains('@') {
@@ -398,7 +398,7 @@ mod tests {
 
     /// Multi-threaded, like the one the launcher actually runs under: a
     /// current-thread runtime is driven only while something calls into it,
-    /// and `Ours` hands it work from a *different* thread and waits — which
+    /// and `Ours` hands it work from a *different* thread and waits, which
     /// is a deadlock, not a test.
     fn runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("runtime")
