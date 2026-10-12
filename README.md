@@ -146,7 +146,7 @@ cd packaging/aur/lightforge-bin && makepkg -si
 Or build it yourself, which takes one command and a couple of minutes:
 
 ```bash
-git clone https://git.tuxcore.pro/kenny/lightforge.git
+git clone https://github.com/LightforgeProject/lightforge.git
 cd lightforge
 cargo build --release --locked
 
