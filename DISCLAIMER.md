@@ -71,9 +71,16 @@ to lose.
 
 Short version: **nothing about you, unless you press Send on a bug report.**
 
-There's no analytics, no usage tracking, no crash pings, no phone-home on
-startup. There isn't even a panic handler that could send something without
-you — reports exist only because somebody filled in a form.
+There's no analytics, no usage tracking and no crash pings. There isn't even a
+panic handler that could send something without you — reports exist only
+because somebody filled in a form.
+
+Two requests do go out when the launcher starts, and neither says anything
+about you beyond the IP address any request reveals: it fetches the game
+artwork it shows you, and it asks GitHub whether a newer Lightforge has been
+released. The second one is a public release listing, nothing is downloaded or
+installed from it, and Settings › General turns it off. Both are in the table
+below.
 
 The longer version, because "we respect your privacy" is what everyone says
 and a list is more useful:
@@ -85,6 +92,7 @@ and a list is more useful:
 | `api.mmoui.com`, `cdn.wowinterface.com`, `api.tukui.org`, `api.github.com`, `edge.forgecdn.net` | installing or updating addons | your IP address, by those providers |
 | `wow.zamimg.com` | news headlines with pictures | your IP address, by Wowhead's CDN |
 | `api.github.com` | checking for new Proton-GE builds | a public release listing |
+| `api.github.com` | once at startup, checking whether a newer Lightforge was released | a public release listing |
 | `bugs.k3nny.tech` | **only when you press Send** | exactly the report shown to you first |
 
 About that last row, since it's the only one that carries anything personal:

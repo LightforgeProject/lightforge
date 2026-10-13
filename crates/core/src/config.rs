@@ -165,6 +165,17 @@ pub struct Config {
     /// notes for what they just updated to.
     #[serde(default)]
     pub patch_notes_seen: Option<String>,
+    /// Whether to ask GitHub, once per start, if a newer Lightforge exists.
+    ///
+    /// On by default and listed in `DISCLAIMER.md`, which is the file that
+    /// says exactly what this program contacts. Nothing is ever installed:
+    /// the answer is a sentence and a link to the releases page.
+    #[serde(default = "yes")]
+    pub check_for_updates: bool,
+    /// The newest version already mentioned, so the notice opens once per
+    /// release rather than on every start.
+    #[serde(default)]
+    pub update_seen: Option<String>,
     /// Every product Lightforge manages, official and custom alike.
     pub products: Vec<Product>,
 }
@@ -224,6 +235,8 @@ impl Default for Config {
             news_on_play: false,
             patch_notes_muted: false,
             patch_notes_seen: None,
+            check_for_updates: true,
+            update_seen: None,
             products: Vec::new(),
         }
     }

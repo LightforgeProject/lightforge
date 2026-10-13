@@ -434,6 +434,16 @@ enum Message {
     /// The start-up artwork fetch finished, with the number of products whose
     /// art is now cached.
     SplashDone(usize),
+    /// GitHub's answer about newer releases, `None` for every reason there is
+    /// not to say anything.
+    UpdateChecked(Option<lightforge_core::update::Available>),
+    /// Close the update notice, remembering the version it named.
+    DismissUpdate,
+    /// Open the releases page in a browser.
+    OpenReleases,
+    /// Turn the start-up check for a new Lightforge on or off, from Settings.
+    /// Distinct from `CheckForUpdates`, which asks Blizzard about the game.
+    CheckLauncherUpdates(bool),
     /// Put the splash away and show the launcher. Separate from `SplashDone`
     /// only so the floor can be waited out between the two.
     FinishSplash,
@@ -1475,6 +1485,9 @@ struct Lightforge {
     install_dialog: Option<InstallDialog>,
     uninstall_dialog: Option<UninstallDialog>,
     cancel_dialog: Option<CancelDialog>,
+    /// A newer Lightforge on GitHub, found at start-up. Shown once per
+    /// release and never installed; see `core::update`.
+    update_notice: Option<lightforge_core::update::Available>,
     /// A cancelled transfer whose files go once the run has wound down.
     ///
     /// Deferred rather than done on the click: the downloader may still have
@@ -1712,6 +1725,7 @@ impl Lightforge {
             install_dialog: None,
             uninstall_dialog: None,
             cancel_dialog: None,
+            update_notice: None,
             delete_after_cancel: None,
             report_dialog: None,
             system: None,
@@ -1856,6 +1870,13 @@ impl Lightforge {
                     codes,
                 ),
                 Message::SplashDone,
+            ),
+            // Beside the artwork rather than before it: this is the one moment
+            // a start is already waiting on the network, and nothing on screen
+            // depends on the answer, so it never holds the splash open.
+            Task::perform(
+                tasks::check_for_update(self.http.clone(), self.config.check_for_updates),
+                Message::UpdateChecked,
             ),
         ])
     }
@@ -3049,6 +3070,44 @@ impl Lightforge {
                     self.config.patch_notes_muted = notes.mute;
                     self.save_config();
                 }
+                Task::none()
+            }
+
+            Message::UpdateChecked(found) => {
+                let Some(available) = found else { return Task::none() };
+                // Once per release. Someone who has read "beta.3 is out" and
+                // decided to stay on beta.2 should not be told again on every
+                // start until they give in.
+                if self.config.update_seen.as_deref() == Some(available.latest.as_str()) {
+                    return Task::none();
+                }
+                self.update_notice = Some(available);
+                Task::none()
+            }
+
+            Message::DismissUpdate => {
+                if let Some(available) = self.update_notice.take() {
+                    self.config.update_seen = Some(available.latest);
+                    self.save_config();
+                }
+                Task::none()
+            }
+
+            Message::OpenReleases => {
+                let url = self
+                    .update_notice
+                    .as_ref()
+                    .map(|a| a.url.clone())
+                    .unwrap_or_else(|| lightforge_core::update::RELEASES_PAGE.to_owned());
+                if let Err(e) = open::that_detached(&url) {
+                    self.error = Some(format!("{url}: {e}"));
+                }
+                self.update(Message::DismissUpdate)
+            }
+
+            Message::CheckLauncherUpdates(on) => {
+                self.config.check_for_updates = on;
+                self.save_config();
                 Task::none()
             }
 
@@ -5770,6 +5829,7 @@ impl Lightforge {
             &self.addon_detail,
             &self.report_dialog,
             &self.patch_notes,
+            &self.update_notice,
         ) {
             (Some(dialog), ..) => Some(self.install_card(dialog)),
             (_, Some(dialog), ..) => Some(self.uninstall_card(dialog)),
@@ -5777,10 +5837,13 @@ impl Lightforge {
             (_, _, _, Some(dialog), ..) => Some(self.downgrade_card(dialog)),
             (_, _, _, _, Some(picker), ..) => Some(self.version_card(picker)),
             (_, _, _, _, _, Some(detail), ..) => Some(self.detail_card(detail)),
-            (_, _, _, _, _, _, Some(dialog), _) => Some(self.report_card(dialog)),
+            (_, _, _, _, _, _, Some(dialog), ..) => Some(self.report_card(dialog)),
             // Last, so a dialog someone opened themselves is never buried
-            // under the one the app opened for them.
-            (.., Some(notes)) => Some(self.patch_notes_card(notes)),
+            // under the one the app opened for them. The notes come before
+            // the update notice: they are about the build that is running,
+            // which is the one the user can do something with right now.
+            (.., Some(notes), _) => Some(self.patch_notes_card(notes)),
+            (.., Some(available)) => Some(self.update_card(available)),
             _ => None,
         };
         let screen = match card {
@@ -10149,6 +10212,18 @@ impl Lightforge {
             "Once per version, and only after an update. The notes are always on the \
              Lightforge Updates page whether or not this is on.",
         ).map(Element::from))
+        .push(toggle(
+            self.config.check_for_updates,
+            "Tell me when a new Lightforge is released",
+            Message::CheckLauncherUpdates,
+        ))
+        .extend(self.hint(
+            "Asks GitHub once when the launcher starts, and says so if there is a newer \
+             release than the one you are running. Nothing is downloaded or installed: \
+             your package manager owns the program, and the notice is a link to the \
+             releases page. DISCLAIMER.md lists this along with everything else \
+             Lightforge contacts.",
+        ).map(Element::from))
         .spacing(theme::SM)
         .into()
     }
@@ -10887,6 +10962,55 @@ impl Lightforge {
                 .spacing(theme::LG),
         )
         .width(Length::Fixed(560.0))
+        .padding(theme::LG)
+        .style(theme::dialog)
+        .into()
+    }
+
+    /// A newer Lightforge exists. Says so, links to it, installs nothing.
+    ///
+    /// Deliberately small and deliberately passive: the binary belongs to
+    /// whatever installed it, a distribution package most of the time, and a
+    /// launcher that replaced itself behind one would be the wrong kind of
+    /// helpful. The releases page is where the decision belongs.
+    fn update_card<'a>(
+        &'a self,
+        available: &'a lightforge_core::update::Available,
+    ) -> Element<'a, Message> {
+        let body = column![
+            text(format!("Lightforge {} is available.", available.latest)).size(theme::BODY),
+            muted(
+                format!(
+                    "You are running {}. Nothing is installed automatically; \
+                     the releases page has the downloads and the notes.",
+                    available.current
+                ),
+                theme::LABEL,
+            ),
+        ]
+        .spacing(theme::SM)
+        .width(Length::Fixed(420.0));
+
+        let choice = |label: &'static str| {
+            button(text(label).size(theme::LABEL).width(Length::Fill).center())
+                .width(Length::Fixed(150.0))
+                .padding([theme::SM, theme::MD])
+        };
+        let actions = row![
+            Space::new().width(Length::Fill),
+            choice("Not now").style(theme::outlined).on_press(Message::DismissUpdate),
+            choice("See the release")
+                .style(theme::filled(theme::ACCENT))
+                .on_press(Message::OpenReleases),
+        ]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center);
+
+        container(
+            column![section("Update available".to_owned(), body.into()), actions]
+                .spacing(theme::LG),
+        )
+        .width(Length::Fixed(420.0))
         .padding(theme::LG)
         .style(theme::dialog)
         .into()

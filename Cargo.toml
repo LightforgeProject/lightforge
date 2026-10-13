@@ -57,6 +57,11 @@ tact-parser = "0.4"
 tar = "0.4"
 tempfile = "3"
 tokio = { version = "1", default-features = false }
+# Release ordering for the update check. Already in the lock as a build
+# dependency of `sentry-contexts`, pulls nothing of its own, and knows the
+# prerelease precedence rules a string compare gets wrong: `beta.10` is newer
+# than `beta.2`, and `1.0.0` is newer than both.
+semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

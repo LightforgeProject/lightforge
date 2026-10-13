@@ -35,6 +35,7 @@ pub mod storage;
 pub mod tact;
 pub mod transfers;
 pub mod tweaks;
+pub mod update;
 
 pub use error::{CoreError, Result};
 pub use paths::Layout;

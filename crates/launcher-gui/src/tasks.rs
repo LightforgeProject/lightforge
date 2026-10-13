@@ -322,6 +322,38 @@ pub async fn after(delay: std::time::Duration) {
 /// A start must not be hostage to a network that never answers. Whatever
 /// landed inside the budget stays cached; the rest is fetched on demand, which
 /// is what every start did before the splash existed.
+/// Ask GitHub whether a newer Lightforge exists.
+///
+/// Runs beside the splash's artwork fetch, which is where the launcher is
+/// already waiting on the network, and answers `None` for every reason there
+/// is not to interrupt someone: the check is switched off, there is no
+/// connection, GitHub is unhappy, the list does not parse, or this is already
+/// the newest build. A failure here is not worth a word on screen; the user
+/// asked to start a launcher, not to audit a release feed.
+pub async fn check_for_update(
+    http: Option<Http>,
+    enabled: bool,
+) -> Option<lightforge_core::update::Available> {
+    use lightforge_core::net::ETagCache;
+    use lightforge_core::update;
+
+    if !enabled {
+        return None;
+    }
+    let http = http?;
+    let dirs = AppDirs::discover().ok()?;
+    // Shares GitHub's 60-per-hour unauthenticated budget with the Proton-GE
+    // check, so the ETag is what keeps a start from costing two of it.
+    let cache = ETagCache::new(dirs.asset_cache_dir().join("lightforge-releases.json"));
+    let releases = update::fetch(&http, &cache).await.ok()?;
+    let found = update::newer_than(env!("CARGO_PKG_VERSION"), &releases);
+    crate::trace::mark(match &found {
+        Some(available) => format!("update: {} is out", available.latest),
+        None => "update: this is the newest build".to_owned(),
+    });
+    found
+}
+
 pub async fn prefetch_within(
     budget: std::time::Duration,
     http: Option<Http>,
