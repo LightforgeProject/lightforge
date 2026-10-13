@@ -447,6 +447,11 @@ enum Message {
     ResumeDownload(ProductCode),
     /// Drop a transfer from the queue entirely.
     CancelDownload(ProductCode),
+    /// Open the confirmation for giving a transfer up.
+    AskCancelDownload(ProductCode),
+    CancelDownloadDismiss,
+    /// Give the transfer up. `delete` only ever comes from a first install.
+    CancelDownloadConfirm { delete: bool },
     /// A tile in the product bar was clicked.
     LineSelected(ProductLine),
     /// A branch was picked for the selected line. Adds the product first when
@@ -836,6 +841,30 @@ struct UninstallDialog {
     plan: Option<Result<tasks::UninstallPreview, String>>,
     /// Deleting: the buttons are held until it answers.
     working: bool,
+}
+
+/// The confirmation before a download is given up.
+///
+/// Two different questions wearing one dialog. Giving up a *first install*
+/// leaves a partial store nothing can read and nothing names, so it offers to
+/// delete it and says how much that is. Giving up an *update* must not delete
+/// anything: the game on disk is playable right now, and what has come down is
+/// reused by the next attempt rather than fetched twice.
+#[derive(Debug, Clone)]
+struct CancelDialog {
+    code: ProductCode,
+    label: String,
+    /// The version already installed, when this is an update. `None` makes it
+    /// a first install, which is the only case where files are removed.
+    installed: Option<String>,
+    /// Other products sharing this install's game data, by name.
+    ///
+    /// A WoW install holds one store for every flavour in it, and a product's
+    /// share of it cannot be picked back out while the others are reading it.
+    /// So a cancelled first install frees the drive only when it was the only
+    /// thing in there, and the dialog has to say which case it is in rather
+    /// than promise a deletion that will not happen.
+    shared_with: Vec<String>,
 }
 
 /// The confirmation before a launch that would open the shared prefix with an
@@ -1451,6 +1480,14 @@ struct Lightforge {
     location_input: String,
     install_dialog: Option<InstallDialog>,
     uninstall_dialog: Option<UninstallDialog>,
+    cancel_dialog: Option<CancelDialog>,
+    /// A cancelled transfer whose files go once the run has wound down.
+    ///
+    /// Deferred rather than done on the click: the downloader may still have
+    /// the store open, and deleting a store out from under its own writer is
+    /// not something to race. The `Downloaded` message is the run saying it
+    /// has stopped, which is when this fires.
+    delete_after_cancel: Option<ProductCode>,
     report_dialog: Option<ReportDialog>,
     /// Filled in once, shortly after startup. `None` until then, and a report
     /// sent in that window simply says so rather than blocking on it.
@@ -1680,6 +1717,8 @@ impl Lightforge {
             location_input: String::new(),
             install_dialog: None,
             uninstall_dialog: None,
+            cancel_dialog: None,
+            delete_after_cancel: None,
             report_dialog: None,
             system: None,
             history: std::collections::VecDeque::new(),
@@ -2403,6 +2442,33 @@ impl Lightforge {
         }
     }
 
+    /// Stop a transfer and take it out of the queue, keeping what it reached.
+    ///
+    /// The bytes stay in the store either way: this is the half of giving up
+    /// that is always safe, and deleting them is a separate decision the
+    /// dialog makes.
+    fn drop_transfer(&mut self, code: &ProductCode) {
+        self.pause(code);
+        self.queue.retain(|d| &d.code != code);
+        self.downloads.finished(code);
+        if self.queue.is_empty() {
+            self.manager_open = false;
+        }
+    }
+
+    /// Delete what a given-up first install left behind.
+    ///
+    /// The same plan an uninstall makes, because it is the same question: what
+    /// on disk belongs to this product and nothing else. A partial install has
+    /// no `.build.info` row and usually no flavour directory, so in practice
+    /// this is the store, and only when no other product is reading it.
+    fn remove_cancelled(&mut self, code: ProductCode) -> Task<Message> {
+        Task::perform(
+            tasks::uninstall(self.http.clone(), self.layout.clone(), code.clone()),
+            move |result| Message::Uninstalled(code.clone(), result),
+        )
+    }
+
     /// Every message, with the status line watched on the way out.
     ///
     /// Lightforge only traces to stdout, so the status line is the closest
@@ -2678,6 +2744,13 @@ impl Lightforge {
                 }
                 if let Some(id) = self.closing.take() {
                     return iced::window::close(id);
+                }
+                // The run this was waiting on has stopped, so the store is
+                // closed and its files can go. Before everything below, which
+                // is all about a queue entry that no longer exists.
+                if self.delete_after_cancel.as_ref() == Some(&code) {
+                    self.delete_after_cancel = None;
+                    return Task::batch([self.pump(), self.remove_cancelled(code)]);
                 }
 
                 // Status and errors describe the selected product. A transfer
@@ -3036,13 +3109,85 @@ impl Lightforge {
             }
 
             Message::CancelDownload(code) => {
-                self.pause(&code);
-                self.queue.retain(|d| d.code != code);
-                self.downloads.finished(&code);
-                if self.queue.is_empty() {
-                    self.manager_open = false;
-                }
+                self.drop_transfer(&code);
                 self.pump()
+            }
+
+            Message::AskCancelDownload(code) => {
+                self.gear_open = false;
+                if !self.queue.iter().any(|d| d.code == code) {
+                    return Task::none();
+                }
+                let label = self
+                    .queue
+                    .iter()
+                    .find(|d| d.code == code)
+                    .map(|d| d.label.clone())
+                    .unwrap_or_else(|| code.as_str().to_owned());
+                // What is on disk for *this* product, which is the thing that
+                // decides whether giving up may delete anything. Read from the
+                // panel only when the panel is showing this product; otherwise
+                // the disk is asked directly.
+                let installed = match code == self.selected.code {
+                    true => self.local.version.clone(),
+                    false => state::Local::inspect(&self.layout, &code).version,
+                };
+                // One small file, read here rather than walked asynchronously:
+                // `.build.info` is the list of products in this install, and
+                // its rows are what decide whether anything can be removed.
+                let shared_with = match installed.is_some() {
+                    true => Vec::new(),
+                    false => lightforge_core::buildinfo::BuildInfo::load(
+                        self.layout.build_info(&code),
+                    )
+                    .map(|info| {
+                        info.products()
+                            .filter(|other| other != &code)
+                            .map(|other| {
+                                self.catalog
+                                    .get(&other)
+                                    .map(|e| e.label.clone())
+                                    .unwrap_or_else(|| other.short_name().to_owned())
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                };
+                self.cancel_dialog =
+                    Some(CancelDialog { code, label, installed, shared_with });
+                Task::none()
+            }
+
+            Message::CancelDownloadDismiss => {
+                self.cancel_dialog = None;
+                Task::none()
+            }
+
+            Message::CancelDownloadConfirm { delete } => {
+                let Some(dialog) = self.cancel_dialog.take() else {
+                    return Task::none();
+                };
+                let code = dialog.code;
+                // Was it actually writing? A queued or paused entry has no run
+                // to wind down, so its files can go at once; a running one has
+                // to stop first, see `delete_after_cancel`.
+                let was_running = self
+                    .queue
+                    .iter()
+                    .any(|d| d.code == code && matches!(d.stage, Stage::Running { .. }));
+                self.drop_transfer(&code);
+                self.status = match delete {
+                    true => "cancelled — removing the files…".to_owned(),
+                    false => "cancelled".to_owned(),
+                };
+                if !delete {
+                    return self.pump();
+                }
+                if was_running {
+                    self.delete_after_cancel = Some(code);
+                    return Task::none();
+                }
+                self.remove_cancelled(code)
             }
 
             Message::PreflightDone(what, result) => {
@@ -4208,14 +4353,30 @@ impl Lightforge {
             }
 
             Message::Uninstalled(code, result) => {
-                let label = self.uninstall_dialog.take().map(|d| d.label).unwrap_or_default();
+                // No dialog means this came from a cancelled download rather
+                // than from Uninstall, and it is worth saying which: the user
+                // asked to give up a download, not to remove a game.
+                let asked = self.uninstall_dialog.take();
+                let label = asked
+                    .as_ref()
+                    .map(|d| d.label.clone())
+                    .or_else(|| self.catalog.get(&code).map(|e| e.label.clone()))
+                    .unwrap_or_else(|| code.as_str().to_owned());
                 match result {
                     Ok(freed) => {
                         // A paused or queued download of it would only put
                         // the files straight back.
                         self.queue.retain(|d| d.code != code);
                         if code == self.selected.code {
-                            self.status = format!("uninstalled {label} — freed {}", size_of(freed));
+                            self.status = match asked.is_some() {
+                                true => {
+                                    format!("uninstalled {label} — freed {}", size_of(freed))
+                                }
+                                false => format!(
+                                    "cancelled {label} — freed {}",
+                                    size_of(freed)
+                                ),
+                            };
                         }
                         Task::batch([
                             Task::perform(
@@ -5609,6 +5770,7 @@ impl Lightforge {
         let card = match (
             &self.install_dialog,
             &self.uninstall_dialog,
+            &self.cancel_dialog,
             &self.downgrade_dialog,
             &self.version_picker,
             &self.addon_detail,
@@ -5617,10 +5779,11 @@ impl Lightforge {
         ) {
             (Some(dialog), ..) => Some(self.install_card(dialog)),
             (_, Some(dialog), ..) => Some(self.uninstall_card(dialog)),
-            (_, _, Some(dialog), ..) => Some(self.downgrade_card(dialog)),
-            (_, _, _, Some(picker), ..) => Some(self.version_card(picker)),
-            (_, _, _, _, Some(detail), ..) => Some(self.detail_card(detail)),
-            (_, _, _, _, _, Some(dialog), _) => Some(self.report_card(dialog)),
+            (_, _, Some(dialog), ..) => Some(self.cancel_card(dialog)),
+            (_, _, _, Some(dialog), ..) => Some(self.downgrade_card(dialog)),
+            (_, _, _, _, Some(picker), ..) => Some(self.version_card(picker)),
+            (_, _, _, _, _, Some(detail), ..) => Some(self.detail_card(detail)),
+            (_, _, _, _, _, _, Some(dialog), _) => Some(self.report_card(dialog)),
             // Last, so a dialog someone opened themselves is never buried
             // under the one the app opened for them.
             (.., Some(notes)) => Some(self.patch_notes_card(notes)),
@@ -8084,6 +8247,10 @@ impl Lightforge {
             && !self.scanning
             && self.deep_cancel.is_none()
             && !downloading;
+        // Anything in the queue for this product can be given up, running,
+        // paused or still waiting its turn. Pause is on the button itself;
+        // this is the one that ends it.
+        let queued = self.queue.iter().any(|d| d.code == self.selected.code);
         let menu = container(
             column![
                 item("Check for Updates", Message::CheckForUpdates, !self.busy),
@@ -8101,6 +8268,13 @@ impl Lightforge {
                 self.owed_repair
                     .is_some()
                     .then(|| item("Repair Damaged Files", Message::RepairDamaged, !self.busy)).map(Element::from))
+            .extend(queued.then(|| {
+                item(
+                    "Cancel Download",
+                    Message::AskCancelDownload(self.selected.code.clone()),
+                    true,
+                )
+            }).map(Element::from))
             .spacing(theme::XS),
         )
         .padding(theme::XS)
@@ -10713,6 +10887,82 @@ impl Lightforge {
         .into()
     }
 
+    /// The confirmation for giving a download up.
+    ///
+    /// Two shapes, because an update and a first install are not the same
+    /// question. An update's files are never removed: the game on disk plays
+    /// right now, and what has already come down is a head start on the next
+    /// attempt rather than waste.
+    ///
+    /// One line of consequence under the title and two buttons, deliberately.
+    /// The earlier version offered a third way out, cancel but keep the files,
+    /// and stated the figure it would free; both made the reader do work to
+    /// answer a question they had already decided.
+    fn cancel_card<'a>(&'a self, dialog: &'a CancelDialog) -> Element<'a, Message> {
+        let updating = dialog.installed.is_some();
+        let (title, hint, keep, give_up) = match &dialog.installed {
+            Some(version) => (
+                format!("Cancel the update to {}?", dialog.label),
+                format!(
+                    "{} stays on {version}, and what has already downloaded is \
+                     kept for the next update.",
+                    dialog.label
+                ),
+                "Keep downloading",
+                "Cancel update",
+            ),
+            None if dialog.shared_with.is_empty() => (
+                format!("Cancel installing {}?", dialog.label),
+                "Cancelling the download will remove all downloaded files on \
+                 your drive."
+                    .to_owned(),
+                "Keep installing",
+                "Cancel install",
+            ),
+            // The store is shared, so nothing can be handed back to the drive
+            // without taking it from the games still reading it.
+            None => (
+                format!("Cancel installing {}?", dialog.label),
+                format!(
+                    "The download stops. What has come down so far is held in \
+                     the game data {} share, so it stays on your drive and is \
+                     reused if you install {} later.",
+                    join_names(&dialog.shared_with),
+                    dialog.label
+                ),
+                "Keep installing",
+                "Cancel install",
+            ),
+        };
+
+        let body = column![muted(hint, theme::BODY)]
+            .spacing(theme::SM)
+            .width(Length::Fixed(520.0));
+
+        // One shape for both, so neither reads as the safe one by being
+        // bigger. Only the fill says which is which.
+        let choice = |label: &'static str| {
+            button(text(label).size(theme::LABEL).width(Length::Fill).center())
+                .width(Length::Fixed(170.0))
+                .padding([theme::SM, theme::MD])
+        };
+        let actions = row![
+            Space::new().width(Length::Fill),
+            choice(keep).style(theme::outlined).on_press(Message::CancelDownloadDismiss),
+            choice(give_up)
+                .style(theme::filled(theme::ERROR))
+                .on_press(Message::CancelDownloadConfirm { delete: !updating }),
+        ]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center);
+
+        container(column![section(title, body.into()), actions].spacing(theme::LG))
+            .width(Length::Fixed(520.0))
+            .padding(theme::LG)
+            .style(theme::dialog)
+            .into()
+    }
+
     fn uninstall_card<'a>(&'a self, dialog: &'a UninstallDialog) -> Element<'a, Message> {
         let mut body = column![].spacing(theme::MD);
         let mut ready = false;
@@ -11359,6 +11609,15 @@ fn optional_label(tag: &str) -> String {
 }
 
 /// Secondary text at a given size.
+/// "Retail", "Retail and Classic Era", "Retail, Classic Era and Anniversary".
+fn join_names(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 fn muted<'a>(content: String, size: f32) -> iced::widget::Text<'a> {
     text(content).size(size).color(theme::MUTED)
 }
@@ -12703,6 +12962,100 @@ mod tests {
         assert!(app.winding_down.is_none());
         assert!(matches!(app.queue[0].stage, Stage::Running { .. }), "the resume must start");
         assert_eq!(app.status, "downloading…");
+    }
+
+    #[test]
+    fn shared_product_names_read_as_a_sentence() {
+        assert_eq!(join_names(&[]), "");
+        assert_eq!(join_names(&["Retail".to_owned()]), "Retail");
+        assert_eq!(
+            join_names(&["Retail".to_owned(), "Classic Era".to_owned()]),
+            "Retail and Classic Era"
+        );
+        assert_eq!(
+            join_names(&[
+                "Retail".to_owned(),
+                "Classic Era".to_owned(),
+                "Anniversary".to_owned()
+            ]),
+            "Retail, Classic Era and Anniversary"
+        );
+    }
+
+    /// A queued or paused entry has no run to wind down, so its files can go
+    /// at once. A running one must not: the downloader still has the store
+    /// open, and deleting it under its own writer is the thing this defers.
+    #[test]
+    fn deleting_a_cancelled_install_waits_for_the_run_to_stop() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+        let code = app.selected.code.clone();
+        app.queue.push(Download {
+            code: code.clone(),
+            label: "Retail".to_owned(),
+            stage: Stage::Queued,
+            sample: TransferState::default(),
+            rate: Rate::default(),
+            job: Job::default(),
+        });
+
+        app.cancel_dialog = Some(CancelDialog {
+            code: code.clone(),
+            label: "Retail".to_owned(),
+            installed: None,
+            shared_with: Vec::new(),
+        });
+        let _ = app.update(Message::CancelDownloadConfirm { delete: true });
+
+        assert!(app.queue.is_empty(), "the entry goes either way");
+        assert!(
+            app.delete_after_cancel.is_none(),
+            "a queued entry had no run open, so nothing is deferred"
+        );
+    }
+
+    #[test]
+    fn cancelling_an_update_never_deletes_anything() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+        let code = app.selected.code.clone();
+        app.queue.push(Download {
+            code: code.clone(),
+            label: "Retail".to_owned(),
+            stage: Stage::Queued,
+            sample: TransferState::default(),
+            rate: Rate::default(),
+            job: Job::default(),
+        });
+        app.cancel_dialog = Some(CancelDialog {
+            code: code.clone(),
+            label: "Retail".to_owned(),
+            // Installed, so this is an update and the game plays right now.
+            installed: Some("1.15.9.70003".to_owned()),
+            shared_with: Vec::new(),
+        });
+
+        let _ = app.update(Message::CancelDownloadConfirm { delete: false });
+
+        assert!(app.queue.is_empty());
+        assert!(app.delete_after_cancel.is_none(), "an update's files are never removed");
+        assert_eq!(app.status, "cancelled");
+    }
+
+    /// Asking about a product with nothing in the queue must not open a dialog
+    /// offering to delete its install.
+    #[test]
+    fn there_is_nothing_to_cancel_when_nothing_is_downloading() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+        let code = app.selected.code.clone();
+
+        let _ = app.update(Message::AskCancelDownload(code));
+
+        assert!(app.cancel_dialog.is_none());
     }
 
     #[test]
