@@ -93,6 +93,15 @@ impl Build {
             },
         })
     }
+
+    /// A build named by the version service rather than by `.build.info`.
+    ///
+    /// What a cancelled download was fetching. There is no installed row to
+    /// read it from, and the data it wrote into the shared store is there all
+    /// the same, so this is the only way to say which entries were its.
+    pub fn remote(product: ProductCode, build_key: String, cdn: Cdn) -> Self {
+        Self { product, build_key, cdn }
+    }
 }
 
 /// Work out what removing `departing`'s data from the store under `install`

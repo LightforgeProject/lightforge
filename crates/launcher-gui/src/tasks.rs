@@ -1419,6 +1419,84 @@ pub struct UninstallPreview {
     pub reclaim: Option<Result<lightforge_core::tact::reclaim::Reclaim, String>>,
 }
 
+/// Remove what a cancelled download wrote, and nothing else.
+///
+/// Two shapes, decided by what else is in the install:
+///
+/// * nothing else, so the whole store was this download's and it goes with
+///   the flavour directory, which is what an uninstall does;
+/// * other products share the store, so the only honest answer is to drop the
+///   entries this build wants that no remaining product wants. Everything a
+///   cancelled run stored is in that set by construction: the plan skips what
+///   the store already holds, so a byte it fetched is a byte no installed
+///   product had.
+///
+/// The build is named by the version service rather than by `.build.info`,
+/// since a cancelled install never got a row there. That is the one thing
+/// this needs the network for, and without it the files have to stay.
+pub async fn discard_download(
+    http: Option<Http>,
+    layout: Layout,
+    code: ProductCode,
+    region: Region,
+) -> Result<u64, String> {
+    use lightforge_core::tact::{reclaim, uninstall, version};
+
+    // The same gate a repair and an uninstall go through.
+    let alive = layout.clone();
+    let busy = tokio::task::spawn_blocking(move || lightforge_core::preflight::scan(&alive))
+        .await
+        .map_err(|e| chain(&e))?;
+    if let Some(process) = busy.first() {
+        return Err(format!("close {} first — the game files are in use", process.name));
+    }
+
+    let install = layout.wow_install(&code);
+    let plan = uninstall::plan(&install, &code).map_err(|e| chain(&e))?;
+    let windows_path = layout
+        .library(&code)
+        .map(|library| library.windows_wow_path())
+        .unwrap_or_else(|| lightforge_core::paths::WINDOWS_WOW_PATH.to_owned());
+
+    // Whatever belongs to this product on the filesystem: a partial flavour
+    // directory, and the store itself when nothing else is reading it.
+    let whole = plan.is_whole_install();
+    let removed = {
+        let (install, code) = (install.clone(), code.clone());
+        tokio::task::spawn_blocking(move || {
+            uninstall::execute(&install, &code, &plan, &windows_path)
+                .map(|removed| removed.bytes)
+                .map_err(|e| chain(&e))
+        })
+        .await
+        .map_err(|e| chain(&e))??
+    };
+    if whole {
+        return Ok(removed);
+    }
+
+    let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
+    let versions = version::versions(&http, region, code.as_str())
+        .await
+        .map_err(|e| chain(&e))?;
+    let remote = version::for_region(&versions, region, |v| &v.region)
+        .ok_or_else(|| "the version service lists no build for this region".to_owned())?;
+    let cdns = version::cdns(&http, region, code.as_str()).await.map_err(|e| chain(&e))?;
+    let cdn = version::for_region(&cdns, region, |c| &c.name)
+        .cloned()
+        .ok_or_else(|| "the version service lists no CDN for this region".to_owned())?;
+
+    let departing = reclaim::Build::remote(code, remote.build_config.clone(), cdn);
+    let reclaim = reclaim::plan(&http, &install, &departing).await.map_err(|e| chain(&e))?;
+    let freed = tokio::task::spawn_blocking(move || {
+        reclaim::execute(&install, &reclaim).map_err(|e| chain(&e))
+    })
+    .await
+    .map_err(|e| chain(&e))??;
+
+    Ok(removed + freed)
+}
+
 /// Plan the store reclaim for `code`, unless the whole store is going.
 async fn reclaim_plan(
     http: &Http,

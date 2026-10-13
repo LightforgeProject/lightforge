@@ -450,6 +450,8 @@ enum Message {
     /// Open the confirmation for giving a transfer up.
     AskCancelDownload(ProductCode),
     CancelDownloadDismiss,
+    /// What removing a cancelled download's files freed, or why it could not.
+    CancelCleaned(ProductCode, Result<u64, String>),
     /// Give the transfer up. `delete` only ever comes from a first install.
     CancelDownloadConfirm { delete: bool },
     /// A tile in the product bar was clicked.
@@ -857,14 +859,6 @@ struct CancelDialog {
     /// The version already installed, when this is an update. `None` makes it
     /// a first install, which is the only case where files are removed.
     installed: Option<String>,
-    /// Other products sharing this install's game data, by name.
-    ///
-    /// A WoW install holds one store for every flavour in it, and a product's
-    /// share of it cannot be picked back out while the others are reading it.
-    /// So a cancelled first install frees the drive only when it was the only
-    /// thing in there, and the dialog has to say which case it is in rather
-    /// than promise a deletion that will not happen.
-    shared_with: Vec<String>,
 }
 
 /// The confirmation before a launch that would open the shared prefix with an
@@ -2456,16 +2450,22 @@ impl Lightforge {
         }
     }
 
-    /// Delete what a given-up first install left behind.
+    /// Delete what a given-up first install wrote.
     ///
-    /// The same plan an uninstall makes, because it is the same question: what
-    /// on disk belongs to this product and nothing else. A partial install has
-    /// no `.build.info` row and usually no flavour directory, so in practice
-    /// this is the store, and only when no other product is reading it.
+    /// Not an uninstall: a WoW install holds one store for every flavour in
+    /// it, so dropping the folder is only right when this was the only thing
+    /// in there. Otherwise the entries this build wants and no remaining
+    /// product wants are the ones to go, which is what
+    /// [`tasks::discard_download`] works out.
     fn remove_cancelled(&mut self, code: ProductCode) -> Task<Message> {
         Task::perform(
-            tasks::uninstall(self.http.clone(), self.layout.clone(), code.clone()),
-            move |result| Message::Uninstalled(code.clone(), result),
+            tasks::discard_download(
+                self.http.clone(),
+                self.layout.clone(),
+                code.clone(),
+                self.config.region,
+            ),
+            move |result| Message::CancelCleaned(code.clone(), result),
         )
     }
 
@@ -3132,35 +3132,45 @@ impl Lightforge {
                     true => self.local.version.clone(),
                     false => state::Local::inspect(&self.layout, &code).version,
                 };
-                // One small file, read here rather than walked asynchronously:
-                // `.build.info` is the list of products in this install, and
-                // its rows are what decide whether anything can be removed.
-                let shared_with = match installed.is_some() {
-                    true => Vec::new(),
-                    false => lightforge_core::buildinfo::BuildInfo::load(
-                        self.layout.build_info(&code),
-                    )
-                    .map(|info| {
-                        info.products()
-                            .filter(|other| other != &code)
-                            .map(|other| {
-                                self.catalog
-                                    .get(&other)
-                                    .map(|e| e.label.clone())
-                                    .unwrap_or_else(|| other.short_name().to_owned())
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                };
-                self.cancel_dialog =
-                    Some(CancelDialog { code, label, installed, shared_with });
+                self.cancel_dialog = Some(CancelDialog { code, label, installed });
                 Task::none()
             }
 
             Message::CancelDownloadDismiss => {
                 self.cancel_dialog = None;
                 Task::none()
+            }
+
+            Message::CancelCleaned(code, result) => {
+                let label = self
+                    .catalog
+                    .get(&code)
+                    .map(|e| e.label.clone())
+                    .unwrap_or_else(|| code.short_name().to_owned());
+                match result {
+                    Ok(freed) => {
+                        if code == self.selected.code {
+                            self.status =
+                                format!("cancelled {label} — freed {}", size_of(freed));
+                        }
+                    }
+                    // The transfer is still cancelled; only the clean-up
+                    // failed, and saying so is better than a status line
+                    // claiming space came back.
+                    Err(e) => {
+                        self.error = Some(format!(
+                            "{label} was cancelled, but its files could not be \
+                             removed: {e}"
+                        ));
+                    }
+                }
+                Task::batch([
+                    Task::perform(
+                        tasks::installed_versions(self.layout.clone()),
+                        Message::InstalledVersions,
+                    ),
+                    self.reload_if_showing(&code),
+                ])
             }
 
             Message::CancelDownloadConfirm { delete } => {
@@ -4353,30 +4363,14 @@ impl Lightforge {
             }
 
             Message::Uninstalled(code, result) => {
-                // No dialog means this came from a cancelled download rather
-                // than from Uninstall, and it is worth saying which: the user
-                // asked to give up a download, not to remove a game.
-                let asked = self.uninstall_dialog.take();
-                let label = asked
-                    .as_ref()
-                    .map(|d| d.label.clone())
-                    .or_else(|| self.catalog.get(&code).map(|e| e.label.clone()))
-                    .unwrap_or_else(|| code.as_str().to_owned());
+                let label = self.uninstall_dialog.take().map(|d| d.label).unwrap_or_default();
                 match result {
                     Ok(freed) => {
                         // A paused or queued download of it would only put
                         // the files straight back.
                         self.queue.retain(|d| d.code != code);
                         if code == self.selected.code {
-                            self.status = match asked.is_some() {
-                                true => {
-                                    format!("uninstalled {label} — freed {}", size_of(freed))
-                                }
-                                false => format!(
-                                    "cancelled {label} — freed {}",
-                                    size_of(freed)
-                                ),
-                            };
+                            self.status = format!("uninstalled {label} — freed {}", size_of(freed));
                         }
                         Task::batch([
                             Task::perform(
@@ -10321,7 +10315,13 @@ impl Lightforge {
         let mut drives = column![].spacing(theme::SM);
         for (index, target) in dialog.targets.iter().enumerate() {
             let chosen = index == dialog.chosen;
-            let mut right = column![].spacing(2).align_x(Alignment::End);
+            // Fixed, and wide enough for the longest thing that goes in it.
+            // Left to shrink it was squeezed by the path beside it until
+            // "1.37 TiB free" came out as three stacked words.
+            let mut right = column![]
+                .spacing(2)
+                .width(Length::Fixed(110.0))
+                .align_x(Alignment::End);
             right = match target.disk {
                 Some(disk) => right.push(mono(format!("{} free", size_of(disk.free)))),
                 None => right.push(muted("—".to_owned(), theme::LABEL)),
@@ -10339,7 +10339,10 @@ impl Lightforge {
             ]
             .align_y(Alignment::Center)]
             .spacing(2);
-            left = left.push(muted(target.install.display().to_string(), theme::CAPTION));
+            // `~/Games/...` rather than `/home/<name>/Games/...`: the home
+            // prefix is the longest and least informative part of the path,
+            // and this row is where the width is tightest.
+            left = left.push(muted(home_relative(&target.install), theme::CAPTION));
             if let Some(reason) = target.state.reason(&target.label) {
                 left = left.push(text(reason).size(theme::CAPTION).color(theme::ERROR));
             }
@@ -10347,7 +10350,9 @@ impl Lightforge {
             let usable = target.state != library::State::Missing;
             drives = drives.push(
                 button(
-                    row![left, Space::new().width(Length::Fill), right]
+                    // The left column takes what the right one does not, so
+                    // the path is the only thing that ever wraps.
+                    row![left.width(Length::Fill), right]
                         .spacing(theme::MD)
                         .align_y(Alignment::Center),
                 )
@@ -10467,7 +10472,7 @@ impl Lightforge {
             ]
             .spacing(theme::LG),
         )
-        .width(Length::Fixed(560.0))
+        .width(Length::Fixed(640.0))
         .padding(theme::LG)
         .style(theme::dialog)
         .into()
@@ -10911,25 +10916,11 @@ impl Lightforge {
                 "Keep downloading",
                 "Cancel update",
             ),
-            None if dialog.shared_with.is_empty() => (
+            None => (
                 format!("Cancel installing {}?", dialog.label),
                 "Cancelling the download will remove all downloaded files on \
                  your drive."
                     .to_owned(),
-                "Keep installing",
-                "Cancel install",
-            ),
-            // The store is shared, so nothing can be handed back to the drive
-            // without taking it from the games still reading it.
-            None => (
-                format!("Cancel installing {}?", dialog.label),
-                format!(
-                    "The download stops. What has come down so far is held in \
-                     the game data {} share, so it stays on your drive and is \
-                     reused if you install {} later.",
-                    join_names(&dialog.shared_with),
-                    dialog.label
-                ),
                 "Keep installing",
                 "Cancel install",
             ),
@@ -11609,12 +11600,20 @@ fn optional_label(tag: &str) -> String {
 }
 
 /// Secondary text at a given size.
-/// "Retail", "Retail and Classic Era", "Retail, Classic Era and Anniversary".
-fn join_names(names: &[String]) -> String {
-    match names {
-        [] => String::new(),
-        [one] => one.clone(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+/// `~/Games/Blizzard` rather than `/home/ann/Games/Blizzard`.
+///
+/// Only the home prefix, and only when it is one: a library on
+/// `/run/media/ann/ssd` is left exactly as it is, because every part of that
+/// path tells the user which drive they are looking at. Unlike
+/// `core::debug::scrub`, the account name is not hidden; this is the user's
+/// own screen and their own path.
+fn home_relative(path: &Path) -> String {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return path.display().to_string();
+    };
+    match path.strip_prefix(&home) {
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => path.display().to_string(),
     }
 }
 
@@ -12965,21 +12964,15 @@ mod tests {
     }
 
     #[test]
-    fn shared_product_names_read_as_a_sentence() {
-        assert_eq!(join_names(&[]), "");
-        assert_eq!(join_names(&["Retail".to_owned()]), "Retail");
+    fn a_library_under_home_is_shown_short_and_one_elsewhere_is_not() {
+        let home = PathBuf::from(std::env::var_os("HOME").expect("a home directory"));
         assert_eq!(
-            join_names(&["Retail".to_owned(), "Classic Era".to_owned()]),
-            "Retail and Classic Era"
+            home_relative(&home.join("Games/Blizzard/games/World of Warcraft")),
+            "~/Games/Blizzard/games/World of Warcraft"
         );
-        assert_eq!(
-            join_names(&[
-                "Retail".to_owned(),
-                "Classic Era".to_owned(),
-                "Anniversary".to_owned()
-            ]),
-            "Retail, Classic Era and Anniversary"
-        );
+        // Every part of a path on another drive says which drive it is.
+        let external = PathBuf::from("/run/media/someone/ssd/games");
+        assert_eq!(home_relative(&external), "/run/media/someone/ssd/games");
     }
 
     /// A queued or paused entry has no run to wind down, so its files can go
@@ -13004,7 +12997,6 @@ mod tests {
             code: code.clone(),
             label: "Retail".to_owned(),
             installed: None,
-            shared_with: Vec::new(),
         });
         let _ = app.update(Message::CancelDownloadConfirm { delete: true });
 
@@ -13034,7 +13026,6 @@ mod tests {
             label: "Retail".to_owned(),
             // Installed, so this is an update and the game plays right now.
             installed: Some("1.15.9.70003".to_owned()),
-            shared_with: Vec::new(),
         });
 
         let _ = app.update(Message::CancelDownloadConfirm { delete: false });
