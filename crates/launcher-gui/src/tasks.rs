@@ -701,13 +701,28 @@ pub async fn preflight(
             .ok()
             .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
             .unwrap_or_default();
-        Preflight::new(Config::default().prefix_user)
+        let started = Instant::now();
+        let report = Preflight::new(Config::default().prefix_user)
             .with_managed(config.managed_products())
             .run(&runner, &layout, Some(&code), &mut guard)
-            // The report is for the CLI, which prints it. Here the outcome is
-            // binary: the prefix is ready, or the launch does not happen.
-            .map(|_report| ())
-            .map_err(|e| chain(&e))
+            .map_err(|e| chain(&e))?;
+        // The report is for the CLI, which prints it. Here the outcome is
+        // binary, the prefix is ready or the launch does not happen, but the
+        // stage timings are worth tracing: a launch that feels stuck is one
+        // of them, and this says which.
+        crate::trace::mark(format!(
+            "preflight: {} ms total, {} process(es)",
+            started.elapsed().as_millis(),
+            report.processes.len()
+        ));
+        for timing in &report.timings {
+            crate::trace::mark(format!(
+                "preflight:   {:>6} ms  {}",
+                timing.took.as_millis(),
+                timing.stage
+            ));
+        }
+        Ok(())
     })
     .await
     .map_err(|e| chain(&e))?
@@ -721,10 +736,27 @@ pub async fn preflight(
 /// fallback is correct either way. It is only slower to notice.
 const GAME_APPEAR_WITHIN: Duration = Duration::from_secs(180);
 
-/// How often the prefix is re-scanned while watching the game.
+/// Counts launches, so a wind-down from a finished session can tell whether a
+/// newer one has started since.
+///
+/// The hazard is narrow and real: the tail of session one can still be
+/// unwinding while session two is spawning, and a prefix scan taken in the
+/// seconds before the new game registers a process looks exactly like an empty
+/// one. Killing the server there would take the starting game with it.
+static LAUNCHES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How often the prefix is re-scanned while waiting for the game to appear.
 ///
 /// 60 ms a scan, measured, so this is well under a percent of a core.
 const WATCH_POLL: Duration = Duration::from_millis(500);
+
+/// How often it is re-scanned once the game is up.
+///
+/// This interval *is* the delay between the window closing and PLAY coming
+/// back, so it is worth more than the waiting-to-start one is: a scan every
+/// 150 ms is about 0.4% of a core while someone plays, which buys back a
+/// third of a second of a button that looks stuck.
+const EXIT_POLL: Duration = Duration::from_millis(150);
 
 /// Run the game, returning when *the game* has exited.
 ///
@@ -783,6 +815,9 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
             &tweaks.wrappers(&tools),
         );
 
+        let generation =
+            LAUNCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+
         // What the prefix held before the click, so a session already running
         // under another launcher is not mistaken for this one's.
         let before = lightforge_core::preflight::games_running(&layout);
@@ -802,9 +837,19 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
                 // The tail is nobody's business but the kernel's now. Reaped
                 // on a thread of its own so the process is not left a zombie,
                 // and so this returns while it is still winding down.
+                //
+                // And then settled, rather than left for the next launch to
+                // settle. Returning early is what gave PLAY back immediately,
+                // but it did not make the tail cheaper: it moved the cost to
+                // the next pre-flight, which pays `wineserver -k -w` plus up
+                // to two 5 s signal graces for processes this session left
+                // behind. Doing it here spends that time while nobody is
+                // waiting on a button.
+                let (quiet_layout, quiet_runner) = (layout.clone(), runner);
                 std::thread::spawn(move || {
                     let _ = child.wait();
                     crate::trace::mark("launch: the prefix is quiet");
+                    settle(&quiet_layout, &quiet_runner, generation);
                 });
                 Ok("game closed".to_owned())
             }
@@ -869,8 +914,45 @@ fn watch_until_gone(layout: &Layout, pid: u32, child: &mut std::process::Child) 
         if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
             return;
         }
-        std::thread::sleep(WATCH_POLL);
+        std::thread::sleep(EXIT_POLL);
     }
+}
+
+/// Put the prefix to rest once a direct launch is over.
+///
+/// Only when nothing of ours is still using it. Battle.net is the case that
+/// matters: it shares the prefix, people leave it open, and killing the server
+/// out from under it would close the client they are looking at. A game
+/// started from Battle.net is the same prefix too, so both are checked.
+///
+/// Best effort throughout. A prefix that will not settle is exactly what the
+/// next pre-flight is for, and it is still there, doing the same work with the
+/// same guarantees. This only tries to make sure it finds nothing to do.
+fn settle(
+    layout: &Layout,
+    runner: &lightforge_core::prefix::ProtonRunner,
+    generation: u64,
+) {
+    use lightforge_core::preflight;
+
+    // A newer launch owns the prefix now. Checked first and by counter rather
+    // than by scanning, because a game that has been spawned but has not yet
+    // appeared in the process table is invisible to a scan and is exactly the
+    // session this must not interrupt.
+    if LAUNCHES.load(std::sync::atomic::Ordering::SeqCst) != generation {
+        crate::trace::mark("launch: a newer session owns the prefix, leaving it alone");
+        return;
+    }
+    if preflight::client_running(layout) || !preflight::games_running(layout).is_empty() {
+        crate::trace::mark("launch: something is still in the prefix, leaving it alone");
+        return;
+    }
+    let started = Instant::now();
+    let _ = runner.wineserver_kill();
+    crate::trace::mark(format!(
+        "launch: prefix settled in {} ms",
+        started.elapsed().as_millis()
+    ));
 }
 
 /// Wait the Proton child out and report what it said, the old contract, kept
@@ -902,6 +984,11 @@ pub async fn launch_via_battle_net(
         use lightforge_core::preflight;
 
         let runner = runner_for(&layout, &code, Runs::BattleNet)?;
+
+        // Counted too, though nothing here winds the prefix down: a direct
+        // launch's wind-down may still be pending, and a client that has been
+        // spawned but not yet registered a process is invisible to its scan.
+        LAUNCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         // Taken before the client is told anything, so a game that was
         // already playing is not mistaken for this launch's.

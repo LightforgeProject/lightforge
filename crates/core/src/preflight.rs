@@ -273,17 +273,40 @@ pub fn shutdown(
     layout: &Layout,
     grace: Duration,
 ) -> Result<Vec<Outcome>, PreflightError> {
+    shutdown_timed(runner, layout, grace, &mut Vec::new())
+}
+
+/// [`shutdown`], stamping how long each stage took into `timings`.
+///
+/// The stages are wildly different in cost, a scan is 60 ms and a signal grace
+/// is up to five seconds, and when a launch feels like it has hung this is the
+/// only thing that says which one it is sitting in.
+fn shutdown_timed(
+    runner: &ProtonRunner,
+    layout: &Layout,
+    grace: Duration,
+    timings: &mut Vec<Timing>,
+) -> Result<Vec<Outcome>, PreflightError> {
+    let mut at = Instant::now();
+    let mut stamp = |timings: &mut Vec<Timing>, stage: &'static str| {
+        timings.push(Timing { stage, took: at.elapsed() });
+        at = Instant::now();
+    };
+
     let found = scan(layout);
+    stamp(timings, "scan");
     if found.is_empty() {
         return Ok(Vec::new());
     }
 
     // Idempotent and near-instant on a prefix with no server running.
     runner.wineserver_kill()?;
+    stamp(timings, "wineserver -k -w");
 
     let mut system = System::new();
     refresh(&mut system);
     let remaining = collect(&system, layout);
+    stamp(timings, "rescan");
 
     let mut outcomes: Vec<Outcome> = found
         .iter()
@@ -297,6 +320,7 @@ pub fn shutdown(
     }
 
     let stubborn = signal_all(&mut system, layout, &remaining, Signal::Term, grace);
+    stamp(timings, "SIGTERM");
     let (ignored_term, exited): (Vec<_>, Vec<_>) =
         remaining.into_iter().partition(|p| stubborn.contains(&p.pid));
     outcomes.extend(exited.into_iter().map(|process| Outcome {
@@ -306,6 +330,7 @@ pub fn shutdown(
 
     if !ignored_term.is_empty() {
         let survivors = signal_all(&mut system, layout, &ignored_term, Signal::Kill, grace);
+        stamp(timings, "SIGKILL");
         outcomes.extend(ignored_term.into_iter().map(|process| {
             let disposition = if survivors.contains(&process.pid) {
                 Disposition::Survived
@@ -477,7 +502,13 @@ impl Preflight {
         code: Option<&ProductCode>,
         downloads: &mut dyn DownloadGuard,
     ) -> Result<Report, PreflightError> {
-        let processes = shutdown(runner, layout, self.grace)?;
+        let mut timings = Vec::new();
+        let processes = shutdown_timed(runner, layout, self.grace, &mut timings)?;
+        let mut at = Instant::now();
+        let mut stamp = |timings: &mut Vec<Timing>, stage: &'static str| {
+            timings.push(Timing { stage, took: at.elapsed() });
+            at = Instant::now();
+        };
 
         let survivors: Vec<PrefixProcess> = processes
             .iter()
@@ -499,6 +530,7 @@ impl Preflight {
         } else {
             None
         };
+        stamp(&mut timings, "clear caches");
 
         // The per-account file is the client's, not ours: it is recreated on
         // login and after a prefix update, each time without `HideOnClose`. A
@@ -516,12 +548,16 @@ impl Preflight {
             )?);
         }
 
+        stamp(&mut timings, "battle.net config");
+
         let download_paused = match code {
             Some(code) => downloads.pause(code)?,
             None => false,
         };
+        stamp(&mut timings, "pause transfers");
 
         Ok(Report {
+            timings,
             processes,
             agent_cache_removed: agent_cache,
             staging_removed: staging,
@@ -544,6 +580,17 @@ pub struct Report {
     pub configs: Vec<PathBuf>,
     /// Whether a download was paused and is owed a resume.
     pub download_paused: bool,
+    /// How long each stage took, in the order they ran. A launch that feels
+    /// like it has hung is one of these, and which one is not guessable from
+    /// the outside.
+    pub timings: Vec<Timing>,
+}
+
+/// One pre-flight stage and what it cost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timing {
+    pub stage: &'static str,
+    pub took: Duration,
 }
 
 impl Report {
@@ -992,6 +1039,9 @@ mod tests {
             staging_removed: None,
             configs: vec![PathBuf::from("/x/Battle.net.config")],
             download_paused: false,
+            // Timings are measurement, not work: a pass that did nothing still
+            // took time to establish that, and that does not make it unclean.
+            timings: vec![Timing { stage: "scan", took: Duration::from_millis(61) }],
         };
         assert!(report.is_clean());
         assert_eq!(report.bytes_reclaimed(), 0);

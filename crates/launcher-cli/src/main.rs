@@ -3000,6 +3000,14 @@ fn print_preflight(report: &lightforge_core::preflight::Report) {
     if report.download_paused {
         println!("download        paused for the session");
     }
+
+    // Last, because it is the answer to a different question: not what the
+    // pass did, but where it spent the time. A launch that feels stuck is one
+    // of these stages, and a signal grace is five seconds where a scan is
+    // sixty milliseconds.
+    for timing in &report.timings {
+        println!("timing          {:<18} {:>6} ms", timing.stage, timing.took.as_millis());
+    }
 }
 
 /// Render a config tweak list: key, value, and why it is set.

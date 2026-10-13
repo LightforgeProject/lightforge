@@ -169,6 +169,36 @@ pub fn config_path(dir: &Path, hash: &str) -> Result<PathBuf, ConfigError> {
     Ok(dir.join(&hash[0..2]).join(&hash[2..4]).join(hash))
 }
 
+/// Put a config's own bytes into a store's `Data/config`, where the client
+/// looks for them.
+///
+/// The client needs the build config and the CDN config before it can do
+/// anything, and it fetches them over the network when they are not in the
+/// store. Measured on `wow_classic_beta`, that is about 1.7 seconds added to
+/// the first launch of every new build, for two files the download already
+/// held in memory and had already checked against their own hashes.
+///
+/// Named by content hash, so writing one twice is writing the same bytes, and
+/// an existing file is left alone rather than rewritten under a client that
+/// may have it open.
+pub fn store(data_dir: &Path, hash: &str, bytes: &[u8]) -> Result<PathBuf, ConfigError> {
+    let path = config_path(&data_dir.join("config"), hash)?;
+    if path.is_file() {
+        return Ok(path);
+    }
+    let io = |source| ConfigError::Io { path: path.clone(), source };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(io)?;
+    }
+    // Through a temporary file in the same directory: the client reads this
+    // directory while it runs, and a half-written config is worse than an
+    // absent one, which it knows how to fetch.
+    let temp = path.with_extension("lightforge-tmp");
+    std::fs::write(&temp, bytes).map_err(io)?;
+    std::fs::rename(&temp, &path).map_err(io)?;
+    Ok(path)
+}
+
 /// Parse 32 hex characters into 16 bytes.
 pub fn parse_hash(hex: &str) -> Result<[u8; 16], ConfigError> {
     if hex.len() != 32 {
@@ -268,6 +298,36 @@ build-product = WoW
             BuildConfig::parse(text),
             Err(ConfigError::MissingKey("encoding"))
         ));
+    }
+
+    #[test]
+    fn a_seeded_config_lands_where_the_client_looks_and_is_not_rewritten() {
+        let dir = std::env::temp_dir()
+            .join(format!("lightforge-config-seed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let data = dir.join("Data");
+        let hash = "9712ae9c84cc54111e9e3ddf9a6b8019";
+
+        let path = store(&data, hash, b"root = abc\n").unwrap();
+        assert_eq!(path, data.join("config").join("97").join("12").join(hash));
+        assert_eq!(std::fs::read(&path).unwrap(), b"root = abc\n");
+        // Nothing half-written is left beside it.
+        let siblings: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(siblings.len(), 1, "{siblings:?}");
+
+        // Named by content hash, so a second pass is the same bytes. The file
+        // is left alone rather than rewritten under a client that has it open.
+        let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(store(&data, hash, b"root = abc\n").unwrap(), path);
+        assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), before);
+
+        assert!(store(&data, "nothex", b"x").is_err(), "a bad hash is not a path");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

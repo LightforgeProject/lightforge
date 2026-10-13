@@ -446,8 +446,24 @@ pub async fn prepare(
         .ok_or(InstallError::EmptyTable("cdns"))?;
     let client = Client::from_cdn(&cdn)?;
 
-    let build = BuildConfig::parse(&client.fetch_config(http, &remote.build_config).await?)?;
-    let cdn_config = CdnConfig::parse(&client.fetch_config(http, &remote.cdn_config).await?)?;
+    let build_text = client.fetch_config(http, &remote.build_config).await?;
+    let cdn_text = client.fetch_config(http, &remote.cdn_config).await?;
+    // Into the store on the way past. These two are the only part of an
+    // install that is not inside CASC, the client needs both before it can
+    // start, and it fetches them itself when they are missing: about 1.7
+    // seconds on the first launch of a new build, for bytes we are holding
+    // right here and have already checked against their hashes. Not fatal if
+    // it fails, the client's own fetch is the fallback and always was.
+    let data_dir = dest.join("Data");
+    for (hash, text) in
+        [(&remote.build_config, &build_text), (&remote.cdn_config, &cdn_text)]
+    {
+        if let Err(e) = super::config::store(&data_dir, hash, text.as_bytes()) {
+            eprintln!("lightforge: could not seed {hash} into the store: {e}");
+        }
+    }
+    let build = BuildConfig::parse(&build_text)?;
+    let cdn_config = CdnConfig::parse(&cdn_text)?;
     on_event(Event::Build {
         versions_name: remote.versions_name.clone(),
         build_config: remote.build_config.clone(),
