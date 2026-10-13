@@ -838,18 +838,20 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
                 // on a thread of its own so the process is not left a zombie,
                 // and so this returns while it is still winding down.
                 //
-                // And then settled, rather than left for the next launch to
-                // settle. Returning early is what gave PLAY back immediately,
-                // but it did not make the tail cheaper: it moved the cost to
-                // the next pre-flight, which pays `wineserver -k -w` plus up
-                // to two 5 s signal graces for processes this session left
-                // behind. Doing it here spends that time while nobody is
-                // waiting on a button.
+                // Settled *first*, before the child is waited on, because the
+                // child is Proton's `steam.exe` and its wait is the thing
+                // being closed: measured on a retail session, the game's pid
+                // went at 10.5 s and that wait did not return until 19.6 s.
+                // Nine seconds in which PLAY is armed, the prefix is not
+                // empty, and a press pays the whole teardown at pre-flight
+                // with two signal graces behind it. Winding down here ends
+                // the window instead of waiting it out: `wineserver -k -w` is
+                // what `steam.exe` is waiting for anyway.
                 let (quiet_layout, quiet_runner) = (layout.clone(), runner);
                 std::thread::spawn(move || {
+                    settle(&quiet_layout, &quiet_runner, generation);
                     let _ = child.wait();
                     crate::trace::mark("launch: the prefix is quiet");
-                    settle(&quiet_layout, &quiet_runner, generation);
                 });
                 Ok("game closed".to_owned())
             }
@@ -948,10 +950,18 @@ fn settle(
         return;
     }
     let started = Instant::now();
-    let _ = runner.wineserver_kill();
+    let outcome = runner.wineserver_kill();
+    // Microseconds, because the interesting failure looks like success: a
+    // `wineserver` that was never found returns before it spawns anything,
+    // and at millisecond resolution that is indistinguishable from a prefix
+    // that was already quiet.
     crate::trace::mark(format!(
-        "launch: prefix settled in {} ms",
-        started.elapsed().as_millis()
+        "launch: prefix settled in {} us{}",
+        started.elapsed().as_micros(),
+        match &outcome {
+            Ok(()) => String::new(),
+            Err(e) => format!(" (failed: {})", chain(e)),
+        }
     ));
 }
 
