@@ -484,7 +484,14 @@ fn adopt_taken(app: &mut Lightforge) {
                     install.path.display()
                 ))),
             },
-            RowKind::Game(game) => pending.push((game.clone(), row.prefix.clone())),
+            RowKind::Game(game) => {
+                // Into the band here, not at the Games step. Ticking a game on
+                // this slide is the user saying they play it; making them say
+                // it again two slides later is asking the same question twice.
+                // The link itself still waits for the prefix, see `pending`.
+                track_hand_off(app, game);
+                pending.push((game.clone(), row.prefix.clone()));
+            }
         }
     }
 
@@ -586,6 +593,52 @@ fn adopt_one(app: &mut Lightforge, install: &WowInstall) -> Result<Vec<Note>, St
         )),
     );
     Ok(notes)
+}
+
+/// Put a found Battle.net game in the band, if it is not there already.
+///
+/// The code on disk and the code in the catalog are not always the same
+/// string: Battle.net calls Hearthstone `hs_beta` on a machine where it is
+/// installed and the catalog ships it as `hsb`. `Catalog::reconcile` rewrites
+/// the catalog to whatever the machine reports, but it only runs once the
+/// client's own code list has been read, which a first run may not have done
+/// yet. So the family is the fallback: two codes name one game when they
+/// resolve to the same Battle.net game family, which is the client's own
+/// notion of identity and the only one available.
+fn track_hand_off(app: &mut Lightforge, game: &HandOff) {
+    let (code, label) = hand_off_entry(&app.catalog, game);
+    if app.config.products.iter().any(|p| p.code == code) {
+        return;
+    }
+    app.config.products.push(lightforge_core::Product::new(code, label));
+    app.save_config();
+    app.sync_choices();
+}
+
+/// Which catalog entry a found game is, and what to call it.
+///
+/// Split out and pure because the matching is the part that can be wrong: a
+/// game added under the code on disk when the catalog holds another one is a
+/// tile with no artwork that never matches what is installed.
+fn hand_off_entry(
+    catalog: &lightforge_core::product::Catalog,
+    game: &HandOff,
+) -> (ProductCode, String) {
+    let found: ProductCode = game.code.clone().into();
+    if let Some(entry) = catalog.get(&found) {
+        return (found, entry.label.clone());
+    }
+    let by_family = lightforge_core::battlenet::game_uid(&found).and_then(|family| {
+        catalog
+            .hand_offs()
+            .find(|e| {
+                lightforge_core::battlenet::game_uid(&e.code).as_deref() == Some(family.as_str())
+            })
+            .map(|e| (e.code.clone(), e.label.clone()))
+    });
+    // A game the catalog has never heard of still goes in, under the name of
+    // the folder it was found in, which is what the user recognises.
+    by_family.unwrap_or_else(|| (found, game.label.clone()))
 }
 
 /// Point our Battle.net at the games another one installed.
@@ -1265,6 +1318,56 @@ mod tests {
             step = step.next().expect("another step");
             assert_eq!(&step, expected);
             assert_eq!(step.back().unwrap().next().unwrap(), step);
+        }
+    }
+
+    /// Battle.net calls Hearthstone `hs_beta` on a machine where it is
+    /// installed; the catalog ships it as `hsb`. Adding it under the code on
+    /// disk when the catalog holds the other one is a tile with no artwork
+    /// that never matches what is installed.
+    #[test]
+    fn a_found_game_is_matched_to_the_catalog_even_under_another_code() {
+        let catalog = lightforge_core::product::Catalog::builtin();
+        let hearthstone = catalog
+            .hand_offs()
+            .find(|e| e.label == "Hearthstone")
+            .expect("the catalog ships Hearthstone");
+
+        // The code the catalog itself uses resolves to itself.
+        let exact = game_named(hearthstone.code.as_str(), "Hearthstone");
+        assert_eq!(hand_off_entry(&catalog, &exact), (hearthstone.code.clone(), "Hearthstone".to_owned()));
+
+        // And the client's own spelling lands on the same entry, by family.
+        for other in ["hs_beta", "hsb"] {
+            let found = game_named(other, "Hearthstone");
+            let (code, label) = hand_off_entry(&catalog, &found);
+            assert_eq!(label, "Hearthstone", "{other} should be Hearthstone");
+            assert_eq!(
+                lightforge_core::battlenet::game_uid(&code),
+                lightforge_core::battlenet::game_uid(&hearthstone.code),
+                "{other} should resolve to the same game family"
+            );
+        }
+    }
+
+    /// A game nothing knows about is still the user's game, so it goes in
+    /// under the folder name they would recognise.
+    #[test]
+    fn a_game_the_catalog_has_never_heard_of_keeps_its_folder_name() {
+        let catalog = lightforge_core::product::Catalog::builtin();
+        let found = game_named("something_new", "Some New Game");
+        let (code, label) = hand_off_entry(&catalog, &found);
+        assert_eq!(code.as_str(), "something_new");
+        assert_eq!(label, "Some New Game");
+    }
+
+    fn game_named(code: &str, label: &str) -> HandOff {
+        HandOff {
+            code: code.to_owned(),
+            label: label.to_owned(),
+            path: PathBuf::from("/games").join(label),
+            version: None,
+            bytes: 0,
         }
     }
 

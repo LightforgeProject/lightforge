@@ -92,7 +92,7 @@ Options:
 ### `lightforge play`
 
 ```text
-Launch the game directly under Proton — the `[ PLAY ]` path.
+Launch the game directly under Proton, the `[ PLAY ]` path.
 
 Runs pre-flight first, then starts `Wow.exe` through the prefix's Windows-visible path. Battle.net is not involved.
 
@@ -369,7 +369,7 @@ Options:
       --show-install
           With `--dry-run`, list the install-manifest files this build would extract, and where each would land
       --cancel-after <CANCEL_AFTER>
-          Trip the cancel token after this many seconds — the same path the GUI's pause button takes. For measuring how long a pause takes to come to rest
+          Trip the cancel token after this many seconds, the same path the GUI's pause button takes. For measuring how long a pause takes to come to rest
   -h, --help
           Print help
 ```
@@ -418,7 +418,7 @@ Arguments:
   [PATH]  Install to check. Defaults to the configured one
 
 Options:
-      --deep         Also hash every stored byte against its chunk table and key. Reads the whole store — minutes rather than seconds — and is safe while the game runs
+      --deep         Also hash every stored byte against its chunk table and key. Reads the whole store, minutes rather than seconds, and is safe while the game runs
       --root <ROOT>  Override the Blizzard root (default: ~/Games/Blizzard)
       --repair       Remove damaged entries from the indices. Requires a closed client
       --all          List every damaged entry rather than the first few
@@ -430,7 +430,7 @@ Options:
 ```text
 Rewrite a store's `.idx` files without touching its archives.
 
-Repairs an install whose indices were written with too little free space for the client's update section — the `NeedsRepair` case — in seconds, instead of re-downloading the whole product.
+Repairs an install whose indices were written with too little free space for the client's update section, the `NeedsRepair` case, in seconds, instead of re-downloading the whole product.
 
 Usage: lightforge reindex [OPTIONS] [PATH]
 
@@ -466,7 +466,7 @@ Options:
 ```text
 Give back the shared store's space held by one product's data: the files no other installed product uses. Prints the plan unless `--yes`.
 
-Uninstalling from the GUI does this itself. This is for a product removed before it could — pass the `--build-key` it had installed.
+Uninstalling from the GUI does this itself. This is for a product removed before it could, pass the `--build-key` it had installed.
 
 Usage: lightforge reclaim [OPTIONS] --product <PRODUCT>
 

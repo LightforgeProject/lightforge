@@ -78,6 +78,17 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.0.0-beta.3" date="2026-10-13">
+      <description>
+        <p>
+          An install found during setup is added even when its folder refuses
+          new files, cancelling a download is possible at last, the Wine
+          prefix is tidied the moment a game quits rather than on the next
+          launch, and the launcher says when a newer release exists.
+        </p>
+      </description>
+      <url>https://github.com/LightforgeProject/lightforge/blob/main/RELEASES.md</url>
+    </release>
     <release version="1.0.0-beta.2" date="2026-10-10">
       <description>
         <p>

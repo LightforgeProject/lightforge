@@ -1,6 +1,63 @@
 # Lightforge release notes
 
 
+## 1.0.0-beta.3
+
+- Added Heroes of the Storm.
+- A World of Warcraft install found during setup is now added even when its
+  folder refuses new files. Only Battle.net's half is skipped in that case,
+  and the launcher says so, where before the whole thing was abandoned and a
+  game already on the disk sat there offering to download itself again.
+- If the folder is simply missing its own write permission, Lightforge adds
+  it back rather than asking you to run chmod on your own install, and tells
+  you it did.
+- A game that could not be added now says so in red instead of a grey line
+  that looked exactly like the ones reporting success.
+- An install sitting in a drive Lightforge already knows about is picked up
+  instead of skipped, which is what happens if you run the first-run setup a
+  second time.
+- Downloads check that the install folder will accept a file before they
+  start, rather than finding out at the end. An update that could not be
+  finished used to fail after every byte was already on the disk.
+- When something goes wrong, the message now carries the system's own reason
+  — permission denied, read-only disk, no space — instead of only naming the
+  folder it happened in.
+- Games installed on an added drive are recorded for Battle.net under that
+  drive, so Battle.net can find them instead of looking in the default
+  library and reporting that the folder holds no game files.
+- Lightforge no longer creates an empty World of Warcraft folder in every
+  drive it manages. That folder looked like a broken install, and it took the
+  name an existing install would otherwise be moved into.
+- Quitting a game now leaves the Wine prefix tidy straight away. It used to
+  be left for the next launch to clean up, which is why starting a game
+  shortly after closing one could sit there for several seconds doing
+  nothing visible. On a retail session that wind-down ran for nine seconds,
+  and pressing Play anywhere inside it paid for the whole thing.
+- Play comes back about a third of a second sooner once the game's window
+  has closed.
+- The two configuration files a client reads before it can start anything
+  are now written into the game's own data while it downloads. The client
+  used to fetch them itself on the first launch of every new build — about
+  a second and a half spent waiting on a server for files that were already
+  on the disk.
+- The pre-launch check that clears the prefix now records how long each of
+  its steps took, and it goes into a bug report. A launch that feels stuck
+  can be answered with where the time went rather than a guess.
+- The install dialog is wider, and the drive it offers no longer squeezes
+  "1.37 TiB free" into three stacked words. Install folders inside your home
+  directory are written as ~/Games/… instead of in full.
+- You can cancel a download now rather than only pausing it. It is in the cog
+  beside the Play button, and it is there whether the download is running,
+  queued or paused.
+- Blizzard games found during setup now appear in the game band as soon as you
+  tick them. Battle.net's own games had to be picked a second time on a later
+  step, which was asking the same question twice.
+- Lightforge now tells you when a newer version has been released. It asks
+  GitHub once while the launcher is starting, and if there is a newer one it
+  says so with a link to the release. Nothing is downloaded or installed for
+  you: the program belongs to whatever you installed it with, and that is
+  where it should be replaced.
+
 ## 1.0.0-beta.2
 
 - Play comes back the moment the game closes. It used to stay dark until the
