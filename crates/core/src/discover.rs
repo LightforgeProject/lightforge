@@ -400,6 +400,18 @@ pub fn plan(install: &WowInstall, existing: &[Library]) -> Result<Plan, AdoptErr
     })
 }
 
+/// What adoption did, and what it could not do.
+#[derive(Debug, Clone)]
+pub struct Adopted {
+    /// The library to add to the config.
+    pub library: Library,
+    /// The install root's owner-write bit was missing and was added.
+    pub repaired: bool,
+    /// Why Battle.net was not told about the install. The games are adopted
+    /// either way; this is the half that only Battle.net needs.
+    pub battle_net: Option<String>,
+}
+
 /// Carry out a [`Plan`]: rename if it must, claim the library, and tell
 /// Battle.net where the install now is.
 ///
@@ -411,7 +423,14 @@ pub fn plan(install: &WowInstall, existing: &[Library]) -> Result<Plan, AdoptErr
 /// install root, which is what its Locate flow reads, and Agent's own registry,
 /// which is the list the client builds its library from. Both are rewritten
 /// from the install's own `.build.info`, so neither can disagree with it.
-pub fn adopt(plan: &Plan, layout: &Layout) -> Result<Library, AdoptError> {
+///
+/// **Neither is fatal.** Adoption is a marker file, a config entry and a drive
+/// letter; those are what make the install Lightforge's, and they are already
+/// done by the time Battle.net is told anything. An install root that will not
+/// take a `.product.db` used to abort the whole adoption and leave a 100 GB
+/// game reading `Install`, when what was actually lost was Battle.net's
+/// ability to see it. The reason comes back instead, for the caller to show.
+pub fn adopt(plan: &Plan, layout: &Layout) -> Result<Adopted, AdoptError> {
     let mut library = plan.library.clone();
     if let Some(target) = &plan.rename {
         std::fs::rename(&plan.install, target).map_err(|source| AdoptError::Io {
@@ -422,6 +441,10 @@ pub fn adopt(plan: &Plan, layout: &Layout) -> Result<Library, AdoptError> {
     library.claim()?;
 
     let install = library.games().join(WOW_DIR);
+    let repaired = matches!(
+        crate::paths::ensure_writable(&install),
+        Ok(crate::paths::Repaired::Yes)
+    );
     let info = BuildInfo::load(install.join(".build.info"))?;
     let mut records = Vec::new();
     for code in &plan.products {
@@ -431,12 +454,18 @@ pub fn adopt(plan: &Plan, layout: &Layout) -> Result<Library, AdoptError> {
             windows_wow_path(&library),
         )?);
     }
-    productdb::write(&install, &records)?;
-    // Best effort, and deliberately not fatal: a prefix that has not been
-    // built yet has no registry to merge into, which is the ordinary case
-    // during a first run. The next pre-flight writes it.
-    let _ = productdb::register(&layout.agent_dir(), &records);
-    Ok(library)
+
+    let battle_net = match productdb::write(&install, &records) {
+        // A prefix that has not been built yet has no registry to merge into,
+        // which is the ordinary case during a first run. The next pre-flight
+        // writes it, so a `false` here is not worth reporting.
+        Ok(_) => match productdb::register(&layout.agent_dir(), &records) {
+            Ok(_) => None,
+            Err(e) => Some(crate::error::chain(&e)),
+        },
+        Err(e) => Some(crate::error::chain(&e)),
+    };
+    Ok(Adopted { library, repaired, battle_net })
 }
 
 /// The Windows path an adopted install is recorded under.
@@ -683,9 +712,15 @@ mod tests {
         assert_ne!(plan.library.wow_letter, existing[0].wow_letter);
 
         let layout = Layout::with_root(dir.join("Blizzard"));
-        let library = adopt(&plan, &layout).expect("adoption writes a marker and a product.db");
-        assert_eq!(library.state(), library::State::Ready);
-        assert!(library.claimed);
+        let adopted = adopt(&plan, &layout).expect("adoption writes a marker and a product.db");
+        assert_eq!(adopted.library.state(), library::State::Ready);
+        assert!(adopted.library.claimed);
+        assert!(!adopted.repaired, "the install root was writable all along");
+        assert!(
+            adopted.battle_net.is_none(),
+            "`.product.db` went in: {:?}",
+            adopted.battle_net
+        );
         // The install is where it always was, with its own files untouched.
         assert!(games.join(WOW_DIR).join("_retail_").join("Wow.exe").is_file());
         // And Battle.net is told where to find it, under the library's letter.
@@ -696,6 +731,59 @@ mod tests {
             registered[0].install_path,
             format!("{}/{}", plan.library.games_letter.trim_end_matches(':').to_uppercase() + ":", WOW_DIR)
         );
+    }
+
+    /// The install root a user already has is not always one that will take a
+    /// new file. Adoption writes `.product.db` into it, and that used to be
+    /// the step that decided whether a 100 GB game appeared in the launcher
+    /// at all.
+    #[test]
+    fn an_install_root_that_refuses_a_file_is_still_adopted() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let dir = scratch("refusing-root");
+        let games = dir.join("mnt").join("nvme2").join("Games");
+        let prefix = foreign_prefix(&dir, &games);
+        let found = inspect(&prefix, Origin::Lutris).unwrap();
+        let install = games.join(WOW_DIR);
+        std::fs::set_permissions(&install, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let plan = plan(&found.wow[0], &[]).unwrap();
+        let adopted = adopt(&plan, &Layout::with_root(dir.join("Blizzard")))
+            .expect("a read-only root does not stop adoption");
+
+        assert!(adopted.repaired, "the owner-write bit was added");
+        assert!(adopted.battle_net.is_none(), "so `.product.db` went in after all");
+        assert!(install.join(".product.db").is_file());
+    }
+
+    /// And when it cannot be written for a reason no permission change fixes,
+    /// the games are still adopted. Only Battle.net's half is lost, and the
+    /// caller is told which half and why.
+    #[test]
+    fn a_product_db_that_cannot_be_written_costs_battle_net_and_nothing_else() {
+        let dir = scratch("no-product-db");
+        let games = dir.join("mnt").join("nvme2").join("Games");
+        let prefix = foreign_prefix(&dir, &games);
+        let found = inspect(&prefix, Origin::Lutris).unwrap();
+        // A non-empty directory where the file goes: the rename cannot land,
+        // whatever the permissions say.
+        let blocker = games.join(WOW_DIR).join(".product.db");
+        std::fs::create_dir_all(blocker.join("in the way")).unwrap();
+
+        let plan = plan(&found.wow[0], &[]).unwrap();
+        let adopted = adopt(&plan, &Layout::with_root(dir.join("Blizzard")))
+            .expect("the games are adopted regardless");
+
+        assert_eq!(adopted.library.state(), library::State::Ready);
+        let reason = adopted.battle_net.expect("the reason comes back");
+        assert!(reason.contains(".product.db"), "it names the file: {reason}");
+        assert!(reason.contains(": "), "and carries its cause: {reason}");
+        // The files themselves are untouched.
+        assert!(games.join(WOW_DIR).join("_retail_").join("Wow.exe").is_file());
     }
 
     #[test]

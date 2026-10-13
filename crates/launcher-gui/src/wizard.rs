@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use iced::widget::{column, container, image, row, scrollable, text, text_input, Space};
 use iced::{Alignment, ContentFit, Element, Length};
 
+use lightforge_core::error::chain;
 use lightforge_core::discover::{self, Found, HandOff, Origin, WowInstall};
 use lightforge_core::product::{Branch, Kind, ProductCode};
 use lightforge_core::tact::install::LOCALES;
@@ -127,7 +128,7 @@ pub struct Wizard {
     /// Whether Battle.net is wanted. Off means WoW only.
     pub battle_net: bool,
     /// What adoption did, one line each, shown on the way out of the step.
-    pub adopted: Vec<String>,
+    pub adopted: Vec<Note>,
     /// Hand-offs to link once the prefix and Battle.net exist.
     pub pending: Vec<(HandOff, PathBuf)>,
 }
@@ -176,6 +177,41 @@ pub enum Msg {
     WantBattleNet(bool),
     /// Done, write the config and get out of the way.
     Finish,
+}
+
+/// One line about what adoption did to one install.
+///
+/// Typed rather than a bare string because the three outcomes do not deserve
+/// the same ink: an install that was taken is a receipt, an install that was
+/// not is the reason someone's game is missing from the launcher, and the
+/// difference used to be invisible, both were the same grey caption on a slide
+/// people click past.
+#[derive(Debug, Clone)]
+pub struct Note {
+    pub text: String,
+    pub level: Level,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Level {
+    /// Adopted, nothing to say beyond what happened.
+    Done,
+    /// Adopted, but something alongside it did not work.
+    Warning,
+    /// Not adopted. The games are not in the launcher.
+    Failed,
+}
+
+impl Note {
+    fn done(text: String) -> Self {
+        Self { text, level: Level::Done }
+    }
+    fn warning(text: String) -> Self {
+        Self { text, level: Level::Warning }
+    }
+    fn failed(text: String) -> Self {
+        Self { text, level: Level::Failed }
+    }
 }
 
 /// Flatten a scan into the rows the step shows.
@@ -441,12 +477,13 @@ fn adopt_taken(app: &mut Lightforge) {
 
     for row in rows.iter().filter(|row| row.take) {
         match &row.kind {
-            RowKind::Wow(install) => {
-                match adopt_one(app, install) {
-                    Ok(note) => notes.push(note),
-                    Err(e) => notes.push(format!("{} — not adopted: {e}", install.path.display())),
-                }
-            }
+            RowKind::Wow(install) => match adopt_one(app, install) {
+                Ok(mut found) => notes.append(&mut found),
+                Err(e) => notes.push(Note::failed(format!(
+                    "{} could not be added: {e}",
+                    install.path.display()
+                ))),
+            },
             RowKind::Game(game) => pending.push((game.clone(), row.prefix.clone())),
         }
     }
@@ -465,14 +502,54 @@ fn adopt_taken(app: &mut Lightforge) {
     }
 }
 
-fn adopt_one(app: &mut Lightforge, install: &WowInstall) -> Result<String, String> {
-    let plan = discover::plan(install, &app.config.libraries).map_err(|e| e.to_string())?;
-    let library = discover::adopt(&plan, &app.layout).map_err(|e| e.to_string())?;
-    let id = library.id.clone();
-    let label = library.label.clone();
-    app.config.libraries.push(library);
+/// Add one found install to the config, in place.
+///
+/// Returns every line worth showing about it, not just one: an install can be
+/// adopted *and* have something to say, and the something is the part that
+/// explains why Battle.net still cannot see the game.
+fn adopt_one(app: &mut Lightforge, install: &WowInstall) -> Result<Vec<Note>, String> {
+    let mut notes = Vec::new();
 
-    for code in &plan.products {
+    let (id, label) = match discover::plan(install, &app.config.libraries) {
+        Ok(plan) => {
+            let adopted = discover::adopt(&plan, &app.layout).map_err(|e| chain(&e))?;
+            let id = adopted.library.id.clone();
+            let label = adopted.library.label.clone();
+            if adopted.repaired {
+                notes.push(Note::warning(format!(
+                    "{} would not accept a file; its owner-write permission was added",
+                    install.path.display()
+                )));
+            }
+            if let Some(reason) = adopted.battle_net {
+                notes.push(Note::warning(format!(
+                    "Battle.net was not told about {}, so you may have to use its own \
+                     Locate button for this one: {reason}",
+                    install.path.display()
+                )));
+            }
+            app.config.libraries.push(adopted.library);
+            (id, label)
+        }
+        // The folder is already inside a library Lightforge knows: a second
+        // run of the wizard, or an install sitting in a drive that was added
+        // by hand. There is nothing to adopt, but the products in it may still
+        // be unassigned, which is the whole difference between a tile that
+        // says Play and one that offers to download 100 GB again.
+        Err(discover::AdoptError::AlreadyOurs) => {
+            let parent = install.path.parent().unwrap_or(&install.path);
+            let library = app
+                .config
+                .libraries
+                .iter()
+                .find(|l| l.games() == parent)
+                .ok_or_else(|| "that folder is managed but its drive is gone".to_owned())?;
+            (library.id.clone(), library.label.clone())
+        }
+        Err(e) => return Err(chain(&e)),
+    };
+
+    for code in &install.products {
         if !app.config.products.iter().any(|p| &p.code == code) {
             let name = app
                 .catalog
@@ -492,16 +569,23 @@ fn adopt_one(app: &mut Lightforge, install: &WowInstall) -> Result<String, Strin
     // built, and `link_libraries` is the one call that must never run against a
     // drive that is not there.
     if lightforge_core::prefix::PrefixStatus::inspect(&app.layout).initialized {
-        let _ = lightforge_core::prefix::link_libraries(&app.layout);
+        if let Err(e) = lightforge_core::prefix::link_libraries(&app.layout) {
+            notes.push(Note::warning(format!("the prefix could not be relinked: {}", chain(&e))));
+        }
     }
-    Ok(format!(
-        "{} — kept where it is, on {label}",
-        plan.products
-            .iter()
-            .map(|code| code.short_name().to_owned())
-            .collect::<Vec<_>>()
-            .join(", ")
-    ))
+    notes.insert(
+        0,
+        Note::done(format!(
+            "{} — kept where it is, on {label}",
+            install
+                .products
+                .iter()
+                .map(|code| code.short_name().to_owned())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    );
+    Ok(notes)
 }
 
 /// Point our Battle.net at the games another one installed.
@@ -927,7 +1011,18 @@ fn install<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> 
     let mut body = column![].spacing(theme::MD);
 
     for note in &wizard.adopted {
-        body = body.push(muted(note.clone(), theme::CAPTION));
+        body = match note.level {
+            Level::Done => body.push(muted(note.text.clone(), theme::CAPTION)),
+            // Loud on purpose. A game that was not added is the one thing on
+            // this slide the user has to act on, and it used to look exactly
+            // like the receipts around it.
+            Level::Warning => body.push(
+                text(note.text.clone()).size(theme::LABEL).color(theme::PAUSE),
+            ),
+            Level::Failed => body.push(
+                text(note.text.clone()).size(theme::BODY).color(theme::ERROR),
+            ),
+        };
     }
 
     body = body.push(

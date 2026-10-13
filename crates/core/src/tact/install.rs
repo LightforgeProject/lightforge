@@ -189,6 +189,12 @@ pub enum Event {
         downloaded: usize,
         bytes: u64,
     },
+    /// The install root refused a file and its owner-write bit was added so
+    /// the run could proceed. Reported because it is a change to a directory
+    /// the user owns, made without being asked.
+    Repaired {
+        dir: PathBuf,
+    },
     /// Optional content this build offers, by tag name.
     Optional {
         names: Vec<String>,
@@ -588,6 +594,19 @@ pub async fn execute(
         plan, remote, cdn, client, encoding, install, locations, loose, tags, tag_column, ..
     } = prepared;
 
+    // Before a byte is fetched, not after. The run's very last act is to write
+    // `.build.info` *into the install root*, and a root that will not take a
+    // new file fails there, hours in, with every downloaded byte already on
+    // disk and the update still reported as failed. Writing into `Data/data`
+    // and the flavour directory proves nothing about the root: those are
+    // separate directories with their own permissions, and an install carried
+    // over from another tool or another user is exactly where they differ.
+    match crate::paths::ensure_writable(dest) {
+        Ok(crate::paths::Repaired::Yes) => on_event(Event::Repaired { dir: dest.to_path_buf() }),
+        Ok(crate::paths::Repaired::No) => {}
+        Err(source) => return Err(InstallError::Unwritable { dir: dest.to_path_buf(), source }),
+    }
+
     let mut writer = StoreWriter::create(dest.join("Data").join("data"))?;
     // The reader always carries a key service; the downloader must too, or
     // blte cannot even name a missing key properly.
@@ -668,7 +687,8 @@ pub async fn execute(
                 ("Version", &remote.versions_name),
             ],
         )?;
-        info.save(&info_path)?;
+        info.save(&info_path)
+            .map_err(|source| InstallError::Metadata { what: ".build.info", source })?;
         on_event(Event::BuildInfo {
             path: info_path,
             version: remote.versions_name.clone(),
@@ -763,6 +783,24 @@ pub enum InstallError {
 
     #[error("the build config has no {0} manifest")]
     MissingManifest(&'static str),
+
+    /// The content is downloaded and extracted and only the bookkeeping is
+    /// left. Its own variant because "i/o error at <the install root>" says
+    /// nothing about which of the half-dozen things that touch that directory
+    /// was being written, and this is the one the user has waited longest for.
+    #[error("{dir} will not accept new files, so this install cannot be finished")]
+    Unwritable {
+        dir: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("the download finished but {what} could not be written")]
+    Metadata {
+        what: &'static str,
+        #[source]
+        source: crate::buildinfo::BuildInfoError,
+    },
 
     #[error("i/o error at {path}")]
     Io {

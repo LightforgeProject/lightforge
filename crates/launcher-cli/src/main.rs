@@ -1323,6 +1323,9 @@ async fn main() -> Result<()> {
                     println!("build           {versions_name} ({build_config})");
                     println!("archives        {archives}");
                 }
+                Event::Repaired { dir } => {
+                    println!("repaired        added owner write to {}", dir.display())
+                }
                 Event::Encoding { entries } => println!("encoding        {entries} entries"),
                 Event::Manifests { download, install, unknown_tags } => {
                     println!("download        {download} entries");
@@ -3180,7 +3183,7 @@ fn describe_link(state: &LinkState) -> String {
     match state {
         LinkState::Correct => "ok".to_owned(),
         LinkState::Missing => "missing".to_owned(),
-        LinkState::Dangling(t) => format!("dangling -> {}", t.display()),
+        LinkState::Pending(t) => format!("ok -> {} (not downloaded yet)", t.display()),
         LinkState::Mislinked(t) => format!("points at {}", t.display()),
         LinkState::OccupiedEmpty => "empty directory in the way".to_owned(),
         LinkState::Occupied => "a real directory with files in it".to_owned(),

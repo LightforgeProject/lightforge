@@ -255,8 +255,11 @@ pub enum LinkState {
     Correct,
     /// Nothing at the link path.
     Missing,
-    /// A symlink whose target doesn't exist, what a wiped `games/` leaves.
-    Dangling(PathBuf),
+    /// A symlink pointing at the right place, where the right place is not
+    /// there yet: a library with no game downloaded into it, or a `games/`
+    /// that was wiped. The link itself is correct and Wine resolves it the
+    /// moment the directory appears, so there is nothing to repair.
+    Pending(PathBuf),
     /// A symlink pointing somewhere else entirely.
     Mislinked(PathBuf),
     /// A real, empty directory, typically created by an installer that ran
@@ -269,13 +272,17 @@ pub enum LinkState {
 
 impl LinkState {
     /// Whether the prefix can be launched from as-is.
+    ///
+    /// [`Self::Pending`] counts: the link is right, and the directory it names
+    /// appears with the first download. Setup is finished either way, and
+    /// holding it open until a game is installed would make a first run loop.
     pub fn is_usable(&self) -> bool {
-        matches!(self, Self::Correct)
+        matches!(self, Self::Correct | Self::Pending(_))
     }
 
     /// Whether [`ensure_link`] can fix this without the user deciding anything.
     pub fn is_repairable(&self) -> bool {
-        !matches!(self, Self::Correct | Self::Occupied)
+        !matches!(self, Self::Correct | Self::Pending(_) | Self::Occupied)
     }
 }
 
@@ -292,7 +299,7 @@ pub fn inspect_link(link: &Path, target: &Path) -> LinkState {
     }
 
     let Ok(dest) = std::fs::read_link(link) else {
-        return LinkState::Dangling(PathBuf::new());
+        return LinkState::Pending(PathBuf::new());
     };
     // Compare resolved paths where possible so `games/` reached through a
     // symlinked home still counts as correct.
@@ -304,30 +311,33 @@ pub fn inspect_link(link: &Path, target: &Path) -> LinkState {
 
     match (same, link.exists()) {
         (true, true) => LinkState::Correct,
-        (true, false) => LinkState::Dangling(dest),
+        (true, false) => LinkState::Pending(dest),
         (false, _) => LinkState::Mislinked(dest),
     }
 }
 
 /// Create or repair the symlink, returning the state found beforehand.
 ///
-/// The target directory is created if absent, a symlink into a not-yet-
-/// downloaded install is the normal pre-install state, and Wine resolves it
-/// the moment the directory appears.
+/// The **target is not created**. A symlink into a not-yet-downloaded install
+/// is the normal pre-install state and Wine resolves it the moment the
+/// directory appears, so conjuring the directory here buys nothing and costs
+/// a real one: an empty `World of Warcraft/` in every library the moment a
+/// prefix is built. That folder is indistinguishable from a broken install, it
+/// occupies the name an install found elsewhere would be linked or adopted
+/// into, and a product whose library holds one reads as `Install` rather than
+/// `Play`. The downloader creates the directory it writes into.
 pub fn ensure_link(link: &Path, target: &Path) -> Result<LinkState, PrefixError> {
     let before = inspect_link(link, target);
 
-    std::fs::create_dir_all(target)
-        .map_err(|e| PrefixError::Io { path: target.to_path_buf(), source: e })?;
     if let Some(parent) = link.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| PrefixError::Io { path: parent.to_path_buf(), source: e })?;
     }
 
     match &before {
-        LinkState::Correct => return Ok(before),
+        LinkState::Correct | LinkState::Pending(_) => return Ok(before),
         LinkState::Occupied => return Err(PrefixError::LinkOccupied(link.to_path_buf())),
-        LinkState::Dangling(_) | LinkState::Mislinked(_) => std::fs::remove_file(link)
+        LinkState::Mislinked(_) => std::fs::remove_file(link)
             .map_err(|e| PrefixError::Io { path: link.to_path_buf(), source: e })?,
         LinkState::OccupiedEmpty => std::fs::remove_dir(link)
             .map_err(|e| PrefixError::Io { path: link.to_path_buf(), source: e })?,
@@ -570,6 +580,7 @@ mod tests {
     fn missing_link_is_created_and_reports_as_correct() {
         let dir = scratch("create");
         let (link, target) = (dir.join("link"), dir.join("target"));
+        std::fs::create_dir_all(&target).unwrap();
 
         assert_eq!(inspect_link(&link, &target), LinkState::Missing);
         assert_eq!(ensure_link(&link, &target).unwrap(), LinkState::Missing);
@@ -579,14 +590,32 @@ mod tests {
     }
 
     #[test]
-    fn a_dangling_link_is_repaired_rather_than_reported_missing() {
-        let dir = scratch("dangling");
+    fn a_link_whose_target_is_not_downloaded_yet_is_left_alone() {
+        let dir = scratch("pending");
         let (link, target) = (dir.join("link"), dir.join("target"));
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
-        assert_eq!(inspect_link(&link, &target), LinkState::Dangling(target.clone()));
-        assert!(ensure_link(&link, &target).unwrap().is_repairable());
-        assert_eq!(inspect_link(&link, &target), LinkState::Correct);
+        let state = inspect_link(&link, &target);
+        assert_eq!(state, LinkState::Pending(target.clone()));
+        // Correct as it stands: nothing to repair, and setup is finished.
+        assert!(state.is_usable() && !state.is_repairable());
+        assert_eq!(ensure_link(&link, &target).unwrap(), state);
+        assert!(!target.exists(), "linking must not conjure the install");
+    }
+
+    #[test]
+    fn a_new_link_does_not_create_the_install_it_points_at() {
+        let dir = scratch("no-pre-create");
+        let (link, target) = (dir.join("link"), dir.join("World of Warcraft"));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert_eq!(ensure_link(&link, &target).unwrap(), LinkState::Missing);
+        assert!(link.is_symlink());
+        assert!(
+            !target.exists(),
+            "an empty install folder reads as a broken one and takes the name \
+             an install found elsewhere would be adopted into"
+        );
     }
 
     #[test]
@@ -594,6 +623,7 @@ mod tests {
         let dir = scratch("mislinked");
         let (link, target, other) = (dir.join("link"), dir.join("target"), dir.join("other"));
         std::fs::create_dir_all(&other).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
         std::os::unix::fs::symlink(&other, &link).unwrap();
 
         assert_eq!(inspect_link(&link, &target), LinkState::Mislinked(other));
@@ -605,6 +635,7 @@ mod tests {
     fn an_empty_directory_is_replaced_but_a_populated_one_is_not() {
         let dir = scratch("occupied");
         let (target, empty, full) = (dir.join("target"), dir.join("empty"), dir.join("full"));
+        std::fs::create_dir_all(&target).unwrap();
         std::fs::create_dir_all(&empty).unwrap();
         std::fs::create_dir_all(full.join("Data")).unwrap();
 
@@ -635,10 +666,13 @@ mod tests {
         assert_eq!(link.parent().unwrap().file_name().unwrap(), "dosdevices");
         assert_eq!(std::fs::read_link(&link).unwrap(), install);
 
-        // Idempotent: provisioning runs on every launch.
+        // Idempotent: provisioning runs on every launch. `Pending` rather than
+        // `Correct` because nothing has been downloaded into the library yet,
+        // and linking deliberately does not create the install directory.
+        assert!(!install.exists());
         assert_eq!(
             ensure_link(&layout.wow_drive(&main), &install).unwrap(),
-            LinkState::Correct,
+            LinkState::Pending(install.clone()),
         );
 
         // The `games/` letter is a second, separate mapping, Battle.net needs

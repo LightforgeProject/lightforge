@@ -38,6 +38,7 @@ use iced::widget::{
 };
 use iced::{Alignment, ContentFit, Element, Length, Subscription, Task};
 
+use lightforge_core::error::chain;
 use lightforge_core::addons::manage;
 use lightforge_core::addons::richtext;
 use lightforge_core::addons::Channel;
@@ -3375,7 +3376,7 @@ impl Lightforge {
                     return Task::none();
                 };
                 if let Err(e) = manage::set_channel(&options, &provider, &id, choice.0) {
-                    self.error = Some(e.to_string());
+                    self.error = Some(chain(&e));
                 }
                 Task::perform(
                     addonwork::list(self.layout.clone(), self.selected.code.clone()),
@@ -3398,7 +3399,7 @@ impl Lightforge {
                     return Task::none();
                 };
                 if let Err(e) = manage::set_ignored(&options, &provider, &id, ignored) {
-                    self.error = Some(e.to_string());
+                    self.error = Some(chain(&e));
                 }
                 // Re-list rather than patch the row in place: the ledger on
                 // disk is the truth the rest of the page is drawn from.
@@ -3418,7 +3419,7 @@ impl Lightforge {
                     return Task::none();
                 };
                 if let Err(e) = manage::set_auto_update(&options, &provider, &id, choice) {
-                    self.error = Some(e.to_string());
+                    self.error = Some(chain(&e));
                 }
                 Task::perform(
                     addonwork::list(self.layout.clone(), self.selected.code.clone()),
@@ -3597,7 +3598,7 @@ impl Lightforge {
                     return Task::none();
                 };
                 if let Err(e) = manage::set_pinned(&options, &provider, &id, file_id) {
-                    self.error = Some(e.to_string());
+                    self.error = Some(chain(&e));
                 }
                 Task::perform(
                     addonwork::list(self.layout.clone(), self.selected.code.clone()),
@@ -4550,7 +4551,7 @@ impl Lightforge {
                     async move {
                         tokio::task::spawn_blocking(move || art::load_shot(&path))
                             .await
-                            .unwrap_or_else(|e| Err(e.to_string()))
+                            .unwrap_or_else(|e| Err(chain(&e)))
                             .map(Box::new)
                     },
                     Message::ReportShotLoaded,
@@ -5267,7 +5268,7 @@ impl Lightforge {
         if library.state() == library::State::Missing {
             return Err(format!("{} is not mounted", library.label));
         }
-        library.claim().map_err(|e| e.to_string())?;
+        library.claim().map_err(|e| chain(&e))?;
         if let Some(product) = self.config.product_mut(code) {
             product.profile.library = Some(id.to_owned());
         }
@@ -5277,7 +5278,7 @@ impl Lightforge {
         // Before setup there is no prefix to link into, and setup makes the
         // links itself; creating `drive_c` early would get in wineboot's way.
         if lightforge_core::prefix::PrefixStatus::inspect(&self.layout).initialized {
-            lightforge_core::prefix::link_libraries(&self.layout).map_err(|e| e.to_string())?;
+            lightforge_core::prefix::link_libraries(&self.layout).map_err(|e| chain(&e))?;
         }
         Ok(())
     }
@@ -5358,7 +5359,7 @@ impl Lightforge {
         );
         library.games_letter = games_letter;
         library.wow_letter = wow_letter;
-        library.claim().map_err(|e| e.to_string())?;
+        library.claim().map_err(|e| chain(&e))?;
         if self.config.libraries.iter().any(|l| l.id == library.id) {
             return Err(format!("{} is already a Lightforge drive", partition.label));
         }
@@ -5366,7 +5367,7 @@ impl Lightforge {
         self.save_config();
         self.rebuild_layout();
         if lightforge_core::prefix::PrefixStatus::inspect(&self.layout).initialized {
-            lightforge_core::prefix::link_libraries(&self.layout).map_err(|e| e.to_string())?;
+            lightforge_core::prefix::link_libraries(&self.layout).map_err(|e| chain(&e))?;
         }
         Ok(())
     }
@@ -5483,7 +5484,7 @@ impl Lightforge {
             return;
         };
         if let Err(e) = self.config.save(&dirs.config_file()) {
-            self.error = Some(e.to_string());
+            self.error = Some(chain(&e));
         }
     }
 

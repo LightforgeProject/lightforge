@@ -568,8 +568,128 @@ pub enum PathError {
     NoHomeDirectory,
 }
 
+
+/// Prove `dir` will take a new file, repairing the one case we own.
+///
+/// `create_dir_all` is not the question: the directory can exist, can be read,
+/// can have a writable `Data/` inside it, and still refuse a file of its own.
+/// An install root carried over from another tool, another machine or a
+/// restored backup is where that happens, and it is invisible until the thing
+/// written into the root is written: `.product.db` when the install is
+/// adopted, `.build.info` at the very end of a download. Both are the last
+/// step of a long operation, which is the worst possible moment to find out.
+///
+/// When the refusal is a missing owner-write bit on a directory this user owns,
+/// it is added and the probe retried: that is a directory we are entitled to
+/// write into, and the alternative is telling someone to run `chmod` on their
+/// own install. Anything else, another owner, a read-only mount, a full disk,
+/// is reported with its cause intact, because those are not ours to change.
+///
+/// Returns whether the mode had to be repaired, so the caller can say so.
+pub fn ensure_writable(dir: &Path) -> Result<Repaired, std::io::Error> {
+    std::fs::create_dir_all(dir)?;
+    match probe(dir) {
+        Ok(()) => return Ok(Repaired::No),
+        Err(e) if e.kind() != std::io::ErrorKind::PermissionDenied => return Err(e),
+        Err(e) => {
+            if !owned_here(dir) {
+                return Err(e);
+            }
+            let Ok(meta) = std::fs::metadata(dir) else { return Err(e) };
+            let mode = std::os::unix::fs::PermissionsExt::mode(&meta.permissions());
+            // Only the owner-write bit, and only when it is the bit missing.
+            // Nothing else about the directory is this function's business.
+            if mode & 0o200 != 0 {
+                return Err(e);
+            }
+            let fixed = std::os::unix::fs::PermissionsExt::from_mode(mode | 0o200);
+            std::fs::set_permissions(dir, fixed).map_err(|_| e)?;
+        }
+    }
+    probe(dir).map(|()| Repaired::Yes)
+}
+
+/// Whether the directory belongs to the user running this process.
+fn owned_here(dir: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(dir).is_ok_and(|meta| meta.uid() == unsafe { libc::geteuid() })
+}
+
+fn probe(dir: &Path) -> Result<(), std::io::Error> {
+    let probe = dir.join(".lightforge-write-probe");
+    std::fs::File::create(&probe)?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
+}
+
+/// Whether [`ensure_writable`] had to change the directory's mode to succeed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Repaired {
+    No,
+    /// The owner-write bit was missing and was added. Worth saying out loud:
+    /// the user's install folder is not the same afterwards as before.
+    Yes,
+}
+
 #[cfg(test)]
 mod tests {
+    /// A directory that exists, that the run would happily write *into*
+    /// through its subdirectories, and that refuses a file of its own. This is
+    /// the shape an install root carried over from another tool arrives in,
+    /// and it used to surface as `i/o error at <that directory>` after an
+    /// hours-long download had already finished.
+    #[test]
+    fn a_root_that_refuses_a_file_is_repaired_when_we_own_it() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // root ignores the mode bits, so there is nothing to prove there.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let dir = std::env::temp_dir()
+            .join(format!("lightforge-writable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(ensure_writable(&dir).unwrap(), Repaired::No);
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        assert_eq!(
+            ensure_writable(&dir).unwrap(),
+            Repaired::Yes,
+            "a directory this user owns is made writable rather than reported"
+        );
+        // Only the owner-write bit, and nothing else about the directory.
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755, "only the owner-write bit was added, got {mode:o}");
+        // And it stays fixed, so the next run reports nothing.
+        assert_eq!(ensure_writable(&dir).unwrap(), Repaired::No);
+        // The probe leaves nothing behind.
+        assert!(std::fs::read_dir(&dir).unwrap().next().is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A refusal that is not ours to fix keeps its cause, which is the half a
+    /// bug report needs and the half `i/o error at {path}` never carried.
+    #[test]
+    fn a_refusal_we_cannot_fix_comes_back_with_its_cause() {
+        let root = std::env::temp_dir()
+            .join(format!("lightforge-unwritable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        // A regular file where a parent directory should be: nothing about
+        // permissions, and nothing a mode change could help.
+        let file = root.join("not-a-directory");
+        std::fs::write(&file, b"x").unwrap();
+
+        let error = ensure_writable(&file.join("World of Warcraft"))
+            .expect_err("a file is not a directory to install into");
+        let rendered = crate::error::chain(&error);
+        assert!(!rendered.is_empty(), "the io error must survive");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     use super::*;
 
     fn layout() -> Layout {

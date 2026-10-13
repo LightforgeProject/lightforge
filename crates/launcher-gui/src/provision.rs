@@ -6,6 +6,7 @@
 //! than one line. It is a handful of strings, and a UI that samples can
 //! otherwise miss a line entirely.
 
+use lightforge_core::error::chain;
 use lightforge_core::net::Http;
 use lightforge_core::config::Config;
 use lightforge_core::paths::{AppDirs, Layout};
@@ -39,11 +40,11 @@ pub async fn install_build(
     version: String,
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<(), String> {
-    let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
+    let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
     setup::install_build(&dirs, &version, reporter(tx))
         .await
         .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| chain(&e))
 }
 
 /// Turn setup [`Event`]s into [`Progress`] updates on `tx`.
@@ -85,10 +86,10 @@ pub async fn run(
     proton_version: Option<String>,
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Status, String> {
-    let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
+    let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
     setup::run(&layout, &dirs, &config, proton_version.as_deref(), reporter(tx))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| chain(&e))
 }
 
 /// Read what is already provisioned, off the UI thread.
@@ -124,12 +125,12 @@ pub async fn check_proton(
     use lightforge_core::net::ETagCache;
     use lightforge_core::proton;
 
-    let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
+    let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
     let http = http.ok_or(crate::tasks::NO_HTTP)?;
     let cache = ETagCache::new(dirs.asset_cache_dir().join("proton-releases.json"));
     let releases = proton::fetch_releases(&http, &cache)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| chain(&e))?;
 
     // Pre-releases are deliberately not offered: `latest_stable` skips them
     // for the update check, and a list that could install one would make the
@@ -169,12 +170,12 @@ pub async fn measure(builds: Vec<std::path::PathBuf>) -> Vec<(std::path::PathBuf
 /// Delete a managed build, refusing anything still pinned.
 pub async fn remove_proton(config: Config, build: ProtonRelease) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
+        let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
         let pinned_by = config.pinned_to(&build.version);
         lightforge_core::proton::remove_build(&build, &dirs.proton_dir(), &pinned_by)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| chain(&e))?;
         Ok(format!("removed {}", build.version))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| chain(&e))?
 }

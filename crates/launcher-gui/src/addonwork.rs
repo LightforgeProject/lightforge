@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 
+use lightforge_core::error::chain;
 use lightforge_core::addons::catalog::{Catalog, Request};
 use lightforge_core::addons::manage::{self, Event, Options, Report};
 use lightforge_core::addons::richtext;
@@ -467,7 +468,7 @@ pub async fn import(
     pinned: bool,
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Report, String> {
-    let collection = Collection::parse(&token).map_err(|e| e.to_string())?;
+    let collection = Collection::parse(&token).map_err(|e| chain(&e))?;
     let requests = manage::requests_from(&collection);
     if requests.is_empty() {
         return Err("that token names no addons Lightforge can install".to_owned());
@@ -483,9 +484,9 @@ pub async fn update(
     channel: Channel,
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Report, String> {
-    let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
+    let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
     let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| chain(&e))?;
     let requests = manage::update_requests(&ledger, channel);
 
     if requests.is_empty() {
@@ -506,9 +507,9 @@ pub async fn auto_update(
     default_auto: bool,
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Option<Report>, String> {
-    let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
+    let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
     let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| chain(&e))?;
     let requests = manage::auto_update_requests(&ledger, channel, default_auto);
 
     if requests.is_empty() {
@@ -573,7 +574,7 @@ async fn run(
 
     manage::install_all(&http, catalog.as_ref(), &requests, &options, on_event)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| chain(&e))
 }
 
 /// Search every provider that can answer.
@@ -656,7 +657,7 @@ pub async fn adopt(
     let http = http.ok_or(crate::tasks::NO_HTTP)?;
     manage::adopt(&http, catalog().as_ref(), &options)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| chain(&e))
 }
 
 /// Every build the catalogue offers for one addon, newest first.
@@ -680,7 +681,7 @@ pub async fn versions(
     catalog
         .files(&http, &id, addons::flavor_of(&code), VERSION_CHOICES)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| chain(&e))
 }
 
 /// Everything the detail view shows about one addon: the project, its
@@ -719,7 +720,7 @@ pub async fn detail(
 
     // The project is the only part that must succeed, it carries the name,
     // the author and the link out. The rest is enrichment.
-    let project = catalog.project(&http, &id).await.map_err(|e| e.to_string())?;
+    let project = catalog.project(&http, &id).await.map_err(|e| chain(&e))?;
 
     let description = catalog.description(&http, &id).await.ok();
 
@@ -790,9 +791,9 @@ pub async fn reinstall_one(
     channel: Channel,
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Report, String> {
-    let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
+    let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
     let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| chain(&e))?;
     let pinned_file = ledger.find(&provider, &id).and_then(|record| record.pinned.clone());
 
     run(
@@ -821,7 +822,7 @@ pub fn export(layout: &Layout, code: &ProductCode) -> Result<String, String> {
     // Reads the ledger and resolves nothing, so the channel is never consulted.
     let options =
         options(layout, code, false, Channel::default()).ok_or("no data directory available")?;
-    let ledger = Ledger::load(&options.ledger_path).map_err(|e| e.to_string())?;
+    let ledger = Ledger::load(&options.ledger_path).map_err(|e| chain(&e))?;
 
     let collection = addons::Collection {
         collection_name: format!("Lightforge · {}", code.as_str()),
@@ -838,7 +839,7 @@ pub fn export(layout: &Layout, code: &ProductCode) -> Result<String, String> {
             .collect(),
     };
 
-    collection.to_token().map_err(|e| e.to_string())
+    collection.to_token().map_err(|e| chain(&e))
 }
 
 /// Ask what has updates, without installing anything.
@@ -853,7 +854,7 @@ pub async fn check_updates(
     let http = http.ok_or(crate::tasks::NO_HTTP)?;
     manage::check_updates(&http, catalog().as_ref(), &options)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| chain(&e))
 }
 
 /// Remove an addon Lightforge installed.
@@ -867,8 +868,8 @@ pub async fn remove(
         // Deletes folders the ledger names; resolves nothing.
         let options = options(&layout, &code, false, Channel::default())
             .ok_or("no data directory available")?;
-        manage::remove(&options, &provider, &id).map_err(|e| e.to_string())
+        manage::remove(&options, &provider, &id).map_err(|e| chain(&e))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| chain(&e))?
 }

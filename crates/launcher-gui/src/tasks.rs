@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use iced::widget::image::Handle;
+use lightforge_core::error::chain;
 use lightforge_core::assets::{Manifest, Pipeline};
 use lightforge_core::config::Config;
 use lightforge_core::net::Http;
@@ -73,7 +74,7 @@ pub async fn refresh(
                 version::for_region(&rows, region, |v| &v.region).cloned(),
                 None,
             ),
-            Err(e) => (None, Some(e.to_string())),
+            Err(e) => (None, Some(chain(&e))),
         },
         None => (None, Some(NO_HTTP.to_owned())),
     };
@@ -109,7 +110,7 @@ pub async fn offerings(
     };
     install::offerings(&http, &code, &options, probe.as_ref())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| chain(&e))
 }
 
 /// What a scan did.
@@ -144,7 +145,7 @@ pub async fn scan_and_repair(
         }
 
         let install = layout.wow_install(&code);
-        let store = Storage::open(install.join("Data")).map_err(|e| e.to_string())?;
+        let store = Storage::open(install.join("Data")).map_err(|e| chain(&e))?;
         let report = verify::scan(&store, |progress| {
             let _ = tx.send(progress);
         });
@@ -152,7 +153,7 @@ pub async fn scan_and_repair(
         let removed = match report.is_healthy() {
             true => 0,
             false => verify::repair(&install.join("Data").join("data"), &report.damaged)
-                .map_err(|e| e.to_string())?,
+                .map_err(|e| chain(&e))?,
         };
         Ok(Scanned {
             checked: report.checked,
@@ -161,7 +162,7 @@ pub async fn scan_and_repair(
         })
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| chain(&e))?
 }
 
 /// Hash every stored byte against its chunk table and key.
@@ -179,10 +180,10 @@ pub async fn deep_scan(
         lightforge_core::tact::verify::deep_scan(layout.wow_install(&code), &cancel, |progress| {
             let _ = tx.send(progress);
         })
-        .map_err(|e| e.to_string())
+        .map_err(|e| chain(&e))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| chain(&e))?
 }
 
 /// Why a repair did not happen.
@@ -208,10 +209,10 @@ pub async fn repair(
         }
         let data_dir = layout.wow_install(&code).join("Data").join("data");
         lightforge_core::tact::verify::repair_unchanged(&data_dir, &report)
-            .map_err(|e| Unrepaired::Failed(e.to_string()))
+            .map_err(|e| Unrepaired::Failed(chain(&e)))
     })
     .await
-    .map_err(|e| Unrepaired::Failed(e.to_string()))?
+    .map_err(|e| Unrepaired::Failed(chain(&e)))?
 }
 
 /// Branding straight off disk, for the frame before [`theme`] answers.
@@ -496,7 +497,7 @@ pub async fn download(
             let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
                 Ok(runtime) => runtime,
                 Err(e) => {
-                    let _ = done_tx.send(Err(e.to_string()));
+                    let _ = done_tx.send(Err(chain(&e)));
                     return;
                 }
             };
@@ -505,8 +506,19 @@ pub async fn download(
                 // Deliberately not the app's shared client: this runtime is
                 // built here and torn down with the thread, and a reqwest
                 // client's connections belong to the runtime that opened them.
-                let http = Http::new().map_err(|e| e.to_string())?;
+                let http = Http::new().map_err(|e| chain(&e))?;
                 let dest = layout.wow_install(&code);
+                // The library's own path, not the default one. `.product.db`
+                // records where Battle.net should look, and a product on an
+                // added drive lives under that drive's letter; writing
+                // `C:\Program Files (x86)\World of Warcraft` for it points
+                // Battle.net at the default library, where this install is
+                // not, and it answers that the folder holds no WoW files.
+                // `uninstall` already resolves it this way.
+                let windows_path = layout
+                    .library(&code)
+                    .map(|library| library.windows_wow_path())
+                    .unwrap_or_else(|| lightforge_core::paths::WINDOWS_WOW_PATH.to_owned());
                 let options = InstallOptions {
                     region,
                     locale,
@@ -522,6 +534,7 @@ pub async fn download(
                     // So Battle.net lists the product as installed rather than
                     // offering to install what is already there.
                     agent_dir: Some(layout.agent_dir()),
+                    windows_path: Some(windows_path),
                     ..InstallOptions::default()
                 };
 
@@ -570,11 +583,11 @@ pub async fn download(
 
                 install::run(&http, &dest, &code, &options, &cancel, on_event)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(|e| chain(&e))
             });
             let _ = done_tx.send(result);
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| chain(&e))?;
 
     done_rx.await.map_err(|_| "the download thread stopped unexpectedly".to_owned())?
 }
@@ -583,6 +596,9 @@ pub async fn download(
 fn describe(event: &Event) -> String {
     match event {
         Event::Build { versions_name, .. } => format!("build {versions_name}"),
+        Event::Repaired { dir } => {
+            format!("{} would not take a file; added owner write", dir.display())
+        }
         Event::Encoding { entries } => format!("encoding — {entries} entries"),
         Event::Manifests { download, .. } => format!("manifests — {download} entries"),
         // The whole product's size, not the job's, an update would flash
@@ -691,10 +707,10 @@ pub async fn preflight(
             // The report is for the CLI, which prints it. Here the outcome is
             // binary: the prefix is ready, or the launch does not happen.
             .map(|_report| ())
-            .map_err(|e| e.to_string())
+            .map_err(|e| chain(&e))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| chain(&e))?
 }
 
 /// How long the game itself gets to appear in the prefix before the watch
@@ -770,7 +786,7 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
         // What the prefix held before the click, so a session already running
         // under another launcher is not mistaken for this one's.
         let before = lightforge_core::preflight::games_running(&layout);
-        let mut child = launch.spawn().map_err(|e| e.to_string())?;
+        let mut child = launch.spawn().map_err(|e| chain(&e))?;
         crate::trace::mark(format!("launch: spawned {}", exe.display()));
 
         let watch = exe.file_name().map(|n| n.to_string_lossy().into_owned());
@@ -799,7 +815,7 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
         }
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| chain(&e))?
 }
 
 /// What [`watch_for`] saw.
@@ -836,7 +852,7 @@ fn watch_for(
         // Checked after the scan, not before it: a game that starts and exits
         // between two polls still has to be seen, and the scan is the only
         // thing that can see it.
-        match child.try_wait().map_err(|e| e.to_string())? {
+        match child.try_wait().map_err(|e| chain(&e))? {
             Some(status) => return Ok(Watched::TreeExited(status)),
             None if Instant::now() >= deadline => return Ok(Watched::NeverAppeared),
             None => std::thread::sleep(WATCH_POLL),
@@ -860,7 +876,7 @@ fn watch_until_gone(layout: &Layout, pid: u32, child: &mut std::process::Child) 
 /// Wait the Proton child out and report what it said, the old contract, kept
 /// for the launches where nothing better is knowable.
 fn reap(mut child: std::process::Child) -> Result<String, String> {
-    let status = child.wait().map_err(|e| e.to_string())?;
+    let status = child.wait().map_err(|e| chain(&e))?;
     Ok(format!("game exited ({status})"))
 }
 
@@ -925,7 +941,7 @@ pub async fn launch_via_battle_net(
             let tools = HostTools::detect();
             let wrappers = config_tweaks().wrappers(&tools);
             battlenet::launch_wrapped(&runner, &layout, &how, &wrappers)
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| chain(&e))?;
 
             if battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT)
                 == Readiness::NeedsAttention
@@ -951,7 +967,7 @@ pub async fn launch_via_battle_net(
         // anything but WoW came out of the client's own catalogue;
         // `Launch::command` falls back to the compiled-in table without one.
         let launch = Launch::Product { code: code.clone(), exec: family };
-        battlenet::launch(&runner, &layout, &launch).map_err(|e| e.to_string())?;
+        battlenet::launch(&runner, &layout, &launch).map_err(|e| chain(&e))?;
 
         Ok(
             match preflight::wait_for_game_start(&layout, &before, HANDOFF_TIMEOUT) {
@@ -961,7 +977,7 @@ pub async fn launch_via_battle_net(
         )
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| chain(&e))?
 }
 
 /// Open the client's install flow for a game, dialog and all.
@@ -1001,12 +1017,12 @@ pub async fn install_via_battle_net(
         );
 
         battlenet::launch(&runner, &layout, &Launch::InstallFlow { uid })
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| chain(&e))?;
 
         Ok(format!("Battle.net is asking where to install {label}"))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| chain(&e))?
 }
 
 /// What came of a hand-off.
@@ -1049,7 +1065,7 @@ pub async fn await_game_exit(layout: Layout, game: GameProcess) -> Result<String
         Ok(format!("{} exited", game.name))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| chain(&e))?
 }
 
 /// What Battle.net reports as installed, keyed by product code.
@@ -1080,10 +1096,10 @@ pub async fn set_battle_net_limit(
             &user,
             mbps.map(|mbps| mbps * 1_000_000),
         )
-        .map_err(|e| e.to_string())
+        .map_err(|e| chain(&e))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| chain(&e))?
 }
 
 /// The product codes Battle.net's own config lists, so the catalog can use
@@ -1160,11 +1176,11 @@ pub async fn open_battle_net(
             &user,
             &battlenet::window_state_tweaks(false),
         );
-        battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| e.to_string())?;
+        battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| chain(&e))?;
         Ok("Battle.net opening".to_owned())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| chain(&e))?
 }
 
 /// The Proton build a product launches under, with its per-product caches.
@@ -1228,7 +1244,7 @@ fn runner_for(
     use lightforge_core::prefix::ProtonRunner;
     use lightforge_core::proton;
 
-    let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
+    let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
     let config = Config::load_or_default(&dirs.config_file()).unwrap_or_default();
     let steam = lightforge_core::steam::SteamRoot::discover();
     let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());
@@ -1318,10 +1334,10 @@ async fn reclaim_plan(
         return None;
     }
     let departing = lightforge_core::buildinfo::BuildInfo::load(install.join(".build.info"))
-        .map_err(|e| e.to_string())
-        .and_then(|info| reclaim::Build::installed(&info, code).map_err(|e| e.to_string()));
+        .map_err(|e| chain(&e))
+        .and_then(|info| reclaim::Build::installed(&info, code).map_err(|e| chain(&e)));
     Some(match departing {
-        Ok(build) => reclaim::plan(http, install, &build).await.map_err(|e| e.to_string()),
+        Ok(build) => reclaim::plan(http, install, &build).await.map_err(|e| chain(&e)),
         Err(e) => Err(e),
     })
 }
@@ -1336,10 +1352,10 @@ pub async fn uninstall_plan(
     let plan = {
         let (install, code) = (install.clone(), code.clone());
         tokio::task::spawn_blocking(move || {
-            lightforge_core::tact::uninstall::plan(&install, &code).map_err(|e| e.to_string())
+            lightforge_core::tact::uninstall::plan(&install, &code).map_err(|e| chain(&e))
         })
         .await
-        .map_err(|e| e.to_string())??
+        .map_err(|e| chain(&e))??
     };
     let reclaim = match &http {
         Some(http) => reclaim_plan(http, &install, &code, &plan).await,
@@ -1370,7 +1386,7 @@ pub async fn uninstall(
     let alive = layout.clone();
     let busy = tokio::task::spawn_blocking(move || lightforge_core::preflight::scan(&alive))
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| chain(&e))?;
     if let Some(process) = busy.first() {
         return Err(format!("close {} first — the game files are in use", process.name));
     }
@@ -1380,7 +1396,7 @@ pub async fn uninstall(
         .library(&code)
         .map(|library| library.windows_wow_path())
         .unwrap_or_else(|| lightforge_core::paths::WINDOWS_WOW_PATH.to_owned());
-    let plan = uninstall::plan(&install, &code).map_err(|e| e.to_string())?;
+    let plan = uninstall::plan(&install, &code).map_err(|e| chain(&e))?;
     // A reclaim that cannot be planned is skipped, not fatal: the uninstall
     // itself is still exactly what was asked for.
     let reclaim = match &http {
@@ -1390,16 +1406,16 @@ pub async fn uninstall(
 
     tokio::task::spawn_blocking(move || {
         let removed = uninstall::execute(&install, &code, &plan, &windows_path)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| chain(&e))?;
         let reclaimed = match &reclaim {
-            Some(reclaim) => reclaim::execute(&install, reclaim).map_err(|e| e.to_string())?,
+            Some(reclaim) => reclaim::execute(&install, reclaim).map_err(|e| chain(&e))?,
             None => 0,
         };
-        productdb::unregister(&layout.agent_dir(), code.as_str()).map_err(|e| e.to_string())?;
+        productdb::unregister(&layout.agent_dir(), code.as_str()).map_err(|e| chain(&e))?;
         Ok(removed.bytes + reclaimed)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| chain(&e))?
 }
 
 /// Measure Settings > Storage. Walks the whole game install.
@@ -1421,18 +1437,18 @@ pub async fn clear_library(
     library: lightforge_core::library::Library,
 ) -> Result<u64, String> {
     tokio::task::spawn_blocking(move || {
-        lightforge_core::storage::clear_library(&layout, &library).map_err(|e| e.to_string())
+        lightforge_core::storage::clear_library(&layout, &library).map_err(|e| chain(&e))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| chain(&e))?
 }
 
 /// Clear Lightforge's own cache, shader caches aside; returns bytes freed.
 pub async fn clear_cache(dirs: AppDirs) -> Result<u64, String> {
     tokio::task::spawn_blocking(move || lightforge_core::storage::clear_cache(&dirs))
         .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+        .map_err(|e| chain(&e))?
+        .map_err(|e| chain(&e))
 }
 
 /// Open a URL in the default browser.
