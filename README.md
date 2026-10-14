@@ -54,7 +54,9 @@ one press.
 ## What it does
 
 **Installs and updates WoW itself.** Retail, Classic, Classic Era,
-Anniversary, and the PTR and beta branches behind each one's version picker.
+Anniversary and WoW: Forever, and the PTR, beta and stress-test branches behind
+each one's version picker. A game Blizzard offers as a pre-install downloads
+ahead of time and says when its servers open.
 Real CASC storage, resumable downloads, and verification that checks every
 stored byte against its own checksums without decoding anything — including
 while the game is running.

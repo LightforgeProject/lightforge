@@ -49,6 +49,11 @@ password. You sign in to Battle.net in Blizzard's own window, exactly as you
 would without me. Lightforge couldn't log in as you if it wanted to; it has
 nothing to log in with.
 
+It does read one thing Battle.net leaves on disk: the client's cached copy of
+Blizzard's public game catalogue, for game names, which tile a game belongs to,
+and a pre-install's release date. It skips anything in it that depends on your
+account, such as which games you own.
+
 ## The honest bit about risk
 
 I'm not going to tell you that you can't get banned for using this, because

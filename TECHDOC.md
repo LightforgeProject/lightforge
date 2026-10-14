@@ -316,6 +316,29 @@ So the mapping is a lookup over files the client already left on disk, not a
 table to maintain — and it covers every title Blizzard publishes rather than
 the two somebody happened to observe in a log.
 
+The same fragments carry the **pre-install** state. Battle.net's "Pre-Install
+… Available October 19, 2026" for the WoW: Forever stress test is a fragment
+giving `wowf` a `release_date_message`, and the version picker's "Stress Test"
+is the part after the dash in its selector name. There is no boolean anywhere;
+a release-date message is the signal. Two rules keep it honest:
+
+- **Only current fragments.** The cache is content-addressed and never pruned,
+  so it holds every revision ever fetched (one old copy still calls the
+  Forever beta "Mists of Pandaria Beta"). The newest root fragment lists the
+  current hash of each, and names and dates come from those alone. Families
+  are read from every revision, since they never change.
+- **Only conditions that can be decided.** A fragment may be conditional on
+  licences, feature flags, platform, country or login region. Only the login
+  region is evaluated, from the configured region; anything else is skipped.
+  The licence-gated one is why: it gives the Forever beta "Available November
+  4" for accounts that do not own Forever, and Lightforge does not look at
+  what an account owns.
+
+It is a label and a caption, never a gate. PLAY stays enabled: whether the
+servers let you in is decided on Blizzard's side, the cache only refreshes when
+the client runs, and starting the game early is how you find out the install
+works before the servers open.
+
 ## Storage libraries
 
 `library.rs`. A library is one partition's worth of games, shaped like the
@@ -366,6 +389,16 @@ URL and revalidated with ETags so a start-up check costs a `304`. The
 is one line in a published table plus a deploy, no release. Only *identity* is
 server-driven — install directory and executable stay derived from the code,
 so a bad publish can mislabel a product but never install one over another.
+
+That derivation is also the limit. `wow_<flavor>` codes install to
+`_<flavor>_`, so a new one needs no release; a code of any other shape does.
+`wowf` (WoW: Forever) installs to `_forever_`, which its product config states
+and its name does not, so it is a built-in code. And because an older build
+reads the same manifest, **a manifest must not name a code that older builds
+derive wrongly**: 1.0.0-beta.3 would install a stated `wowf` into a literal
+`wowf/` folder. Its art therefore stays on the beta's entry, and the live
+branch borrows it. Reading the folder and executable from the product config
+would lift the limit, and is the planned fix.
 
 `news.rs` fetches headlines through the same backend and files each article
 against the game it belongs to.
