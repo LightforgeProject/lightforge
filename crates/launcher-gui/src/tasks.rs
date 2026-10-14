@@ -1008,8 +1008,8 @@ fn reap(mut child: std::process::Child) -> Result<String, String> {
 ///
 /// About 25 ms against a real cache, and only at startup: the answer changes
 /// when Blizzard publishes a new title, not while the launcher is open.
-pub async fn game_families(layout: Layout, user: String) -> Families {
-    tokio::task::spawn_blocking(move || Families::read(&layout, &user))
+pub async fn game_families(layout: Layout, user: String, region: Region) -> Families {
+    tokio::task::spawn_blocking(move || Families::read(&layout, &user, region))
         .await
         .unwrap_or_default()
 }

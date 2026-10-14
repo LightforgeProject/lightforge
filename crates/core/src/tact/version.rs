@@ -188,6 +188,7 @@ pub const KNOWN_PRODUCTS: &[(&str, &str)] = &[
     ("wow_classic_era", "Classic Era"),
     ("wow_classic_era_ptr", "Classic Era PTR"),
     ("wow_anniversary", "Anniversary"),
+    ("wowf", "Forever"),
     ("osi", "Diablo II: Resurrected"),
     ("d3", "Diablo III"),
     ("fenris", "Diablo IV"),

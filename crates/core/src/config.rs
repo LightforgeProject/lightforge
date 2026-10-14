@@ -254,6 +254,7 @@ impl Config {
                 Product::new(ProductCode::ClassicEra, "World of Warcraft Classic"),
                 Product::new(ProductCode::Classic, "WoW Classic (progression)"),
                 Product::new(ProductCode::ClassicBeta, "World of Warcraft: Forever — Beta"),
+                Product::new(ProductCode::Forever, "World of Warcraft: Forever"),
                 Product::new(ProductCode::Ptr, "WoW PTR"),
             ],
             ..Self::default()

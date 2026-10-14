@@ -1105,7 +1105,7 @@ pub fn game_uri(family: &str) -> String {
 /// ```text
 /// WoW  -> WoWX12_retail
 /// WoWC -> WoW_wow_classic_era, WoW_wow_classic
-/// WoWF -> WoWPTR_wow_classic_beta
+/// WoWF -> WoWPTR_wow_classic_beta, WoW_wowf
 /// W3   -> W3_retail
 /// ```
 ///
@@ -1133,7 +1133,9 @@ pub fn game_uid(code: &ProductCode) -> Option<String> {
         | ProductCode::ClassicEra
         | ProductCode::ClassicPtr
         | ProductCode::EraPtr => "WoWC",
-        ProductCode::ClassicBeta => "WoWF",
+        // Observed 2026-10-14: picking the stress test in the Forever tile's
+        // dropdown logs `WoWF` and then `WoW_wowf`, one tile for both.
+        ProductCode::ClassicBeta | ProductCode::Forever => "WoWF",
         // Families read out of a real client log, same as the WoW ones above.
         // Only codes actually observed are listed: a guess here does not
         // degrade to "nothing happens", it opens somebody else's game.
@@ -1406,6 +1408,7 @@ mod tests {
         assert_eq!(uid(ProductCode::ClassicEra), "WoWC");
         assert_eq!(uid(ProductCode::Classic), "WoWC");
         assert_eq!(uid(ProductCode::ClassicBeta), "WoWF");
+        assert_eq!(uid(ProductCode::Forever), "WoWF");
 
         // The bug this prevents: a TACT code is unresolvable and the client
         // falls back to Warcraft III.

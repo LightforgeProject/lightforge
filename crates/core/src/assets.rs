@@ -183,14 +183,24 @@ impl Manifest {
     /// wore retail's logo and backdrop, because retail is what `default`
     /// points at.
     ///
-    /// `None` for a line whose head *is* this product, so the live branch
-    /// still falls through to `default` rather than resolving to itself.
+    /// For the head itself, or a head the manifest does not name, the first
+    /// other branch that has a theme. Forever's head is `wowf`, and a
+    /// manifest naming `wowf` would make 1.0.0-beta.3 and older install it
+    /// into a literal `wowf/` (they do not know the code), so its art stays
+    /// on `wow_classic_beta` and the live product borrows it from there.
     fn head_theme(&self, code: &ProductCode) -> Option<&Theme> {
-        let head = code.line().head();
-        match head == *code {
+        let line = code.line();
+        let head = line.head();
+        let head_theme = match head == *code {
             true => None,
             false => self.products.get(head.as_str()),
-        }
+        };
+        head_theme.or_else(|| {
+            line.branches()
+                .iter()
+                .filter(|branch| *branch != code)
+                .find_map(|branch| self.products.get(branch.as_str()))
+        })
     }
 
     /// One art slot for a product: its own, else its line's, else the default
@@ -811,6 +821,25 @@ mod tests {
     fn a_line_with_no_art_of_its_own_still_reaches_the_default() {
         let m = manifest();
         assert_eq!(m.theme(&ProductCode::ClassicPtr).unwrap().label, "Retail");
+    }
+
+    /// Forever's art is published against the beta, and must stay there while
+    /// 1.0.0-beta.3 is in use: that build does not know `wowf` and would
+    /// install it into `wowf/` the moment a manifest named it.
+    #[test]
+    fn a_head_with_no_art_borrows_a_sibling_branch() {
+        let body = FIXTURE.replace(
+            r#""wow_classic_era": {"#,
+            r#""wow_classic_beta": { "label": "WoW Forever",
+                                     "logo":       { "url": "forever-logo.png" },
+                                     "background": { "url": "forever-bg.jpg" } },
+            "wow_classic_era": {"#,
+        );
+        let m = Manifest::parse(body.as_bytes()).unwrap();
+        assert_eq!(
+            m.slot(&ProductCode::Forever, |t| t.logo.as_ref()).map(|a| a.url.as_str()),
+            Some("forever-logo.png"),
+        );
     }
 
     #[test]

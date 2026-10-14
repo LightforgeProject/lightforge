@@ -1083,6 +1083,22 @@ struct Complete {
     version: Option<String>,
 }
 
+/// The caption under a pre-installed game's button, from Battle.net's own
+/// `Available October 19, 2026`. Said as the servers, not the game: the game
+/// starts fine before then, it is the login that is refused. A string that
+/// does not have that shape is shown as Blizzard wrote it.
+fn servers_open(release_date: &str) -> String {
+    let Some(date) = release_date.strip_prefix("Available ") else {
+        return release_date.to_owned();
+    };
+    // The year is noise for a date days away.
+    let date = match date.rsplit_once(", ") {
+        Some((day, year)) if year.len() == 4 && year.bytes().all(|b| b.is_ascii_digit()) => day,
+        _ => date,
+    };
+    format!("Servers will be available on {date}")
+}
+
 /// A product in the picker. `ProductCode` has no `Display`, and the label the
 /// user reads is not the code.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1108,17 +1124,21 @@ struct BranchChoice {
     branch: Branch,
     /// The catalog's name for this product, used when adding it to config.
     label: String,
+    /// Battle.net's name for this version where it has one of its own,
+    /// `Stress Test` rather than `Live`; see `Families::version_name`.
+    name: Option<String>,
     configured: bool,
 }
 
 impl std::fmt::Display for BranchChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = self.name.as_deref().unwrap_or(self.branch.label());
         match self.configured {
-            true => f.write_str(self.branch.label()),
+            true => f.write_str(name),
             // Said plainly in the list rather than greyed out: iced's
             // pick_list cannot style one entry differently, and a silently
             // different-looking row explains nothing anyway.
-            false => write!(f, "{} — add", self.branch.label()),
+            false => write!(f, "{name} — add"),
         }
     }
 }
@@ -1821,7 +1841,7 @@ impl Lightforge {
         let addons = Task::done(Message::AutoUpdateAddons);
         // Which tile each product belongs to, for the games Battle.net runs.
         let families = Task::perform(
-            tasks::game_families(app.layout.clone(), app.config.prefix_user.clone()),
+            tasks::game_families(app.layout.clone(), app.config.prefix_user.clone(), app.config.region),
             |families| Message::FamiliesRead(Box::new(families)),
         );
         // The first run, exactly once: the flag is written when the wizard is
@@ -2878,6 +2898,7 @@ impl Lightforge {
                         tasks::game_families(
                             self.layout.clone(),
                             self.config.prefix_user.clone(),
+                            self.config.region,
                         ),
                         |families| Message::FamiliesRead(Box::new(families)),
                     ),
@@ -6182,8 +6203,9 @@ impl Lightforge {
         // Only line heads: a line's other branches are reached from the
         // version picker, not added here as games of their own.
         // Tracked lines stay listed, or there would be no way to remove one.
+        // By head, not by `Branch::Live`: Forever's head is its beta.
         let managed: Vec<&CatalogEntry> =
-            self.catalog.managed().filter(|e| e.branch == Branch::Live).collect();
+            self.catalog.managed().filter(|e| e.code == e.line.head()).collect();
         if !managed.is_empty() {
             rows = rows.push(muted("World of Warcraft".to_owned(), theme::LABEL));
             rows = rows.extend(self.hint("Downloaded and launched by Lightforge.").map(Element::from));
@@ -6349,8 +6371,12 @@ impl Lightforge {
     /// them, which left Diablo and StarCraft as text tiles beside WoW's
     /// icons. They have marks now, and a game is a game: what decides whether
     /// a tile shows art is whether art exists, not who installs the game.
+    ///
+    /// The head's mark first, then any other branch's: Forever's head is
+    /// `wowf`, whose art stays on `wow_classic_beta` in the manifest (see
+    /// `Manifest::head_theme`).
     fn tile_art(&self, line: &ProductLine) -> Option<&tasks::Mark> {
-        self.icons.get(&line.head())
+        line.branches().iter().find_map(|code| self.icons.get(code))
     }
 
     /// One tile.
@@ -6937,6 +6963,11 @@ impl Lightforge {
             .map(|entry| BranchChoice {
                 configured: self.choices.iter().any(|c| c.code == entry.code),
                 branch: entry.branch,
+                name: self
+                    .families
+                    // The UI is English; the install locale is for the game's files.
+                    .version_name(entry.code.as_str(), "default")
+                    .map(str::to_owned),
                 code: entry.code.clone(),
                 label: entry.label.clone(),
             })
@@ -7521,8 +7552,17 @@ impl Lightforge {
             .align_y(Alignment::Center),
         );
 
+        // Battle.net's own words for a game that downloads before it opens.
+        // A caption and a label only: PLAY stays PLAY, because whether the
+        // game is open is decided on Blizzard's side, and this cache can
+        // still say "pre-install" on release day.
+        let release_date = self.families.release_date(self.selected.code.as_str(), "default");
+        let label = match (action, release_date) {
+            (ActionState::Install, Some(_)) => "PRE-INSTALL",
+            _ => action.label(),
+        };
         let primary = button(
-            container(text(action.label()).size(theme::HEADING).color(iced::Color::WHITE))
+            container(text(label).size(theme::HEADING).color(iced::Color::WHITE))
                 .center_x(Length::Fill),
         )
         .style(theme::filled_left(color))
@@ -7581,6 +7621,7 @@ impl Lightforge {
                 false => battle_net.on_press(Message::BattleNet),
             },
         ]
+        .push(release_date.map(|date| muted(servers_open(date), theme::CAPTION)))
         .spacing(theme::SM)
         .align_x(Alignment::Center)
         .width(Length::Shrink);
@@ -12702,6 +12743,15 @@ fn eta_of(progress: state::Progress) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::servers_open;
+
+    #[test]
+    fn the_servers_caption_is_built_from_blizzards_date() {
+        assert_eq!(servers_open("Available October 19, 2026"), "Servers will be available on October 19");
+        // Anything else is Blizzard's words, untouched.
+        assert_eq!(servers_open("Coming soon"), "Coming soon");
+    }
+
     use super::*;
 
     fn chord(text: &str, modifiers: iced::keyboard::Modifiers) -> bool {

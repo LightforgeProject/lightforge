@@ -206,9 +206,10 @@ impl Collection {
     pub fn client_type_of(code: &ProductCode) -> &'static str {
         match code {
             ProductCode::Classic | ProductCode::ClassicPtr => "Classic",
-            ProductCode::ClassicEra | ProductCode::EraPtr | ProductCode::ClassicBeta => {
-                "ClassicEra"
-            }
+            ProductCode::ClassicEra
+            | ProductCode::EraPtr
+            | ProductCode::ClassicBeta
+            | ProductCode::Forever => "ClassicEra",
             ProductCode::Ptr | ProductCode::Ptr2 => "RetailPtr",
             ProductCode::Beta => "Beta",
             _ => "Retail",
@@ -356,8 +357,11 @@ pub fn flavor_of(code: &ProductCode) -> &'static str {
             "retail"
         }
         ProductCode::Classic | ProductCode::ClassicPtr => "classic",
-        // The Forever beta runs on the 1.x line, so its addons are Era addons.
-        ProductCode::ClassicEra | ProductCode::EraPtr | ProductCode::ClassicBeta => "classic_era",
+        // Forever and its beta run on the 1.x line, so their addons are Era addons.
+        ProductCode::ClassicEra
+        | ProductCode::EraPtr
+        | ProductCode::ClassicBeta
+        | ProductCode::Forever => "classic_era",
         // An unknown or custom product is almost always a retail-line server.
         ProductCode::Custom(_) => "retail",
     }

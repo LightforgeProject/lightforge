@@ -41,6 +41,10 @@ pub enum ProductCode {
     /// Classic-line beta, `wow_classic_beta`. Currently the "World of
     /// Warcraft: Forever" beta, which ships on the 1.x line.
     ClassicBeta,
+    /// World of Warcraft: Forever, `wowf`. First published for the
+    /// October 2026 stress test; Battle.net lists it in the Forever tile's
+    /// version dropdown beside the beta.
+    Forever,
     /// Any code Lightforge doesn't model explicitly, including custom entries.
     Custom(String),
 }
@@ -57,6 +61,7 @@ impl ProductCode {
             Self::EraPtr => "wow_classic_era_ptr",
             Self::Beta => "wow_beta",
             Self::ClassicBeta => "wow_classic_beta",
+            Self::Forever => "wowf",
             Self::Custom(code) => code,
         }
     }
@@ -67,7 +72,7 @@ impl ProductCode {
             Self::Retail | Self::Ptr | Self::Ptr2 | Self::Beta => ProductLine::Retail,
             Self::Classic | Self::ClassicPtr => ProductLine::Classic,
             Self::ClassicEra | Self::EraPtr => ProductLine::ClassicEra,
-            Self::ClassicBeta => ProductLine::Forever,
+            Self::ClassicBeta | Self::Forever => ProductLine::Forever,
             Self::Custom(code) => ProductLine::Custom(code.clone()),
         }
     }
@@ -75,7 +80,9 @@ impl ProductCode {
     /// Which build of its line this product is.
     pub fn branch(&self) -> Branch {
         match self {
-            Self::Retail | Self::Classic | Self::ClassicEra | Self::Custom(_) => Branch::Live,
+            Self::Retail | Self::Classic | Self::ClassicEra | Self::Forever | Self::Custom(_) => {
+                Branch::Live
+            }
             Self::Ptr | Self::ClassicPtr | Self::EraPtr => Branch::Ptr,
             Self::Ptr2 => Branch::Ptr2,
             Self::Beta | Self::ClassicBeta => Branch::Beta,
@@ -102,6 +109,7 @@ impl ProductCode {
             Self::EraPtr => "Era PTR",
             Self::Beta => "Beta",
             Self::ClassicBeta => "C-Beta",
+            Self::Forever => "Forever",
             Self::Custom(code) => code,
         }
     }
@@ -115,7 +123,8 @@ impl ProductCode {
     /// flavor nobody has looked inside yet.
     pub fn executable(&self) -> &str {
         match self {
-            Self::Retail | Self::Ptr | Self::Ptr2 => "Wow.exe",
+            // `wowf`'s product config names `Wow.exe`, not a Classic name.
+            Self::Retail | Self::Ptr | Self::Ptr2 | Self::Forever => "Wow.exe",
             Self::Classic | Self::ClassicEra | Self::ClassicPtr | Self::EraPtr => {
                 "WowClassic.exe"
             }
@@ -142,6 +151,10 @@ impl ProductCode {
             Self::Beta => "_beta_",
             // A real install carries `_classic_beta_/WowB.exe`.
             Self::ClassicBeta => "_classic_beta_",
+            // From `wowf`'s product config (`shared_container_default_subfolder`).
+            // The code is not `wow_<flavor>` shaped, so the fallback below
+            // would have answered a literal `wowf/`.
+            Self::Forever => "_forever_",
             // A code this build does not know still follows the convention
             // every known one does: `wow_<flavor>` installs to `_<flavor>_`.
             // Deriving it beats installing into a literal `wow_foo/` directory
@@ -173,6 +186,7 @@ impl FromStr for ProductCode {
             "wow_classic_era_ptr" => Self::EraPtr,
             "wow_beta" => Self::Beta,
             "wow_classic_beta" => Self::ClassicBeta,
+            "wowf" => Self::Forever,
             other => Self::Custom(other.to_owned()),
         })
     }
@@ -214,7 +228,7 @@ pub enum ProductLine {
     Retail,
     Classic,
     ClassicEra,
-    /// "World of Warcraft: Forever", currently beta-only. Its own line rather
+    /// "World of Warcraft: Forever": the beta, with `wowf` beside it. Its own line rather
     /// than a branch of Era: Battle.net gives it its own game family (`WoWF`,
     /// see [`crate::battlenet`]) and its own tile, and this bar is modelled on
     /// that one. Its *addons* are still Era addons, compatibility and
@@ -257,6 +271,8 @@ impl ProductLine {
             Self::Retail => ProductCode::Retail,
             Self::Classic => ProductCode::Classic,
             Self::ClassicEra => ProductCode::ClassicEra,
+            // The beta, not `wowf`, until Forever launches (November 4, 2026):
+            // the stress test is a weekend, the beta is what people play.
             Self::Forever => ProductCode::ClassicBeta,
             Self::Custom(code) => ProductCode::Custom(code.clone()),
         }
@@ -271,7 +287,7 @@ impl ProductLine {
             Self::Retail => vec![ProductCode::Retail, ProductCode::Ptr, ProductCode::Ptr2, ProductCode::Beta],
             Self::Classic => vec![ProductCode::Classic, ProductCode::ClassicPtr],
             Self::ClassicEra => vec![ProductCode::ClassicEra, ProductCode::EraPtr],
-            Self::Forever => vec![ProductCode::ClassicBeta],
+            Self::Forever => vec![ProductCode::ClassicBeta, ProductCode::Forever],
             // Nothing is known about a custom code beyond itself.
             Self::Custom(code) => vec![ProductCode::Custom(code.clone())],
         }
@@ -368,6 +384,7 @@ pub const KNOWN_CODES: &[ProductCode] = &[
     ProductCode::ClassicPtr,
     ProductCode::ClassicEra,
     ProductCode::EraPtr,
+    ProductCode::Forever,
     ProductCode::ClassicBeta,
 ];
 
@@ -435,7 +452,12 @@ impl Catalog {
     /// What this binary knows on its own, with no manifest in hand.
     pub fn builtin() -> Self {
         let wow = KNOWN_CODES.iter().map(|code| CatalogEntry {
-            label: format!("{} {}", code.line().label(), code.branch().label()),
+            // A live branch is the line itself, and its label names the tile
+            // and the Add a game row: "Forever", not "Forever Live".
+            label: match code.branch() {
+                Branch::Live => code.line().label().to_owned(),
+                branch => format!("{} {}", code.line().label(), branch.label()),
+            },
             line: code.line(),
             branch: code.branch(),
             kind: Kind::of(code),
@@ -546,11 +568,16 @@ impl Catalog {
     pub fn branches(&self, line: &ProductLine) -> Vec<&CatalogEntry> {
         let mut found: Vec<&CatalogEntry> =
             self.entries.iter().filter(|e| &e.line == line).collect();
-        found.sort_by_key(|e| match e.branch {
-            Branch::Live => 0,
-            Branch::Ptr => 1,
-            Branch::Ptr2 => 2,
-            Branch::Beta => 3,
+        // The head first, which is the live branch everywhere but Forever.
+        let head = line.head();
+        found.sort_by_key(|e| {
+            let rank = match e.branch {
+                Branch::Live => 0,
+                Branch::Ptr => 1,
+                Branch::Ptr2 => 2,
+                Branch::Beta => 3,
+            };
+            (e.code != head, rank)
         });
         found
     }
@@ -772,7 +799,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lines_head_is_the_live_branch_of_that_line() {
+    fn a_lines_head_is_its_first_branch() {
         for line in [
             ProductLine::Retail,
             ProductLine::Classic,
@@ -806,5 +833,27 @@ mod tests {
         }
         assert_eq!(ProductCode::Ptr2.install_dir(), "_xptr_");
         assert_eq!(ProductCode::EraPtr.install_dir(), "_classic_era_ptr_");
+    }
+
+    /// Measured from `wowf`'s product config, 2026-10-14. As an unknown code
+    /// it would have installed into a literal `wowf/`, where no client looks.
+    #[test]
+    fn forever_installs_where_its_product_config_says() {
+        let code: ProductCode = "wowf".parse().unwrap();
+        assert_eq!(code, ProductCode::Forever);
+        assert_eq!(code.install_dir(), "_forever_");
+        assert_eq!(code.executable(), "Wow.exe");
+        assert_eq!(code.line(), ProductLine::Forever);
+        assert_eq!(code.branch(), Branch::Live);
+        assert_eq!(ProductLine::Forever.head(), ProductCode::ClassicBeta, "the beta leads until launch");
+        assert_eq!(ProductLine::Forever.branches(), vec![ProductCode::ClassicBeta, ProductCode::Forever]);
+    }
+
+    /// Add a game lists only live branches, so this is what puts Forever in it.
+    #[test]
+    fn the_builtin_catalog_names_a_live_branch_after_its_line() {
+        let catalog = Catalog::builtin();
+        assert_eq!(catalog.get(&ProductCode::Forever).unwrap().label, "Forever");
+        assert_eq!(catalog.get(&ProductCode::ClassicBeta).unwrap().label, "Forever Beta");
     }
 }
