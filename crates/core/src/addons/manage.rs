@@ -245,19 +245,17 @@ async fn fetch_and_install(
 
     verify_md5(&package, entry.md5.as_deref(), name)?;
 
-    // A repair replaces the folders rather than writing over them, so a file
-    // an older build shipped and this one does not goes too. Deliberately
-    // after the download: until the package is in hand there is nothing to
-    // put back, and a failed fetch must not leave the addon gone.
-    if options.reinstall {
-        if let Some(record) = ledger.find(provider, &entry.id) {
-            install::delete_folders(&options.addons_dir, &record.folders)?;
-        }
-    }
+    // A repair replaces every folder the record names, so one an older build
+    // shipped and this one does not goes too. It happens inside the extract's
+    // swap, so a failure leaves the addon as it was rather than half gone.
+    let retire = match options.reinstall {
+        true => ledger.find(provider, &entry.id).map(|r| r.folders.clone()).unwrap_or_default(),
+        false => Vec::new(),
+    };
 
     // Trust what the package contains over what the catalog said it contains:
     // the folders are what removal will delete, so they have to be real.
-    let extracted = install::extract(&package, &options.addons_dir)?;
+    let extracted = install::extract(&package, &options.addons_dir, &retire)?;
     // An install replaces the record wholesale, so everything the user chose
     // about this addon is read off the old one first and carried across.
     let chosen = ledger.find(provider, &entry.id).cloned().unwrap_or_default();
