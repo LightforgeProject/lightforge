@@ -238,7 +238,16 @@ pub async fn cached_theme(
             Some(manifest) => cached_icons(&pipeline, manifest, &codes),
             None => HashMap::new(),
         };
-        Themed { manifest: manifest.map(Arc::new), branding, icons }
+        let warm = manifest.as_ref().is_some_and(|manifest| {
+            let wants_art = manifest.slot(&code, |t| t.logo.as_ref()).is_some()
+                && manifest.slot(&code, |t| t.background.as_ref()).is_some();
+            let wants_icons = codes
+                .iter()
+                .filter(|c| manifest.own_theme(c).is_some_and(|t| t.icon.is_some()))
+                .count();
+            (!wants_art || branding.is_some()) && icons.len() == wants_icons
+        });
+        Themed { manifest: manifest.map(Arc::new), branding, icons, warm }
     })
     .await
     .unwrap_or_default()
@@ -271,6 +280,10 @@ pub struct Themed {
     pub manifest: Option<Arc<Manifest>>,
     pub branding: Option<Art>,
     pub icons: HashMap<ProductCode, Mark>,
+    /// Set only by the cache-only pass: everything the first screen draws
+    /// was on disk, the selected game's art and every product's mark, so the
+    /// splash has nothing left to wait for.
+    pub warm: bool,
 }
 
 /// A product's decoded mark, beside the file it came from.
@@ -355,6 +368,9 @@ pub async fn check_for_update(
     found
 }
 
+/// How many products a prefetch fetches at once.
+const PREFETCH_AT_ONCE: usize = 4;
+
 pub async fn prefetch_within(
     budget: std::time::Duration,
     http: Option<Http>,
@@ -385,17 +401,37 @@ pub async fn prefetch(
             return 0;
         }
     };
-    let mut cached = 0;
-    for code in &codes {
-        // One at a time rather than joined: these are big files off one host,
-        // and a first run has plenty of other things it would rather have the
-        // connection for.
-        if pipeline.resolve_with(&http, &manifest, code).await.is_ok() {
-            cached += 1;
-        }
-        let _ = pipeline.icon(&http, &manifest, code).await;
-    }
-    crate::trace::mark(format_args!("prefetched art for {cached}/{} products", codes.len()));
+    use futures_util::StreamExt;
+
+    // A few products at a time. This only runs with art missing, usually a
+    // first run, where everything is a real download: one at a time made the
+    // splash the sum of every transfer, and all at once would open a dozen
+    // connections to one host (no HTTP/2 here) fighting over a slow link.
+    //
+    // Each future owns its handles: borrowing them across `buffer_unordered`
+    // trips the compiler's higher-ranked `Send` check on the task.
+    let manifest = Arc::new(manifest);
+    let total = codes.len();
+    let cached = futures_util::stream::iter(codes)
+        .map(|code| {
+            let (http, pipeline, manifest) = (http.clone(), pipeline.clone(), Arc::clone(&manifest));
+            async move {
+                match pipeline.resolve_with(&http, &manifest, &code).await {
+                    // Branding carries the icon; asking again is a round trip.
+                    Ok(_) => true,
+                    // A hand-off has a mark and no art.
+                    Err(_) => {
+                        let _ = pipeline.icon(&http, &manifest, &code).await;
+                        false
+                    }
+                }
+            }
+        })
+        .buffer_unordered(PREFETCH_AT_ONCE)
+        .filter(|resolved| std::future::ready(*resolved))
+        .count()
+        .await;
+    crate::trace::mark(format_args!("prefetched art for {cached}/{total} products"));
     cached
 }
 
@@ -471,7 +507,7 @@ pub async fn theme(
         None => None,
     };
 
-    Themed { manifest: Some(manifest), branding, icons }
+    Themed { manifest: Some(manifest), branding, icons, warm: false }
 }
 
 /// What a running transfer publishes for the UI to read.

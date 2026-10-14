@@ -405,6 +405,9 @@ struct Splash {
     products: usize,
     /// When the window opened, so [`SPLASH_FLOOR`] can be honoured.
     opened: Instant,
+    /// Whether the cache has been read and the splash knows if it waits for
+    /// the network. Decided once, on the first cache-only pass.
+    decided: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1900,22 +1903,15 @@ impl Lightforge {
     /// Open the splash and start the fetch it is waiting on.
     fn open_splash(&mut self) -> Task<Message> {
         let codes: Vec<ProductCode> = self.choices.iter().map(|c| c.code.clone()).collect();
-        self.splash = Some(Splash { products: codes.len(), opened: Instant::now() });
+        self.splash = Some(Splash { products: codes.len(), opened: Instant::now(), decided: false });
+        // Nothing is fetched yet: the cache-only pass `reload` starts beside
+        // this decides whether anything needs to be. See `splash_decide`.
         Task::batch([
             // The window is the launcher's size but only the card is painted,
             // so the rest of it is a transparent rectangle that would still
             // swallow every click landing on whatever is behind it. On
             // Wayland this sets a real empty input region, not a hint.
             iced::window::oldest().and_then(iced::window::enable_mouse_passthrough),
-            Task::perform(
-                tasks::prefetch_within(
-                    SPLASH_BUDGET,
-                    self.http.clone(),
-                    self.pipeline.clone(),
-                    codes,
-                ),
-                Message::SplashDone,
-            ),
             // Beside the artwork rather than before it: this is the one moment
             // a start is already waiting on the network, and nothing on screen
             // depends on the answer, so it never holds the splash open.
@@ -1924,6 +1920,51 @@ impl Lightforge {
                 Message::UpdateChecked,
             ),
         ])
+    }
+
+    /// The splash's one decision, made when the selected game's cache-only
+    /// pass lands: close, or wait for the network.
+    ///
+    /// The splash exists so nobody sees a grey launcher, so it closes early
+    /// only when the cache already holds everything the first screen draws,
+    /// decoded and in state by now. The revalidation `reload` started runs
+    /// on behind the launcher and swaps in whatever changed, exactly as on a
+    /// product switch. Anything missing, or a first run, whose wizard counts
+    /// off the prefetch, waits for the full fetch as it always has.
+    fn splash_decide(&mut self, warm: bool) -> Task<Message> {
+        let Some(splash) = self.splash.as_mut().filter(|s| !s.decided) else {
+            return Task::none();
+        };
+        splash.decided = true;
+        if warm && self.wizard.is_none() {
+            trace::mark("splash: cache is warm, not waiting on the network");
+            return self.close_splash_after_floor();
+        }
+        Task::perform(
+            tasks::prefetch_within(
+                SPLASH_BUDGET,
+                self.http.clone(),
+                self.pipeline.clone(),
+                self.choices.iter().map(|c| c.code.clone()).collect(),
+            ),
+            Message::SplashDone,
+        )
+    }
+
+    /// Close the splash once it has been up for [`SPLASH_FLOOR`].
+    fn close_splash_after_floor(&mut self) -> Task<Message> {
+        let waited = self.splash.as_ref().map(|s| s.opened.elapsed()).unwrap_or_default();
+        match SPLASH_FLOOR.checked_sub(waited) {
+            Some(left) if !left.is_zero() => {
+                Task::perform(tasks::after(left), |()| Message::FinishSplash)
+            }
+            // Both ways out go through `finish_splash` and nothing else. An
+            // earlier version did the work in two places, and the two copies
+            // drifted: the one taken whenever the fetch outlasts the floor,
+            // which is every start with anything to fetch, missed a step the
+            // other had.
+            _ => self.finish_splash(),
+        }
     }
 
     /// Put the release notes up, if this start is the first one on this
@@ -2651,10 +2692,14 @@ impl Lightforge {
                 if self.icons.is_empty() {
                     self.icons = themed.icons;
                 }
-                if code == self.selected.code && self.branding.is_none() {
+                let selected = code == self.selected.code;
+                if selected && self.branding.is_none() {
                     self.branding = themed.branding;
                 }
-                Task::none()
+                match selected {
+                    true => self.splash_decide(themed.warm),
+                    false => Task::none(),
+                }
             }
 
             Message::Themed(code, themed) => {
@@ -3164,19 +3209,9 @@ impl Lightforge {
                 if let Some(wizard) = self.wizard.as_mut() {
                     wizard.prefetched = Some(count);
                 }
-                let waited =
-                    self.splash.as_ref().map(|s| s.opened.elapsed()).unwrap_or_default();
-                match SPLASH_FLOOR.checked_sub(waited) {
-                    Some(left) if !left.is_zero() => {
-                        Task::perform(tasks::after(left), |()| Message::FinishSplash)
-                    }
-                    // Both ways out go through `finish_splash` and nothing
-                    // else. An earlier version did the work here directly as
-                    // well, and the two copies drifted: the one taken
-                    // whenever the fetch outlasts the floor, which is every
-                    // start with anything to fetch, missed a step the other
-                    // had.
-                    _ => self.finish_splash(),
+                match self.splash.is_some() {
+                    true => self.close_splash_after_floor(),
+                    false => Task::none(),
                 }
             }
 
