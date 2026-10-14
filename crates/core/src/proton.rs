@@ -386,6 +386,85 @@ pub struct UpdateNotice {
 mod tests {
     use super::*;
 
+    /// A `.tar.gz` holding `files`, written into `dir`.
+    fn tarball(dir: &Path, files: &[(&str, &[u8])]) -> PathBuf {
+        let path = dir.join("release.tar.gz");
+        let gz = flate2::write::GzEncoder::new(std::fs::File::create(&path).unwrap(), Default::default());
+        let mut tar = tar::Builder::new(gz);
+        for (name, bytes) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            tar.append_data(&mut header, name, *bytes).unwrap();
+        }
+        tar.into_inner().unwrap().finish().unwrap();
+        path
+    }
+
+    fn staging_left(dir: &Path) -> bool {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|e| e.file_name().to_string_lossy().starts_with(crate::staging::PREFIX))
+    }
+
+    const BUILD: &[(&str, &[u8])] = &[
+        ("GE-Proton11-7/proton", b"#!/usr/bin/env python3"),
+        ("GE-Proton11-7/version", b"1760000000 GE-Proton11-7"),
+        ("GE-Proton11-7/files/bin/wine", b"elf"),
+    ];
+
+    #[test]
+    fn an_unpacked_build_lands_whole_and_leaves_no_staging() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proton");
+        let built = unpack(&tarball(tmp.path(), BUILD), &root).unwrap();
+
+        assert_eq!(built, root.join("GE-Proton11-7"));
+        assert!(built.join("files/bin/wine").is_file());
+        assert!(!staging_left(&root));
+    }
+
+    #[test]
+    fn a_truncated_download_leaves_nothing_behind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proton");
+        let archive = tarball(tmp.path(), BUILD);
+        let bytes = std::fs::read(&archive).unwrap();
+        std::fs::write(&archive, &bytes[..bytes.len() / 2]).unwrap();
+
+        assert!(unpack(&archive, &root).is_err());
+        assert!(!root.join("GE-Proton11-7").exists());
+        assert!(!staging_left(&root));
+        assert!(discover_managed(&root).is_empty());
+    }
+
+    #[test]
+    fn a_tarball_that_is_not_a_proton_build_is_not_installed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proton");
+        let archive = tarball(tmp.path(), &[("Something/readme", b"hi")]);
+
+        assert!(matches!(unpack(&archive, &root), Err(ProtonError::NotAProtonBuild(_))));
+        assert!(!root.join("Something").exists());
+        assert!(!staging_left(&root));
+    }
+
+    #[test]
+    fn unpacking_a_release_again_replaces_it_rather_than_merging() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proton");
+        let stale = root.join("GE-Proton11-7/files/stale.dll");
+        std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        std::fs::write(&stale, b"old").unwrap();
+
+        let built = unpack(&tarball(tmp.path(), BUILD), &root).unwrap();
+        assert!(built.join("proton").is_file());
+        assert!(!stale.exists());
+        assert!(!staging_left(&root));
+    }
+
     #[test]
     fn classifies_real_world_tags() {
         // Tags observed on a live system.
@@ -985,35 +1064,29 @@ pub async fn install_release(
         .ok_or(ProtonError::NotAProtonBuild(unpacked))
 }
 
-/// Extract a `.tar.gz`, returning the single top-level directory it created.
+/// Extract a `.tar.gz` into `dest_root`, returning the build's directory.
+///
+/// Unpacked into a staging folder inside `dest_root` and renamed into place
+/// only once it is complete and reads as a Proton build. An interrupted or
+/// failed unpack used to leave a half-extracted GE-Proton folder that
+/// discovery listed and a launch then failed on; now it leaves nothing.
 fn unpack(archive: &Path, dest_root: &Path) -> Result<PathBuf, ProtonError> {
-    let file = std::fs::File::open(archive).map_err(|e| ProtonError::Io {
-        path: archive.to_path_buf(),
-        source: e,
-    })?;
-    std::fs::create_dir_all(dest_root).map_err(|e| ProtonError::Io {
-        path: dest_root.to_path_buf(),
-        source: e,
-    })?;
+    let io = |path: &Path| {
+        let path = path.to_path_buf();
+        move |source| ProtonError::Io { path, source }
+    };
+    let file = std::fs::File::open(archive).map_err(io(archive))?;
+    std::fs::create_dir_all(dest_root).map_err(io(dest_root))?;
+
+    let staging = crate::staging::create_in(dest_root).map_err(io(dest_root))?;
+    let fresh = staging.path().join("new");
+    let old = staging.path().join("old");
+    std::fs::create_dir(&fresh).map_err(io(&fresh))?;
 
     let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
-    let mut top: Option<PathBuf> = None;
-
-    for entry in tar.entries().map_err(|e| ProtonError::Io {
-        path: archive.to_path_buf(),
-        source: e,
-    })? {
-        let mut entry = entry.map_err(|e| ProtonError::Io {
-            path: archive.to_path_buf(),
-            source: e,
-        })?;
-        let path = entry
-            .path()
-            .map_err(|e| ProtonError::Io {
-                path: archive.to_path_buf(),
-                source: e,
-            })?
-            .into_owned();
+    for entry in tar.entries().map_err(io(archive))? {
+        let mut entry = entry.map_err(io(archive))?;
+        let path = entry.path().map_err(io(archive))?.into_owned();
 
         // Reject absolute paths and `..` traversal rather than trusting the
         // archive to stay inside its own directory.
@@ -1024,17 +1097,40 @@ fn unpack(archive: &Path, dest_root: &Path) -> Result<PathBuf, ProtonError> {
         {
             return Err(ProtonError::UnsafeArchivePath(path));
         }
-        if top.is_none() {
-            top = path.components().next().map(|c| dest_root.join(c));
-        }
-
-        entry.unpack_in(dest_root).map_err(|e| ProtonError::Io {
-            path: dest_root.to_path_buf(),
-            source: e,
-        })?;
+        entry.unpack_in(&fresh).map_err(io(&fresh))?;
     }
 
-    top.ok_or_else(|| ProtonError::EmptyArchive(archive.to_path_buf()))
+    // A release is one directory named for it. Anything else is not a
+    // GE-Proton tarball, and guessing which part is the build is how a stray
+    // folder would end up beside the real ones.
+    let mut tops = std::fs::read_dir(&fresh)
+        .map_err(io(&fresh))?
+        .filter_map(Result::ok)
+        .map(|e| e.path());
+    let (Some(built), None) = (tops.next(), tops.next()) else {
+        return Err(match std::fs::read_dir(&fresh).map(|mut d| d.next().is_none()) {
+            Ok(true) => ProtonError::EmptyArchive(archive.to_path_buf()),
+            _ => ProtonError::NotAProtonBuild(archive.to_path_buf()),
+        });
+    };
+    if ProtonRelease::read_from_dir(&built, ProtonSource::Managed).is_none() {
+        return Err(ProtonError::NotAProtonBuild(archive.to_path_buf()));
+    }
+
+    let target = dest_root.join(built.file_name().unwrap_or_default());
+    // The same release again, a repair: the old copy only goes once the new
+    // one is ready to take its place, and comes back if that fails.
+    let replacing = target.exists();
+    if replacing {
+        std::fs::rename(&target, &old).map_err(io(&target))?;
+    }
+    if let Err(source) = std::fs::rename(&built, &target) {
+        if replacing {
+            let _ = std::fs::rename(&old, &target);
+        }
+        return Err(ProtonError::Io { path: target, source });
+    }
+    Ok(target)
 }
 
 /// Pull the digest out of a `sha512sum` line: `<hex>  <filename>`.

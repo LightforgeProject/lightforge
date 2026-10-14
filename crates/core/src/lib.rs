@@ -30,6 +30,7 @@ pub mod proton;
 pub mod releases;
 pub mod runtime;
 pub mod setup;
+mod staging;
 pub mod state;
 pub mod steam;
 pub mod storage;

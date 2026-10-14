@@ -300,13 +300,6 @@ pub struct Extracted {
     pub bytes: u64,
 }
 
-/// Staging folders are named this, beside `AddOns` in `Interface`.
-const STAGING_PREFIX: &str = ".lightforge-staging-";
-
-/// A staging folder this old was left by a run that died, not by one still
-/// going: no package takes an hour to unpack.
-const STALE_STAGING: std::time::Duration = std::time::Duration::from_secs(60 * 60);
-
 /// Extract an addon package into `addons_dir`.
 ///
 /// Replaces the folders it contains: an update must not leave a removed file
@@ -387,12 +380,8 @@ pub fn extract(package: &[u8], addons_dir: &Path, retire: &[String]) -> Result<E
     // `Interface`, not `AddOns`: neither the client nor `scan` ever looks
     // at a folder there that is not an addon.
     let interface = addons_dir.parent().unwrap_or(addons_dir);
-    sweep_stale_staging(interface);
     // Dropped at the end either way, taking the replaced copies with it.
-    let staging = tempfile::Builder::new()
-        .prefix(STAGING_PREFIX)
-        .tempdir_in(interface)
-        .map_err(io(interface))?;
+    let staging = crate::staging::create_in(interface).map_err(io(interface))?;
     let fresh = staging.path().join("new");
     let old = staging.path().join("old");
 
@@ -479,26 +468,6 @@ fn swap_steps<'a>(
     Ok(())
 }
 
-/// Clear staging folders a crashed run left behind. Best effort: a leftover
-/// costs disk space, never correctness, so failing here is not a failed
-/// install.
-fn sweep_stale_staging(interface: &Path) {
-    let Ok(entries) = std::fs::read_dir(interface) else { return };
-    for entry in entries.filter_map(Result::ok) {
-        if !entry.file_name().to_string_lossy().starts_with(STAGING_PREFIX) {
-            continue;
-        }
-        let stale = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.elapsed().ok())
-            .is_some_and(|age| age > STALE_STAGING);
-        if stale {
-            let _ = std::fs::remove_dir_all(entry.path());
-        }
-    }
-}
 
 /// Delete the folders an install wrote, and forget it.
 ///
@@ -692,7 +661,7 @@ mod tests {
         std::fs::read_dir(addons.parent().unwrap())
             .unwrap()
             .filter_map(Result::ok)
-            .any(|e| e.file_name().to_string_lossy().starts_with(STAGING_PREFIX))
+            .any(|e| e.file_name().to_string_lossy().starts_with(crate::staging::PREFIX))
     }
 
     #[test]
