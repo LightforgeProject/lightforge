@@ -192,11 +192,19 @@ checksums: github-names
 	@cd $(DIST) && rm -f SHA256SUMS && sha256sum lightforge* > SHA256SUMS
 	@cat $(DIST)/SHA256SUMS
 
-## Fail with a useful sentence rather than a missing-file error from tar.
+## Fail with a useful sentence rather than a missing-file error from tar,
+## and refuse binaries built from another version: packages are named from
+## Cargo.toml, so stale binaries would ship under the new name (beta.2 nearly
+## did). The timeout is for a GUI built before it answered `--version`,
+## which would open a window instead and hold the build.
 check-binaries:
 	@for bin in $(addprefix $(OUT)/,$(BINARIES)); do \
 	  [ -f "$$bin" ] || { echo "missing $$bin — run \`make release\` first"; exit 1; }; \
+	  got=$$(timeout 10 "$$bin" --version 2>/dev/null); \
+	  want="$$(basename "$$bin") $(VERSION)"; \
+	  [ "$$got" = "$$want" ] || { echo "$$bin reports '$$got', expected '$$want' — run \`make release\`"; exit 1; }; \
 	done
+	@echo "ok   binaries are $(VERSION)"
 
 clean-packages:
 	rm -rf $(DIST) target/tarball target/debian target/container/generate-rpm

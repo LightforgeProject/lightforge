@@ -319,6 +319,14 @@ fn tune_allocator() {
 fn tune_allocator() {}
 
 fn main() -> iced::Result {
+    // The one flag, answered before anything opens a window. Packaging checks
+    // that a release ships the build it says it does by asking both binaries,
+    // and a bug report is easier with the version than with a screenshot.
+    // Same shape as clap's answer for `lightforge`.
+    if std::env::args().skip(1).any(|arg| arg == "--version" || arg == "-V") {
+        println!("lightforge-gui {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     tune_allocator();
     trace::begin();
     // 0.14 takes the boot function where 0.13 took the title, and runs it
