@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use super::catalog::{Catalog, CatalogError, Request, Resolved};
 use super::providers;
 use super::install::{self, InstallError, Ledger, Record};
+use crate::backup::{BackupError, Reason};
 use crate::net::Http;
 
 /// Where an operation writes, and what it is for.
@@ -38,6 +39,9 @@ pub struct Options {
     pub reinstall: bool,
     /// Which builds to accept for an addon that has no opinion of its own.
     pub channel: super::Channel,
+    /// Back up the game's settings before the first installed addon is
+    /// replaced. `None` for callers with no game to protect, or none to ask.
+    pub backup: Option<crate::backup::Plan>,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +118,7 @@ pub async fn install_all(
         source,
     })?;
 
+    let mut backup = options.backup.clone();
     for entry in &resolved {
         let asked = requests.iter().find(|r| r.id == entry.id);
         let provider = asked
@@ -140,6 +145,17 @@ pub async fn install_all(
             on_event(Event::UpToDate { name: name.clone() });
             report.up_to_date.push(name);
             continue;
+        }
+
+        // Once per run, and only when something already installed is about
+        // to change: a fresh install has no saved data to migrate. Without a
+        // backup nothing is replaced, which is the point of taking one.
+        if ledger.find(&provider, &entry.id).is_some() {
+            if let Some(plan) = backup.take() {
+                tokio::task::spawn_blocking(move || plan.create(Reason::AddonUpdate))
+                    .await
+                    .map_err(|e| ManageError::Join(e.to_string()))??;
+            }
         }
 
         match fetch_and_install(http, entry, &provider, &name, pin, options, &mut ledger).await {
@@ -723,6 +739,12 @@ pub enum ManageError {
         #[source]
         source: std::io::Error,
     },
+
+    #[error("could not back up the game's settings first, so nothing was replaced")]
+    Backup(#[from] BackupError),
+
+    #[error("the settings backup stopped unexpectedly: {0}")]
+    Join(String),
 }
 
 #[cfg(test)]
@@ -745,6 +767,7 @@ mod tests {
             pinned: false,
             reinstall: false,
             channel,
+            backup: None,
         }
     }
 

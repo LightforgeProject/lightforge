@@ -176,6 +176,9 @@ pub struct Config {
     /// release rather than on every start.
     #[serde(default)]
     pub update_seen: Option<String>,
+    /// How many `WTF/Account` backups each game keeps.
+    #[serde(default = "default_backup_keep")]
+    pub backup_keep: usize,
     /// Every product Lightforge manages, official and custom alike.
     pub products: Vec<Product>,
 }
@@ -204,6 +207,10 @@ fn yes() -> bool {
 
 /// The language a WoW install is in unless the user picked another.
 pub const DEFAULT_LOCALE: &str = "enUS";
+
+fn default_backup_keep() -> usize {
+    crate::backup::DEFAULT_KEEP
+}
 
 fn default_locale() -> String {
     DEFAULT_LOCALE.to_owned()
@@ -237,6 +244,7 @@ impl Default for Config {
             patch_notes_seen: None,
             check_for_updates: true,
             update_seen: None,
+            backup_keep: default_backup_keep(),
             products: Vec::new(),
         }
     }

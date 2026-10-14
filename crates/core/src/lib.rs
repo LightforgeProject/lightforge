@@ -10,6 +10,7 @@
 
 pub mod addons;
 pub mod assets;
+pub mod backup;
 pub mod battlenet;
 pub mod buildinfo;
 pub mod config;

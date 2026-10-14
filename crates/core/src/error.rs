@@ -37,6 +37,9 @@ pub enum CoreError {
     #[error(transparent)]
     Preflight(#[from] crate::preflight::PreflightError),
 
+    #[error(transparent)]
+    Backup(#[from] crate::backup::BackupError),
+
     #[error("i/o error at {path}")]
     Io {
         path: PathBuf,

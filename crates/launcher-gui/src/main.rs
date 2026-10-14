@@ -713,6 +713,14 @@ enum Message {
     InstallVersion(String, String, String),
     /// Close the picker without choosing.
     CancelVersionPicker,
+    OpenGameSettings,
+    CloseGameSettings,
+    BackupsListed(Result<Vec<lightforge_core::backup::Backup>, String>),
+    BackupNow,
+    AskRestore(PathBuf),
+    CancelRestore,
+    ConfirmRestore,
+    BackupFinished(Result<String, String>),
     /// Open the detail view for one addon: provider, id, name.
     ShowAddonDetail(String, String, String),
     /// The catalogue answered with the project, description and changelog.
@@ -1237,6 +1245,21 @@ struct AddonDetail {
     tab: DetailTab,
 }
 
+/// The Game Settings popup, for the game that was selected when it opened.
+#[derive(Debug, Clone)]
+struct GameSettings {
+    code: ProductCode,
+    label: String,
+    /// `None` until the first listing answers.
+    backups: Option<Vec<lightforge_core::backup::Backup>>,
+    /// A backup or restore is running; every button waits for it.
+    working: bool,
+    /// The backup whose Restore was pressed, waiting for its confirmation.
+    confirm: Option<PathBuf>,
+    /// The last outcome: a sentence, or what went wrong.
+    note: Option<Result<String, String>>,
+}
+
 /// One addon's builds, while the user chooses between them.
 #[derive(Debug, Clone)]
 struct VersionPicker {
@@ -1577,6 +1600,7 @@ struct Lightforge {
     /// The version picker, when it is open: which addon, and the builds the
     /// catalogue offers. `None` in the list means the fetch is still out.
     version_picker: Option<VersionPicker>,
+    game_settings: Option<GameSettings>,
     addon_detail: Option<AddonDetail>,
     /// Whether the environment-variable editor is expanded, per panel.
     ///
@@ -1770,6 +1794,7 @@ impl Lightforge {
             addon_remove_armed: None,
             addon_menu_open: None,
             version_picker: None,
+            game_settings: None,
             addon_detail: None,
             env_open: false,
             bnet_env_open: true,
@@ -3750,6 +3775,89 @@ impl Lightforge {
             Message::CancelVersionPicker => {
                 self.version_picker = None;
                 Task::none()
+            }
+
+            Message::OpenGameSettings => {
+                self.close_panels();
+                self.game_settings = Some(GameSettings {
+                    code: self.selected.code.clone(),
+                    label: self.selected.label.clone(),
+                    backups: None,
+                    working: false,
+                    confirm: None,
+                    note: None,
+                });
+                self.list_backups()
+            }
+
+            Message::CloseGameSettings => {
+                self.game_settings = None;
+                Task::none()
+            }
+
+            Message::BackupsListed(result) => {
+                // Dropped if the popup closed while the listing was out.
+                if let Some(settings) = self.game_settings.as_mut() {
+                    match result {
+                        Ok(backups) => settings.backups = Some(backups),
+                        Err(e) => {
+                            settings.backups = Some(Vec::new());
+                            settings.note = Some(Err(e));
+                        }
+                    }
+                }
+                Task::none()
+            }
+
+            Message::BackupNow => {
+                let Some(settings) = self.game_settings.as_mut() else {
+                    return Task::none();
+                };
+                settings.working = true;
+                settings.confirm = None;
+                Task::perform(
+                    tasks::create_backup(self.layout.clone(), settings.code.clone()),
+                    Message::BackupFinished,
+                )
+            }
+
+            Message::AskRestore(archive) => {
+                if let Some(settings) = self.game_settings.as_mut() {
+                    settings.confirm = Some(archive);
+                }
+                Task::none()
+            }
+
+            Message::CancelRestore => {
+                if let Some(settings) = self.game_settings.as_mut() {
+                    settings.confirm = None;
+                }
+                Task::none()
+            }
+
+            Message::ConfirmRestore => {
+                let Some(settings) = self.game_settings.as_mut() else {
+                    return Task::none();
+                };
+                let Some(archive) = settings.confirm.take() else {
+                    return Task::none();
+                };
+                settings.working = true;
+                Task::perform(
+                    tasks::restore_backup(self.layout.clone(), settings.code.clone(), archive),
+                    Message::BackupFinished,
+                )
+            }
+
+            Message::BackupFinished(result) => {
+                let Some(settings) = self.game_settings.as_mut() else {
+                    return Task::none();
+                };
+                settings.working = false;
+                settings.note = Some(result);
+                // Either outcome can have changed the list: a restore adds
+                // the backup of what it replaced.
+                self.list_backups()
             }
 
             Message::ShowAddonDetail(provider, id, name) => {
@@ -5849,6 +5957,7 @@ impl Lightforge {
             &self.version_picker,
             &self.addon_detail,
             &self.report_dialog,
+            &self.game_settings,
             &self.patch_notes,
             &self.update_notice,
         ) {
@@ -5859,6 +5968,7 @@ impl Lightforge {
             (_, _, _, _, Some(picker), ..) => Some(self.version_card(picker)),
             (_, _, _, _, _, Some(detail), ..) => Some(self.detail_card(detail)),
             (_, _, _, _, _, _, Some(dialog), ..) => Some(self.report_card(dialog)),
+            (_, _, _, _, _, _, _, Some(settings), ..) => Some(self.game_settings_card(settings)),
             // Last, so a dialog someone opened themselves is never buried
             // under the one the app opened for them. The notes come before
             // the update notice: they are about the build that is running,
@@ -6684,6 +6794,17 @@ impl Lightforge {
             || self.strip_open
             || self.app_menu_open
             || self.addon_menu_open.is_some()
+    }
+
+    /// Ask for the open Game Settings popup's backups.
+    fn list_backups(&self) -> Task<Message> {
+        match &self.game_settings {
+            Some(settings) => Task::perform(
+                tasks::list_backups(self.layout.clone(), settings.code.clone()),
+                Message::BackupsListed,
+            ),
+            None => Task::none(),
+        }
     }
 
     /// Close every one of them.
@@ -8351,6 +8472,7 @@ impl Lightforge {
         let queued = self.queue.iter().any(|d| d.code == self.selected.code);
         let menu = container(
             column![
+                item("Game Settings", Message::OpenGameSettings, installed),
                 item("Check for Updates", Message::CheckForUpdates, !self.busy),
                 item("Scan and Repair", Message::ScanAndRepair, can_scan),
                 match self.deep_cancel.is_some() {
@@ -10653,6 +10775,108 @@ impl Lightforge {
                 .spacing(theme::LG),
         )
         .width(Length::Fixed(560.0))
+        .padding(theme::LG)
+        .style(theme::dialog)
+        .into()
+    }
+
+    /// The Game Settings popup. Backups are its first section; the game's
+    /// other per-product settings are meant to join them here.
+    fn game_settings_card<'a>(&'a self, settings: &'a GameSettings) -> Element<'a, Message> {
+        let idle = !settings.working && !self.busy;
+        let keep = self.config.backup_keep;
+
+        let mut body = column![muted(
+            format!(
+                "Everything you set up in the game, every addon's SavedVariables, your key \
+                 bindings and macros, lives in WTF/Account. Lightforge backs it up before an \
+                 addon update and before the first launch on a new client build, and keeps \
+                 the newest {keep}."
+            ),
+            theme::LABEL,
+        )]
+        .spacing(theme::MD);
+
+        match settings.backups.as_deref() {
+            None => body = body.push(muted("reading backups…".to_owned(), theme::BODY)),
+            Some([]) => {
+                body = body.push(empty(
+                    "No backups yet.",
+                    "One is taken automatically the next time it is needed.",
+                ))
+            }
+            Some(backups) => {
+                let mut list = column![].spacing(theme::XS);
+                for backup in backups {
+                    let facts = [
+                        Some(backup.reason.label().to_owned()),
+                        backup.build.clone(),
+                        Some(size_of(backup.size)),
+                    ];
+                    let mut line = row![column![
+                        text(backup.when()).size(theme::BODY),
+                        muted(facts.into_iter().flatten().collect::<Vec<_>>().join(" · "), theme::CAPTION),
+                    ]
+                    .spacing(theme::XS)]
+                    .spacing(theme::SM)
+                    .align_y(Alignment::Center)
+                    .push(Space::new().width(Length::Fill));
+
+                    line = match settings.confirm.as_ref() == Some(&backup.path) {
+                        true => line
+                            .push(muted("Replace the current settings?".to_owned(), theme::LABEL))
+                            .push(secondary("Cancel", Message::CancelRestore).enabled(true))
+                            .push(action_button("Restore", theme::UPDATE, Message::ConfirmRestore).enabled(idle)),
+                        false => line.push(
+                            secondary("Restore", Message::AskRestore(backup.path.clone())).enabled(idle),
+                        ),
+                    };
+                    list = list.push(container(line).padding(theme::MD).style(theme::row));
+                }
+                // Five rows fit the popup; a longer `backup_keep` scrolls
+                // rather than pushing the buttons off the card.
+                let height = match backups.len() > 5 {
+                    true => Length::Fixed(5.0 * 66.0),
+                    false => Length::Shrink,
+                };
+                body = body.push(scrollable(list).height(height).style(theme::scrollbar));
+                body = body.push(muted(
+                    "Restoring backs up the current settings first, so it can be undone \
+                     the same way. The game has to be closed."
+                        .to_owned(),
+                    theme::CAPTION,
+                ));
+            }
+        }
+
+        if let Some(note) = &settings.note {
+            body = body.push(match note {
+                Ok(line) => muted(line.clone(), theme::LABEL),
+                Err(e) => text(e.clone()).size(theme::LABEL).color(theme::ERROR),
+            });
+        }
+
+        let actions = row![
+            secondary("Back up now", Message::BackupNow).enabled(idle),
+            Space::new().width(Length::Fill),
+            secondary("Close", Message::CloseGameSettings).enabled(true),
+        ]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center);
+
+        container(
+            column![
+                column![
+                    text("Game Settings").size(theme::TITLE),
+                    muted(settings.label.clone(), theme::LABEL),
+                ]
+                .spacing(theme::XS),
+                section("Settings backups", body.into()),
+                actions,
+            ]
+            .spacing(theme::LG),
+        )
+        .width(Length::Fixed(620.0))
         .padding(theme::LG)
         .style(theme::dialog)
         .into()

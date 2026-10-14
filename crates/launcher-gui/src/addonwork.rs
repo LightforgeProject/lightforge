@@ -447,6 +447,7 @@ fn options(
         pinned,
         reinstall: false,
         channel,
+        backup: Some(crate::tasks::settings_backup(layout, &dirs, code)),
     })
 }
 

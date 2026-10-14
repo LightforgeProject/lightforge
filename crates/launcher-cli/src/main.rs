@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use lightforge_core::backup;
 use lightforge_core::buildinfo::BuildInfo;
 use lightforge_core::config::Config;
 use lightforge_core::paths::{AppDirs, Layout};
@@ -356,6 +357,24 @@ enum Command {
         id: String,
         #[arg(long, default_value = "curse")]
         provider: String,
+        #[arg(long, default_value = "wow")]
+        product: String,
+    },
+    /// List a game's `WTF/Account` backups, newest first.
+    BackupList {
+        #[arg(long, default_value = "wow")]
+        product: String,
+    },
+    /// Back up a game's `WTF/Account` now. Skipped when nothing changed.
+    BackupCreate {
+        #[arg(long, default_value = "wow")]
+        product: String,
+    },
+    /// Restore a backup over `WTF/Account`. The current state is backed up
+    /// first, so a restore can be undone the same way.
+    BackupRestore {
+        /// The number `backup-list` shows (1 is the newest), or the file name.
+        backup: String,
         #[arg(long, default_value = "wow")]
         product: String,
     },
@@ -1793,6 +1812,10 @@ async fn main() -> Result<()> {
                 pinned: false,
                 reinstall: false,
                 channel: addon_channel(&dirs),
+                // A directory given by hand may not belong to this game, and
+                // its settings are not the ones an update there could touch.
+                backup: (dir == layout.addons_dir(&code))
+                    .then(|| settings_backup(&layout, &dirs, &code)),
             };
             let client = addon_origin(catalog.as_deref(), &dirs).map(Catalog::new);
             let http = Http::new().context("http client")?;
@@ -1991,6 +2014,7 @@ async fn main() -> Result<()> {
                 pinned: false,
                 reinstall: false,
                 channel: addon_channel(&dirs),
+                backup: Some(settings_backup(&layout, &dirs, &code)),
             };
 
             // install_all fills the channel in from the ledger or the default.
@@ -2037,6 +2061,7 @@ async fn main() -> Result<()> {
                 pinned,
                 reinstall: false,
                 channel: addon_channel(&dirs),
+                backup: Some(settings_backup(&layout, &dirs, &code)),
             };
             println!("addons dir      {}", options.addons_dir.display());
             println!("flavor          {}\n", options.flavor);
@@ -2090,6 +2115,7 @@ async fn main() -> Result<()> {
                 pinned: false,
                 reinstall: false,
                 channel: addon_channel(&dirs),
+                backup: Some(settings_backup(&layout, &dirs, &code)),
             };
 
             let http = Http::new()?;
@@ -2098,6 +2124,56 @@ async fn main() -> Result<()> {
             })
             .await?;
             print_addon_report(&report);
+        }
+        Command::BackupList { product } => {
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let plan = settings_backup(&layout, &dirs, &code);
+            let backups = plan.list().context("reading backups")?;
+            if backups.is_empty() {
+                println!("no backups in {}", plan.dir.display());
+            }
+            for (n, b) in backups.iter().enumerate() {
+                println!(
+                    "{:>2}  {}  {:<36} {:<16} {:>8.1} MiB  {}",
+                    n + 1,
+                    b.when(),
+                    b.reason.label(),
+                    b.build.as_deref().unwrap_or("-"),
+                    b.size as f64 / 1048576.0,
+                    b.name(),
+                );
+            }
+        }
+        Command::BackupCreate { product } => {
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let plan = settings_backup(&layout, &dirs, &code);
+            match plan.create(backup::Reason::Manual).context("backing up")? {
+                Some(b) => println!("backed up to {}", b.path.display()),
+                None if plan.account_dir.is_dir() => println!("unchanged since the last backup"),
+                None => println!("nothing to back up: {} does not exist", plan.account_dir.display()),
+            }
+        }
+        Command::BackupRestore { backup: which, product } => {
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let running = lightforge_core::preflight::games_running(&layout);
+            if !running.is_empty() {
+                anyhow::bail!("close the game first: {} is running", running[0].name);
+            }
+            let plan = settings_backup(&layout, &dirs, &code);
+            let backups = plan.list().context("reading backups")?;
+            let chosen = match which.parse::<usize>() {
+                Ok(n) => n.checked_sub(1).and_then(|i| backups.get(i)),
+                Err(_) => backups.iter().find(|b| b.name() == which),
+            }
+            .with_context(|| format!("no backup {which}; see `lightforge backup-list`"))?;
+            let safety = plan.restore(chosen).context("restoring")?;
+            println!("restored {} ({})", chosen.name(), chosen.when());
+            if let Some(safety) = safety {
+                println!("the replaced settings are in {}", safety.name());
+            }
         }
         Command::AddonRemove { id, provider, product } => {
             use lightforge_core::addons::{self, manage};
@@ -2111,6 +2187,7 @@ async fn main() -> Result<()> {
                 pinned: false,
                 reinstall: false,
                 channel: addon_channel(&dirs),
+                backup: Some(settings_backup(&layout, &dirs, &code)),
             };
 
             let removed = manage::remove(&options, &provider, &id)?;
@@ -3119,6 +3196,13 @@ fn read_token(token: &str) -> Result<String> {
 ///
 /// The CLI has no settings UI, so it reads the same `addon_channel` the GUI
 /// writes rather than inventing a second default.
+/// Where this game's settings backups go, and how many it keeps.
+fn settings_backup(layout: &Layout, dirs: &AppDirs, code: &ProductCode) -> backup::Plan {
+    let keep = Config::load_or_default(&dirs.config_file())
+        .map_or(backup::DEFAULT_KEEP, |config| config.backup_keep);
+    backup::Plan::for_product(layout, dirs, code, keep)
+}
+
 fn addon_channel(dirs: &AppDirs) -> lightforge_core::addons::Channel {
     Config::load_or_default(&dirs.config_file())
         .map(|config| config.addon_channel)

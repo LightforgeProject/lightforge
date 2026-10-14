@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use iced::widget::image::Handle;
+use lightforge_core::backup;
 use lightforge_core::error::chain;
 use lightforge_core::assets::{Manifest, Pipeline};
 use lightforge_core::config::Config;
@@ -790,6 +791,73 @@ const WATCH_POLL: Duration = Duration::from_millis(500);
 /// third of a second of a button that looks stuck.
 const EXIT_POLL: Duration = Duration::from_millis(150);
 
+/// Where this game's settings backups go, and how many it keeps.
+pub fn settings_backup(layout: &Layout, dirs: &AppDirs, code: &ProductCode) -> backup::Plan {
+    let keep = Config::load_or_default(&dirs.config_file())
+        .map_or(backup::DEFAULT_KEEP, |config| config.backup_keep);
+    backup::Plan::for_product(layout, dirs, code, keep)
+}
+
+/// A game's settings backups, newest first.
+pub async fn list_backups(layout: Layout, code: ProductCode) -> Result<Vec<backup::Backup>, String> {
+    tokio::task::spawn_blocking(move || {
+        let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
+        settings_backup(&layout, &dirs, &code).list().map_err(|e| chain(&e))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Back up a game's settings now, answering with the sentence to show.
+pub async fn create_backup(layout: Layout, code: ProductCode) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
+        let plan = settings_backup(&layout, &dirs, &code);
+        Ok(match plan.create(backup::Reason::Manual).map_err(|e| chain(&e))? {
+            Some(_) => "Backed up.".to_owned(),
+            None if plan.account_dir.is_dir() => "Nothing changed since the last backup.".to_owned(),
+            None => "Nothing to back up yet: the game has not been started.".to_owned(),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Put one backup back. Refused while a game runs: the client writes
+/// SavedVariables when it exits and would overwrite the restore.
+pub async fn restore_backup(layout: Layout, code: ProductCode, archive: PathBuf) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        if !lightforge_core::preflight::games_running(&layout).is_empty() {
+            return Err("Close the game first, it would overwrite the restore when it exits.".to_owned());
+        }
+        let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
+        let plan = settings_backup(&layout, &dirs, &code);
+        let backups = plan.list().map_err(|e| chain(&e))?;
+        let chosen = backups
+            .iter()
+            .find(|b| b.path == archive)
+            .ok_or("That backup is no longer there.")?;
+        plan.restore(chosen).map_err(|e| chain(&e))?;
+        Ok(format!("Restored the backup from {}.", chosen.when()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The first launch on a new build gets a settings backup first.
+///
+/// Never fatal, unlike the one before an addon update: an update can wait for
+/// a backup, but refusing to start the game over one is the wrong trade. Runs
+/// behind the pre-flight gate, with the client closed.
+fn back_up_before_launch(layout: &Layout, code: &ProductCode) {
+    let Ok(dirs) = AppDirs::discover() else { return };
+    match settings_backup(layout, &dirs, code).before_launch() {
+        Ok(Some(taken)) => crate::trace::mark(format!("launch: settings backed up to {}", taken.path.display())),
+        Ok(None) => {}
+        Err(e) => eprintln!("lightforge: could not back up settings before launch: {}", chain(&e)),
+    }
+}
+
 /// Run the game, returning when *the game* has exited.
 ///
 /// Not when the prefix is quiet. Proton launches the client through its own
@@ -825,6 +893,8 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
         if !exe.is_file() {
             return Err(format!("no game at {}", exe.display()));
         }
+
+        back_up_before_launch(&layout, &code);
 
         let (tweaks, tools) = tweaks_for(&code);
 
@@ -1026,6 +1096,7 @@ pub async fn launch_via_battle_net(
         use lightforge_core::preflight;
 
         let runner = runner_for(&layout, &code, Runs::BattleNet)?;
+        back_up_before_launch(&layout, &code);
 
         // Counted too, though nothing here winds the prefix down: a direct
         // launch's wind-down may still be pending, and a client that has been

@@ -27,7 +27,7 @@ install your config points at, so you rarely have to pass one.
 - [Setup, Proton and the prefix](#setup-proton-and-the-prefix)
 - [Battle.net](#battlenet)
 - [Games: install, update, remove](#games-install-update-remove)
-- [Addons](#addons)
+- [Addons and settings backups](#addons-and-settings-backups)
 - [Catalogue and artwork](#catalogue-and-artwork)
 - [Digging into the CDN and CASC](#digging-into-the-cdn-and-casc)
 
@@ -526,7 +526,7 @@ Options:
   -h, --help                   Print help
 ```
 
-## Addons
+## Addons and settings backups
 
 ### `lightforge addons`
 
@@ -684,6 +684,48 @@ Arguments:
 Options:
       --root <ROOT>  Override the Blizzard root (default: ~/Games/Blizzard)
   -h, --help         Print help
+```
+
+### `lightforge backup-list`
+
+```text
+List a game's `WTF/Account` backups, newest first
+
+Usage: lightforge backup-list [OPTIONS]
+
+Options:
+      --product <PRODUCT>  [default: wow]
+      --root <ROOT>        Override the Blizzard root (default: ~/Games/Blizzard)
+  -h, --help               Print help
+```
+
+### `lightforge backup-create`
+
+```text
+Back up a game's `WTF/Account` now. Skipped when nothing changed
+
+Usage: lightforge backup-create [OPTIONS]
+
+Options:
+      --product <PRODUCT>  [default: wow]
+      --root <ROOT>        Override the Blizzard root (default: ~/Games/Blizzard)
+  -h, --help               Print help
+```
+
+### `lightforge backup-restore`
+
+```text
+Restore a backup over `WTF/Account`. The current state is backed up first, so a restore can be undone the same way
+
+Usage: lightforge backup-restore [OPTIONS] <BACKUP>
+
+Arguments:
+  <BACKUP>  The number `backup-list` shows (1 is the newest), or the file name
+
+Options:
+      --product <PRODUCT>  [default: wow]
+      --root <ROOT>        Override the Blizzard root (default: ~/Games/Blizzard)
+  -h, --help               Print help
 ```
 
 ## Catalogue and artwork
