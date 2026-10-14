@@ -10,12 +10,12 @@ Everything below installs the same two binaries, the menu entry and the icons.
 
 Download `lightforge_<version>_amd64.deb` from the
 [releases page](https://github.com/LightforgeProject/lightforge/releases).
-The filename says `1.0.0.beta.3` because GitHub will not serve a `~` in an
+The filename says `1.0.0.beta.4` because GitHub will not serve a `~` in an
 asset name; the version inside the package, which is the one `apt` reads and
-orders by, is `1.0.0~beta.3`:
+orders by, is `1.0.0~beta.4`:
 
 ```bash
-sudo apt install ./lightforge_1.0.0.beta.3-1_amd64.deb
+sudo apt install ./lightforge_1.0.0.beta.4-1_amd64.deb
 ```
 
 It asks for glibc 2.36 or newer — Debian 12, Ubuntu 22.10 and anything after
@@ -31,7 +31,7 @@ the version it can actually promise for every future build.
 Download `lightforge-<version>.x86_64.rpm` from the same place:
 
 ```bash
-sudo dnf install ./lightforge-1.0.0.beta.3-1.x86_64.rpm   # or zypper install
+sudo dnf install ./lightforge-1.0.0.beta.4-1.x86_64.rpm   # or zypper install
 ```
 
 ## Arch, CachyOS, EndeavourOS
@@ -58,8 +58,8 @@ A Flatpak is the answer there and isn't done yet. In the meantime the
 runs anywhere with glibc 2.36 or newer, SteamOS included:
 
 ```bash
-tar xzf lightforge-1.0.0-beta.3-x86_64-linux.tar.gz
-cd lightforge-1.0.0-beta.3
+tar xzf lightforge-1.0.0-beta.4-x86_64-linux.tar.gz
+cd lightforge-1.0.0-beta.4
 install -Dm755 lightforge-gui ~/.local/bin/lightforge-gui
 install -Dm755 lightforge     ~/.local/bin/lightforge
 install -Dm644 pro.tuxcore.Lightforge.desktop ~/.local/share/applications/

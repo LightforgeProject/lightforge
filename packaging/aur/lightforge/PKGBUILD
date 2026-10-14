@@ -3,12 +3,12 @@
 # Builds from the tagged source. For the prebuilt binaries, see `lightforge-bin`.
 
 pkgname=lightforge
-pkgver=1.0.0beta.3
+pkgver=1.0.0beta.4
 pkgrel=1
-# The upstream tag. AUR versions may not contain a hyphen, so `1.0.0-beta.3`
-# becomes `1.0.0beta.3` here — which `vercmp` orders *before* `1.0.0`, so the
+# The upstream tag. AUR versions may not contain a hyphen, so `1.0.0-beta.4`
+# becomes `1.0.0beta.4` here — which `vercmp` orders *before* `1.0.0`, so the
 # eventual stable release upgrades cleanly and needs no `epoch`.
-_tag=v1.0.0-beta.3
+_tag=v1.0.0-beta.4
 pkgdesc='Native Linux launcher for World of Warcraft, with Battle.net managed for you'
 arch=('x86_64')
 url='https://github.com/LightforgeProject/lightforge'
@@ -32,8 +32,8 @@ source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
 # Of GitHub's generated source archive for the tag, which is not
 # byte-identical to anything produced locally. Regenerate with `updpkgsums`.
 # `SKIP` until the tag exists: GitHub generates the source archive, so run
-# `updpkgsums` once v1.0.0-beta.3 is pushed, before uploading.
-sha256sums=('12439c98cdfcaeec5107e7117d05967a46f2615fe75e931747ee634b1266b7d7')
+# `updpkgsums` once v1.0.0-beta.4 is pushed, before uploading.
+sha256sums=('SKIP')
 _srcdir="$pkgname-${_tag#v}"
 
 prepare() {

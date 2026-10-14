@@ -1,6 +1,16 @@
 # Lightforge release notes
 
 
+## 1.0.0-beta.4
+
+- Added the WoW: Forever stress test. It sits beside the beta in Forever's
+  version picker, which stays on the beta until Forever launches.
+- WoW: Forever now appears in Add a game.
+- A game Blizzard offers as a pre-install says so: the button reads
+  PRE-INSTALL, and a line under it says when the servers open. You can still
+  start it before then to check the install works; the login is what waits.
+
+
 ## 1.0.0-beta.3
 
 - Added Heroes of the Storm.

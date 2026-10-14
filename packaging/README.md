@@ -48,16 +48,16 @@ cargo install cargo-deb cargo-generate-rpm
 
 ### Why the version changes shape
 
-`1.0.0-beta.3` is a valid semver prerelease and an invalid package version
+`1.0.0-beta.4` is a valid semver prerelease and an invalid package version
 nearly everywhere else.
 
 | | |
 | --- | --- |
-| Cargo | `1.0.0-beta.3` |
-| deb / rpm | `1.0.0~beta.3` — `~` sorts *before* `1.0.0`, `-` does not |
-| AUR | `1.0.0beta.3` — hyphens are not allowed at all |
+| Cargo | `1.0.0-beta.4` |
+| deb / rpm | `1.0.0~beta.4` — `~` sorts *before* `1.0.0`, `-` does not |
+| AUR | `1.0.0beta.4` — hyphens are not allowed at all |
 
-`vercmp 1.0.0beta.3 1.0.0` is `-1`, so the Arch version orders correctly too
+`vercmp 1.0.0beta.4 1.0.0` is `-1`, so the Arch version orders correctly too
 and the stable release will need no `epoch`. The Makefile derives the deb and
 rpm forms from `Cargo.toml`; the two PKGBUILDs carry theirs by hand.
 
@@ -76,7 +76,7 @@ podman run --rm -v "$PWD/packaging:/p:Z" registry.fedoraproject.org/fedora:41 \
          appstreamcli validate /p/pro.tuxcore.Lightforge.metainfo.xml'
 ```
 
-All three pass as of 1.0.0-beta.3. `appstreamcli --pedantic` has one remaining
+All three pass as of 1.0.0-beta.4. `appstreamcli --pedantic` has one remaining
 note — the component id contains capitals — which is a style preference
 (`org.gnome.Software` has them too) and not an error.
 
@@ -123,13 +123,13 @@ make check-cli-doc        # docs/CLI.md matches the binary
 make release              # binaries + the glibc floor check
 make packages             # tarball, .deb, .rpm, SHA256SUMS
 
-git tag -a v1.0.0-beta.3 -m 'Lightforge 1.0.0-beta.3'
-git push origin v1.0.0-beta.3
-git push github v1.0.0-beta.3
+git tag -a v1.0.0-beta.4 -m 'Lightforge 1.0.0-beta.4'
+git push origin v1.0.0-beta.4
+git push github v1.0.0-beta.4
 
-gh release create v1.0.0-beta.3 \
+gh release create v1.0.0-beta.4 \
   --repo LightforgeProject/lightforge \
-  --title 'Lightforge 1.0.0-beta.3' \
+  --title 'Lightforge 1.0.0-beta.4' \
   --prerelease \
   target/dist/*
 ```
@@ -138,7 +138,7 @@ Then fill the two `sha256sums` in the PKGBUILDs — they are `SKIP` until the
 tag exists, because the sums are of files GitHub has not generated yet:
 
 - `lightforge` hashes GitHub's own source archive
-  (`.../archive/refs/tags/v1.0.0-beta.3.tar.gz`), which is not byte-identical
+  (`.../archive/refs/tags/v1.0.0-beta.4.tar.gz`), which is not byte-identical
   to anything produced locally. `updpkgsums` fetches it and fills it in.
 - `lightforge-bin` hashes the tarball `make packages` just built, so its sum
   is already in `target/dist/SHA256SUMS`.
@@ -165,7 +165,7 @@ git clone ssh://aur@aur.archlinux.org/lightforge.git aur-lightforge
 cp packaging/aur/lightforge/PKGBUILD aur-lightforge/
 cd aur-lightforge
 makepkg --printsrcinfo > .SRCINFO     # mandatory, and must match the PKGBUILD
-git add PKGBUILD .SRCINFO && git commit -m 'Lightforge 1.0.0-beta.3' && git push
+git add PKGBUILD .SRCINFO && git commit -m 'Lightforge 1.0.0-beta.4' && git push
 ```
 
 `.SRCINFO` is generated rather than written, and is not kept in this repo for
