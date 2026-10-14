@@ -229,17 +229,28 @@ pub struct Remedy {
     pub note: Option<String>,
 }
 
-/// The relevant fields of `/etc/os-release`.
+/// The relevant fields of `/etc/os-release`, and whether the system is an
+/// image-based one.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OsRelease {
     pub id: String,
     pub id_like: String,
     pub pretty_name: String,
+    /// Booted from an OSTree image: Silverblue, Kinoite, Bazzite and the
+    /// other Fedora Atomic variants. `/etc/os-release` says `fedora` on all
+    /// of them, so it cannot tell them apart from a plain install, and there
+    /// the package manager everyone knows cannot install anything.
+    pub atomic: bool,
 }
 
 impl OsRelease {
     pub fn read() -> Self {
-        Self::parse(&std::fs::read_to_string("/etc/os-release").unwrap_or_default())
+        Self {
+            // The marker OSTree itself writes at boot, and the one
+            // rpm-ostree checks before it agrees to run.
+            atomic: std::path::Path::new("/run/ostree-booted").exists(),
+            ..Self::parse(&std::fs::read_to_string("/etc/os-release").unwrap_or_default())
+        }
     }
 
     pub fn parse(text: &str) -> Self {
@@ -257,6 +268,10 @@ impl OsRelease {
             }
         }
         os
+    }
+
+    fn is_fedora(&self) -> bool {
+        self.is("fedora")
     }
 
     /// Whether this system is, or is derived from, `family`.
@@ -313,6 +328,33 @@ pub fn remedy_for(os: &OsRelease) -> Remedy {
                     .to_owned(),
             ),
         )
+    } else if os.atomic && os.is_fedora() {
+        // UNVERIFIED. The root is a read-only image, so `dnf install` fails
+        // outright; packages are layered onto the next deployment instead,
+        // and nothing changes until it is booted. Same package as plain
+        // Fedora, for the same reason: the i686 Wine pulls the whole 32-bit
+        // closure the installer needs.
+        (
+            Some("rpm-ostree install wine.i686".to_owned()),
+            Some(
+                "Fedora Atomic layers packages onto the next boot, so restart \
+                 once it finishes. `dnf install` cannot work on this system"
+                    .to_owned(),
+            ),
+        )
+    } else if os.atomic {
+        // An image-based system that is not Fedora's: no layering tool we
+        // could name with any confidence, and a mutable-system command would
+        // be wrong.
+        (
+            None,
+            Some(
+                "This system boots from a read-only image, so the usual package \
+                 manager cannot install these. Add a 32-bit Wine the way your \
+                 distribution layers extra packages"
+                    .to_owned(),
+            ),
+        )
     } else if os.is("debian") {
         // UNVERIFIED. Debian and Ubuntu ship no i386 packages at all until
         // the architecture is enabled, which is why the first half exists;
@@ -339,7 +381,7 @@ pub fn remedy_for(os: &OsRelease) -> Remedy {
                     .to_owned(),
             ),
         )
-    } else if os.id == "fedora" || os.is("fedora") {
+    } else if os.is_fedora() {
         // VERIFIED on Fedora 44, after two wrong answers worth recording:
         //
         // `dnf install wine` resolves to x86_64 and installs nothing 32-bit
@@ -372,7 +414,38 @@ mod remedy_tests {
             id: id.into(),
             id_like: id_like.into(),
             pretty_name: format!("{id} (test)"),
+            atomic: false,
         }
+    }
+
+    fn atomic(id: &str, id_like: &str) -> OsRelease {
+        OsRelease { atomic: true, ..os(id, id_like) }
+    }
+
+    /// Bazzite and Silverblue report `ID=fedora`, and `dnf install` on a
+    /// read-only image is an instruction that cannot work.
+    #[test]
+    fn atomic_fedora_layers_with_rpm_ostree() {
+        for (id, like) in [("fedora", ""), ("bazzite", "fedora")] {
+            let remedy = remedy_for(&atomic(id, like));
+            let command = remedy.command.unwrap();
+            assert!(command.starts_with("rpm-ostree install"), "{id}: {command}");
+            assert!(command.contains("wine.i686"), "{id}: {command}");
+            assert!(remedy.note.unwrap().contains("restart"), "{id} must say a reboot is needed");
+        }
+    }
+
+    #[test]
+    fn a_plain_fedora_still_uses_dnf() {
+        let command = remedy_for(&os("fedora", "")).command.unwrap();
+        assert!(command.starts_with("sudo dnf install"), "{command}");
+    }
+
+    #[test]
+    fn another_image_based_system_gets_a_note_and_no_command() {
+        let remedy = remedy_for(&atomic("endless", ""));
+        assert!(remedy.command.is_none());
+        assert!(remedy.note.is_some());
     }
 
     /// The regression this table was corrected for, twice over.
@@ -411,6 +484,7 @@ mod remedy_tests {
                     _ => String::new(),
                 },
                 pretty_name: id.into(),
+                atomic: false,
             };
             let remedy = remedy_for(&os);
             let command = remedy.command.unwrap_or_default();

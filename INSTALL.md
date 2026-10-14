@@ -34,6 +34,21 @@ Download `lightforge-<version>.x86_64.rpm` from the same place:
 sudo dnf install ./lightforge-1.0.0.beta.4-1.x86_64.rpm   # or zypper install
 ```
 
+## Bazzite, Silverblue, Kinoite and other Fedora Atomic
+
+The system is a read-only image, so `dnf install` cannot work there. Two ways
+in. The tarball needs no reboot and touches nothing outside your home folder:
+follow [the steps below](#steam-deck-and-everything-else), `~/.local/bin` is
+already on Fedora's `PATH`. Or layer the rpm onto the image and reboot into
+it:
+
+```bash
+rpm-ostree install ./lightforge-1.0.0.beta.4-1.x86_64.rpm
+systemctl reboot
+```
+
+Updates the same way: the next rpm, or the next tarball over the old files.
+
 ## Arch, CachyOS, EndeavourOS
 
 **Not on the AUR yet** — registrations there are closed and there's no account
@@ -142,6 +157,7 @@ distro, but here they are:
 | | |
 | --- | --- |
 | **Fedora** | `sudo dnf install wine.i686` ✅ verified on Fedora 44 |
+| **Fedora Atomic** (Bazzite, Silverblue) | `rpm-ostree install wine.i686`, then reboot |
 | **Debian / Ubuntu** | `sudo dpkg --add-architecture i386 && sudo apt update && sudo apt install wine32:i386` |
 | **Arch** | `sudo pacman -S wine` (multilib must be enabled) |
 | **openSUSE** | `sudo zypper install wine-32bit` |
