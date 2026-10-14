@@ -157,7 +157,7 @@ distro, but here they are:
 | | |
 | --- | --- |
 | **Fedora** | `sudo dnf install wine.i686` ✅ verified on Fedora 44 |
-| **Fedora Atomic** (Bazzite, Silverblue) | `rpm-ostree install wine.i686`, then reboot |
+| **Fedora Atomic** (Bazzite, Silverblue) | `rpm-ostree install --apply-live wine.i686` (if it refuses: without the flag, then reboot) |
 | **Debian / Ubuntu** | `sudo dpkg --add-architecture i386 && sudo apt update && sudo apt install wine32:i386` |
 | **Arch** | `sudo pacman -S wine` (multilib must be enabled) |
 | **openSUSE** | `sudo zypper install wine-32bit` |

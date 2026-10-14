@@ -330,15 +330,20 @@ pub fn remedy_for(os: &OsRelease) -> Remedy {
         )
     } else if os.atomic && os.is_fedora() {
         // UNVERIFIED. The root is a read-only image, so `dnf install` fails
-        // outright; packages are layered onto the next deployment instead,
-        // and nothing changes until it is booted. Same package as plain
-        // Fedora, for the same reason: the i686 Wine pulls the whole 32-bit
-        // closure the installer needs.
+        // outright; packages are layered onto a new deployment instead.
+        // `--apply-live` also applies it to the running system, because this
+        // advice appears in the middle of Battle.net setup and a reboot there
+        // breaks the flow. It is meant for exactly this, a pure addition, but
+        // some images refuse it, hence the fallback in the note. Same package
+        // as plain Fedora, for the same reason: the i686 Wine pulls the whole
+        // 32-bit closure the installer needs.
         (
-            Some("rpm-ostree install wine.i686".to_owned()),
+            Some("rpm-ostree install --apply-live wine.i686".to_owned()),
             Some(
-                "Fedora Atomic layers packages onto the next boot, so restart \
-                 once it finishes. `dnf install` cannot work on this system"
+                "Fedora Atomic layers packages onto its image; `--apply-live` \
+                 makes them usable without a restart. If it refuses, run the \
+                 same command without it and restart. `dnf install` cannot \
+                 work on this system"
                     .to_owned(),
             ),
         )
@@ -429,9 +434,10 @@ mod remedy_tests {
         for (id, like) in [("fedora", ""), ("bazzite", "fedora")] {
             let remedy = remedy_for(&atomic(id, like));
             let command = remedy.command.unwrap();
-            assert!(command.starts_with("rpm-ostree install"), "{id}: {command}");
+            assert!(command.starts_with("rpm-ostree install --apply-live"), "{id}: {command}");
             assert!(command.contains("wine.i686"), "{id}: {command}");
-            assert!(remedy.note.unwrap().contains("restart"), "{id} must say a reboot is needed");
+            // The fallback when an image refuses a live apply.
+            assert!(remedy.note.unwrap().contains("restart"), "{id} must name the reboot fallback");
         }
     }
 
