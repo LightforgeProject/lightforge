@@ -34,31 +34,6 @@ Download `lightforge-<version>.x86_64.rpm` from the same place:
 sudo dnf install ./lightforge-1.0.0.beta.4-1.x86_64.rpm   # or zypper install
 ```
 
-## Bazzite, Silverblue, Kinoite and other Fedora Atomic
-
-The system is a read-only image, so `dnf install` cannot work there. Use the
-[installer](#steamos-bazzite-and-other-systems): double-click it on KDE
-(Bazzite, Kinoite, Aurora), or run the one-line command on GNOME (Silverblue,
-Bluefin). It needs no reboot.
-
-**32-bit libraries:** Battle.net's installer needs them. Bazzite ships Steam
-and usually has them already; plain Silverblue and Kinoite do not. Setup checks
-before it gets that far and says so if they are missing. To add them:
-
-```bash
-rpm-ostree install --apply-live wine.i686
-```
-
-If `--apply-live` is refused, run it without the flag and reboot.
-
-**Or layer the rpm** onto the image and reboot into it. Updates then mean the
-next rpm and another reboot:
-
-```bash
-rpm-ostree install ./lightforge-1.0.0.beta.4-1.x86_64.rpm
-systemctl reboot
-```
-
 ## Arch, CachyOS, EndeavourOS
 
 **Not on the AUR yet** — registrations there are closed and there's no account
