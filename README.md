@@ -138,6 +138,13 @@ sudo apt install ./lightforge_1.0.0.beta.4-1_amd64.deb     # Debian, Ubuntu
 sudo dnf install ./lightforge-1.0.0.beta.4-1.x86_64.rpm    # Fedora, openSUSE
 ```
 
+On SteamOS, Bazzite and other systems, download `lightforge-installer.desktop`
+from the same page and double-click it, or run it from a terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LightforgeProject/lightforge/main/packaging/installer/install.sh | bash
+```
+
 On Arch there's a PKGBUILD in the repository. The AUR has registrations
 closed, so there's no account to upload it from yet:
 
@@ -155,8 +162,8 @@ cargo build --release --locked
 ./target/release/lightforge-gui
 ```
 
-[**INSTALL.md**](INSTALL.md) covers the rest: the portable tarball for the
-Steam Deck, what you need per distro, the 32-bit package Battle.net's
+[**INSTALL.md**](INSTALL.md) covers the rest: the installer in more detail,
+the Steam Deck, what you need per distro, the 32-bit package Battle.net's
 installer quietly depends on, and how to remove it again.
 
 ## Requirements

@@ -1,7 +1,7 @@
 # Installing Lightforge
 
-There's a package for Debian/Ubuntu, one for Fedora, and a PKGBUILD for Arch.
-Failing that, Lightforge is a Rust program with almost no dependencies, so
+There's a package for Debian/Ubuntu, one for Fedora, a PKGBUILD for Arch, and
+an installer for SteamOS, Bazzite and everything else. Failing that, Lightforge is a Rust program with almost no dependencies, so
 building it is three commands and a couple of minutes of your CPU fan.
 
 Everything below installs the same two binaries, the menu entry and the icons.
@@ -22,8 +22,8 @@ It asks for glibc 2.36 or newer — Debian 12, Ubuntu 22.10 and anything after
 them. `apt` pulls in nothing else; see [what you need](#to-run) below.
 
 Ubuntu 22.04 LTS is glibc 2.35 and `apt` will refuse the package. The binaries
-themselves only import 2.34 and 2.35, so the [tarball](#steam-deck-and-everything-else)
-below runs there — the `.deb` states the container's own 2.36 because that is
+themselves only import 2.34 and 2.35, so the [installer](#steamos-bazzite-and-other-systems)
+below works there — the `.deb` states the container's own 2.36 because that is
 the version it can actually promise for every future build.
 
 ## Fedora, RHEL, openSUSE
@@ -36,23 +36,10 @@ sudo dnf install ./lightforge-1.0.0.beta.4-1.x86_64.rpm   # or zypper install
 
 ## Bazzite, Silverblue, Kinoite and other Fedora Atomic
 
-The system is a read-only image, so `dnf install` cannot work there. The
-installer needs no reboot and touches nothing outside your home folder.
-
-**On KDE** (Bazzite, Kinoite, Aurora): download `lightforge-installer.desktop`
-from the [releases page](https://github.com/LightforgeProject/lightforge/releases),
-double-click it and choose Continue, as described
-[below](#steam-deck-and-everything-else).
-
-**On GNOME** (Silverblue, Bluefin): GNOME Files opens a `.desktop` file as text
-rather than running it, so paste this into a terminal instead. It is the same
-installer:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/LightforgeProject/lightforge/main/packaging/installer/install.sh | bash
-```
-
-Run either again to update.
+The system is a read-only image, so `dnf install` cannot work there. Use the
+[installer](#steamos-bazzite-and-other-systems): double-click it on KDE
+(Bazzite, Kinoite, Aurora), or run the one-line command on GNOME (Silverblue,
+Bluefin). It needs no reboot.
 
 **32-bit libraries:** Battle.net's installer needs them. Bazzite ships Steam
 and usually has them already; plain Silverblue and Kinoite do not. Setup checks
@@ -89,46 +76,41 @@ built and installed in a clean Arch container before they were committed, and
 both land on the AUR as `lightforge` and `lightforge-bin` the day an account
 is possible.
 
-## Steam Deck, and everything else
+## SteamOS, Bazzite and other systems
 
-**The easy way:** download `lightforge-installer.desktop` from the
+The installer works on any distribution with glibc 2.36 or newer, needs no
+root, and touches nothing outside your home folder. Run it again any time to
+update.
+
+**Double-click:** download `lightforge-installer.desktop` from the
 [releases page](https://github.com/LightforgeProject/lightforge/releases) and
 double-click it. Your desktop will warn that the file is untrusted, choose
 Continue. A terminal window shows the download, checks it, installs Lightforge
-into your home folder and starts it. Run it again any time to update. To
-remove Lightforge later:
+and starts it. GNOME Files opens the file as text instead of running it, so on
+GNOME use the command below.
+
+**Install from a terminal:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LightforgeProject/lightforge/main/packaging/installer/install.sh | bash
+```
+
+**Uninstall:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/LightforgeProject/lightforge/main/packaging/installer/install.sh | bash -s -- --uninstall
 ```
 
-Your games, the Wine prefix and your settings stay where they are.
+Uninstalling removes Lightforge itself. Your games, the Wine prefix and your
+settings stay where they are; see [Uninstalling](#uninstalling) for where they
+live.
 
-**By hand:** the
-[portable tarball](https://github.com/LightforgeProject/lightforge/releases)
-runs anywhere with glibc 2.36 or newer, SteamOS included:
-
-```bash
-tar xzf lightforge-1.0.0-beta.4-x86_64-linux.tar.gz
-cd lightforge-1.0.0-beta.4
-install -Dm755 lightforge-gui ~/.local/bin/lightforge-gui
-install -Dm755 lightforge     ~/.local/bin/lightforge
-install -Dm644 pro.tuxcore.Lightforge.desktop ~/.local/share/applications/
-cp -r icons/hicolor ~/.local/share/icons/
-sed -i "s|=lightforge-gui|=$HOME/.local/bin/lightforge-gui|" \
-  ~/.local/share/applications/pro.tuxcore.Lightforge.desktop
-```
-
-The last line points the menu entry at the full path. Not every desktop
-session has `~/.local/bin` on its `PATH`, and where it is missing the entry
-doesn't fail, it simply never appears in the menu.
-
-On a Steam Deck, either way happens in Desktop Mode (Steam button, Power,
-Switch to Desktop). Nothing needs root, and SteamOS already has the 32-bit
-libraries Battle.net's installer needs, so leave `steamos-readonly` alone. The
-first-run setup asks whether the device is a Steam Deck or Steam Machine or a
-desktop PC running SteamOS. Retail World of Warcraft is well over 100 GB, so
-on a Deck add your SD card as a drive during setup.
+On a Steam Deck, do this in Desktop Mode (Steam button, Power, Switch to
+Desktop). SteamOS already has the 32-bit libraries Battle.net's installer
+needs, so leave `steamos-readonly` alone. The first-run setup asks whether the
+device is a Steam Deck or Steam Machine or a desktop PC running SteamOS.
+Retail World of Warcraft is well over 100 GB, so on a Deck add your SD card as
+a drive during setup.
 
 ## Build it yourself
 
@@ -272,8 +254,8 @@ Then you're on the Play page and it's one button.
 ## Updating
 
 With a package, however your system updates everything else — install the new
-`.deb` or `.rpm` over the old one, or `makepkg -si` again on Arch. From a
-source tree:
+`.deb` or `.rpm` over the old one, or `makepkg -si` again on Arch. With the
+installer, run it again. From a source tree:
 
 ```bash
 git pull
@@ -282,12 +264,15 @@ cargo build --release --locked
 
 Nothing migrates behind your back; your config, games and addons are outside
 the build directory and stay where they are. There's no self-updater, which is
-most of the argument for installing a package rather than a binary.
+most of the argument for installing a package or using the installer rather
+than a bare binary.
 
 ## Uninstalling
 
 `sudo apt remove lightforge`, `sudo dnf remove lightforge`,
-`sudo pacman -R lightforge-bin`, or `make uninstall PREFIX=~/.local` — then as
+`sudo pacman -R lightforge-bin`, the installer's
+[uninstall command](#steamos-bazzite-and-other-systems), or
+`make uninstall PREFIX=~/.local` — then as
 much of this as you want gone:
 
 ```text

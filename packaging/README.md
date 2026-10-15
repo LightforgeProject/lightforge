@@ -23,7 +23,8 @@ packaging/
 open a terminal, Steam Deck owners first. Double-clicked, it opens a terminal
 window and runs `install.sh` from the `main` branch on GitHub, which finds the
 newest release, checks it against `SHA256SUMS`, and installs it into the home
-folder exactly as INSTALL.md's tarball steps do. Running it again updates.
+folder: the binaries in `~/.local/bin`, the menu entry and icons under
+`~/.local/share`. Running it again updates.
 
 Because it is fetched from `main`, a fix to `install.sh` reaches everyone
 without a release, and nothing in it is reachable before it is merged there.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs or updates Lightforge for the current user. No root, nothing
-# outside the home folder, the same layout INSTALL.md's tarball steps use,
-# so running it again over a manual install is an update.
+# outside the home folder: the binaries in ~/.local/bin, the menu entry and
+# icons under ~/.local/share, so running it again is an update.
 #
 #   install.sh                    newest release from GitHub
 #   install.sh <tarball>          a tarball already on disk (testing a build)
