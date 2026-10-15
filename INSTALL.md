@@ -36,18 +36,41 @@ sudo dnf install ./lightforge-1.0.0.beta.4-1.x86_64.rpm   # or zypper install
 
 ## Bazzite, Silverblue, Kinoite and other Fedora Atomic
 
-The system is a read-only image, so `dnf install` cannot work there. Two ways
-in. The tarball needs no reboot and touches nothing outside your home folder:
-follow [the steps below](#steam-deck-and-everything-else), `~/.local/bin` is
-already on Fedora's `PATH`. Or layer the rpm onto the image and reboot into
-it:
+The system is a read-only image, so `dnf install` cannot work there. The
+installer needs no reboot and touches nothing outside your home folder.
+
+**On KDE** (Bazzite, Kinoite, Aurora): download `lightforge-installer.desktop`
+from the [releases page](https://github.com/LightforgeProject/lightforge/releases),
+double-click it and choose Continue, as described
+[below](#steam-deck-and-everything-else).
+
+**On GNOME** (Silverblue, Bluefin): GNOME Files opens a `.desktop` file as text
+rather than running it, so paste this into a terminal instead. It is the same
+installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LightforgeProject/lightforge/main/packaging/installer/install.sh | bash
+```
+
+Run either again to update.
+
+**32-bit libraries:** Battle.net's installer needs them. Bazzite ships Steam
+and usually has them already; plain Silverblue and Kinoite do not. Setup checks
+before it gets that far and says so if they are missing. To add them:
+
+```bash
+rpm-ostree install --apply-live wine.i686
+```
+
+If `--apply-live` is refused, run it without the flag and reboot.
+
+**Or layer the rpm** onto the image and reboot into it. Updates then mean the
+next rpm and another reboot:
 
 ```bash
 rpm-ostree install ./lightforge-1.0.0.beta.4-1.x86_64.rpm
 systemctl reboot
 ```
-
-Updates the same way: the next rpm, or the next tarball over the old files.
 
 ## Arch, CachyOS, EndeavourOS
 
@@ -68,7 +91,20 @@ is possible.
 
 ## Steam Deck, and everything else
 
-A Flatpak is the answer there and isn't done yet. In the meantime the
+**The easy way:** download `lightforge-installer.desktop` from the
+[releases page](https://github.com/LightforgeProject/lightforge/releases) and
+double-click it. Your desktop will warn that the file is untrusted, choose
+Continue. A terminal window shows the download, checks it, installs Lightforge
+into your home folder and starts it. Run it again any time to update. To
+remove Lightforge later:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LightforgeProject/lightforge/main/packaging/installer/install.sh | bash -s -- --uninstall
+```
+
+Your games, the Wine prefix and your settings stay where they are.
+
+**By hand:** the
 [portable tarball](https://github.com/LightforgeProject/lightforge/releases)
 runs anywhere with glibc 2.36 or newer, SteamOS included:
 
@@ -87,8 +123,8 @@ The last line points the menu entry at the full path. Not every desktop
 session has `~/.local/bin` on its `PATH`, and where it is missing the entry
 doesn't fail, it simply never appears in the menu.
 
-On a Steam Deck, do this in Desktop Mode (Steam button, Power, Switch to
-Desktop) in Konsole. Nothing needs root, and SteamOS already has the 32-bit
+On a Steam Deck, either way happens in Desktop Mode (Steam button, Power,
+Switch to Desktop). Nothing needs root, and SteamOS already has the 32-bit
 libraries Battle.net's installer needs, so leave `steamos-readonly` alone. The
 first-run setup asks whether the device is a Steam Deck or Steam Machine or a
 desktop PC running SteamOS. Retail World of Warcraft is well over 100 GB, so

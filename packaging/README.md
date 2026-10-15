@@ -9,10 +9,26 @@ packaging/
 ├── pro.tuxcore.Lightforge.desktop        the menu entry
 ├── pro.tuxcore.Lightforge.metainfo.xml   AppStream, for software centres
 ├── icons/hicolor/…                       16px → 512px, plus the SVG
+├── installer/
+│   ├── lightforge-installer.desktop      the double-click installer
+│   └── install.sh                        what it runs, fetched from main
 └── aur/
     ├── lightforge/PKGBUILD               builds from the tagged source
     └── lightforge-bin/PKGBUILD           installs the released binaries
 ```
+
+## The installer
+
+`lightforge-installer.desktop` is a release asset for people who will never
+open a terminal, Steam Deck owners first. Double-clicked, it opens a terminal
+window and runs `install.sh` from the `main` branch on GitHub, which finds the
+newest release, checks it against `SHA256SUMS`, and installs it into the home
+folder exactly as INSTALL.md's tarball steps do. Running it again updates.
+
+Because it is fetched from `main`, a fix to `install.sh` reaches everyone
+without a release, and nothing in it is reachable before it is merged there.
+To test a change before that, run it straight from the tree:
+`bash packaging/installer/install.sh [tarball]`.
 
 The `.deb` and `.rpm` are not here: their metadata lives in
 `crates/launcher-gui/Cargo.toml`, because `cargo-deb` and `cargo-generate-rpm`
@@ -30,7 +46,7 @@ the others do not, the taskbar shows a placeholder instead of the icon.
 
 ```bash
 make release    # the binaries, in a Debian 12 container — see ../Containerfile
-make packages   # tarball + .deb + .rpm + SHA256SUMS, into target/dist/
+make packages   # tarball + .deb + .rpm + installer + SHA256SUMS, into target/dist/
 ```
 
 `make packages` deliberately does not depend on `make release`: it would

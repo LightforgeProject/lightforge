@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Install Lightforge
+Comment=Download and install the newest Lightforge for this user, or update it
+Exec=bash -c "{ curl -fsSL https://raw.githubusercontent.com/LightforgeProject/lightforge/main/packaging/installer/install.sh || echo 'echo; echo Could not download the Lightforge installer. Check the internet connection and press Enter to close.; read -r _ </dev/tty'; } | bash"
+Icon=system-software-install
+Terminal=true

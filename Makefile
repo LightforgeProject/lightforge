@@ -29,7 +29,7 @@ GLIBC_MAX ?= 2.36
 BINARIES := lightforge lightforge-gui
 
 .PHONY: release image check-glibc clean-release cli-doc check-cli-doc \
-	packages deb rpm tarball checksums github-names check-binaries \
+	packages deb rpm tarball installer checksums github-names check-binaries \
 	clean-packages install uninstall
 
 ## Build release binaries against an old glibc, and verify they are portable.
@@ -126,7 +126,7 @@ uninstall:
 ## rebuilding 27 MB of GUI three times to produce three files from the same
 ## two binaries is a minute nobody needs to spend. Run `make release` first —
 ## each target checks the binaries are there.
-packages: tarball deb rpm checksums
+packages: tarball deb rpm installer checksums
 	@echo
 	@echo "Release artifacts in $(DIST):"
 	@ls -lh $(DIST) | awk 'NR>1 {print "  " $$9 "  " $$5}'
@@ -148,6 +148,14 @@ tarball: check-binaries
 	       target/tarball/lightforge-$(VERSION)/
 	@tar -czf $(DIST)/$(TARBALL) -C target/tarball lightforge-$(VERSION)
 	@echo "ok   $(DIST)/$(TARBALL)"
+
+## The double-click installer, published beside the packages so the release
+## page has one file a Steam Deck user can take. It carries no version: it
+## fetches install.sh from main, which picks the newest release itself.
+installer:
+	@mkdir -p $(DIST)
+	@cp packaging/installer/lightforge-installer.desktop $(DIST)/
+	@echo "ok   $(DIST)/lightforge-installer.desktop"
 
 ## A .deb, written natively — no `dpkg` on this machine.
 ##
