@@ -477,6 +477,17 @@ enum Message {
     CancelDownloadConfirm { delete: bool },
     /// A tile in the product bar was clicked.
     LineSelected(ProductLine),
+    /// The cursor came onto a tile, or left one. Tracked so a drag knows
+    /// what it is over without asking the layout.
+    TileEntered(ProductLine),
+    TileLeft(ProductLine),
+    /// A tile was pressed: a click or the start of a drag, which the release
+    /// decides.
+    TileGrabbed(ProductLine),
+    /// The cursor moved while a tile was held, in window coordinates.
+    TileDragged(f32),
+    /// The held tile was let go.
+    TileDropped,
     /// A branch was picked for the selected line. Adds the product first when
     /// the branch was on offer but not configured.
     BranchSelected(BranchChoice),
@@ -1410,6 +1421,10 @@ struct Lightforge {
     browse_open: bool,
     /// The band's overflow menu, only ever reachable when something is in it.
     strip_open: bool,
+    /// The tile under the cursor, if any.
+    tile_hover: Option<ProductLine>,
+    /// The tile held down, while it is.
+    tile_drag: Option<TileDrag>,
     /// Whether the menu under the wordmark is open.
     app_menu_open: bool,
     /// Pages left behind, oldest first, and pages stepped back out of.
@@ -1731,6 +1746,8 @@ impl Lightforge {
             manager_open: false,
             browse_open: false,
             strip_open: false,
+            tile_hover: None,
+            tile_drag: None,
             app_menu_open: false,
             visited: Vec::new(),
             forward: Vec::new(),
@@ -3066,6 +3083,83 @@ impl Lightforge {
                     self.manager_open = false;
                 }
                 Task::none()
+            }
+
+            Message::TileEntered(line) => {
+                self.tile_hover = Some(line);
+                Task::none()
+            }
+
+            Message::TileLeft(line) => {
+                // Only if it is still the one recorded: entering the next tile
+                // can arrive before leaving the last.
+                if self.tile_hover.as_ref() == Some(&line) {
+                    self.tile_hover = None;
+                }
+                Task::none()
+            }
+
+            Message::TileGrabbed(line) => {
+                self.tile_drag = Some(TileDrag { line, origin: None, last: 0.0, moving: false });
+                Task::none()
+            }
+
+            Message::TileDragged(x) => {
+                let Some(drag) = &mut self.tile_drag else {
+                    return Task::none();
+                };
+                let Some(origin) = drag.origin else {
+                    drag.origin = Some(x);
+                    drag.last = x;
+                    return Task::none();
+                };
+                drag.moving |= (x - origin).abs() > DRAG_SLOP;
+                let heading = x - drag.last;
+                drag.last = x;
+                if !drag.moving {
+                    return Task::none();
+                }
+
+                // Moved over another tile: take its place, the way a browser
+                // tab does. Only in the direction of travel, or two tiles of
+                // different widths trade places back and forth under a
+                // cursor that has come to rest on the seam.
+                let held = drag.line.clone();
+                let Some(over) = self.tile_hover.clone().filter(|line| line != &held) else {
+                    return Task::none();
+                };
+                let lines = self.lines();
+                let (Some(from), Some(to)) = (
+                    lines.iter().position(|l| l == &held),
+                    lines.iter().position(|l| l == &over),
+                ) else {
+                    return Task::none();
+                };
+                if (to > from && heading > 0.0) || (to < from && heading < 0.0) {
+                    self.move_line(from, to);
+                }
+                Task::none()
+            }
+
+            Message::TileDropped => {
+                let Some(drag) = self.tile_drag.take() else {
+                    return Task::none();
+                };
+                match drag.moving {
+                    // Saved once, at the end: the order changes on every
+                    // tile crossed, and the file needs only the last one.
+                    true => {
+                        self.save_config();
+                        Task::none()
+                    }
+                    // A click is a press and a release on the same tile.
+                    false if self.tile_hover.as_ref() == Some(&drag.line)
+                        && drag.line != self.catalog.line_of(&self.selected.code) =>
+                    {
+                        self.update(Message::LineSelected(drag.line))
+                    }
+                    false => Task::none(),
+                }
             }
 
             Message::ToggleBrowse => {
@@ -5898,6 +5992,22 @@ impl Lightforge {
             false => Subscription::none(),
         };
 
+        // A held tile follows the cursor, and only a held one: hover alone
+        // comes from the tiles' own mouse areas, so moving across the window
+        // wakes nothing.
+        let dragging = match self.tile_drag.is_some() {
+            true => iced::event::listen_with(|event, _, _| match event {
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                    Some(Message::TileDragged(position.x))
+                }
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+                    Some(Message::TileDropped)
+                }
+                _ => None,
+            }),
+            false => Subscription::none(),
+        };
+
         // The splash's bar sweeps off the clock, so it needs the tick as much
         // as a live transfer does.
         match self.splash.is_some()
@@ -5910,9 +6020,10 @@ impl Lightforge {
                 closing,
                 hints,
                 resizes,
+                dragging,
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),
             ]),
-            false => Subscription::batch([closing, hints, resizes]),
+            false => Subscription::batch([closing, hints, resizes, dragging]),
         }
     }
 
@@ -6286,6 +6397,24 @@ impl Lightforge {
         lines
     }
 
+    /// Move the line at `from` in the band to `to`, its products with it.
+    ///
+    /// The band's order is the configured products' order, so that is what
+    /// changes; the choices follow so the band redraws without a reload. A
+    /// stable sort keeps a line's PTR and beta where they were behind it.
+    fn move_line(&mut self, from: usize, to: usize) {
+        let mut order = self.lines();
+        let line = order.remove(from);
+        order.insert(to, line);
+        let catalog = &self.catalog;
+        let rank = |code: &ProductCode| {
+            let line = catalog.line_of(code);
+            order.iter().position(|l| l == &line).unwrap_or(usize::MAX)
+        };
+        self.config.products.sort_by_key(|p| rank(&p.code));
+        self.choices.sort_by_key(|c| rank(&c.code));
+    }
+
     /// Rebuild the catalog from whatever manifest is in hand.
     fn refresh_catalog(&mut self) {
         let mut catalog = match &self.manifest {
@@ -6551,11 +6680,33 @@ impl Lightforge {
                 .into(),
         };
 
+        // The button only for its look. A pressable one keeps its pressed
+        // state by position in the row, and a drag moves tiles between
+        // positions, so a tile let go after a drag could fire a different
+        // tile's press. The mouse area around it takes press, hover, and
+        // release instead, and [`Message::TileDropped`] tells a click from a
+        // drag. With no `on_press` the button always reports `Disabled`, so
+        // the hover it would have shown is passed in from what is tracked.
+        let hovered = self.tile_hover.as_ref() == Some(line);
+        let held = self.tile_drag.as_ref().is_some_and(|drag| &drag.line == line);
+        let status = match hovered || held {
+            true => button::Status::Hovered,
+            false => button::Status::Active,
+        };
         let tile = button(face).padding([theme::XS, theme::SM]);
         let tile = match selected {
             true => tile.style(theme::selected),
-            false => tile.style(theme::ghost).on_press(Message::LineSelected(line.clone())),
+            false => tile.style(move |theme, _| theme::ghost(theme, status)),
         };
+        let dragging = self.tile_drag.as_ref().is_some_and(|drag| drag.moving);
+        let tile = mouse_area(tile)
+            .on_press(Message::TileGrabbed(line.clone()))
+            .on_enter(Message::TileEntered(line.clone()))
+            .on_exit(Message::TileLeft(line.clone()))
+            .interaction(match dragging {
+                true => iced::mouse::Interaction::Grabbing,
+                false => iced::mouse::Interaction::Pointer,
+            });
 
         tooltip(
             tile,
@@ -12117,6 +12268,22 @@ const STRIP_HEIGHT: f32 = theme::TILE + theme::LG;
 /// than an estimate of how wide a glyph renders.
 const BAND_BUTTON: f32 = 48.0;
 
+/// How far a held tile has to travel before it is a drag rather than a click
+/// with a shaky hand.
+const DRAG_SLOP: f32 = 6.0;
+
+/// A tile held down in the band.
+///
+/// `origin` is unknown at the press, which carries no position, and is taken
+/// from the first movement after it. `last` is where the cursor was on the
+/// previous movement, so a move can tell which way it is heading.
+struct TileDrag {
+    line: ProductLine,
+    origin: Option<f32>,
+    last: f32,
+    moving: bool,
+}
+
 /// Battle.net's own mark on the button at the end of the band.
 ///
 /// Larger than [`BAND_GLYPH`], which sizes marks that sit *inside* a band
@@ -13261,6 +13428,67 @@ mod tests {
         let _ = app.enqueue();
         assert!(app.queue.is_empty(), "a download was queued onto a drive that is not there");
         assert_eq!(app.error.as_deref(), Some("nvme2 is not mounted"));
+    }
+
+    /// Dragging a tile moves its whole line, branches and all, and only in
+    /// the direction the cursor is heading; a press and release without
+    /// travel is still a click.
+    #[test]
+    fn dragging_a_tile_reorders_the_band() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+
+        let retail = Choice { code: ProductCode::Retail, label: "Retail".to_owned() };
+        app.choices = vec![
+            retail.clone(),
+            Choice { code: ProductCode::Ptr, label: "PTR".to_owned() },
+            Choice { code: ProductCode::ClassicEra, label: "Classic Era".to_owned() },
+            Choice { code: ProductCode::EraPtr, label: "Era PTR".to_owned() },
+            Choice { code: ProductCode::Classic, label: "Classic".to_owned() },
+        ];
+        app.config.products = app
+            .choices
+            .iter()
+            .map(|c| Product::new(c.code.clone(), c.label.clone()))
+            .collect();
+        app.selected = retail;
+
+        let classic = app.catalog.line_of(&ProductCode::Classic);
+        let era = app.catalog.line_of(&ProductCode::ClassicEra);
+        let retail_line = app.catalog.line_of(&ProductCode::Retail);
+
+        // Held over Classic, nudged inside the slop, then dragged left over
+        // Era (heading right: no move) and on over Retail (heading left).
+        let _ = app.update(Message::TileEntered(classic.clone()));
+        let _ = app.update(Message::TileGrabbed(classic.clone()));
+        let _ = app.update(Message::TileDragged(300.0));
+        let _ = app.update(Message::TileDragged(297.0));
+        assert!(!app.tile_drag.as_ref().unwrap().moving, "a twitch started a drag");
+        let _ = app.update(Message::TileEntered(era.clone()));
+        let _ = app.update(Message::TileDragged(305.0));
+        assert_eq!(app.lines().last(), Some(&classic), "moved against the direction of travel");
+        let _ = app.update(Message::TileDragged(250.0));
+        let _ = app.update(Message::TileEntered(retail_line.clone()));
+        let _ = app.update(Message::TileDragged(200.0));
+        let _ = app.update(Message::TileDropped);
+
+        let order: Vec<&ProductCode> = app.config.products.iter().map(|p| &p.code).collect();
+        assert_eq!(order, vec![
+            &ProductCode::Classic,
+            &ProductCode::Retail,
+            &ProductCode::Ptr,
+            &ProductCode::ClassicEra,
+            &ProductCode::EraPtr,
+        ]);
+        assert_eq!(app.lines(), vec![classic.clone(), retail_line, era.clone()]);
+        assert!(app.tile_drag.is_none());
+
+        // A click: press and release on Era with no travel selects it.
+        let _ = app.update(Message::TileEntered(era.clone()));
+        let _ = app.update(Message::TileGrabbed(era.clone()));
+        let _ = app.update(Message::TileDropped);
+        assert_eq!(app.catalog.line_of(&app.selected.code), era);
     }
 
     /// A tile is a line. Removing Classic Era with its PTR tracked used to
