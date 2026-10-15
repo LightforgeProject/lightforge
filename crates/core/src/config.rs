@@ -15,6 +15,16 @@ use crate::proton::ProtonPin;
 /// Windows user name inside a Proton prefix.
 const DEFAULT_PREFIX_USER: &str = "steamuser";
 
+/// How Lightforge is used on a SteamOS machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SteamOsUse {
+    /// A Steam Deck or a Steam Machine: controller input.
+    Console,
+    /// SteamOS on a desktop PC: mouse and keyboard.
+    Desktop,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -142,6 +152,13 @@ pub struct Config {
     /// wizard says so when it is set.
     #[serde(default)]
     pub battle_net_declined: bool,
+    /// What a SteamOS machine is used as, asked during setup and only there.
+    ///
+    /// `None` everywhere else, and on SteamOS until the question is answered.
+    /// The same OS runs a handheld, a box under a television, and an ordinary
+    /// desktop, and nothing on the machine says which one this is.
+    #[serde(default)]
+    pub steamos_use: Option<SteamOsUse>,
     /// Whether the News panel is shown beside the game's key art.
     ///
     /// Off by default: a first run should show the game's key art and nothing
@@ -239,6 +256,7 @@ impl Default for Config {
             locale: default_locale(),
             setup_complete: false,
             battle_net_declined: false,
+            steamos_use: None,
             news_on_play: false,
             patch_notes_muted: false,
             patch_notes_seen: None,
@@ -563,6 +581,19 @@ mod tests {
         let config: Config = toml::from_str("install_root = \"/games/Blizzard\"").unwrap();
         assert_eq!(config.battle_net_tweaks, crate::tweaks::Tweaks::default());
         assert!(config.battle_net_tweaks.is_default());
+    }
+
+    // Written as a word a person could type, and absent until answered.
+    #[test]
+    fn the_steamos_answer_is_a_plain_word_and_optional() {
+        let config: Config = toml::from_str("install_root = \"/games/Blizzard\"").unwrap();
+        assert_eq!(config.steamos_use, None);
+
+        let config = Config { steamos_use: Some(SteamOsUse::Console), ..Config::default() };
+        let text = toml::to_string(&config).unwrap();
+        assert!(text.contains("steamos_use = \"console\""), "{text}");
+        let back: Config = toml::from_str(&text).unwrap();
+        assert_eq!(back.steamos_use, Some(SteamOsUse::Console));
     }
 
     #[test]

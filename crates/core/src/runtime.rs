@@ -244,13 +244,30 @@ pub struct OsRelease {
 }
 
 impl OsRelease {
+    /// The running system's, or the file `LIGHTFORGE_OS_RELEASE` names.
+    ///
+    /// The override is for development: it lets one machine walk the paths
+    /// meant for another, the SteamOS setup question on an Arch desktop,
+    /// without a VM. Only the file is swapped; `atomic` is still read from
+    /// the real boot.
     pub fn read() -> Self {
+        let path = std::env::var_os("LIGHTFORGE_OS_RELEASE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| "/etc/os-release".into());
         Self {
             // The marker OSTree itself writes at boot, and the one
             // rpm-ostree checks before it agrees to run.
             atomic: std::path::Path::new("/run/ostree-booted").exists(),
-            ..Self::parse(&std::fs::read_to_string("/etc/os-release").unwrap_or_default())
+            ..Self::parse(&std::fs::read_to_string(path).unwrap_or_default())
         }
+    }
+
+    /// Valve's own SteamOS, on a Deck, a Steam Machine, or a desktop.
+    ///
+    /// The ID alone, not `ID_LIKE`: distributions built on SteamOS's base
+    /// are their own thing and are not asked the SteamOS question.
+    pub fn is_steamos(&self) -> bool {
+        self.id == "steamos"
     }
 
     pub fn parse(text: &str) -> Self {
@@ -515,6 +532,14 @@ mod remedy_tests {
         assert_eq!(parsed.id, "debian");
         assert_eq!(parsed.pretty_name, "Debian GNU/Linux 13");
         assert!(parsed.id_like.is_empty());
+    }
+
+    /// SteamOS by its own ID only; something built on it is not asked.
+    #[test]
+    fn steamos_is_recognised_by_its_id_alone() {
+        assert!(os("steamos", "arch").is_steamos());
+        assert!(!os("arch", "").is_steamos());
+        assert!(!os("chimeraos", "steamos arch").is_steamos());
     }
 
     /// The case that started all this: Ubuntu is `ID=ubuntu ID_LIKE=debian`,

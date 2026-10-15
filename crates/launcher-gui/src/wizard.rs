@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use iced::widget::{column, container, image, row, scrollable, text, text_input, Space};
 use iced::{Alignment, ContentFit, Element, Length};
 
+use lightforge_core::config::SteamOsUse;
 use lightforge_core::error::chain;
 use lightforge_core::discover::{self, Found, HandOff, Origin, WowInstall};
 use lightforge_core::product::{Branch, Kind, ProductCode};
@@ -175,6 +176,8 @@ pub enum Msg {
     /// Take a drive back off the list. Nothing on it is deleted.
     RemoveDrive(String),
     WantBattleNet(bool),
+    /// What this SteamOS machine is for. Only ever sent on SteamOS.
+    SteamOsUse(SteamOsUse),
     /// Done, write the config and get out of the way.
     Finish,
 }
@@ -393,6 +396,12 @@ pub fn update(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
             if let Some(wizard) = app.wizard.as_mut() {
                 wizard.drive_error = outcome.err();
             }
+            iced::Task::none()
+        }
+
+        Msg::SteamOsUse(answer) => {
+            app.config.steamos_use = Some(answer);
+            app.save_config();
             iced::Task::none()
         }
 
@@ -754,7 +763,7 @@ fn footer<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
 
     // What the step's own button says, and whether it can be pressed yet.
     let (label, ready): (&str, bool) = match wizard.step {
-        Step::Welcome => ("Get started", true),
+        Step::Welcome => ("Get started", welcome_answered(app)),
         Step::Place => ("Look for my games", true),
         Step::Found => (
             match wizard.rows.iter().any(|row| row.take) {
@@ -779,6 +788,12 @@ fn footer<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     );
 
     actions.into()
+}
+
+/// Whether the first slide can be left. On SteamOS the Deck-or-desktop
+/// question has to be answered first; "Set up later" still leaves without it.
+fn welcome_answered(app: &Lightforge) -> bool {
+    !app.steamos || app.config.steamos_use.is_some()
 }
 
 fn welcome(app: &Lightforge) -> Element<'_, Message> {
@@ -823,6 +838,32 @@ fn welcome(app: &Lightforge) -> Element<'_, Message> {
         .padding(theme::SM)
         .into(),
     ));
+    // Asked, not guessed: the same OS runs a handheld, a box under a
+    // television, and a desktop, and nothing on the machine says which.
+    if app.steamos {
+        let picked = app.config.steamos_use;
+        body = body.push(
+            column![
+                text("How will you use Lightforge on this SteamOS device?").size(theme::BODY),
+                iced::widget::radio(
+                    "Steam Deck or Steam Machine: Controller Input",
+                    SteamOsUse::Console,
+                    picked,
+                    |answer| Message::Wizard(Msg::SteamOsUse(answer)),
+                )
+                .text_size(theme::BODY),
+                iced::widget::radio(
+                    "SteamOS on a desktop PC: Mouse and Keyboard Input",
+                    SteamOsUse::Desktop,
+                    picked,
+                    |answer| Message::Wizard(Msg::SteamOsUse(answer)),
+                )
+                .text_size(theme::BODY),
+            ]
+            .spacing(theme::SM),
+        );
+    }
+
     body = body.extend(
         app.hint(
             "The region decides which of Blizzard's version services a download comes from, \
@@ -1303,6 +1344,23 @@ mod tests {
             version: None,
             bytes: 2048,
         }
+    }
+
+    /// Only SteamOS is asked, and there the first slide waits for an answer.
+    #[test]
+    fn steamos_has_to_say_what_it_is_for_before_setup_goes_on() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.config.steamos_use = None;
+
+        app.steamos = false;
+        assert!(welcome_answered(&app), "a desktop distro was held on a SteamOS question");
+
+        app.steamos = true;
+        assert!(!welcome_answered(&app));
+        let _ = update(&mut app, Msg::SteamOsUse(SteamOsUse::Console));
+        assert_eq!(app.config.steamos_use, Some(SteamOsUse::Console));
+        assert!(welcome_answered(&app));
     }
 
     #[test]

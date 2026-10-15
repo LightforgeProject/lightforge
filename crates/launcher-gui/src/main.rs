@@ -1425,6 +1425,9 @@ struct Lightforge {
     tile_hover: Option<ProductLine>,
     /// The tile held down, while it is.
     tile_drag: Option<TileDrag>,
+    /// Running on SteamOS, which is what puts the Deck-or-desktop question
+    /// in setup. Read once: the OS does not change under a running app.
+    steamos: bool,
     /// Whether the menu under the wordmark is open.
     app_menu_open: bool,
     /// Pages left behind, oldest first, and pages stepped back out of.
@@ -1748,6 +1751,7 @@ impl Lightforge {
             strip_open: false,
             tile_hover: None,
             tile_drag: None,
+            steamos: lightforge_core::runtime::OsRelease::read().is_steamos(),
             app_menu_open: false,
             visited: Vec::new(),
             forward: Vec::new(),

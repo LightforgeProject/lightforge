@@ -79,7 +79,20 @@ install -Dm755 lightforge-gui ~/.local/bin/lightforge-gui
 install -Dm755 lightforge     ~/.local/bin/lightforge
 install -Dm644 pro.tuxcore.Lightforge.desktop ~/.local/share/applications/
 cp -r icons/hicolor ~/.local/share/icons/
+sed -i "s|=lightforge-gui|=$HOME/.local/bin/lightforge-gui|" \
+  ~/.local/share/applications/pro.tuxcore.Lightforge.desktop
 ```
+
+The last line points the menu entry at the full path. Not every desktop
+session has `~/.local/bin` on its `PATH`, and where it is missing the entry
+doesn't fail, it simply never appears in the menu.
+
+On a Steam Deck, do this in Desktop Mode (Steam button, Power, Switch to
+Desktop) in Konsole. Nothing needs root, and SteamOS already has the 32-bit
+libraries Battle.net's installer needs, so leave `steamos-readonly` alone. The
+first-run setup asks whether the device is a Steam Deck or Steam Machine or a
+desktop PC running SteamOS. Retail World of Warcraft is well over 100 GB, so
+on a Deck add your SD card as a drive during setup.
 
 ## Build it yourself
 
