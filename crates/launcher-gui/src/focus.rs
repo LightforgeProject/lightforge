@@ -117,10 +117,14 @@ pub struct Spot {
     /// lets the list be scrolled to bring the control into view.
     pub viewport: Rectangle,
     pub press: Press,
+    /// Whether it is a text field, which on a console wants a keyboard.
+    pub field: bool,
     /// The scrolled region it is in, if any.
     pub region: Option<&'static str>,
     /// The innermost group or region it is in, if any.
     group: Option<String>,
+    /// The innermost pane it is in, if any.
+    pane: Option<&'static str>,
     depth: u32,
     live: bool,
 }
@@ -137,6 +141,7 @@ struct Record {
     within: Vec<&'static str>,
     /// What shows of each region being drawn into, in the window.
     shown: Vec<Rectangle>,
+    panes: Vec<&'static str>,
     groups: Vec<String>,
     /// The control with the ring, as the app last said.
     current: Option<Target>,
@@ -164,11 +169,13 @@ pub struct Place {
     pub target: Target,
     pub bounds: Rectangle,
     pub group: Option<String>,
+    /// The [`pane`] it is in, if any, which the arrows never leave.
+    pub pane: Option<&'static str>,
 }
 
 impl Place {
     fn of(target: &Target, spot: &Spot) -> Self {
-        Self { target: target.clone(), bounds: spot.screen, group: spot.group.clone() }
+        Self { target: target.clone(), bounds: spot.screen, group: spot.group.clone(), pane: spot.pane }
     }
 }
 
@@ -226,7 +233,18 @@ pub fn put(target: Target, bounds: Rectangle, press: Press, depth: u32) {
     with(|r| {
         let live = !matches!(press, Press::Off);
         r.top = r.top.max(depth);
-        let spot = Spot { bounds, screen: bounds, viewport: bounds, press, region: None, group: None, depth, live };
+        let spot = Spot {
+            bounds,
+            screen: bounds,
+            viewport: bounds,
+            press,
+            field: false,
+            region: None,
+            group: None,
+            pane: None,
+            depth,
+            live,
+        };
         r.spots.insert(target, spot);
     });
 }
@@ -252,8 +270,8 @@ pub fn reset() {
 /// so up from any of the first few games is the wordmark that spans them.
 ///
 /// Left and right stay on the line when there is anything on it, and only
-/// then reach for the nearest control off it. Nothing in that direction
-/// leaves the ring where it is.
+/// then, outside any group, reach for the nearest control off it. Nothing in
+/// that direction leaves the ring where it is.
 pub fn step(places: &[Place], current: &Target, step: Step) -> Option<Target> {
     let here = places.iter().find(|p| &p.target == current)?;
     let from = here.bounds;
@@ -278,6 +296,7 @@ pub fn step(places: &[Place], current: &Target, step: Step) -> Option<Target> {
     let candidates: Vec<Candidate> = places
         .iter()
         .filter(|p| &p.target != current)
+        .filter(|p| here.pane.is_none() || p.pane == here.pane)
         .filter_map(|p| {
             let to = p.bounds;
             let (ahead, aside, centres) = match step {
@@ -333,12 +352,25 @@ pub fn step(places: &[Place], current: &Target, step: Step) -> Option<Target> {
         }
         Step::Left | Step::Right => {
             let line: Vec<_> = candidates.iter().filter(|c| c.aside == 0.0).collect();
-            match line.is_empty() {
-                false => pick(line, &|c| c.ahead + 0.01 * c.centres),
-                true => pick(candidates.iter().collect(), &|c| c.ahead + 2.0 * c.aside + 0.01 * c.centres),
+            if !line.is_empty() {
+                return pick(line, &|c| c.ahead + 0.01 * c.centres);
             }
+            // Inside a group, a page or a card, sideways never leaves the
+            // line: left from the first control in an addon row is nothing,
+            // not the filter above it or the Shop tab up in the header,
+            // which were the nearest things to the left.
+            if here.group.is_some() {
+                return None;
+            }
+            pick(candidates.iter().collect(), &|c| c.ahead + 2.0 * c.aside + 0.01 * c.centres)
         }
     }
+}
+
+/// The control whose centre is nearest `at`'s.
+pub fn nearest(places: &[Place], at: Rectangle) -> Option<Target> {
+    let far = |p: &Place| p.bounds.center().distance(at.center());
+    places.iter().min_by(|a, b| far(a).total_cmp(&far(b))).map(|p| p.target.clone())
 }
 
 /// The control nearest the top left, where reading starts.
@@ -361,7 +393,15 @@ pub fn layer<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Messag
 
 /// `content`, a scrolled list the ring can scroll, named `id`.
 pub fn region<'a>(id: &'static str, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
-    Element::new(Region { content: content.into(), id })
+    Element::new(Region { content: content.into(), id, pane: false })
+}
+
+/// A [`region`] the arrows never leave: a page beside a list of pages, like
+/// Settings, which is left by Escape, back to its entry in the list. Without
+/// it, down from the last switch was the list's next entry, and left from
+/// anything was the list.
+pub fn pane<'a>(id: &'static str, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    Element::new(Region { content: content.into(), id, pane: true })
 }
 
 /// `content`, controls that belong together, named `id`; see [`step`].
@@ -387,6 +427,7 @@ struct Layer<'a> {
 struct Region<'a> {
     content: Element<'a, Message>,
     id: &'static str,
+    pane: bool,
 }
 
 struct Group<'a> {
@@ -653,8 +694,10 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Ring<'_> {
                 screen,
                 viewport: *viewport,
                 press: self.press.clone(),
+                field: field(tree),
                 region: r.within.last().copied(),
                 group: r.groups.last().cloned(),
+                pane: r.panes.last().copied(),
                 depth: r.depth,
                 live,
             };
@@ -777,12 +820,18 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Region<'_> {
             let depth = r.depth;
             r.regions.insert(self.id, (bounds.width * bounds.height, depth));
             r.within.push(self.id);
+            if self.pane {
+                r.panes.push(self.id);
+            }
             r.shown.push(bounds.intersection(viewport).unwrap_or(bounds));
             r.groups.push(self.id.to_owned());
         });
         self.content.as_widget().draw(tree, renderer, theme, style, layout, cursor, viewport);
         with(|r| {
             r.within.pop();
+            if self.pane {
+                r.panes.pop();
+            }
             r.shown.pop();
             r.groups.pop();
         });
@@ -834,6 +883,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Root<'_> {
             r.depth = 0;
             r.within.clear();
             r.shown.clear();
+            r.panes.clear();
             r.groups.clear();
         });
         self.content.as_widget().draw(tree, renderer, theme, style, layout, cursor, viewport);
@@ -866,7 +916,7 @@ mod tests {
             (Target::Gear, at(1168.0, 660.0, 50.0, 56.0)),
             (Target::LaunchViaBattleNet, at(983.0, 722.0, 235.0, 30.0)),
         ];
-        places.into_iter().map(|(target, bounds)| Place { target, bounds, group: None }).collect()
+        places.into_iter().map(|(target, bounds)| Place { target, bounds, group: None, pane: None }).collect()
     }
 
     /// Two cards side by side, the right one's rows sitting a little lower,
@@ -877,9 +927,10 @@ mod tests {
             target: Target::Key(name.to_owned()),
             bounds: at(x, y, 200.0, 20.0),
             group: Some(group.to_owned()),
+            pane: None,
         };
         let cards = vec![
-            Place { target: Target::AppMenu, bounds: at(40.0, 10.0, 240.0, 30.0), group: None },
+            Place { target: Target::AppMenu, bounds: at(40.0, 10.0, 240.0, 30.0), group: None, pane: None },
             place("custom", 880.0, 60.0, "presets"),
             place("cpu", 50.0, 120.0, "performance"),
             place("water", 50.0, 160.0, "performance"),
@@ -893,6 +944,62 @@ mod tests {
         // Down the Looks card, then out of it straight down, not across.
         assert_eq!(step(&cards, &Target::Key("clutter".to_owned()), Step::Down), key("glow"));
         assert_eq!(step(&cards, &Target::Key("glow".to_owned()), Step::Down), key("api"));
+    }
+
+    /// An addon row inside the page: left from its first control is nothing,
+    /// where it used to be the Shop tab or the filter field, whichever was
+    /// the nearest thing to the left.
+    #[test]
+    fn left_out_of_a_page_row_goes_nowhere() {
+        let page = |name: &str, x: f32, y: f32| Place {
+            target: Target::Key(name.to_owned()),
+            bounds: at(x, y, 80.0, 30.0),
+            group: Some("page".to_owned()),
+            pane: None,
+        };
+        let places = vec![
+            Place { target: Target::Shop, bounds: at(350.0, 10.0, 120.0, 30.0), group: None, pane: None },
+            page("filter", 20.0, 120.0),
+            page("details", 1000.0, 300.0),
+            page("install", 1100.0, 300.0),
+            page("next details", 1000.0, 360.0),
+        ];
+        let details = Target::Key("details".to_owned());
+        assert_eq!(step(&places, &details, Step::Left), None);
+        assert_eq!(step(&places, &details, Step::Right), Some(Target::Key("install".to_owned())));
+    }
+
+    /// Settings: the list of pages down the left, the page beside it. The
+    /// arrows walk the page and never leave it, not down from the last
+    /// switch onto the list's next entry, not left onto the list.
+    #[test]
+    fn the_arrows_never_leave_a_pane() {
+        let tab = |name: &str, y: f32| Place {
+            target: Target::Key(name.to_owned()),
+            bounds: at(20.0, y, 200.0, 36.0),
+            group: Some("settings nav".to_owned()),
+            pane: None,
+        };
+        let switch = |name: &str, y: f32| Place {
+            target: Target::Key(name.to_owned()),
+            bounds: at(300.0, y, 300.0, 20.0),
+            group: Some("settings".to_owned()),
+            pane: Some("settings"),
+        };
+        let places = vec![
+            tab("general", 100.0),
+            tab("downloads", 300.0),
+            tab("addons", 340.0),
+            switch("minimize", 120.0),
+            switch("new version", 240.0),
+        ];
+        let key = |name: &str| Some(Target::Key(name.to_owned()));
+        let last = Target::Key("new version".to_owned());
+        assert_eq!(step(&places, &last, Step::Down), None);
+        assert_eq!(step(&places, &last, Step::Left), None);
+        assert_eq!(step(&places, &last, Step::Up), key("minimize"));
+        // The list itself is no pane: right from it still finds the page.
+        assert_eq!(step(&places, &Target::Key("general".to_owned()), Step::Right), key("minimize"));
     }
 
     #[test]

@@ -33,6 +33,7 @@ pub mod setup;
 mod staging;
 pub mod state;
 pub mod steam;
+pub mod steam_shortcut;
 pub mod storage;
 pub mod tact;
 pub mod transfers;

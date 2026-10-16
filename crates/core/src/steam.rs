@@ -1,8 +1,9 @@
 //! Steam installation discovery.
 //!
 //! Lightforge targets Proton-GE from a Steam library, so it needs to find the
-//! Steam root and enumerate library folders. Both are read-only operations,
-//! Lightforge never writes into Steam's configuration.
+//! Steam root and enumerate library folders. Both only read; the one thing
+//! Lightforge writes into Steam is its own library entry, see
+//! [`crate::steam_shortcut`], and only when asked to.
 
 use std::path::{Path, PathBuf};
 

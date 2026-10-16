@@ -206,6 +206,47 @@ pub fn logo_size(aspect: f32, ink: f32) -> (f32, f32) {
 /// is a card over the artwork now, and a card is sized by what it holds.
 pub const TILE: f32 = 40.0;
 
+/// Drawn for a Steam Deck or Steam Machine: held in a hand or read from a
+/// sofa, pressed with a thumb or a controller. Set by the view at the start
+/// of each frame, from the answer setup asked for on SteamOS, so the shared
+/// builders below can read it without every page passing it down.
+static CONSOLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_console(on: bool) {
+    CONSOLE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn console() -> bool {
+    CONSOLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A product tile's edge: [`TILE`], or a thumb's worth more on a console.
+pub fn tile() -> f32 {
+    match console() {
+        true => 52.0,
+        false => TILE,
+    }
+}
+
+/// Padding for something pressed, `[vertical, horizontal]`. On a console a
+/// button grows to about 42 points tall, the size Steam's own Game Mode
+/// buttons are on the same screen, from the 32 a mouse is happy with.
+pub fn tap(padding: [f32; 2]) -> [f32; 2] {
+    match console() {
+        true => [padding[0] + 5.0, padding[1] + XS],
+        false => padding,
+    }
+}
+
+/// Text on something pressed: a step up on a console, where the screen is
+/// seven inches across or across the room.
+pub fn tap_text(size: f32) -> f32 {
+    match console() {
+        true => size + 2.0,
+        false => size,
+    }
+}
+
 /// A headline's picture on the News page, and the 16:9 box it sits in.
 ///
 /// Wowhead publishes these at whatever shape the article wanted, 802x624 is

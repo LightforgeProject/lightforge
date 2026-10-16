@@ -162,8 +162,6 @@ pub enum Msg {
     Open,
     Next,
     Back,
-    /// Leave it, and do not open it again by itself.
-    Later,
     Region(Region),
     Locale(String),
     /// The artwork prefetch finished, with the number of products it cached.
@@ -257,13 +255,11 @@ pub fn update(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
             prefetch(app)
         }
 
-        Msg::Later | Msg::Finish => {
-            let finishing = matches!(msg, Msg::Finish);
+        Msg::Finish => {
             let pending = app.wizard.as_ref().map(|w| w.pending.clone()).unwrap_or_default();
             app.wizard = None;
-            // Both ways out mark the first run as seen: someone who dismissed
-            // the wizard has seen it, and meeting it again on the next start
-            // would be nagging. Settings keeps the button.
+            // Marks the first run as seen; Settings keeps the button for a
+            // second one.
             app.config.setup_complete = true;
             // A fresh install has nothing to be told what is new about: the
             // notes describe the version it has just been set up with. Marked
@@ -271,7 +267,13 @@ pub fn update(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
             // build the wizard was running.
             app.config.patch_notes_seen = Some(env!("CARGO_PKG_VERSION").to_owned());
             app.save_config();
-            if finishing && !pending.is_empty() {
+            // Played from Game Mode, so it belongs in the Steam library
+            // there. A failure is said in Settings, under the button that
+            // tries again; setup is done either way.
+            if app.console() {
+                app.add_to_steam();
+            }
+            if !pending.is_empty() {
                 link_hand_offs(app, &pending);
             }
             app.go_to(crate::Screen::Dashboard);
@@ -405,7 +407,9 @@ pub fn update(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
         Msg::SteamOsUse(answer) => {
             app.config.steamos_use = Some(answer);
             app.save_config();
-            iced::Task::none()
+            // The window changes with the answer, fullscreen for a console,
+            // so whoever answered sees what they chose straight away.
+            app.window_mode()
         }
 
         Msg::WantBattleNet(want) => {
@@ -757,19 +761,16 @@ fn dots(step: Step) -> Element<'static, Message> {
     row.into()
 }
 
-/// Back, the step's own button, and the way out.
+/// Back, and the step's own button.
+///
+/// No way out halfway: every step can be passed without doing anything, so
+/// the button that skipped them all only ever caught a stray press, and on a
+/// controller one press of A was enough to lose the setup.
 fn footer<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     let mut actions = row![].spacing(theme::SM).align_y(Alignment::Center);
 
     if wizard.step.back().is_some() && wizard.step != Step::Done {
         actions = actions.push(secondary("Back", Message::Wizard(Msg::Back)).enabled(!app.busy));
-    }
-    // The way out sits with Back rather than under the step's own button: it
-    // is the quiet choice, and a column of two buttons in the corner reads as
-    // one decision with two answers, which this is not.
-    if wizard.step != Step::Done {
-        actions =
-            actions.push(secondary("Set up later", Message::Wizard(Msg::Later)).enabled(true));
     }
     actions = actions.push(Space::new().width(Length::Fill));
 
@@ -803,7 +804,7 @@ fn footer<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
 }
 
 /// Whether the first slide can be left. On SteamOS the Deck-or-desktop
-/// question has to be answered first; "Set up later" still leaves without it.
+/// question has to be answered first.
 fn welcome_answered(app: &Lightforge) -> bool {
     !app.steamos || app.config.steamos_use.is_some()
 }
@@ -864,7 +865,7 @@ fn welcome(app: &Lightforge) -> Element<'_, Message> {
                 iced::widget::radio(label, value, picked, |answer| {
                     Message::Wizard(Msg::SteamOsUse(answer))
                 })
-                .text_size(theme::BODY),
+                .text_size(theme::tap_text(theme::BODY)),
             )
         };
         body = body.push(
@@ -1080,7 +1081,7 @@ fn found<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
         let tick: Element<Message> = match row.blocked.is_none() {
             true => clickable(
                 format!("wizard take {index}"),
-                iced::widget::checkbox(row.take)
+                crate::tick(row.take)
                     .on_toggle(move |on| Message::Wizard(Msg::Take(index, on))),
             ),
             false => Space::new().width(Length::Fixed(theme::MD)).into(),
@@ -1149,10 +1150,10 @@ fn install<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> 
 
     body = body.push(clickable(
         "wizard battle.net",
-        iced::widget::checkbox(wizard.battle_net)
+        crate::tick(wizard.battle_net)
             .label("Install Battle.net")
             .on_toggle(|on| Message::Wizard(Msg::WantBattleNet(on)))
-            .text_size(theme::BODY),
+            .text_size(theme::tap_text(theme::BODY)),
     ));
     if !wizard.battle_net {
         body = body.push(muted(
@@ -1247,6 +1248,15 @@ fn done<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     })
     .size(theme::BODY)]
     .spacing(theme::MD);
+
+    if app.console() {
+        body = body.push(muted(
+            "Lightforge goes into your Steam library as we close this, with its own \
+             artwork. It shows there the next time Steam starts."
+                .to_owned(),
+            theme::CAPTION,
+        ));
+    }
 
     if !wizard.pending.is_empty() {
         body = body.push(muted(
@@ -1426,6 +1436,12 @@ mod tests {
         assert_eq!(app.wizard.as_ref().unwrap().step, Step::Welcome);
         let _ = app.update(Message::FocusBack);
         assert!(app.wizard.is_some(), "Escape on the first slide left setup");
+
+        // Opened from Settings, where Escape otherwise means "back to Play".
+        app.screen = crate::Screen::Settings;
+        let _ = app.update(Message::FocusBack);
+        assert!(app.wizard.is_some(), "Escape in setup over Settings left setup");
+        assert_eq!(app.screen, crate::Screen::Settings);
     }
 
     #[test]
