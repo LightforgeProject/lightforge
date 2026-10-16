@@ -5438,6 +5438,11 @@ impl Lightforge {
                 }
                 let closed = match (self.dialog_dismissal(), self.panel_open()) {
                     (Some(dismiss), _) => self.update(dismiss),
+                    // Setup has no pages behind it: Escape is its Back, and
+                    // never its way out.
+                    (None, false) if self.wizard.is_some() => {
+                        self.update(Message::Wizard(wizard::Msg::Back))
+                    }
                     (None, true) => {
                         self.close_panels();
                         Task::none()
@@ -6260,11 +6265,15 @@ impl Lightforge {
         // is no way out of it except the two buttons in its footer, so nothing
         // else may be reachable while it is up.
         if let Some(open) = &self.wizard {
-            return Element::from(
-                container(wizard::view(self, open))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .style(theme::backdrop),
+            let card = wizard::view(self, open);
+            // An open dropdown closes on a click anywhere else, as it does
+            // on every other page.
+            let card = match self.panel_open() {
+                true => Element::from(mouse_area(card).on_press(Message::Dismiss)),
+                false => card,
+            };
+            return focus::root(
+                container(card).width(Length::Fill).height(Length::Fill).style(theme::backdrop),
             );
         }
         let screen = match self.screen {
@@ -6691,8 +6700,9 @@ impl Lightforge {
             };
             let action: Element<Message> = match tracked(&entry.code) {
                 true => secondary("Remove", Message::RemoveProduct(entry.code.clone()))
-                    .enabled(elsewhere(&entry.code)),
-                false => secondary("Add", Message::AddProduct(entry.code.clone())).enabled(true),
+                    .keyed(format!("game {}", entry.code.as_str()), elsewhere(&entry.code)),
+                false => secondary("Add", Message::AddProduct(entry.code.clone()))
+                    .keyed(format!("game {}", entry.code.as_str()), true),
             };
             // The mark the band would wear, so a row and its tile are plainly
             // the same game. The column is held even when there is no icon,
@@ -7233,10 +7243,9 @@ impl Lightforge {
 
     /// Whether the arrows, Enter and Escape are someone else's right now.
     ///
-    /// Setup has buttons of its own that are not rings yet, and the splash
-    /// and the broken-config screen have nothing to press.
+    /// The splash and the broken-config screen have nothing to press.
     fn keys_belong_elsewhere(&self) -> bool {
-        self.config_error.is_some() || self.splash.is_some() || self.wizard.is_some()
+        self.config_error.is_some() || self.splash.is_some()
     }
 
     /// What closes the dialog on top, the way its Cancel or Close does.
@@ -7287,6 +7296,10 @@ impl Lightforge {
         }
         if drawn(&focus::Target::Primary) {
             return Some(focus::Target::Primary);
+        }
+        // In setup, the slide's own button, so Enter after Enter walks it.
+        if let Some(forward) = self.wizard.as_ref().map(wizard::forward).filter(|t| drawn(t)) {
+            return Some(forward);
         }
         focus::first(spots)
     }
@@ -13266,7 +13279,15 @@ impl<'a> Action<'a> {
     /// The button, pressable or not, and a place for the selection ring
     /// named by what it sends, which is unique wherever it is drawn.
     fn enabled(self, enabled: bool) -> Element<'a, Message> {
-        let target = focus::Target::Key(format!("{:?}", self.message));
+        let key = format!("{:?}", self.message);
+        self.keyed(key, enabled)
+    }
+
+    /// [`Action::enabled`] under a name of its own, for a button whose
+    /// message changes when pressed, Add turning into Remove: named by what
+    /// it sends, the ring would lose it the moment Enter landed.
+    fn keyed(self, key: String, enabled: bool) -> Element<'a, Message> {
+        let target = focus::Target::Key(key);
         match enabled {
             true => focus::ring(
                 target,

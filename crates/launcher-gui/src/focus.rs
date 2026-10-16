@@ -108,6 +108,10 @@ pub enum Press {
 #[derive(Debug, Clone)]
 pub struct Spot {
     pub bounds: Rectangle,
+    /// Where it is in the window, which is what the arrows compare: inside
+    /// a scrolled list `bounds` moves with the scrolling, so a row far down
+    /// the list would otherwise sit below the buttons under the list.
+    screen: Rectangle,
     /// What was visible of the region the control was drawn in. Inside a
     /// scrolled list both are in the list's own coordinates, which is what
     /// lets the list be scrolled to bring the control into view.
@@ -131,6 +135,8 @@ struct Record {
     /// While drawing: the layer, the regions and the groups being drawn into.
     depth: u32,
     within: Vec<&'static str>,
+    /// What shows of each region being drawn into, in the window.
+    shown: Vec<Rectangle>,
     groups: Vec<String>,
     /// The control with the ring, as the app last said.
     current: Option<Target>,
@@ -162,7 +168,7 @@ pub struct Place {
 
 impl Place {
     fn of(target: &Target, spot: &Spot) -> Self {
-        Self { target: target.clone(), bounds: spot.bounds, group: spot.group.clone() }
+        Self { target: target.clone(), bounds: spot.screen, group: spot.group.clone() }
     }
 }
 
@@ -220,7 +226,8 @@ pub fn put(target: Target, bounds: Rectangle, press: Press, depth: u32) {
     with(|r| {
         let live = !matches!(press, Press::Off);
         r.top = r.top.max(depth);
-        r.spots.insert(target, Spot { bounds, viewport: bounds, press, region: None, group: None, depth, live });
+        let spot = Spot { bounds, screen: bounds, viewport: bounds, press, region: None, group: None, depth, live };
+        r.spots.insert(target, spot);
     });
 }
 
@@ -623,8 +630,15 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Ring<'_> {
             ),
         };
         let on = with(|r| {
+            // A scrolled list hands its content the part of it that shows,
+            // moved by however far it is scrolled; that move, taken back off.
+            let screen = match r.shown.last() {
+                Some(shown) => bounds - Vector::new(viewport.x - shown.x, viewport.y - shown.y),
+                None => bounds,
+            };
             let spot = Spot {
                 bounds,
+                screen,
                 viewport: *viewport,
                 press: self.press.clone(),
                 region: r.within.last().copied(),
@@ -748,11 +762,13 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Region<'_> {
             let depth = r.depth;
             r.regions.insert(self.id, (bounds.width * bounds.height, depth));
             r.within.push(self.id);
+            r.shown.push(bounds.intersection(viewport).unwrap_or(bounds));
             r.groups.push(self.id.to_owned());
         });
         self.content.as_widget().draw(tree, renderer, theme, style, layout, cursor, viewport);
         with(|r| {
             r.within.pop();
+            r.shown.pop();
             r.groups.pop();
         });
     }
@@ -802,6 +818,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Root<'_> {
             r.top = 0;
             r.depth = 0;
             r.within.clear();
+            r.shown.clear();
             r.groups.clear();
         });
         self.content.as_widget().draw(tree, renderer, theme, style, layout, cursor, viewport);
