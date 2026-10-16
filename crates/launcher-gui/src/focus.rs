@@ -420,12 +420,24 @@ impl Operation for Leave {
     }
 }
 
-/// How far outside a clicked control its ring is drawn, above and below
+/// How far outside a checkbox or a radio its ring is drawn, above and below
 /// and to either side. Wider at the sides: a checkbox's box and the last
 /// letter of its label sit right on its edges, and four points there still
 /// read as touching, while the rows above and below are only so far away.
 const RING_GAP_Y: f32 = 5.0;
 const RING_GAP_X: f32 = 10.0;
+
+type Field = iced::widget::text_input::State<<iced::Renderer as iced::advanced::text::Renderer>::Paragraph>;
+
+/// Whether `tree` is a text field's.
+fn field(tree: &Tree) -> bool {
+    tree.tag == tree::Tag::of::<Field>()
+}
+
+/// Whether `tree` is a text field with the cursor in it.
+fn typing(tree: &Tree) -> bool {
+    field(tree) && tree.state.downcast_ref::<Field>().is_focused()
+}
 
 /// Hand a made-up mouse event to `content`, as if the pointer were at `at`.
 ///
@@ -657,15 +669,18 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Ring<'_> {
         // ring at all. A layer of its own, so it lands over the control's
         // picture and text and not under them.
         //
-        // Drawn round a control to be clicked rather than on its edge: those
-        // are checkboxes and fields, whose bounds end at the box or the
-        // label's last letter, and a ring on that line touches both.
-        if on {
+        // Drawn round a checkbox or a radio rather than on its edge: their
+        // bounds end at the box and the label's last letter, and a ring on
+        // that line touches both. A field has a box of its own to sit on,
+        // the way a dropdown does.
+        // A field with the cursor in it already says so with its own
+        // border, and a ring round that read as two selections at once.
+        if on && !typing(tree) {
             let (ring, radius) = match self.press {
-                Press::Click => {
+                Press::Click if !field(tree) => {
                     (bounds.expand([RING_GAP_Y, RING_GAP_X]), theme::RADIUS_SM + RING_GAP_Y)
                 }
-                Press::Send(_) | Press::Off => (bounds, theme::RADIUS_SM),
+                Press::Click | Press::Send(_) | Press::Off => (bounds, theme::RADIUS_SM),
             };
             renderer.with_layer(ring, |renderer| {
                 renderer.fill_quad(
