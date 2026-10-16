@@ -1170,9 +1170,8 @@ fn games<'a>(app: &'a Lightforge) -> Element<'a, Message> {
         }
         let action: Element<Message> = match tracked(&entry.code) {
             true => secondary("Remove", Message::RemoveProduct(entry.code.clone()))
-                .enabled(app.choices.len() > 1)
-                .into(),
-            false => secondary("Add", Message::AddProduct(entry.code.clone())).enabled(true).into(),
+                .enabled(app.choices.len() > 1),
+            false => secondary("Add", Message::AddProduct(entry.code.clone())).enabled(true),
         };
         container(
             row![mark, facts.width(Length::Fill), action]

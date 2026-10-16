@@ -19,6 +19,7 @@
 
 mod addonwork;
 mod art;
+mod focus;
 mod popover;
 mod provision;
 mod report;
@@ -33,7 +34,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use iced::widget::{
-    button, canvas, column, container, image, mouse_area, pick_list, progress_bar, responsive,
+    button, canvas, column, container, image, mouse_area, progress_bar, responsive,
     rich_text, row, scrollable, span, stack, text, text_editor, text_input, tooltip, Space,
 };
 use iced::{Alignment, ContentFit, Element, Length, Subscription, Task};
@@ -488,6 +489,21 @@ enum Message {
     TileDragged(f32),
     /// The held tile was let go.
     TileDropped,
+    /// An arrow key: move the selection ring; see [`focus`].
+    FocusStep(focus::Step),
+    /// Enter: press the control with the ring on it.
+    FocusPress,
+    /// Escape: close what is open, or go back a page.
+    FocusBack,
+    /// A frame has passed since a key press opened or closed something; see
+    /// [`Lightforge::focus_entering`].
+    FocusSettle,
+    /// Open or close a picker's list, by its key.
+    TogglePicker(String),
+    /// An entry was chosen from a picker's list: close it, then this.
+    Picked(Box<Message>),
+    /// The mouse moved, so the ring is no longer where the user is looking.
+    FocusHidden,
     /// A branch was picked for the selected line. Adds the product first when
     /// the branch was on offer but not configured.
     BranchSelected(BranchChoice),
@@ -921,7 +937,7 @@ struct DowngradeDialog {
 }
 
 /// Which section of Settings is showing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum SettingsTab {
     General,
     Setup,
@@ -987,7 +1003,7 @@ enum AddonTab {
 }
 
 /// Which screen is showing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Screen {
     Dashboard,
     /// Live news, once there is something to show. A placeholder for now: the
@@ -1425,6 +1441,20 @@ struct Lightforge {
     tile_hover: Option<ProductLine>,
     /// The tile held down, while it is.
     tile_drag: Option<TileDrag>,
+    /// The control the keyboard has selected, and the ring is on. `None`
+    /// until a key is pressed, and again once the mouse moves.
+    focus: Option<focus::Target>,
+    /// The control that opened the menu the ring is in, to land on again
+    /// when the menu closes.
+    focus_return: Option<focus::Target>,
+    /// Waiting for what a key press opened or closed to be drawn, so the ring
+    /// can follow it. Counts down the frames it is willing to wait.
+    focus_entering: u8,
+    /// A region the ring moves into once it is drawn: the page beside the
+    /// Settings list, after Enter on one of its tabs.
+    focus_into: Option<&'static str>,
+    /// The picker whose list is open, by its key; see [`Lightforge::picker`].
+    picker_open: Option<String>,
     /// Running on SteamOS, which is what puts the Deck-or-desktop question
     /// in setup. Read once: the OS does not change under a running app.
     steamos: bool,
@@ -1751,6 +1781,11 @@ impl Lightforge {
             strip_open: false,
             tile_hover: None,
             tile_drag: None,
+            focus: None,
+            focus_return: None,
+            focus_entering: 0,
+            picker_open: None,
+            focus_into: None,
             steamos: lightforge_core::runtime::OsRelease::read().is_steamos(),
             app_menu_open: false,
             visited: Vec::new(),
@@ -2295,6 +2330,20 @@ impl Lightforge {
     /// Deliberately bare: no Install, no Update, no Play, not even greyed out.
     /// Offering those disabled would say Lightforge could manage this game and
     /// merely will not.
+    /// What a hand-off game's button can honestly be, in order of how much
+    /// is known. Without a game family the client cannot be told which tile
+    /// to open, and a guess lands on somebody else's game, so that case
+    /// promises nothing beyond opening the client.
+    fn handoff_act(&self) -> HandoffAct {
+        let family = self.family_of(&self.selected.code);
+        let installed = self.installed_versions.contains_key(self.selected.code.as_str());
+        match (family.is_some(), installed) {
+            (false, _) => HandoffAct::OpenClient,
+            (true, true) => HandoffAct::Play,
+            (true, false) => HandoffAct::Install,
+        }
+    }
+
     fn handoff_panel(&self) -> Element<'_, Message> {
         let mut left = column![].spacing(theme::SM).width(Length::Fill);
         left = left.push(match &self.error {
@@ -2316,23 +2365,15 @@ impl Lightforge {
             None => left = left.push(muted("not installed".to_owned(), theme::LABEL)),
         }
 
-        // Three things the button can honestly be, in order of how much is
-        // known. Without a game family the client cannot be told which tile
-        // to open, and a guess lands on somebody else's game, so that case
-        // promises nothing beyond opening the client.
-        let family = self.family_of(&self.selected.code);
-        let installed = self.installed_versions.contains_key(self.selected.code.as_str());
-        let act = match (family.is_some(), installed) {
-            (false, _) => HandoffAct::OpenClient,
-            (true, true) => HandoffAct::Play,
-            (true, false) => HandoffAct::Install,
-        };
+        let act = self.handoff_act();
         left = left.extend(self.hint(act.hint()).map(Element::from));
         // The managed panel has a row of links and this one had none, so a
         // hand-off game had no route to any optimization page. It is phrased
         // for the shared profile on purpose, "its games", not "this game",
         // because one environment covers every game the client starts.
-        left = left.push(
+        left = left.push(self.ring(
+            focus::Target::HandOffSettings,
+            Some(Message::ShowSettingsTab(SettingsTab::BattleNet)),
             button(
                 row![
                     image(sliders_icon())
@@ -2346,7 +2387,7 @@ impl Lightforge {
             .on_press(Message::ShowSettingsTab(SettingsTab::BattleNet))
             .style(theme::ghost)
             .padding([theme::XS, theme::SM]),
-        );
+        ));
         let open = button(
             container(text(act.label()).size(theme::HEADING)).center_x(Length::Fill),
         )
@@ -2372,10 +2413,14 @@ impl Lightforge {
         container(
             row![
                 left,
-                match self.busy {
-                    true => open,
-                    false => open.on_press(press),
-                },
+                self.ring(
+                    focus::Target::Primary,
+                    (!self.busy).then(|| press.clone()),
+                    match self.busy {
+                        true => open,
+                        false => open.on_press(press),
+                    },
+                ),
             ]
             .spacing(theme::XL)
             .align_y(Alignment::Center),
@@ -5269,6 +5314,19 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::TogglePicker(key) => {
+                self.picker_open = match self.picker_open.as_ref() == Some(&key) {
+                    true => None,
+                    false => Some(key),
+                };
+                Task::none()
+            }
+
+            Message::Picked(message) => {
+                self.picker_open = None;
+                self.update(*message)
+            }
+
             Message::ToggleGear => {
                 self.gear_open = !self.gear_open;
                 Task::none()
@@ -5276,6 +5334,124 @@ impl Lightforge {
 
             Message::Dismiss => {
                 self.close_panels();
+                Task::none()
+            }
+
+            Message::FocusStep(step) => {
+                if self.keys_belong_elsewhere() {
+                    return Task::none();
+                }
+                let spots = focus::live();
+                // The first press only shows where the ring is.
+                let current = self.focus.clone().filter(|t| spots.iter().any(|p| &p.target == t));
+                let Some(current) = current else {
+                    self.focus = self.focus_start(&spots);
+                    return match self.focus {
+                        Some(_) => Task::none(),
+                        // Nothing to select, only something to read.
+                        None => self.scroll_page(step, None),
+                    };
+                };
+                match focus::step(&spots, &current, step) {
+                    Some(next) => {
+                        Self::scroll_into_view(&next);
+                        self.focus = Some(next);
+                        Task::none()
+                    }
+                    None => self.scroll_page(step, Some(&current)),
+                }
+            }
+
+            Message::FocusPress => {
+                if self.keys_belong_elsewhere() {
+                    return Task::none();
+                }
+                let spots = focus::live();
+                let current = self.focus.clone().filter(|t| spots.iter().any(|p| &p.target == t));
+                let Some(current) = current else {
+                    self.focus = self.focus_start(&spots);
+                    return Task::none();
+                };
+                // A Settings tab is a way in as much as a choice: the ring
+                // goes on to the page it opens, and Escape brings it back.
+                if let focus::Target::SettingsTab(_) = current {
+                    self.focus_into = Some(SETTINGS_PAGE);
+                }
+                let pressed = match focus::spot(&current).map(|spot| spot.press) {
+                    Some(focus::Press::Send(message)) => self.update(message),
+                    Some(focus::Press::Click) => {
+                        focus::click(current);
+                        Task::none()
+                    }
+                    Some(focus::Press::Off) | None => return Task::none(),
+                };
+                // Whatever the press opened or closed, the ring follows once
+                // it has been drawn.
+                self.focus_entering = FOCUS_ENTER_FRAMES;
+                Task::batch([pressed, focus_settle()])
+            }
+
+            Message::FocusSettle => {
+                if self.focus_entering == 0 {
+                    return Task::none();
+                }
+                self.focus_entering -= 1;
+                if let Some(region) = self.focus_into {
+                    if let Some(first) = focus::first(&focus::live_in(region)) {
+                        self.focus_into = None;
+                        self.focus_entering = 0;
+                        self.focus = Some(first);
+                        return Task::none();
+                    }
+                }
+                let spots = focus::live();
+                let drawn = |target: &focus::Target| spots.iter().any(|p| &p.target == target);
+                match self.focus.clone() {
+                    // Covered by a menu or a dialog that has just opened, or
+                    // gone with the one that just closed: on to what is on
+                    // top now, and remember where it was, to come back to.
+                    Some(was) if !drawn(&was) && !spots.is_empty() => {
+                        self.focus = self.focus_start(&spots);
+                        self.focus_return = Some(was);
+                        self.focus_entering = 0;
+                        Task::none()
+                    }
+                    Some(_) => focus_settle(),
+                    None => Task::none(),
+                }
+            }
+
+            Message::FocusBack => {
+                if self.keys_belong_elsewhere() {
+                    return Task::none();
+                }
+                // Out of a Settings page, back onto its tab in the list.
+                let in_page = self.focus.as_ref().and_then(focus::spot).and_then(|spot| spot.region)
+                    == Some(SETTINGS_PAGE);
+                if self.screen == Screen::Settings
+                    && in_page
+                    && self.dialog_dismissal().is_none()
+                    && !self.panel_open()
+                {
+                    self.focus = Some(focus::Target::SettingsTab(self.settings_tab));
+                    return Task::none();
+                }
+                let closed = match (self.dialog_dismissal(), self.panel_open()) {
+                    (Some(dismiss), _) => self.update(dismiss),
+                    (None, true) => {
+                        self.close_panels();
+                        Task::none()
+                    }
+                    (None, false) if !self.visited.is_empty() => self.update(Message::GoBack),
+                    (None, false) => return Task::none(),
+                };
+                self.focus_entering = FOCUS_ENTER_FRAMES;
+                Task::batch([closed, focus_settle()])
+            }
+
+            Message::FocusHidden => {
+                self.focus = None;
+                self.focus_entering = 0;
                 Task::none()
             }
 
@@ -5977,16 +6153,45 @@ impl Lightforge {
         // nothing.
         let closing = iced::window::close_requests().map(Message::CloseRequested);
 
-        // The hint chord. `on_key_press` only produces a message when the
-        // closure returns one, so an idle window is not woken by typing.
-        let hints = iced::keyboard::listen().filter_map(|event| match event {
-            iced::keyboard::Event::KeyPressed { ref key, modifiers, .. }
-                if hints_chord(key, modifiers) =>
-            {
-                Some(Message::ToggleHints)
+        // The hint chord, and the keys that move the selection ring. Only
+        // keys no widget took, so arrows in a text field stay the field's,
+        // and only these produce a message, so typing wakes nothing else.
+        let hints = iced::keyboard::listen().filter_map(|event| {
+            use iced::keyboard::key::Named;
+            let iced::keyboard::Event::KeyPressed { ref key, modifiers, .. } = event else {
+                return None;
+            };
+            if hints_chord(key, modifiers) {
+                return Some(Message::ToggleHints);
             }
-            _ => None,
+            match key.as_ref() {
+                iced::keyboard::Key::Named(Named::ArrowUp) => Some(Message::FocusStep(focus::Step::Up)),
+                iced::keyboard::Key::Named(Named::ArrowDown) => {
+                    Some(Message::FocusStep(focus::Step::Down))
+                }
+                iced::keyboard::Key::Named(Named::ArrowLeft) => {
+                    Some(Message::FocusStep(focus::Step::Left))
+                }
+                iced::keyboard::Key::Named(Named::ArrowRight) => {
+                    Some(Message::FocusStep(focus::Step::Right))
+                }
+                iced::keyboard::Key::Named(Named::Enter) => Some(Message::FocusPress),
+                iced::keyboard::Key::Named(Named::Escape) => Some(Message::FocusBack),
+                _ => None,
+            }
         });
+
+        // While the ring is up, the mouse moving takes it away, the way a
+        // browser drops its focus outline once you reach for the mouse.
+        let pointing = match self.focus.is_some() {
+            true => iced::event::listen_with(|event, _, _| match event {
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { .. }) => {
+                    Some(Message::FocusHidden)
+                }
+                _ => None,
+            }),
+            false => Subscription::none(),
+        };
 
         // Resize events are only interesting to a human reading a trace, and
         // subscribing to them makes every resize step rebuild the view, so
@@ -6025,9 +6230,10 @@ impl Lightforge {
                 hints,
                 resizes,
                 dragging,
+                pointing,
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),
             ]),
-            false => Subscription::batch([closing, hints, resizes, dragging]),
+            false => Subscription::batch([closing, hints, resizes, dragging, pointing]),
         }
     }
 
@@ -6041,6 +6247,7 @@ impl Lightforge {
         }
 
         let started = Instant::now();
+        focus::set_current(self.focus.clone());
         if let Some(error) = &self.config_error {
             return self.broken_config_screen(error);
         }
@@ -6084,9 +6291,7 @@ impl Lightforge {
         // Clicks inside a panel are absorbed so they never reach the dismissal
         // beneath it; without this, clicking the gap between two rows of the
         // download manager would close it.
-        let overlay = overlay.map(|panel| {
-            Element::from(mouse_area(panel).on_press(Message::MenuClick))
-        });
+        let overlay = overlay.map(|panel| focus::layer(mouse_area(panel).on_press(Message::MenuClick)));
 
         let screen = match overlay {
             Some(panel) => stack![
@@ -6138,8 +6343,10 @@ impl Lightforge {
         let screen = match card {
             Some(card) => stack![
                 screen,
-                mouse_area(container(card).center(Length::Fill).style(theme::scrim))
-                    .on_press(Message::MenuClick),
+                focus::layer(
+                    mouse_area(container(card).center(Length::Fill).style(theme::scrim))
+                        .on_press(Message::MenuClick),
+                ),
             ]
             .into(),
             None => screen,
@@ -6166,7 +6373,7 @@ impl Lightforge {
         );
 
         trace::view_built(started.elapsed());
-        screen
+        focus::root(screen)
     }
 
     /// Title, product picker, and navigation.
@@ -6235,7 +6442,7 @@ impl Lightforge {
         // of its own below, so the tiles answer "which game" where the tabs
         // answer "which page", instead of the two sharing a line.
         let mut bar = row![popover::popover(
-            wordmark,
+            self.ring(focus::Target::AppMenu, Some(Message::ToggleAppMenu), wordmark),
             // No `mouse_area` guard here: a popover captures the pointer over
             // its own bounds, which is what that guard is for on the stacked
             // panels; see [`popover`].
@@ -6266,8 +6473,16 @@ impl Lightforge {
         };
 
         bar = bar.push(Space::new().width(Length::Fixed(GROUP_GAP)));
-        bar = bar.push(step(back_icon(), Message::GoBack, !self.visited.is_empty()));
-        bar = bar.push(step(forward_icon(), Message::GoForward, !self.forward.is_empty()));
+        bar = bar.push(self.ring(
+            focus::Target::Back,
+            (!self.visited.is_empty()).then_some(Message::GoBack),
+            step(back_icon(), Message::GoBack, !self.visited.is_empty()),
+        ));
+        bar = bar.push(self.ring(
+            focus::Target::Forward,
+            (!self.forward.is_empty()).then_some(Message::GoForward),
+            step(forward_icon(), Message::GoForward, !self.forward.is_empty()),
+        ));
 
         // The pages in a row of their own rather than loose in `bar`, so
         // [`TAB_GAP`] sets the air between tabs and nothing else: the row above
@@ -6276,9 +6491,21 @@ impl Lightforge {
         bar = bar.push(Space::new().width(Length::Fixed(GROUP_GAP)));
         bar = bar.push(
             row![
-                nav("Play", Screen::Dashboard),
-                nav("News", Screen::News),
-                outbound("Battle.net Shop", SHOP_URL),
+                self.ring(
+                    focus::Target::Tab(Screen::Dashboard),
+                    Some(Message::Show(Screen::Dashboard)),
+                    nav("Play", Screen::Dashboard),
+                ),
+                self.ring(
+                    focus::Target::Tab(Screen::News),
+                    Some(Message::Show(Screen::News)),
+                    nav("News", Screen::News),
+                ),
+                self.ring(
+                    focus::Target::Shop,
+                    Some(Message::OpenLink(SHOP_URL)),
+                    outbound("Battle.net Shop", SHOP_URL),
+                ),
             ]
             .spacing(TAB_GAP)
             .align_y(Alignment::Center),
@@ -6290,7 +6517,9 @@ impl Lightforge {
         // panel is furniture.
         if !self.queue.is_empty() {
             let count = self.queue.len();
-            bar = bar.push(
+            bar = bar.push(self.ring(
+                focus::Target::Downloads,
+                Some(Message::ToggleManager),
                 button(
                     text(match count {
                         1 => "↓ 1".to_owned(),
@@ -6304,7 +6533,7 @@ impl Lightforge {
                     false => theme::ghost,
                 })
                 .on_press(Message::ToggleManager),
-            );
+            ));
             bar = bar.push(Space::new().width(Length::Fixed(theme::SM)));
         }
 
@@ -6346,7 +6575,11 @@ impl Lightforge {
                         // worse than no button.
                         .extend((!self.config.battle_net_declined).then(|| {
                             Element::from(
-                                container(self.battle_net_button())
+                                container(self.ring(
+                                    focus::Target::BattleNet,
+                                    (!self.busy).then_some(Message::OpenBattleNet),
+                                    self.battle_net_button(),
+                                ))
                                     .height(Length::Fill)
                                     .align_y(Alignment::Center),
                             )
@@ -6458,11 +6691,8 @@ impl Lightforge {
             };
             let action: Element<Message> = match tracked(&entry.code) {
                 true => secondary("Remove", Message::RemoveProduct(entry.code.clone()))
-                    .enabled(elsewhere(&entry.code))
-                    .into(),
-                false => secondary("Add", Message::AddProduct(entry.code.clone()))
-                    .enabled(true)
-                    .into(),
+                    .enabled(elsewhere(&entry.code)),
+                false => secondary("Add", Message::AddProduct(entry.code.clone())).enabled(true),
             };
             // The mark the band would wear, so a row and its tile are plainly
             // the same game. The column is held even when there is no icon,
@@ -6521,15 +6751,18 @@ impl Lightforge {
         // Embedded rather than floating: the default scrollbar is drawn over
         // the content, and the rows end in a button, so it landed on top of
         // Add and Remove. Given its own column it sits beside them instead.
-        container(
-            scrollable(rows)
-                .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
-                .style(theme::scrollbar),
+        let panel = container(
+            focus::region(
+                "browse",
+                scrollable(rows)
+                    .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
+                    .style(theme::scrollbar),
+            ),
         )
         .padding(theme::MD)
         .max_height(560.0)
-        .style(theme::floating)
-        .into()
+        .style(theme::floating);
+        focus::layer(panel)
     }
 
     /// The download manager: every transfer this session knows about.
@@ -6582,18 +6815,13 @@ impl Lightforge {
                 }
             }
 
-            let control: Element<Message> = match &entry.stage {
-                Stage::Running { .. } => {
-                    secondary("Pause", Message::PauseDownload(entry.code.clone()))
-                        .enabled(true)
-                        .into()
-                }
+            let control = match &entry.stage {
+                Stage::Running { .. } => secondary("Pause", Message::PauseDownload(entry.code.clone())),
                 Stage::Queued | Stage::Paused(_) => {
                     secondary("Resume", Message::ResumeDownload(entry.code.clone()))
-                        .enabled(true)
-                        .into()
                 }
-            };
+            }
+            .enabled(true);
 
             rows = rows.push(
                 container(
@@ -6703,6 +6931,11 @@ impl Lightforge {
             false => tile.style(move |theme, _| theme::ghost(theme, status)),
         };
         let dragging = self.tile_drag.as_ref().is_some_and(|drag| drag.moving);
+        let tile = self.ring(
+            focus::Target::Tile(line.clone()),
+            Some(Message::LineSelected(line.clone())),
+            tile,
+        );
         let tile = mouse_area(tile)
             .on_press(Message::TileGrabbed(line.clone()))
             .on_enter(Message::TileEntered(line.clone()))
@@ -6749,7 +6982,12 @@ impl Lightforge {
     /// never has to know the window's size; see [`Self::header`].
     fn strip(&self, room: f32) -> Element<'_, Message> {
         let lines = self.lines();
-        let current = self.catalog.line_of(&self.selected.code);
+        // The tile the ring is on stays in view in place of the selected one,
+        // or the arrows would walk into the overflow and out of sight.
+        let current = match &self.focus {
+            Some(focus::Target::Tile(line)) => line.clone(),
+            _ => self.catalog.line_of(&self.selected.code),
+        };
         let selected = lines.iter().position(|line| line == &current).unwrap_or(0);
         let widths: Vec<f32> = lines.iter().map(|line| self.tile_width(line)).collect();
 
@@ -6770,16 +7008,20 @@ impl Lightforge {
 
         if !hidden.is_empty() {
             let hidden: Vec<ProductLine> = hidden.into_iter().map(|id| lines[id].clone()).collect();
-            let more = band_button(
-                image(chevron_icon())
-                    .width(Length::Fixed(BAND_GLYPH))
-                    .height(Length::Fixed(BAND_GLYPH)),
-                Message::ToggleStrip,
-                self.strip_open,
-                format!("{} more game{}", hidden.len(), match hidden.len() {
-                    1 => "",
-                    _ => "s",
-                }),
+            let more = self.ring(
+                focus::Target::More,
+                Some(Message::ToggleStrip),
+                band_button(
+                    image(chevron_icon())
+                        .width(Length::Fixed(BAND_GLYPH))
+                        .height(Length::Fixed(BAND_GLYPH)),
+                    Message::ToggleStrip,
+                    self.strip_open,
+                    format!("{} more game{}", hidden.len(), match hidden.len() {
+                        1 => "",
+                        _ => "s",
+                    }),
+                ),
             );
             // The panel hangs under the button it belongs to rather than in
             // the corner like the download manager: which games are behind it
@@ -6797,13 +7039,17 @@ impl Lightforge {
         // the ribbon to its right to grow into.
         band = band.push(
             popover::popover(
-                band_button(
-                    image(plus_icon())
-                        .width(Length::Fixed(BAND_GLYPH))
-                        .height(Length::Fixed(BAND_GLYPH)),
-                    Message::ToggleBrowse,
-                    self.browse_open,
-                    "Add a game".to_owned(),
+                self.ring(
+                    focus::Target::AddGame,
+                    Some(Message::ToggleBrowse),
+                    band_button(
+                        image(plus_icon())
+                            .width(Length::Fixed(BAND_GLYPH))
+                            .height(Length::Fixed(BAND_GLYPH)),
+                        Message::ToggleBrowse,
+                        self.browse_open,
+                        "Add a game".to_owned(),
+                    ),
                 ),
                 // The popover absorbs clicks inside the panel itself, so no
                 // `mouse_area` guard is needed here; see [`popover`].
@@ -6985,8 +7231,108 @@ impl Lightforge {
             .any(|m| m.provider == provider && m.id == id)
     }
 
+    /// Whether the arrows, Enter and Escape are someone else's right now.
+    ///
+    /// Setup has buttons of its own that are not rings yet, and the splash
+    /// and the broken-config screen have nothing to press.
+    fn keys_belong_elsewhere(&self) -> bool {
+        self.config_error.is_some() || self.splash.is_some() || self.wizard.is_some()
+    }
+
+    /// What closes the dialog on top, the way its Cancel or Close does.
+    ///
+    /// In the order the view stacks them, so Escape closes the one on top.
+    fn dialog_dismissal(&self) -> Option<Message> {
+        Some(match () {
+            _ if self.install_dialog.is_some() => Message::InstallCancel,
+            _ if self.uninstall_dialog.is_some() => Message::UninstallCancel,
+            _ if self.cancel_dialog.is_some() => Message::CancelDownloadDismiss,
+            _ if self.downgrade_dialog.is_some() => Message::DowngradeCancel,
+            _ if self.version_picker.is_some() => Message::CancelVersionPicker,
+            _ if self.addon_detail.is_some() => Message::CloseAddonDetail,
+            _ if self.report_dialog.is_some() => Message::ReportCancel,
+            _ if self.game_settings.is_some() => Message::CloseGameSettings,
+            _ if self.patch_notes.is_some() => Message::DismissPatchNotes,
+            _ if self.update_notice.is_some() => Message::DismissUpdate,
+            _ => return None,
+        })
+    }
+
+    /// Scroll the page, for an arrow with no control in its direction.
+    ///
+    /// The region the ring is in, or failing that the largest on top: the
+    /// page itself, or the text of the dialog over it.
+    fn scroll_page(&self, step: focus::Step, from: Option<&focus::Target>) -> Task<Message> {
+        let dy = match step {
+            focus::Step::Up => -FOCUS_SCROLL,
+            focus::Step::Down => FOCUS_SCROLL,
+            focus::Step::Left | focus::Step::Right => return Task::none(),
+        };
+        let region = from.and_then(focus::spot).and_then(|spot| spot.region).or_else(focus::main_region);
+        if let Some(region) = region {
+            focus::scroll(region, dy);
+        }
+        Task::none()
+    }
+
+    /// Where the ring appears when it is not on anything yet.
+    ///
+    /// Back on the control that opened the menu just closed, then PLAY, the
+    /// thing a controller user came for, then wherever reading starts, which
+    /// in a menu is its first entry.
+    fn focus_start(&mut self, spots: &[focus::Place]) -> Option<focus::Target> {
+        let drawn = |target: &focus::Target| spots.iter().any(|p| &p.target == target);
+        if let Some(back) = self.focus_return.take().filter(|t| drawn(t)) {
+            return Some(back);
+        }
+        if drawn(&focus::Target::Primary) {
+            return Some(focus::Target::Primary);
+        }
+        focus::first(spots)
+    }
+
+    /// Scroll the region `target` is in so that it can be seen.
+    ///
+    /// The control and the part of the region showing were recorded in the
+    /// region's own coordinates, so the distance to scroll is the difference
+    /// between them. A row's worth of room is kept beyond it: a list only
+    /// draws the rows it shows, and the next one has to be drawn to be
+    /// somewhere the arrows can go. Scrolling past either end is clamped by
+    /// the list itself.
+    fn scroll_into_view(target: &focus::Target) {
+        let Some(spot) = focus::spot(target) else {
+            return;
+        };
+        let Some(region) = spot.region else {
+            return;
+        };
+        let (shown, at) = (spot.viewport, spot.bounds);
+        let ahead = at.height + theme::MD * 2.0;
+        let dy = match () {
+            _ if at.y - ahead < shown.y => at.y - ahead - shown.y,
+            _ if at.y + at.height + ahead > shown.y + shown.height => {
+                at.y + at.height + ahead - (shown.y + shown.height)
+            }
+            _ => return,
+        };
+        focus::scroll(region, dy);
+    }
+
+    /// `content`, as a control the ring can land on, sending `press` when
+    /// Enter is pressed on it. `None` is a disabled control.
+    fn ring<'a>(
+        &self,
+        target: focus::Target,
+        press: Option<Message>,
+        content: impl Into<Element<'a, Message>>,
+    ) -> Element<'a, Message> {
+        let press = press.map_or(focus::Press::Off, focus::Press::Send);
+        focus::ring(target, press, content)
+    }
+
     fn panel_open(&self) -> bool {
-        self.gear_open
+        self.picker_open.is_some()
+            || self.gear_open
             || self.manager_open
             || self.browse_open
             || self.strip_open
@@ -7011,6 +7357,7 @@ impl Lightforge {
     /// clicking the page, choosing a page, picking a game. A panel left
     /// hanging over the thing you just changed is the bug this prevents.
     fn close_panels(&mut self) {
+        self.picker_open = None;
         self.gear_open = false;
         self.manager_open = false;
         self.browse_open = false;
@@ -7044,10 +7391,21 @@ impl Lightforge {
             ]
             .spacing(theme::SM)
             .align_y(Alignment::Center);
-            button(face.width(Length::Fill))
-                .padding([theme::XS, theme::SM])
-                .style(theme::ghost)
-                .on_press_maybe(message)
+            self.ring(
+                focus::Target::Menu(label),
+                message.clone(),
+                button(face.width(Length::Fill))
+                    .padding([theme::XS, theme::SM])
+                    .style(theme::ghost)
+                    .on_press_maybe(message),
+            )
+        };
+        let square = |icon: image::Handle, url: Option<&'static str>| {
+            self.ring(
+                focus::Target::Link(url.unwrap_or_default()),
+                url.map(Message::OpenLink),
+                link_square(icon, url, MENU_GLYPH),
+            )
         };
 
         let rows = column![
@@ -7071,18 +7429,18 @@ impl Lightforge {
             // and a menu that ends in a line of labels reading "Ko-fi" and
             // "PayPal" would read as the point of the menu.
             row![
-                link_square(discord_icon(), DISCORD_URL, MENU_GLYPH),
-                link_square(x_icon(), X_URL, MENU_GLYPH),
+                square(discord_icon(), DISCORD_URL),
+                square(x_icon(), X_URL),
                 Space::new().width(Length::Fill),
-                link_square(kofi_icon(), KOFI_URL, MENU_GLYPH),
-                link_square(paypal_icon(), PAYPAL_URL, MENU_GLYPH),
+                square(kofi_icon(), KOFI_URL),
+                square(paypal_icon(), PAYPAL_URL),
             ]
             .spacing(theme::XS),
         ]
         .spacing(theme::XS)
         .width(Length::Fixed(240.0));
 
-        container(rows).padding(theme::SM).style(theme::menu).into()
+        focus::layer(container(rows).padding(theme::SM).style(theme::menu))
     }
 
     /// One addon's own settings: what is true of this addon rather than what
@@ -7242,7 +7600,7 @@ impl Lightforge {
             theme::CAPTION,
         ));
 
-        container(rows).padding(theme::SM).style(theme::menu).into()
+        focus::layer(container(rows).padding(theme::SM).style(theme::menu))
     }
 
     /// The games the band had no room for.
@@ -7259,14 +7617,81 @@ impl Lightforge {
                 );
             }
             entry = entry.push(text(self.name_of(line)).size(theme::BODY));
-            rows = rows.push(
+            rows = rows.push(self.ring(
+                focus::Target::Overflow(line.clone()),
+                Some(Message::LineSelected(line.clone())),
                 button(entry.width(Length::Fill))
                     .padding([theme::XS, theme::SM])
                     .style(theme::ghost)
                     .on_press(Message::LineSelected(line.clone())),
-            );
+            ));
         }
-        container(rows).padding(theme::SM).style(theme::menu).into()
+        focus::layer(container(rows).padding(theme::SM).style(theme::menu))
+    }
+
+    /// A dropdown the ring can open and move through.
+    ///
+    /// A button and a menu of our own rather than a `pick_list`, whose list
+    /// keeps its open state to itself, so a keyboard can neither open it nor
+    /// move through it. Looks the same, and a mouse uses it the same way.
+    /// `key` names it, and has to be unique on the page.
+    #[allow(clippy::too_many_arguments)]
+    fn picker<'a, T: ToString + PartialEq + Clone>(
+        &self,
+        key: String,
+        options: Vec<T>,
+        current: Option<T>,
+        placeholder: &str,
+        on_pick: impl Fn(T) -> Message,
+        width: Length,
+        size: f32,
+    ) -> Element<'a, Message> {
+        let label = match &current {
+            Some(current) => text(current.to_string()).size(size),
+            None => text(placeholder.to_owned()).size(size).color(theme::MUTED),
+        };
+        let toggle = Message::TogglePicker(key.clone());
+        let face = button(
+            row![
+                label.width(Length::Fill),
+                image(chevron_icon())
+                    .width(Length::Fixed(APP_MENU_CHEVRON))
+                    .height(Length::Fixed(APP_MENU_CHEVRON)),
+            ]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center),
+        )
+        .padding([theme::XS + 2.0, theme::SM])
+        .width(width)
+        .style(theme::picker_button)
+        .on_press(toggle.clone());
+        let face = focus::ring(focus::Target::Key(format!("picker {key}")), focus::Press::Send(toggle), face);
+
+        let menu = (self.picker_open.as_ref() == Some(&key)).then(|| {
+            let mut rows = column![].spacing(theme::XS).width(Length::Fixed(240.0));
+            for option in options {
+                let chosen = Message::Picked(Box::new(on_pick(option.clone())));
+                let name = option.to_string();
+                let entry = button(text(name.clone()).size(size).width(Length::Fill))
+                    .padding([theme::XS, theme::SM])
+                    .width(Length::Fill)
+                    .style(match current.as_ref() == Some(&option) {
+                        true => theme::selected,
+                        false => theme::ghost,
+                    })
+                    .on_press(chosen.clone());
+                rows = rows.push(focus::ring(
+                    focus::Target::Key(format!("pick {key} {name}")),
+                    focus::Press::Send(chosen),
+                    entry,
+                ));
+            }
+            focus::layer(
+                mouse_area(container(rows).padding(theme::XS).style(theme::menu))
+                    .on_press(Message::MenuClick),
+            )
+        });
+        popover::popover(face, menu).align_left().into()
     }
 
     /// Every branch of the selected line, configured or not.
@@ -7410,10 +7835,13 @@ impl Lightforge {
             self.header(),
             column![
                 top,
-                scrollable(content)
-                    .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
-                    .style(theme::scrollbar)
-                    .height(Length::Fill),
+                focus::region(
+                    "page",
+                    scrollable(content)
+                        .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
+                        .style(theme::scrollbar)
+                        .height(Length::Fill),
+                ),
             ]
             .spacing(theme::LG)
             .padding(theme::LG),
@@ -7733,11 +8161,15 @@ impl Lightforge {
             left = left.push(
                 row![
                     muted("version".to_owned(), theme::CAPTION),
-                    pick_list(branches, Some(current), Message::BranchSelected)
-                        .text_size(theme::LABEL)
-                        .padding([theme::XS, theme::SM])
-                        .style(theme::picker)
-                        .menu_style(theme::picker_menu),
+                    self.picker(
+                        "version".to_owned(),
+                        branches,
+                        Some(current),
+                        "",
+                        Message::BranchSelected,
+                        Length::Shrink,
+                        theme::LABEL,
+                    ),
                 ]
                 .spacing(theme::SM)
                 .align_y(Alignment::Center),
@@ -7848,20 +8280,24 @@ impl Lightforge {
                 // with the selection and every task takes its code, so this
                 // is navigation, not a second copy of it. Disabled until
                 // there is an install to put an addon into.
-                link(
-                    package_icon(),
-                    "Manage Addons",
+                self.ring(
+                    focus::Target::Addons,
                     self.local.version.is_some().then_some(Message::Show(Screen::Addons)),
+                    link(
+                        package_icon(),
+                        "Manage Addons",
+                        self.local.version.is_some().then_some(Message::Show(Screen::Addons)),
+                    ),
                 ),
-                link(
-                    sliders_icon(),
-                    "Game Optimizations",
+                self.ring(
+                    focus::Target::Tweaks,
                     Some(Message::Show(Screen::Tweaks)),
+                    link(sliders_icon(), "Game Optimizations", Some(Message::Show(Screen::Tweaks))),
                 ),
-                link(
-                    card_icon(),
-                    "Manage Subscription",
+                self.ring(
+                    focus::Target::Subscription,
                     Some(Message::ManageSubscription),
+                    link(card_icon(), "Manage Subscription", Some(Message::ManageSubscription)),
                 ),
             ]
             // Each link now carries its own air, so the row's gap only has to
@@ -7923,11 +8359,15 @@ impl Lightforge {
         // edge fell between the menu and the button.
         let control = popover::popover(
             row![
-                match self.busy || matches!(action, ActionState::Unknown) {
-                    true => primary,
-                    false => primary.on_press(Message::Primary),
-                },
-                gear,
+                self.ring(
+                    focus::Target::Primary,
+                    (!self.busy && !matches!(action, ActionState::Unknown)).then_some(Message::Primary),
+                    match self.busy || matches!(action, ActionState::Unknown) {
+                        true => primary,
+                        false => primary.on_press(Message::Primary),
+                    },
+                ),
+                self.ring(focus::Target::Gear, Some(Message::ToggleGear), gear),
             ]
             .align_y(Alignment::Center),
             self.gear_open.then(|| self.gear_menu()),
@@ -7935,10 +8375,14 @@ impl Lightforge {
 
         let right = column![
             control,
-            match self.busy {
-                true => battle_net,
-                false => battle_net.on_press(Message::BattleNet),
-            },
+            self.ring(
+                focus::Target::LaunchViaBattleNet,
+                (!self.busy).then_some(Message::BattleNet),
+                match self.busy {
+                    true => battle_net,
+                    false => battle_net.on_press(Message::BattleNet),
+                },
+            ),
         ]
         .push(release_date.map(|date| muted(servers_open(date), theme::CAPTION)))
         .spacing(theme::SM)
@@ -8018,11 +8462,14 @@ impl Lightforge {
         label: &'a str,
         which: Tweak,
         on: bool,
-    ) -> iced::widget::Checkbox<'a, Message> {
-        iced::widget::checkbox(on)
-            .label(label)
-            .on_toggle(move |on| Message::Tweak(scope, which, on))
-            .text_size(theme::BODY)
+    ) -> Element<'a, Message> {
+        clickable(
+            format!("tweak {label}"),
+            iced::widget::checkbox(on)
+                .label(label)
+                .on_toggle(move |on| Message::Tweak(scope, which, on))
+                .text_size(theme::BODY),
+        )
     }
 
     /// How tall every card on the grid is.
@@ -8095,7 +8542,8 @@ impl Lightforge {
     ) -> Element<'a, Message> {
         let mut inner = column![text(title).size(theme::HEADING)].spacing(theme::SM);
         inner = inner.extend(self.hint(brief).map(Element::from));
-        container(inner.push(content).spacing(theme::SM))
+        let content = focus::group(format!("card {title}"), inner.push(content).spacing(theme::SM));
+        container(content)
             .padding(theme::MD)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -8111,14 +8559,20 @@ impl Lightforge {
     fn preset_row(&self, tweaks: &Tweaks) -> Element<'_, Message> {
         let current = tweaks.preset();
 
+        // The lit one takes the ring too, though pressing it changes
+        // nothing: a row the ring skips a segment of reads as broken.
         let segment = |label: &'static str, chosen: bool, message: Message| {
-            button(text(label).size(theme::BODY))
-                .padding([theme::SM, theme::MD])
-                .style(match chosen {
-                    true => theme::selected,
-                    false => theme::ghost,
-                })
-                .on_press_maybe((!chosen).then_some(message))
+            self.ring(
+                focus::Target::Key(format!("preset {label}")),
+                Some(message.clone()),
+                button(text(label).size(theme::BODY))
+                    .padding([theme::SM, theme::MD])
+                    .style(match chosen {
+                        true => theme::selected,
+                        false => theme::ghost,
+                    })
+                    .on_press_maybe((!chosen).then_some(message)),
+            )
         };
 
         // Custom first, and lit whenever nothing else is. It is not a fourth
@@ -8301,12 +8755,13 @@ impl Lightforge {
                 for name in &available {
                     let on = opted.iter().any(|n| n == name);
                     let tag = name.clone();
-                    content = content.push(
+                    content = content.push(clickable(
+                        format!("optional {name}"),
                         iced::widget::checkbox(on)
                             .label(optional_label(name))
                             .on_toggle(move |on| Message::OptionalContent(tag.clone(), on))
                             .text_size(theme::BODY),
-                    );
+                    ));
                 }
                 content = content.extend(
                     self.hint(
@@ -8403,11 +8858,15 @@ impl Lightforge {
         ];
         let mut content = column![row![
             muted("Graphics API".to_owned(), theme::LABEL).width(Length::Fixed(110.0)),
-            pick_list(apis, Some(ApiChoice(tweaks.graphics_api)), Message::TweakApi)
-                .style(theme::picker)
-                .text_size(theme::BODY)
-                .padding(theme::SM)
-                .width(Length::Fill),
+            self.picker(
+                "graphics-api".to_owned(),
+                apis,
+                Some(ApiChoice(tweaks.graphics_api)),
+                "",
+                Message::TweakApi,
+                Length::Fill,
+                theme::BODY,
+            ),
         ]
         .spacing(theme::MD)
         .align_y(Alignment::Center)]
@@ -8422,12 +8881,15 @@ impl Lightforge {
         content = content.push(
             row![
                 muted("Frame cap".to_owned(), theme::LABEL).width(Length::Fixed(110.0)),
-                text_input("uncapped", &self.fps_input)
-                    .on_input(Message::TweakFpsCap)
-                    .style(theme::field)
-                    .size(theme::BODY)
-                    .padding(theme::SM)
-                    .width(Length::Fixed(110.0)),
+                clickable(
+                    "frame cap",
+                    text_input("uncapped", &self.fps_input)
+                        .on_input(Message::TweakFpsCap)
+                        .style(theme::field)
+                        .size(theme::BODY)
+                        .padding(theme::SM)
+                        .width(Length::Fixed(110.0)),
+                ),
                 muted("fps".to_owned(), theme::LABEL),
             ]
             .spacing(theme::MD)
@@ -8443,12 +8905,15 @@ impl Lightforge {
         content = content.push(
             row![
                 muted("When unfocused".to_owned(), theme::LABEL).width(Length::Fixed(110.0)),
-                text_input("30", &self.fps_bk_input)
-                    .on_input(Message::TweakFpsCapBackground)
-                    .style(theme::field)
-                    .size(theme::BODY)
-                    .padding(theme::SM)
-                    .width(Length::Fixed(110.0)),
+                clickable(
+                    "frame cap unfocused",
+                    text_input("30", &self.fps_bk_input)
+                        .on_input(Message::TweakFpsCapBackground)
+                        .style(theme::field)
+                        .size(theme::BODY)
+                        .padding(theme::SM)
+                        .width(Length::Fixed(110.0)),
+                ),
                 muted("fps".to_owned(), theme::LABEL),
             ]
             .spacing(theme::MD)
@@ -8511,8 +8976,7 @@ impl Lightforge {
         }
 
         rows.push(
-            self.tweak_check(scope, "Run on Proton's Wayland backend", Tweak::Wayland, tweaks.wayland)
-                .into(),
+            self.tweak_check(scope, "Run on Proton's Wayland backend", Tweak::Wayland, tweaks.wayland),
         );
         rows.extend(
             self.hint(
@@ -8522,22 +8986,25 @@ impl Lightforge {
             .map(Element::from),
         );
         if tweaks.wayland {
-            rows.push(self.tweak_check(scope, "Ask for HDR output", Tweak::Hdr, tweaks.hdr).into());
+            rows.push(self.tweak_check(scope, "Ask for HDR output", Tweak::Hdr, tweaks.hdr));
             rows.push(
                 row![
                     muted("Monitor".to_owned(), theme::LABEL).width(Length::Fixed(110.0)),
-                    text_input(
-                        "whichever Proton picks",
-                        match scope {
-                            Scope::Product => &self.monitor_input,
-                            Scope::BattleNet => &self.bnet_monitor_input,
-                        },
-                    )
-                    .on_input(move |v| Message::TweakWaylandMonitor(scope, v))
+                    clickable(
+                        "monitor",
+                        text_input(
+                            "whichever Proton picks",
+                            match scope {
+                                Scope::Product => &self.monitor_input,
+                                Scope::BattleNet => &self.bnet_monitor_input,
+                            },
+                        )
+                        .on_input(move |v| Message::TweakWaylandMonitor(scope, v))
                         .style(theme::field)
                         .size(theme::BODY)
                         .padding(theme::SM)
                         .width(Length::Fill),
+                    ),
                 ]
                 .spacing(theme::MD)
                 .align_y(Alignment::Center)
@@ -8562,7 +9029,8 @@ impl Lightforge {
             Scope::Product => self.env_open,
             Scope::BattleNet => self.bnet_env_open,
         };
-        let summary = row![
+        let summary = row![clickable(
+            "environment",
             button(
                 text(match open {
                     true => "Hide",
@@ -8573,7 +9041,7 @@ impl Lightforge {
             .on_press(Message::TweakEnvToggle(scope))
             .style(theme::ghost)
             .padding([theme::XS, theme::SM]),
-        ];
+        )];
         let mut head = row![text("Environment variables").size(theme::HEADING)]
             .spacing(theme::SM)
             .align_y(Alignment::Center);
@@ -8591,10 +9059,13 @@ impl Lightforge {
                     container(
                         row![
                             mono(format!("{key}={value}")).width(Length::Fill),
-                            button(text("Remove").size(theme::LABEL))
-                                .on_press(Message::TweakEnvRemove(scope, key.clone()))
-                                .style(theme::ghost)
-                                .padding([theme::XS, theme::SM]),
+                            clickable(
+                                format!("remove variable {key}"),
+                                button(text("Remove").size(theme::LABEL))
+                                    .on_press(Message::TweakEnvRemove(scope, key.clone()))
+                                    .style(theme::ghost)
+                                    .padding([theme::XS, theme::SM]),
+                            ),
                         ]
                         .spacing(theme::SM)
                         .align_y(Alignment::Center),
@@ -8605,20 +9076,26 @@ impl Lightforge {
             }
             inner = inner.push(
                 row![
-                    text_input("VARIABLE", &self.env_key_input)
-                        .on_input(Message::TweakEnvKey)
-                        .on_submit(Message::TweakEnvAdd(scope))
-                        .style(theme::field)
-                        .size(theme::BODY)
-                        .padding(theme::SM)
-                        .width(Length::Fixed(220.0)),
-                    text_input("value", &self.env_value_input)
-                        .on_input(Message::TweakEnvValue)
-                        .on_submit(Message::TweakEnvAdd(scope))
-                        .style(theme::field)
-                        .size(theme::BODY)
-                        .padding(theme::SM)
-                        .width(Length::Fill),
+                    clickable(
+                        "variable",
+                        text_input("VARIABLE", &self.env_key_input)
+                            .on_input(Message::TweakEnvKey)
+                            .on_submit(Message::TweakEnvAdd(scope))
+                            .style(theme::field)
+                            .size(theme::BODY)
+                            .padding(theme::SM)
+                            .width(Length::Fixed(220.0)),
+                    ),
+                    clickable(
+                        "value",
+                        text_input("value", &self.env_value_input)
+                            .on_input(Message::TweakEnvValue)
+                            .on_submit(Message::TweakEnvAdd(scope))
+                            .style(theme::field)
+                            .size(theme::BODY)
+                            .padding(theme::SM)
+                            .width(Length::Fill),
+                    ),
                     secondary("Add", Message::TweakEnvAdd(scope)).enabled(!self.env_key_input.is_empty()),
                 ]
                 .spacing(theme::SM)
@@ -8645,11 +9122,15 @@ impl Lightforge {
     /// construction, at any window size.
     fn gear_menu(&self) -> Element<'_, Message> {
         let item = |label: &'static str, message: Message, enabled: bool| {
-            button(text(label).size(theme::LABEL))
-                .style(theme::ghost)
-                .padding([theme::SM, theme::MD])
-                .width(Length::Fill)
-                .on_press_maybe(enabled.then_some(message))
+            self.ring(
+                focus::Target::Menu(label),
+                enabled.then(|| message.clone()),
+                button(text(label).size(theme::LABEL))
+                    .style(theme::ghost)
+                    .padding([theme::SM, theme::MD])
+                    .width(Length::Fill)
+                    .on_press_maybe(enabled.then_some(message)),
+            )
         };
 
         let installed = self.local.version.is_some();
@@ -8685,14 +9166,14 @@ impl Lightforge {
             .extend(
                 self.owed_repair
                     .is_some()
-                    .then(|| item("Repair Damaged Files", Message::RepairDamaged, !self.busy)).map(Element::from))
+                    .then(|| item("Repair Damaged Files", Message::RepairDamaged, !self.busy)))
             .extend(queued.then(|| {
                 item(
                     "Cancel Download",
                     Message::AskCancelDownload(self.selected.code.clone()),
                     true,
                 )
-            }).map(Element::from))
+            }))
             .spacing(theme::XS),
         )
         .padding(theme::XS)
@@ -8701,7 +9182,7 @@ impl Lightforge {
         .width(Length::Fixed(240.0))
         .style(theme::floating);
 
-        mouse_area(menu).on_press(Message::MenuClick).into()
+        focus::layer(mouse_area(menu).on_press(Message::MenuClick))
     }
 
     /// A page that is just the chrome and some content.
@@ -8935,12 +9416,12 @@ impl Lightforge {
             .map(Element::from),
         );
 
-        self.framed(
+        self.framed(focus::region(
+            "updates",
             scrollable(body.spacing(theme::MD))
                 .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
-                .style(theme::scrollbar)
-                .into(),
-        )
+                .style(theme::scrollbar),
+        ))
     }
 
     /// The splash: the wordmark, what is being fetched, and a bar that says
@@ -9315,34 +9796,20 @@ impl Lightforge {
                 // Which builds this addon accepts. Narrow and first, so the
                 // buttons that act stay where the eye expects them whether or
                 // not there is an update to show.
-                actions = actions.push(
-                    pick_list(
-                        RowChannel::ALL.to_vec(),
-                        Some(RowChannel(managed.channel)),
-                        {
-                            let provider = managed.provider.clone();
-                            let id = managed.id.clone();
-                            move |choice| {
-                                Message::AddonChannelFor(
-                                    provider.clone(),
-                                    id.clone(),
-                                    choice,
-                                )
-                            }
-                        },
-                    )
-                    // Sized like the buttons it sits beside, down to the text
-                    // and the padding: three controls on one line that
-                    // disagree about their height read as a mistake rather
-                    // than as a hierarchy. The width is fixed so the buttons
-                    // do not shift as the word changes between Default,
-                    // Stable, Beta and Alpha.
-                    .text_size(theme::LABEL)
-                    .padding([theme::SM, theme::MD])
-                    .width(Length::Fixed(120.0))
-                    .style(theme::picker)
-                    .menu_style(theme::picker_menu),
-                );
+                // Sized like the buttons it sits beside: three controls on
+                // one line that disagree about their height read as a
+                // mistake rather than as a hierarchy. The width is fixed so
+                // the buttons do not shift as the word changes between
+                // Default, Stable, Beta and Alpha.
+                actions = actions.push(self.picker(
+                    format!("channel {} {}", managed.provider, managed.id),
+                    RowChannel::ALL.to_vec(),
+                    Some(RowChannel(managed.channel)),
+                    "",
+                    |choice| Message::AddonChannelFor(managed.provider.clone(), managed.id.clone(), choice),
+                    Length::Fixed(120.0),
+                    theme::LABEL,
+                ));
 
                 // One addon at a time. `install_one` fetches the newest file
                 // and does not pin it, which is exactly what updating is, so
@@ -9710,8 +10177,7 @@ impl Lightforge {
                     theme::INSTALL,
                     Message::InstallAddon(provider.clone(), listing.id.clone()),
                 )
-                .enabled(!self.addons_busy)
-                .into(),
+                .enabled(!self.addons_busy),
             });
             body = body.push(container(line).padding(theme::MD).style(theme::row));
         }
@@ -9824,12 +10290,15 @@ impl Lightforge {
             body = body.push(field_row(
                 "Install to".to_owned(),
                 row![
-                    text_input("~/Games/Blizzard", &self.location_input)
-                        .on_input(Message::LocationChanged)
-                        .on_submit(Message::UseLocation)
-                        .style(theme::field)
-                        .size(theme::BODY)
-                        .padding(theme::SM),
+                    clickable(
+                        "install location",
+                        text_input("~/Games/Blizzard", &self.location_input)
+                            .on_input(Message::LocationChanged)
+                            .on_submit(Message::UseLocation)
+                            .style(theme::field)
+                            .size(theme::BODY)
+                            .padding(theme::SM),
+                    ),
                     secondary("Use this location", Message::UseLocation).enabled(true),
                     secondary("Open folder", Message::OpenLibrary).enabled(true),
                 ]
@@ -10050,8 +10519,7 @@ impl Lightforge {
                 )
                 .into(),
                 (true, true) => secondary("Remove", Message::RemoveProton(build.version.clone()))
-                    .enabled(!self.setup_running)
-                    .into(),
+                    .enabled(!self.setup_running),
             };
 
             rows = rows.push(
@@ -10106,22 +10574,18 @@ impl Lightforge {
         }
 
         row![
-            pick_list(
+            self.picker(
+                "proton-install".to_owned(),
                 self.proton_available
                     .iter()
                     .map(|v| ProtonChoice(Some(v.clone()), Unpinned::Newest))
                     .collect::<Vec<_>>(),
                 self.proton_choice.clone().map(|v| ProtonChoice(Some(v), Unpinned::Newest)),
+                "Install a version",
                 Message::ChooseProtonVersion,
-            )
-            .placeholder("Install a version")
-            .text_size(theme::BODY)
-            .padding(theme::SM)
-            .width(Length::Fixed(220.0))
-            // The one picker on this page that used to forget the theme, and
-            // it showed: a system-styled dropdown among five themed ones.
-            .style(theme::picker)
-            .menu_style(theme::picker_menu),
+                Length::Fixed(220.0),
+                theme::BODY,
+            ),
             secondary("Install", Message::InstallProton)
                 .enabled(self.proton_choice.is_some() && !self.setup_running),
         ]
@@ -10140,10 +10604,16 @@ impl Lightforge {
             let entry = button(text(tab.label()).size(theme::BODY))
                 .width(Length::Fill)
                 .padding([theme::SM, theme::MD]);
-            nav = nav.push(match self.settings_tab == tab {
-                true => entry.style(theme::selected),
-                false => entry.style(theme::ghost).on_press(Message::SettingsTab(tab)),
-            });
+            // The tab on show still takes the ring, or there would be no
+            // way back into the list from the page beside it.
+            nav = nav.push(self.ring(
+                focus::Target::SettingsTab(tab),
+                Some(Message::SettingsTab(tab)),
+                match self.settings_tab == tab {
+                    true => entry.style(theme::selected),
+                    false => entry.style(theme::ghost).on_press(Message::SettingsTab(tab)),
+                },
+            ));
         }
 
         let (title, body) = match self.settings_tab {
@@ -10181,13 +10651,16 @@ impl Lightforge {
         column![
             self.header(),
             row![
-                nav,
+                focus::group("settings nav", nav),
                 container(Space::new().width(Length::Fixed(1.0)))
                     .height(Length::Fill)
                     .style(theme::divider),
-                scrollable(container(content).padding([0.0, theme::LG]))
-                    .width(Length::Fill)
-                    .height(Length::Fill),
+                focus::region(
+                    SETTINGS_PAGE,
+                    scrollable(container(content).padding([0.0, theme::LG]))
+                        .width(Length::Fill)
+                        .height(Length::Fill),
+                ),
             ]
             .spacing(theme::LG)
             .padding(theme::LG),
@@ -10268,16 +10741,19 @@ impl Lightforge {
                 .collect()
         };
 
-        let picker = |unpinned: Unpinned,
+        let picker = |key: String,
+                      unpinned: Unpinned,
                       current: Option<String>,
                       on_pick: Box<dyn Fn(ProtonChoice) -> Message>| {
-            pick_list(builds(unpinned), Some(ProtonChoice(current, unpinned)), on_pick)
-                .text_size(theme::BODY)
-                .padding(theme::SM)
-                .width(Length::Fixed(260.0))
-                .style(theme::picker)
-                .menu_style(theme::picker_menu)
-                .into()
+            self.picker(
+                key,
+                builds(unpinned),
+                Some(ProtonChoice(current, unpinned)),
+                "",
+                on_pick,
+                Length::Fixed(260.0),
+                theme::BODY,
+            )
         };
 
         // A row of this card: the name takes the slack, then any signs, then
@@ -10336,6 +10812,7 @@ impl Lightforge {
                 label.clone(),
                 tags,
                 picker(
+                    format!("proton {}", code.as_str()),
                     match Kind::of(code) {
                         Kind::Managed => Unpinned::Default,
                         Kind::HandOff => Unpinned::BattleNet,
@@ -10366,6 +10843,7 @@ impl Lightforge {
             "Default".to_owned(),
             Vec::new(),
             picker(
+                "proton default".to_owned(),
                 Unpinned::Newest,
                 self.config.default_proton.version().map(str::to_owned),
                 Box::new(Message::PinDefaultProton),
@@ -10381,6 +10859,7 @@ impl Lightforge {
             }
             .into()],
             picker(
+                "proton battle.net".to_owned(),
                 Unpinned::Default,
                 self.config.battle_net_proton.version().map(str::to_owned),
                 Box::new(Message::PinBattleNetProton),
@@ -10487,16 +10966,15 @@ impl Lightforge {
 
         column![field_row(
             "Default addon channel".to_owned(),
-            pick_list(
+            self.picker(
+                "addon channel".to_owned(),
                 choices,
                 Some(ChannelChoice(self.config.addon_channel)),
+                "",
                 Message::AddonChannelDefault,
-            )
-            .text_size(theme::LABEL)
-            .padding([theme::XS, theme::SM])
-            .style(theme::picker)
-            .menu_style(theme::picker_menu)
-            .into(),
+                Length::Shrink,
+                theme::LABEL,
+            ),
         )]
         .extend(
             self.hint(
@@ -10507,12 +10985,13 @@ impl Lightforge {
             )
             .map(Element::from),
         )
-        .push(
+        .push(clickable(
+            "addon auto update",
             iced::widget::checkbox(self.config.addon_auto_update)
                 .label("Keep addons up to date automatically")
                 .on_toggle(Message::AddonAutoUpdateDefault)
                 .text_size(theme::BODY),
-        )
+        ))
         .extend(
             self.hint(
                 "Runs once per game per session — when Lightforge starts, and again the \
@@ -10531,7 +11010,7 @@ impl Lightforge {
     /// the app itself rather than about a product, a transfer or a prefix.
     fn general_section(&self) -> Element<'_, Message> {
         let toggle = |on: bool, label: &'static str, msg: fn(bool) -> Message| {
-            iced::widget::checkbox(on).label(label).on_toggle(msg).text_size(theme::BODY)
+            clickable(label, iced::widget::checkbox(on).label(label).on_toggle(msg).text_size(theme::BODY))
         };
 
         column![toggle(
@@ -10680,12 +11159,15 @@ impl Lightforge {
     fn downloads_section(&self) -> Element<'_, Message> {
         let speed = |input: &str, placeholder: &str, on_input: fn(String) -> Message| {
             row![
-                text_input(placeholder, input)
-                    .on_input(on_input)
-                    .style(theme::field)
-                    .size(theme::BODY)
-                    .padding(theme::SM)
-                    .width(Length::Fixed(110.0)),
+                clickable(
+                    format!("speed {placeholder}"),
+                    text_input(placeholder, input)
+                        .on_input(on_input)
+                        .style(theme::field)
+                        .size(theme::BODY)
+                        .padding(theme::SM)
+                        .width(Length::Fixed(110.0)),
+                ),
                 muted("MB/s".to_owned(), theme::LABEL),
             ]
             .spacing(theme::SM)
@@ -10707,12 +11189,13 @@ impl Lightforge {
             "Battle.net's own cap, for what it downloads. Read from its config and written \
              back; clearing the field removes the setting and restores its default.",
         ).map(Element::from))
-        .push(
+        .push(clickable(
+            "pause while playing",
             iced::widget::checkbox(self.config.pause_downloads_while_playing)
                 .label("Pause downloads while a game is running")
                 .on_toggle(Message::PauseWhilePlaying)
-            .text_size(theme::BODY),
-        )
+                .text_size(theme::BODY),
+        ))
         .extend(self.hint(
             "The game you launch always pauses its own download — it and the launcher \
              would be sharing one storage file. This covers the rest of the queue.",
@@ -10784,7 +11267,8 @@ impl Lightforge {
             }
 
             let usable = target.state != library::State::Missing;
-            drives = drives.push(
+            drives = drives.push(clickable(
+                format!("install target {index}"),
                 button(
                     // The left column takes what the right one does not, so
                     // the path is the only thing that ever wraps.
@@ -10799,7 +11283,7 @@ impl Lightforge {
                     false => theme::card_button,
                 })
                 .on_press_maybe(usable.then_some(Message::InstallTarget(index))),
-            );
+            ));
         }
         let location: Element<Message> = column![drives]
             .extend(
@@ -10841,10 +11325,13 @@ impl Lightforge {
                     body = body.push(field_row(
                         "Optional".to_owned(),
                         row![
-                            iced::widget::checkbox(dialog.high_res)
-                                .label(optional_label(HIGH_RES))
-                                .on_toggle(Message::InstallHighRes)
-                                .text_size(theme::BODY),
+                            clickable(
+                                "high res",
+                                iced::widget::checkbox(dialog.high_res)
+                                    .label(optional_label(HIGH_RES))
+                                    .on_toggle(Message::InstallHighRes)
+                                    .text_size(theme::BODY),
+                            ),
                             muted(format!("+{}", size_of(extra)), theme::LABEL),
                         ]
                         .spacing(theme::SM)
@@ -10893,10 +11380,13 @@ impl Lightforge {
         };
         let actions = row![
             Space::new().width(Length::Fill),
-            choice("Cancel").style(theme::outlined).on_press(Message::InstallCancel),
-            choice("Start install")
-                .style(theme::filled(theme::INSTALL))
-                .on_press_maybe(ready.then_some(Message::InstallStart)),
+            clickable("cancel", choice("Cancel").style(theme::outlined).on_press(Message::InstallCancel)),
+            clickable(
+                "start install",
+                choice("Start install")
+                    .style(theme::filled(theme::INSTALL))
+                    .on_press_maybe(ready.then_some(Message::InstallStart)),
+            ),
         ]
         .spacing(theme::SM)
         .align_y(Alignment::Center);
@@ -10958,12 +11448,16 @@ impl Lightforge {
         };
         let actions = row![
             Space::new().width(Length::Fill),
-            choice("Cancel".to_owned())
-                .style(theme::outlined)
-                .on_press(Message::DowngradeCancel),
-            choice("Launch anyway".to_owned())
-                .style(theme::filled(theme::UPDATE))
-                .on_press(Message::DowngradeConfirm),
+            clickable(
+                "cancel",
+                choice("Cancel".to_owned()).style(theme::outlined).on_press(Message::DowngradeCancel),
+            ),
+            clickable(
+                "launch anyway",
+                choice("Launch anyway".to_owned())
+                    .style(theme::filled(theme::UPDATE))
+                    .on_press(Message::DowngradeConfirm),
+            ),
         ]
         .spacing(theme::SM)
         .align_y(Alignment::Center);
@@ -11274,8 +11768,7 @@ impl Lightforge {
                 theme::INSTALL,
                 Message::InstallAddon(detail.provider.clone(), detail.id.clone()),
             )
-            .enabled(!self.addons_busy)
-            .into();
+            .enabled(!self.addons_busy);
             footer = footer.push(install);
         }
         footer = footer.push(secondary("Close", Message::CloseAddonDetail).enabled(true));
@@ -11299,7 +11792,8 @@ impl Lightforge {
     ) -> Element<'a, Message> {
         let tab = |label: String, which: DetailTab, available: bool| {
             let selected = detail.tab == which;
-            button(text(label).size(theme::BODY))
+            let key = format!("detail tab {label}");
+            let tab = button(text(label).size(theme::BODY))
                 .padding([theme::XS, theme::MD])
                 .style(match selected {
                     true => theme::selected,
@@ -11308,7 +11802,8 @@ impl Lightforge {
                 .on_press_maybe(match available && !selected {
                     true => Some(Message::AddonDetailTab(which)),
                     false => None,
-                })
+                });
+            clickable(key, tab)
         };
 
         let changelog_label = match &loaded.changelog_build {
@@ -11396,26 +11891,35 @@ impl Lightforge {
 
         let body = column![
             muted(format!("Version {}", notes.release.version), theme::LABEL),
-            container(
+            container(focus::region(
+                "notes",
                 scrollable(release_notes(&notes.release))
                     .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
                     .style(theme::scrollbar),
-            )
+            ))
             .max_height(NOTES_MAX),
         ]
         .spacing(theme::SM);
 
         let actions = row![
-            iced::widget::checkbox(notes.mute)
-                .label("Never show this again")
-                .on_toggle(Message::MutePatchNotes)
-                .text_size(theme::BODY),
+            self.ring(
+                focus::Target::Key("mute notes".to_owned()),
+                Some(Message::MutePatchNotes(!notes.mute)),
+                iced::widget::checkbox(notes.mute)
+                    .label("Never show this again")
+                    .on_toggle(Message::MutePatchNotes)
+                    .text_size(theme::BODY),
+            ),
             Space::new().width(Length::Fill),
-            button(text("Got it").size(theme::LABEL).width(Length::Fill).center())
-                .width(Length::Fixed(150.0))
-                .padding([theme::SM, theme::MD])
-                .style(theme::filled(theme::ACCENT))
-                .on_press(Message::DismissPatchNotes),
+            self.ring(
+                focus::Target::NotesDismiss,
+                Some(Message::DismissPatchNotes),
+                button(text("Got it").size(theme::LABEL).width(Length::Fill).center())
+                    .width(Length::Fixed(150.0))
+                    .padding([theme::SM, theme::MD])
+                    .style(theme::filled(theme::ACCENT))
+                    .on_press(Message::DismissPatchNotes),
+            ),
         ]
         .spacing(theme::SM)
         .align_y(Alignment::Center);
@@ -11461,10 +11965,18 @@ impl Lightforge {
         };
         let actions = row![
             Space::new().width(Length::Fill),
-            choice("Not now").style(theme::outlined).on_press(Message::DismissUpdate),
-            choice("See the release")
-                .style(theme::filled(theme::ACCENT))
-                .on_press(Message::OpenReleases),
+            self.ring(
+                focus::Target::UpdateLater,
+                Some(Message::DismissUpdate),
+                choice("Not now").style(theme::outlined).on_press(Message::DismissUpdate),
+            ),
+            self.ring(
+                focus::Target::UpdateOpen,
+                Some(Message::OpenReleases),
+                choice("See the release")
+                    .style(theme::filled(theme::ACCENT))
+                    .on_press(Message::OpenReleases),
+            ),
         ]
         .spacing(theme::SM)
         .align_y(Alignment::Center);
@@ -11526,10 +12038,13 @@ impl Lightforge {
         };
         let actions = row![
             Space::new().width(Length::Fill),
-            choice(keep).style(theme::outlined).on_press(Message::CancelDownloadDismiss),
-            choice(give_up)
-                .style(theme::filled(theme::ERROR))
-                .on_press(Message::CancelDownloadConfirm { delete: !updating }),
+            clickable("keep", choice(keep).style(theme::outlined).on_press(Message::CancelDownloadDismiss)),
+            clickable(
+                "give up",
+                choice(give_up)
+                    .style(theme::filled(theme::ERROR))
+                    .on_press(Message::CancelDownloadConfirm { delete: !updating }),
+            ),
         ]
         .spacing(theme::SM)
         .align_y(Alignment::Center);
@@ -11623,12 +12138,18 @@ impl Lightforge {
         };
         let actions = row![
             Space::new().width(Length::Fill),
-            choice("Cancel")
-                .style(theme::outlined)
-                .on_press_maybe((!dialog.working).then_some(Message::UninstallCancel)),
-            choice(if dialog.working { "Uninstalling…" } else { "Uninstall" })
-                .style(theme::filled(theme::ERROR))
-                .on_press_maybe((ready && !dialog.working).then_some(Message::UninstallConfirm)),
+            clickable(
+                "cancel",
+                choice("Cancel")
+                    .style(theme::outlined)
+                    .on_press_maybe((!dialog.working).then_some(Message::UninstallCancel)),
+            ),
+            clickable(
+                "uninstall",
+                choice(if dialog.working { "Uninstalling…" } else { "Uninstall" })
+                    .style(theme::filled(theme::ERROR))
+                    .on_press_maybe((ready && !dialog.working).then_some(Message::UninstallConfirm)),
+            ),
         ]
         .spacing(theme::SM)
         .align_y(Alignment::Center);
@@ -11664,21 +12185,30 @@ impl Lightforge {
         let mut body = column![
             // Five lines: enough that a paragraph looks invited rather than
             // tolerated, and the card still fits a laptop screen.
-            text_editor(&dialog.note)
-                .placeholder(prompt)
-                .on_action(Message::ReportNote)
-                .height(Length::Fixed(theme::BODY * 1.4 * 5.0 + theme::SM * 2.0))
-                .style(theme::editor)
-                .size(theme::BODY)
-                .padding(theme::SM),
+            // Pressing a field puts the typing in it: Steam's own keyboard
+            // (Steam and X on a Deck) then writes there. Escape leaves the
+            // field, and a second one closes the card.
+            clickable(
+                "report note",
+                text_editor(&dialog.note)
+                    .placeholder(prompt)
+                    .on_action(Message::ReportNote)
+                    .height(Length::Fixed(theme::BODY * 1.4 * 5.0 + theme::SM * 2.0))
+                    .style(theme::editor)
+                    .size(theme::BODY)
+                    .padding(theme::SM),
+            ),
             // Optional, and said so: a report with no way back is still worth
             // sending, and someone who would rather stay anonymous should not
             // have to wonder whether leaving it blank breaks anything.
-            text_input("Email or Discord name, so I can reach you (optional)", &dialog.contact)
-                .on_input_maybe(writing.then_some(Message::ReportContact))
-                .style(theme::field)
-                .size(theme::BODY)
-                .padding(theme::SM),
+            clickable(
+                "report contact",
+                text_input("Email or Discord name, so I can reach you (optional)", &dialog.contact)
+                    .on_input_maybe(writing.then_some(Message::ReportContact))
+                    .style(theme::field)
+                    .size(theme::BODY)
+                    .padding(theme::SM),
+            ),
         ]
         .spacing(theme::MD);
 
@@ -11736,7 +12266,10 @@ impl Lightforge {
         let actions = match dialog.stage {
             ReportStage::Sent => row![
                 Space::new().width(Length::Fill),
-                choice("Close").style(theme::filled(theme::ACCENT)).on_press(Message::ReportCancel),
+                clickable(
+                    "close",
+                    choice("Close").style(theme::filled(theme::ACCENT)).on_press(Message::ReportCancel),
+                ),
             ],
             _ => row![
                 Space::new().width(Length::Fill),
@@ -11744,15 +12277,14 @@ impl Lightforge {
                 // in it, the clipboard carries text, which the Discord
                 // route solves on its own, since an image is pasted there.
                 match dialog.stage {
-                    ReportStage::Failed => Element::from(
-                        choice("Copy report")
-                            .style(theme::outlined)
-                            .on_press(Message::ReportCopy)
+                    ReportStage::Failed => clickable(
+                        "copy report",
+                        choice("Copy report").style(theme::outlined).on_press(Message::ReportCopy),
                     ),
                     _ => Element::from(Space::new().width(Length::Shrink)),
                 },
-                choice("Cancel").style(theme::outlined).on_press(Message::ReportCancel),
-                choice(match dialog.stage {
+                clickable("cancel", choice("Cancel").style(theme::outlined).on_press(Message::ReportCancel)),
+                clickable("send", choice(match dialog.stage {
                     ReportStage::Sending => "Sending…",
                     ReportStage::Failed => "Try again",
                     ReportStage::TooSoon => "Just sent",
@@ -11769,7 +12301,7 @@ impl Lightforge {
                         && dialog.stage != ReportStage::TooSoon
                         && !dialog.note.text().trim().is_empty())
                     .then_some(Message::ReportSend)
-                ),
+                )),
             ],
         }
         .spacing(theme::SM)
@@ -11789,10 +12321,13 @@ impl Lightforge {
     /// only one that works when the launcher is sandboxed.
     fn shot_row<'a>(&self, dialog: &'a ReportDialog) -> Element<'a, Message> {
         let choose = |label: &'static str| {
-            button(text(label).size(theme::LABEL))
-                .padding([theme::XS, theme::SM])
-                .style(theme::outlined)
-                .on_press(Message::ReportShotPick)
+            clickable(
+                "screenshot",
+                button(text(label).size(theme::LABEL))
+                    .padding([theme::XS, theme::SM])
+                    .style(theme::outlined)
+                    .on_press(Message::ReportShotPick),
+            )
         };
 
         let Some(shot) = &dialog.shot else {
@@ -11821,10 +12356,13 @@ impl Lightforge {
             .spacing(theme::XS)
             .width(Length::Fill),
             choose("Replace…"),
-            button(text("Remove").size(theme::LABEL))
-                .padding([theme::XS, theme::SM])
-                .style(theme::outlined)
-                .on_press(Message::ReportShotCleared),
+            clickable(
+                "remove screenshot",
+                button(text("Remove").size(theme::LABEL))
+                    .padding([theme::XS, theme::SM])
+                    .style(theme::outlined)
+                    .on_press(Message::ReportShotCleared),
+            ),
         ]
         .spacing(theme::SM)
         .align_y(Alignment::Center)
@@ -11941,7 +12479,6 @@ impl Lightforge {
                     let action = item.clearable.then(|| {
                         secondary("Clear", Message::ClearCache)
                             .enabled(item.bytes > 0 && !clearing)
-                            .into()
                     });
                     usage = usage.push(usage_row(
                         column![
@@ -12066,7 +12603,6 @@ impl Lightforge {
             let action = item.clearable.then(|| {
                 secondary("Clear", Message::ClearDrive(id.clone()))
                     .enabled(item.bytes > 0 && !clearing)
-                    .into()
             });
             card = card.push(usage_row(
                 text(item.label.clone()).size(theme::BODY).into(),
@@ -12275,6 +12811,24 @@ const BAND_BUTTON: f32 = 48.0;
 /// How far a held tile has to travel before it is a drag rather than a click
 /// with a shaky hand.
 const DRAG_SLOP: f32 = 6.0;
+
+/// How many frames whatever a key press opens or closes is given to be drawn
+/// before the ring stops waiting to follow it.
+const FOCUS_ENTER_FRAMES: u8 = 10;
+
+/// The scrolled page beside the Settings list, as a focus region.
+const SETTINGS_PAGE: &str = "settings";
+
+/// How far an arrow with nothing to move to scrolls the page instead.
+const FOCUS_SCROLL: f32 = 160.0;
+
+/// Ask again in a frame's time whether a menu the keyboard opened is drawn.
+fn focus_settle() -> Task<Message> {
+    // Made inside the future: a timer needs the runtime it will run on.
+    Task::perform(async { tokio::time::sleep(Duration::from_millis(16)).await }, |()| {
+        Message::FocusSettle
+    })
+}
 
 /// A tile held down in the band.
 ///
@@ -12709,10 +13263,17 @@ struct Action<'a> {
 }
 
 impl<'a> Action<'a> {
-    fn enabled(self, enabled: bool) -> button::Button<'a, Message> {
+    /// The button, pressable or not, and a place for the selection ring
+    /// named by what it sends, which is unique wherever it is drawn.
+    fn enabled(self, enabled: bool) -> Element<'a, Message> {
+        let target = focus::Target::Key(format!("{:?}", self.message));
         match enabled {
-            true => self.inner.on_press(self.message),
-            false => self.inner,
+            true => focus::ring(
+                target,
+                focus::Press::Send(self.message.clone()),
+                self.inner.on_press(self.message),
+            ),
+            false => focus::ring(target, focus::Press::Off, self.inner),
         }
     }
 
@@ -12862,6 +13423,15 @@ fn field_row<'a>(label: String, control: Element<'a, Message>) -> Element<'a, Me
         .spacing(theme::MD)
         .align_y(Alignment::Center)
         .into()
+}
+
+/// `content` as a place for the selection ring, pressed by clicking it.
+///
+/// For a control whose click is more than a message: a checkbox, a text
+/// field that should take the typing. Whether it is enabled is read off it,
+/// the way the pointer reads it. `key` has to be unique on the page.
+fn clickable<'a>(key: impl Into<String>, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    focus::ring(focus::Target::Key(key.into()), focus::Press::Click, content)
 }
 
 /// A separator between inline facts.
@@ -13493,6 +14063,98 @@ mod tests {
         let _ = app.update(Message::TileGrabbed(era.clone()));
         let _ = app.update(Message::TileDropped);
         assert_eq!(app.catalog.line_of(&app.selected.code), era);
+    }
+
+    /// The Deck's controls arrive as keys: the D-pad as arrows, A as Enter,
+    /// B as Escape. They have to reach a game and back out of a dialog with
+    /// no mouse at all.
+    #[test]
+    fn the_keyboard_alone_picks_a_game_and_closes_the_release_notes() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+        app.wizard = None;
+        app.splash = None;
+        app.update_notice = None;
+        app.screen = Screen::Dashboard;
+
+        let retail = Choice { code: ProductCode::Retail, label: "Retail".to_owned() };
+        app.choices = vec![
+            retail.clone(),
+            Choice { code: ProductCode::ClassicEra, label: "Classic Era".to_owned() },
+        ];
+        app.config.products = app
+            .choices
+            .iter()
+            .map(|c| Product::new(c.code.clone(), c.label.clone()))
+            .collect();
+        app.selected = retail;
+        let retail_line = app.catalog.line_of(&ProductCode::Retail);
+        let era = app.catalog.line_of(&ProductCode::ClassicEra);
+
+        // What a frame would have recorded: where each control was drawn,
+        // and in which layer.
+        let at = |x: f32, y: f32| iced::Rectangle { x, y, width: 56.0, height: 40.0 };
+        let send = focus::Press::Send;
+        let page = || {
+            focus::reset();
+            focus::put(focus::Target::AppMenu, at(40.0, 10.0), send(Message::ToggleAppMenu), 0);
+            focus::put(
+                focus::Target::Tile(retail_line.clone()),
+                at(110.0, 60.0),
+                send(Message::LineSelected(retail_line.clone())),
+                0,
+            );
+            focus::put(focus::Target::Tile(era.clone()), at(180.0, 60.0), send(Message::LineSelected(era.clone())), 0);
+            focus::put(focus::Target::Primary, at(980.0, 660.0), send(Message::Primary), 0);
+        };
+
+        // Release notes up, over the page: the first key lands on Got it,
+        // the page beneath is out of reach, and B closes them.
+        page();
+        focus::put(focus::Target::NotesDismiss, at(700.0, 500.0), send(Message::DismissPatchNotes), 1);
+        app.patch_notes = Some(PatchNotes {
+            release: lightforge_core::releases::Release { version: "9.9.9".to_owned(), notes: vec![] },
+            mute: false,
+        });
+        let _ = app.update(Message::FocusStep(focus::Step::Down));
+        assert_eq!(app.focus, Some(focus::Target::NotesDismiss));
+        let _ = app.update(Message::FocusStep(focus::Step::Up));
+        assert_eq!(app.focus, Some(focus::Target::NotesDismiss), "the ring left the dialog");
+        let _ = app.update(Message::FocusBack);
+        assert!(app.patch_notes.is_none(), "Escape left the notes up");
+
+        // Gone with the dialog, the ring lands on PLAY once the page is drawn.
+        page();
+        let _ = app.update(Message::FocusSettle);
+        assert_eq!(app.focus, Some(focus::Target::Primary));
+
+        // Up from the first game is the wordmark above it.
+        app.focus = Some(focus::Target::Tile(retail_line.clone()));
+        let _ = app.update(Message::FocusStep(focus::Step::Up));
+        assert_eq!(app.focus, Some(focus::Target::AppMenu));
+
+        // Enter on the wordmark opens its menu, the ring moves into it once
+        // it is drawn, and Escape brings it back to the wordmark.
+        let _ = app.update(Message::FocusPress);
+        assert!(app.app_menu_open);
+        focus::put(focus::Target::Menu("Settings"), at(40.0, 50.0), send(Message::Show(Screen::Settings)), 1);
+        let _ = app.update(Message::FocusSettle);
+        assert_eq!(app.focus, Some(focus::Target::Menu("Settings")));
+        let _ = app.update(Message::FocusBack);
+        assert!(!app.app_menu_open);
+        page();
+        let _ = app.update(Message::FocusSettle);
+        assert_eq!(app.focus, Some(focus::Target::AppMenu));
+
+        app.focus = Some(focus::Target::Tile(retail_line));
+        let _ = app.update(Message::FocusStep(focus::Step::Right));
+        let _ = app.update(Message::FocusPress);
+        assert_eq!(app.catalog.line_of(&app.selected.code), era);
+
+        // The mouse moving takes the ring away.
+        let _ = app.update(Message::FocusHidden);
+        assert!(app.focus.is_none());
     }
 
     /// A tile is a line. Removing Classic Era with its PTR tracked used to

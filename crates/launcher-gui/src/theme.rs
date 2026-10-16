@@ -15,7 +15,7 @@
 //! iced gives no cascade, so "restraint" here means type, spacing and one
 //! accent rather than effects.
 
-use iced::widget::{button, container, overlay, pick_list, scrollable, text_editor, text_input};
+use iced::widget::{button, container, scrollable, text_editor, text_input};
 use iced::{border, gradient, Background, Border, Color, Font, Radians, Shadow, Theme, Vector};
 
 // ---------------------------------------------------------------- palette --
@@ -681,23 +681,17 @@ pub fn selected(_theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-/// The branch picker, and the list it drops down.
-///
-/// iced's default is a light control, which was tolerable when the picker sat
-/// on the page and is not once it sits inside the header band. Both halves are
-/// styled: the closed control and its overlay menu are separate types, and
-/// styling only one leaves a pale list hanging off a dark button.
-pub fn picker(_theme: &Theme, status: pick_list::Status) -> pick_list::Style {
-    let hovered =
-        matches!(status, pick_list::Status::Hovered | pick_list::Status::Opened { .. });
-    pick_list::Style {
-        background: Background::Color(match hovered {
+/// A dropdown's face: the button of a picker whose list is a menu of our own,
+/// since a `pick_list` keeps its open state to itself and a keyboard can
+/// neither open it nor move through it.
+pub fn picker_button(_theme: &Theme, status: button::Status) -> button::Style {
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    button::Style {
+        background: Some(Background::Color(match hovered {
             true => RAISED,
             false => SURFACE,
-        }),
+        })),
         text_color: TEXT,
-        placeholder_color: MUTED,
-        handle_color: MUTED,
         border: Border {
             color: match hovered {
                 true => BORDER_OVER_ART,
@@ -706,21 +700,7 @@ pub fn picker(_theme: &Theme, status: pick_list::Status) -> pick_list::Style {
             width: 1.0,
             radius: RADIUS_SM.into(),
         },
-    }
-}
-
-/// The open list behind [`picker`].
-pub fn picker_menu(_theme: &Theme) -> overlay::menu::Style {
-    overlay::menu::Style {
-        background: Background::Color(SURFACE),
-        text_color: TEXT,
-        border: Border { color: BORDER, width: 1.0, radius: RADIUS_SM.into() },
-        selected_background: Background::Color(Color { a: 0.18, ..ACCENT }),
-        selected_text_color: TEXT,
-        // 0.14 fixed the software renderer's shadow damage (iced-rs/iced#2715),
-        // so a shadow here is safe again, but the menu never had one, and
-        // adding one is a design decision rather than part of this port.
-        shadow: iced::Shadow::default(),
+        ..button::Style::default()
     }
 }
 
