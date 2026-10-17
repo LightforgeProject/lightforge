@@ -652,7 +652,29 @@ fn restore_sigpipe() {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> std::process::ExitCode {
+    use lightforge_core::advice::{advise, Fix};
+
+    match run().await {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        // What returning the error from `main` printed, then what to do about
+        // it, when that is known.
+        Err(error) => {
+            eprintln!("Error: {error:?}");
+            if let Some(advice) = advise(error.as_ref()) {
+                eprintln!("\nhint: {}", advice.todo);
+                match advice.fix {
+                    Some(Fix::CopyCommand(command)) => eprintln!("      {command}"),
+                    Some(Fix::DeepScan) => eprintln!("      lightforge verify --deep --repair"),
+                    _ => {}
+                }
+            }
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<()> {
     restore_sigpipe();
     let cli = Cli::parse();
 

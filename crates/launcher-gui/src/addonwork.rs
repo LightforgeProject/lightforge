@@ -7,6 +7,8 @@
 use std::path::PathBuf;
 
 use lightforge_core::error::chain;
+
+use crate::tasks::Problem;
 use lightforge_core::addons::catalog::{Catalog, Request};
 use lightforge_core::addons::manage::{self, Event, Options, Report};
 use lightforge_core::addons::richtext;
@@ -477,11 +479,11 @@ pub async fn import(
     // than taking the newest of each.
     pinned: bool,
     tx: tokio::sync::watch::Sender<Progress>,
-) -> Result<Report, String> {
-    let collection = Collection::parse(&token).map_err(|e| chain(&e))?;
+) -> Result<Report, Problem> {
+    let collection = Collection::parse(&token).map_err(|e| Problem::of(&e))?;
     let requests = manage::requests_from(&collection);
     if requests.is_empty() {
-        return Err("that token names no addons Lightforge can install".to_owned());
+        return Err("that token names no addons Lightforge can install".into());
     }
     run(http, layout, code, requests, Mode { pinned, ..Mode::default() }, channel, tx).await
 }
@@ -493,10 +495,10 @@ pub async fn update(
     code: ProductCode,
     channel: Channel,
     tx: tokio::sync::watch::Sender<Progress>,
-) -> Result<Report, String> {
-    let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
+) -> Result<Report, Problem> {
+    let dirs = AppDirs::discover().map_err(|e| Problem::of(&e))?;
     let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
-        .map_err(|e| chain(&e))?;
+        .map_err(|e| Problem::of(&e))?;
     let requests = manage::update_requests(&ledger, channel);
 
     if requests.is_empty() {
@@ -516,10 +518,10 @@ pub async fn auto_update(
     channel: Channel,
     default_auto: bool,
     tx: tokio::sync::watch::Sender<Progress>,
-) -> Result<Option<Report>, String> {
-    let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
+) -> Result<Option<Report>, Problem> {
+    let dirs = AppDirs::discover().map_err(|e| Problem::of(&e))?;
     let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
-        .map_err(|e| chain(&e))?;
+        .map_err(|e| Problem::of(&e))?;
     let requests = manage::auto_update_requests(&ledger, channel, default_auto);
 
     if requests.is_empty() {
@@ -559,7 +561,7 @@ async fn run(
     mode: Mode,
     channel: Channel,
     tx: tokio::sync::watch::Sender<Progress>,
-) -> Result<Report, String> {
+) -> Result<Report, Problem> {
     let options = Options {
         reinstall: mode.reinstall,
         ..options(&layout, &code, mode.pinned, channel)
@@ -595,7 +597,7 @@ async fn run(
 
     manage::install_all(&http, catalog.as_ref(), &requests, &options, on_event)
         .await
-        .map_err(|e| chain(&e))
+        .map_err(|e| Problem::of(&e))
 }
 
 /// Search every provider that can answer.
@@ -652,7 +654,7 @@ pub async fn install_one(
     id: String,
     channel: Channel,
     tx: tokio::sync::watch::Sender<Progress>,
-) -> Result<Report, String> {
+) -> Result<Report, Problem> {
     run(
         http,
         layout,
@@ -783,7 +785,7 @@ pub async fn install_version(
     id: String,
     file_id: String,
     tx: tokio::sync::watch::Sender<Progress>,
-) -> Result<Report, String> {
+) -> Result<Report, Problem> {
     run(
         http,
         layout,
@@ -811,10 +813,10 @@ pub async fn reinstall_one(
     id: String,
     channel: Channel,
     tx: tokio::sync::watch::Sender<Progress>,
-) -> Result<Report, String> {
-    let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
+) -> Result<Report, Problem> {
+    let dirs = AppDirs::discover().map_err(|e| Problem::of(&e))?;
     let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
-        .map_err(|e| chain(&e))?;
+        .map_err(|e| Problem::of(&e))?;
     let pinned_file = ledger.find(&provider, &id).and_then(|record| record.pinned.clone());
 
     run(

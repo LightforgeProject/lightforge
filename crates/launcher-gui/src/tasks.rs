@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use iced::widget::image::Handle;
 use lightforge_core::backup;
+use lightforge_core::advice::{advise, Advice};
 use lightforge_core::error::chain;
 use lightforge_core::assets::{Manifest, Pipeline};
 use lightforge_core::config::Config;
@@ -28,6 +29,46 @@ use lightforge_core::tact::version::{self, Region, Version};
 use lightforge_core::tweaks::{HostTools, Tweaks};
 
 use crate::art::Art;
+
+/// An error on its way to the screen: what went wrong, and what to do about
+/// it when that is known.
+///
+/// Built with [`Problem::of`] while the error still has its type, because
+/// that is the only point at which [`advise`](lightforge_core::advice::advise)
+/// can tell a full drive from a dropped connection. A plain `String` converts
+/// into one with no advice, so a path that has not been taught any yet still
+/// reports exactly what it did before.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Problem {
+    pub message: String,
+    pub advice: Option<Advice>,
+}
+
+impl Problem {
+    pub fn of(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self { message: chain(error), advice: advise(error) }
+    }
+}
+
+impl From<String> for Problem {
+    fn from(message: String) -> Self {
+        Self { message, advice: None }
+    }
+}
+
+impl From<&str> for Problem {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+
+/// The message alone. The advice is for the screen; the status history and
+/// a bug report want what actually went wrong.
+impl std::fmt::Display for Problem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
 
 /// One product's situation, as of a refresh.
 #[derive(Debug, Clone)]
@@ -549,7 +590,7 @@ pub async fn download(
     optional_tags: Vec<String>,
     cancel: Cancel,
     tx: tokio::sync::watch::Sender<TransferState>,
-) -> Result<Summary, String> {
+) -> Result<Summary, Problem> {
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
 
     // The download runs on its own thread with its own runtime, and the result
@@ -566,7 +607,7 @@ pub async fn download(
             let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
                 Ok(runtime) => runtime,
                 Err(e) => {
-                    let _ = done_tx.send(Err(chain(&e)));
+                    let _ = done_tx.send(Err(Problem::of(&e)));
                     return;
                 }
             };
@@ -575,7 +616,7 @@ pub async fn download(
                 // Deliberately not the app's shared client: this runtime is
                 // built here and torn down with the thread, and a reqwest
                 // client's connections belong to the runtime that opened them.
-                let http = Http::new().map_err(|e| chain(&e))?;
+                let http = Http::new().map_err(|e| Problem::of(&e))?;
                 let dest = layout.wow_install(&code);
                 // The library's own path, not the default one. `.product.db`
                 // records where Battle.net should look, and a product on an
@@ -652,11 +693,11 @@ pub async fn download(
 
                 install::run(&http, &dest, &code, &options, &cancel, on_event)
                     .await
-                    .map_err(|e| chain(&e))
+                    .map_err(|e| Problem::of(&e))
             });
             let _ = done_tx.send(result);
         })
-        .map_err(|e| chain(&e))?;
+        .map_err(|e| Problem::of(&e))?;
 
     done_rx.await.map_err(|_| "the download thread stopped unexpectedly".to_owned())?
 }
@@ -759,8 +800,8 @@ pub async fn preflight(
     code: ProductCode,
     downloads: SharedDownloads,
     runs: Runs,
-) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+) -> Result<(), Problem> {
+    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         // The same build the launch will use. The prefix is shared, so
         // clearing it with one Proton and then launching under another is how
         // you get an unasked-for prefix upgrade between the two.
@@ -774,7 +815,7 @@ pub async fn preflight(
         let report = Preflight::new(config.prefix_user.clone())
             .with_managed(config.managed_products())
             .run(&runner, &layout, Some(&code), &mut guard)
-            .map_err(|e| chain(&e))?;
+            .map_err(|e| Problem::of(&e))?;
         // The report is for the CLI, which prints it. Here the outcome is
         // binary, the prefix is ready or the launch does not happen, but the
         // stage timings are worth tracing: a launch that feels stuck is one
@@ -794,7 +835,7 @@ pub async fn preflight(
         Ok(())
     })
     .await
-    .map_err(|e| chain(&e))?
+    .map_err(|e| Problem::of(&e))?
 }
 
 /// How long the game itself gets to appear in the prefix before the watch
@@ -931,8 +972,8 @@ fn back_up_before_launch(layout: &Layout, code: &ProductCode) {
 /// The fallback path, nothing recognisable ever appeared, keeps the old
 /// behaviour, because a launch that produced no game is exactly the case where
 /// the child's exit status is the only thing worth reporting.
-pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
+pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Problem> {
+    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         // The install's native path, *not* the `C:\Program Files (x86)`
         // symlink. This is half of what makes the in-game shop work, and the
         // other half is [`Layout::wow_drive`]. Wine resolves a Unix path to
@@ -944,7 +985,7 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
         let flavor = layout.wow_install(&code).join(&*code.install_dir());
         let exe = lightforge_core::paths::game_executable(&flavor, &code);
         if !exe.is_file() {
-            return Err(format!("no game at {}", exe.display()));
+            return Err(format!("no game at {}", exe.display()).into());
         }
 
         back_up_before_launch(&layout, &code);
@@ -981,7 +1022,7 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
         // What the prefix held before the click, so a session already running
         // under another launcher is not mistaken for this one's.
         let before = lightforge_core::preflight::games_running(&layout);
-        let mut child = launch.spawn().map_err(|e| chain(&e))?;
+        let mut child = launch.spawn().map_err(|e| Problem::of(&e))?;
         crate::trace::mark(format!("launch: spawned {}", exe.display()));
 
         let watch = exe.file_name().map(|n| n.to_string_lossy().into_owned());
@@ -1022,7 +1063,7 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
         }
     })
     .await
-    .map_err(|e| chain(&e))?
+    .map_err(|e| Problem::of(&e))?
 }
 
 /// What [`watch_for`] saw.
@@ -1127,8 +1168,8 @@ fn settle(
 
 /// Wait the Proton child out and report what it said, the old contract, kept
 /// for the launches where nothing better is knowable.
-fn reap(mut child: std::process::Child) -> Result<String, String> {
-    let status = child.wait().map_err(|e| chain(&e))?;
+fn reap(mut child: std::process::Child) -> Result<String, Problem> {
+    let status = child.wait().map_err(|e| Problem::of(&e))?;
     Ok(format!("game exited ({status})"))
 }
 
@@ -1148,8 +1189,8 @@ pub async fn launch_via_battle_net(
     user: String,
     family: Option<String>,
     minimized: bool,
-) -> Result<Handoff, String> {
-    tokio::task::spawn_blocking(move || {
+) -> Result<Handoff, Problem> {
+    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch, Readiness};
         use lightforge_core::preflight;
 
@@ -1199,7 +1240,7 @@ pub async fn launch_via_battle_net(
             let tools = HostTools::detect();
             let wrappers = config_tweaks().wrappers(&tools);
             battlenet::launch_wrapped(&runner, &layout, &how, &wrappers)
-                .map_err(|e| chain(&e))?;
+                .map_err(|e| Problem::of(&e))?;
 
             if battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT)
                 == Readiness::NeedsAttention
@@ -1225,7 +1266,7 @@ pub async fn launch_via_battle_net(
         // anything but WoW came out of the client's own catalogue;
         // `Launch::command` falls back to the compiled-in table without one.
         let launch = Launch::Product { code: code.clone(), exec: family };
-        battlenet::launch(&runner, &layout, &launch).map_err(|e| chain(&e))?;
+        battlenet::launch(&runner, &layout, &launch).map_err(|e| Problem::of(&e))?;
 
         Ok(
             match preflight::wait_for_game_start(&layout, &before, HANDOFF_TIMEOUT) {
@@ -1235,7 +1276,7 @@ pub async fn launch_via_battle_net(
         )
     })
     .await
-    .map_err(|e| chain(&e))?
+    .map_err(|e| Problem::of(&e))?
 }
 
 /// Open the client's install flow for a game, dialog and all.
@@ -1260,8 +1301,8 @@ pub async fn install_via_battle_net(
     user: String,
     uid: String,
     label: String,
-) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
+) -> Result<String, Problem> {
+    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch};
 
         let runner = runner_for(&layout, &code, Runs::BattleNet)?;
@@ -1275,12 +1316,12 @@ pub async fn install_via_battle_net(
         );
 
         battlenet::launch(&runner, &layout, &Launch::InstallFlow { uid })
-            .map_err(|e| chain(&e))?;
+            .map_err(|e| Problem::of(&e))?;
 
         Ok(format!("Battle.net is asking where to install {label}"))
     })
     .await
-    .map_err(|e| chain(&e))?
+    .map_err(|e| Problem::of(&e))?
 }
 
 /// What came of a hand-off.
@@ -1317,13 +1358,13 @@ const HANDOFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180)
 ///
 /// Split from the launch so the screen can say which game is running in
 /// between, instead of "handing off…" for the length of a session.
-pub async fn await_game_exit(layout: Layout, game: GameProcess) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
+pub async fn await_game_exit(layout: Layout, game: GameProcess) -> Result<String, Problem> {
+    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         lightforge_core::preflight::wait_for_game_exit(&layout, game.pid);
         Ok(format!("{} exited", game.name))
     })
     .await
-    .map_err(|e| chain(&e))?
+    .map_err(|e| Problem::of(&e))?
 }
 
 /// What Battle.net reports as installed, keyed by product code.
@@ -1421,8 +1462,8 @@ pub async fn open_battle_net(
     layout: Layout,
     code: ProductCode,
     user: String,
-) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
+) -> Result<String, Problem> {
+    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch};
 
         let runner = runner_for(&layout, &code, Runs::BattleNet)?;
@@ -1434,11 +1475,11 @@ pub async fn open_battle_net(
             &user,
             &battlenet::window_state_tweaks(false),
         );
-        battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| chain(&e))?;
+        battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| Problem::of(&e))?;
         Ok("Battle.net opening".to_owned())
     })
     .await
-    .map_err(|e| chain(&e))?
+    .map_err(|e| Problem::of(&e))?
 }
 
 /// The Proton build a product launches under, with its per-product caches.
@@ -1717,15 +1758,15 @@ pub async fn uninstall(
     layout: Layout,
     code: ProductCode,
     copied: std::sync::Arc<std::sync::atomic::AtomicU64>,
-) -> Result<u64, String> {
+) -> Result<u64, Problem> {
     use lightforge_core::tact::{productdb, reclaim, uninstall};
 
     let alive = layout.clone();
     let busy = tokio::task::spawn_blocking(move || lightforge_core::preflight::scan(&alive))
         .await
-        .map_err(|e| chain(&e))?;
+        .map_err(|e| Problem::of(&e))?;
     if let Some(process) = busy.first() {
-        return Err(format!("close {} first — the game files are in use", process.name));
+        return Err(format!("close {} first — the game files are in use", process.name).into());
     }
 
     let install = layout.wow_install(&code);
@@ -1733,7 +1774,7 @@ pub async fn uninstall(
         .library(&code)
         .map(|library| library.windows_wow_path())
         .unwrap_or_else(|| lightforge_core::paths::WINDOWS_WOW_PATH.to_owned());
-    let plan = uninstall::plan(&install, &code).map_err(|e| chain(&e))?;
+    let plan = uninstall::plan(&install, &code).map_err(|e| Problem::of(&e))?;
     // A reclaim that cannot be planned is skipped, not fatal: the uninstall
     // itself is still exactly what was asked for.
     let reclaim = match &http {
@@ -1741,21 +1782,21 @@ pub async fn uninstall(
         None => None,
     };
 
-    tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         let removed = uninstall::execute(&install, &code, &plan, &windows_path)
-            .map_err(|e| chain(&e))?;
+            .map_err(|e| Problem::of(&e))?;
         let reclaimed = match &reclaim {
             Some(reclaim) => reclaim::execute(&install, reclaim, |bytes| {
                 copied.store(bytes, std::sync::atomic::Ordering::Relaxed)
             })
-            .map_err(|e| chain(&e))?,
+            .map_err(|e| Problem::of(&e))?,
             None => 0,
         };
-        productdb::unregister(&layout.agent_dir(), code.as_str()).map_err(|e| chain(&e))?;
+        productdb::unregister(&layout.agent_dir(), code.as_str()).map_err(|e| Problem::of(&e))?;
         Ok(removed.bytes + reclaimed)
     })
     .await
-    .map_err(|e| chain(&e))?
+    .map_err(|e| Problem::of(&e))?
 }
 
 /// What freeing a store's unused game data would do: data no installed or

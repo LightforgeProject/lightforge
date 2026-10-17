@@ -62,7 +62,7 @@ use lightforge_core::tact::download::Cancel;
 use lightforge_core::tweaks::{GraphicsApi, HostTools, Preset, Tweaks};
 
 use art::Art;
-use tasks::{Refreshed, SharedDownloads, TransferState};
+use tasks::{Problem, Refreshed, SharedDownloads, TransferState};
 
 /// Where a player manages their subscription, per the spec.
 const ACCOUNT_URL: &str = "https://account.battle.net/games";
@@ -540,19 +540,19 @@ enum Message {
     /// the branch was on offer but not configured.
     BranchSelected(BranchChoice),
     /// Pre-flight finished; `Launch` says what it was clearing the way for.
-    PreflightDone(Launch, Result<(), String>),
+    PreflightDone(Launch, Result<(), Problem>),
     /// Diagnostic only: subscribed to solely under `LIGHTFORGE_TRACE=frames`.
     ResizeTraced(iced::Size),
     /// The optimistic, cache-only paint that precedes [`Message::Themed`].
     CachedTheme(ProductCode, Box<tasks::Themed>),
     Primary,
     Tick,
-    Downloaded(ProductCode, Result<Complete, String>),
+    Downloaded(ProductCode, Result<Complete, Problem>),
     CloseRequested(iced::window::Id),
-    Launched(Result<String, String>),
+    Launched(Result<String, Problem>),
     /// A hand-off ran to the point where there is something to say: the
     /// game is up, the client needs a person, or nothing started.
-    HandoffStarted(Result<tasks::Handoff, String>),
+    HandoffStarted(Result<tasks::Handoff, Problem>),
     BattleNet,
     ManageSubscription,
     OpenFiles,
@@ -663,7 +663,7 @@ enum Message {
     /// Re-read the machine after the user has installed the libraries, so the
     /// row clears without restarting the app.
     RecheckRuntime,
-    SetupFinished(Result<Box<SetupStatus>, String>),
+    SetupFinished(Result<Box<SetupStatus>, Problem>),
     PinDefaultProton(ProtonChoice),
     /// The build Battle.net and Agent launch under.
     PinBattleNetProton(ProtonChoice),
@@ -692,7 +692,7 @@ enum Message {
     /// Install the chosen version.
     InstallProton,
     /// That build finished, or did not.
-    ProtonInstalled(Result<(), String>),
+    ProtonInstalled(Result<(), Problem>),
     /// Delete one managed build, by version.
     RemoveProton(String),
     ProtonRemoved(Result<String, String>),
@@ -711,7 +711,7 @@ enum Message {
     /// Launch anyway, under a build older than the one that built the prefix.
     DowngradeConfirm,
     DowngradeCancel,
-    Uninstalled(ProductCode, Result<u64, String>),
+    Uninstalled(ProductCode, Result<u64, Problem>),
     ClearCache,
     CacheCleared(Result<u64, String>),
     OpenLibrary,
@@ -741,7 +741,7 @@ enum Message {
     TokenChanged(String),
     ImportToken,
     UpdateAddons,
-    AddonsFinished(Result<Box<lightforge_core::addons::Report>, String>),
+    AddonsFinished(Result<Box<lightforge_core::addons::Report>, Problem>),
     RemoveAddon(String, String),
     /// First click on a Remove: arm it. The second one removes.
     ArmRemoveAddon(String, String),
@@ -825,7 +825,7 @@ enum Message {
     /// Update whatever updates itself, for the product on screen.
     AutoUpdateAddons,
     /// `None` when there was nothing to update.
-    AutoUpdateFinished(Result<Option<Box<lightforge_core::addons::Report>>, String>),
+    AutoUpdateFinished(Result<Option<Box<lightforge_core::addons::Report>>, Problem>),
     SettingsTab(SettingsTab),
     SearchChanged(String),
     RunSearch,
@@ -1679,7 +1679,7 @@ struct Lightforge {
     downloads: SharedDownloads,
     busy: bool,
     status: String,
-    error: Option<String>,
+    error: Option<Problem>,
     /// The last few status lines, oldest first, for a bug report to carry.
     history: std::collections::VecDeque<String>,
     /// What was last reported and when, so the same text cannot go out twice
@@ -2382,7 +2382,7 @@ impl Lightforge {
         // the same drive.
         if !matches!(what, Launch::Client) {
             if let Some(drive) = self.offline_drive(&self.selected.code) {
-                self.error = Some(format!("{drive} is not mounted"));
+                self.error = Some(format!("{drive} is not mounted").into());
                 return Task::none();
             }
         }
@@ -2391,7 +2391,7 @@ impl Lightforge {
         // is about to open. Downloads are not refused here: pre-flight pauses
         // them, and the launch waits for them to come to rest.
         if let Some(what) = self.maintenance() {
-            self.error = Some(format!("wait for {what} to finish first"));
+            self.error = Some(format!("wait for {what} to finish first").into());
             return Task::none();
         }
 
@@ -2595,8 +2595,8 @@ impl Lightforge {
     fn handoff_panel(&self) -> Element<'_, Message> {
         let mut left = column![].spacing(theme::SM).width(Length::Fill);
         left = left.push(match &self.error {
-            Some(e) => text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR),
-            None => text(self.status.clone()).size(theme::LABEL).color(theme::MUTED),
+            Some(e) => problem(e),
+            None => text(self.status.clone()).size(theme::LABEL).color(theme::MUTED).into(),
         });
 
         left = self.scan_progress(left);
@@ -2799,14 +2799,14 @@ impl Lightforge {
         // The panel above should never offer this, but the download path is
         // the one that writes to disk, so it checks for itself.
         if self.kind_of(&code) == Kind::HandOff {
-            self.error = Some(format!("{label} is installed through Battle.net"));
+            self.error = Some(format!("{label} is installed through Battle.net").into());
             return Task::none();
         }
         // The panel holds this product when its drive is away, but the queue
         // is also restored from disk and resumed without anyone pressing
         // anything, so the check that actually protects the files is here.
         if let Some(drive) = self.offline_drive(&code) {
-            self.error = Some(format!("{drive} is not mounted"));
+            self.error = Some(format!("{drive} is not mounted").into());
             return Task::none();
         }
         self.error = None;
@@ -3619,7 +3619,7 @@ impl Lightforge {
                 // product to show and no way back to this panel.
                 if going.len() >= self.choices.len() {
                     self.error =
-                        Some("that is the only game left — add another first".to_owned());
+                        Some("that is the only game left — add another first".into());
                     return Task::none();
                 }
 
@@ -3706,7 +3706,7 @@ impl Lightforge {
                     .map(|a| a.url.clone())
                     .unwrap_or_else(|| lightforge_core::update::RELEASES_PAGE.to_owned());
                 if let Err(e) = open::that_detached(&url) {
-                    self.error = Some(format!("{url}: {e}"));
+                    self.error = Some(format!("{url}: {e}").into());
                 }
                 self.update(Message::DismissUpdate)
             }
@@ -3840,7 +3840,7 @@ impl Lightforge {
                         self.error = Some(format!(
                             "{label} was cancelled, but its files could not be \
                              removed: {e}"
-                        ));
+                        ).into());
                     }
                 }
                 Task::batch([
@@ -3901,7 +3901,7 @@ impl Lightforge {
 
             Message::ManageSubscription => {
                 if let Err(e) = tasks::open_url(ACCOUNT_URL) {
-                    self.error = Some(e);
+                    self.error = Some(e.into());
                 }
                 Task::none()
             }
@@ -3910,7 +3910,7 @@ impl Lightforge {
                 let dir = self.layout.product_dir(&self.selected.code);
                 let dir = if dir.is_dir() { dir } else { self.layout.games_root() };
                 if let Err(e) = tasks::open_path(dir) {
-                    self.error = Some(e);
+                    self.error = Some(e.into());
                 }
                 Task::none()
             }
@@ -3952,7 +3952,7 @@ impl Lightforge {
 
             Message::OpenLink(url) => {
                 if let Err(e) = tasks::open_url(url) {
-                    self.error = Some(e);
+                    self.error = Some(e.into());
                 }
                 self.close_panels();
                 Task::none()
@@ -3960,7 +3960,7 @@ impl Lightforge {
 
             Message::OpenArticle(url) => {
                 if let Err(e) = tasks::open_url(&url) {
-                    self.error = Some(e);
+                    self.error = Some(e.into());
                 }
                 Task::none()
             }
@@ -4139,7 +4139,7 @@ impl Lightforge {
 
             Message::BattleNetLimitWritten(result) => {
                 if let Err(e) = result {
-                    self.error = Some(e);
+                    self.error = Some(e.into());
                 }
                 Task::none()
             }
@@ -4161,7 +4161,7 @@ impl Lightforge {
                     return Task::none();
                 };
                 if let Err(e) = manage::set_channel(&options, &provider, &id, choice.0) {
-                    self.error = Some(chain(&e));
+                    self.error = Some(Problem::of(&e));
                 }
                 Task::perform(
                     addonwork::list(self.layout.clone(), self.selected.code.clone()),
@@ -4184,7 +4184,7 @@ impl Lightforge {
                     return Task::none();
                 };
                 if let Err(e) = manage::set_ignored(&options, &provider, &id, ignored) {
-                    self.error = Some(chain(&e));
+                    self.error = Some(Problem::of(&e));
                 }
                 // Re-list rather than patch the row in place: the ledger on
                 // disk is the truth the rest of the page is drawn from.
@@ -4204,7 +4204,7 @@ impl Lightforge {
                     return Task::none();
                 };
                 if let Err(e) = manage::set_auto_update(&options, &provider, &id, choice) {
-                    self.error = Some(chain(&e));
+                    self.error = Some(Problem::of(&e));
                 }
                 Task::perform(
                     addonwork::list(self.layout.clone(), self.selected.code.clone()),
@@ -4257,7 +4257,7 @@ impl Lightforge {
                         )
                     }
                     Err(e) => {
-                        self.error = Some(e);
+                        self.error = Some(e.into());
                         Task::none()
                     }
                 }
@@ -4498,7 +4498,7 @@ impl Lightforge {
                     return Task::none();
                 };
                 if let Err(e) = manage::set_pinned(&options, &provider, &id, file_id) {
-                    self.error = Some(chain(&e));
+                    self.error = Some(Problem::of(&e));
                 }
                 Task::perform(
                     addonwork::list(self.layout.clone(), self.selected.code.clone()),
@@ -4723,7 +4723,7 @@ impl Lightforge {
                     return Task::none();
                 }
                 if let Some(problem) = &listing.problem {
-                    self.error = Some(format!("the addon list cannot be read: {problem}"));
+                    self.error = Some(format!("the addon list cannot be read: {problem}").into());
                 }
                 self.addons = *listing;
                 Task::none()
@@ -4819,7 +4819,7 @@ impl Lightforge {
                         self.export_token = token;
                         self.status = "export ready".to_owned();
                     }
-                    Err(e) => self.error = Some(e),
+                    Err(e) => self.error = Some(e.into()),
                 }
                 Task::none()
             }
@@ -4843,7 +4843,7 @@ impl Lightforge {
 
             Message::OpenAddonsDir => {
                 if let Err(e) = tasks::open_path(self.addons.dir.clone()) {
-                    self.error = Some(e);
+                    self.error = Some(e.into());
                 }
                 Task::none()
             }
@@ -4867,7 +4867,7 @@ impl Lightforge {
             Message::AddonRemoved(result) => {
                 match result {
                     Ok(folders) => self.status = format!("removed {}", folders.join(", ")),
-                    Err(e) => self.error = Some(e),
+                    Err(e) => self.error = Some(e.into()),
                 }
                 Task::perform(
                     addonwork::list(self.layout.clone(), self.selected.code.clone()),
@@ -4877,7 +4877,7 @@ impl Lightforge {
 
             Message::OpenUrl(url) => {
                 if let Err(e) = tasks::open_url(&url) {
-                    self.error = Some(e);
+                    self.error = Some(e.into());
                 }
                 Task::none()
             }
@@ -4975,7 +4975,7 @@ impl Lightforge {
                         self.measure_storage()
                     }
                     Err(e) => {
-                        self.error = Some(e);
+                        self.error = Some(e.into());
                         Task::none()
                     }
                 }
@@ -4993,7 +4993,7 @@ impl Lightforge {
                     .filter(|l| self.drive_states.get(&l.id) == Some(&library::State::Missing))
                     .map(|l| l.label.clone())
                 {
-                    self.error = Some(format!("{drive} is not mounted"));
+                    self.error = Some(format!("{drive} is not mounted").into());
                     return Task::none();
                 }
                 for library in &mut self.config.libraries {
@@ -5021,7 +5021,7 @@ impl Lightforge {
                         self.measure_storage()
                     }
                     Err(e) => {
-                        self.error = Some(e);
+                        self.error = Some(e.into());
                         Task::none()
                     }
                 }
@@ -5063,11 +5063,11 @@ impl Lightforge {
                 // else may write the store meanwhile, and the client may not
                 // have it open. `pump` and pre-flight both hold while it runs.
                 if let Some(what) = self.store_writer() {
-                    self.error = Some(format!("wait for {what} to finish first"));
+                    self.error = Some(format!("wait for {what} to finish first").into());
                     return Task::none();
                 }
                 if self.launching.is_some() {
-                    self.error = Some("close the game first".to_owned());
+                    self.error = Some("close the game first".into());
                     return Task::none();
                 }
                 let total = match self.unused.get(&id) {
@@ -5112,7 +5112,7 @@ impl Lightforge {
                         .map(Path::to_path_buf)
                         .unwrap_or_else(|| library.games().to_path_buf());
                     if let Err(e) = tasks::open_path(path) {
-                        self.error = Some(e);
+                        self.error = Some(e.into());
                     }
                 }
                 Task::none()
@@ -5172,11 +5172,11 @@ impl Lightforge {
                 // Any writer, not only this product's own: the store is shared,
                 // and a reclaim rewrites archives another flavour is writing.
                 if let Some(what) = self.store_writer() {
-                    self.error = Some(format!("wait for {what} to finish first"));
+                    self.error = Some(format!("wait for {what} to finish first").into());
                     return Task::none();
                 }
                 if self.launching.is_some() {
-                    self.error = Some("close the game first".to_owned());
+                    self.error = Some("close the game first".into());
                     return Task::none();
                 }
                 let Some(dialog) = self.uninstall_dialog.as_mut() else {
@@ -5254,7 +5254,7 @@ impl Lightforge {
                         .unwrap_or(root),
                 };
                 if let Err(e) = tasks::open_path(dir) {
-                    self.error = Some(e);
+                    self.error = Some(e.into());
                 }
                 Task::none()
             }
@@ -5275,7 +5275,7 @@ impl Lightforge {
                         self.reload(self.selected.code.clone()),
                     ]),
                     Err(e) => {
-                        self.error = Some(e);
+                        self.error = Some(e.into());
                         Task::none()
                     }
                 }
@@ -5413,7 +5413,7 @@ impl Lightforge {
                 }
                 match result {
                     Ok(statuses) => self.updates = statuses,
-                    Err(e) => self.error = Some(e),
+                    Err(e) => self.error = Some(e.into()),
                 }
                 Task::none()
             }
@@ -6109,7 +6109,7 @@ impl Lightforge {
                             }
                         };
                     }
-                    Err(e) => self.error = Some(e),
+                    Err(e) => self.error = Some(e.into()),
                 }
                 Task::none()
             }
@@ -6120,11 +6120,11 @@ impl Lightforge {
                 // may be writing the store, and the client may not have it
                 // open.
                 if let Some(what) = self.store_writer() {
-                    self.error = Some(format!("wait for {what} to finish first"));
+                    self.error = Some(format!("wait for {what} to finish first").into());
                     return Task::none();
                 }
                 if self.launching.is_some() {
-                    self.error = Some("close the game first".to_owned());
+                    self.error = Some("close the game first".into());
                     return Task::none();
                 }
                 self.error = None;
@@ -6158,12 +6158,12 @@ impl Lightforge {
                         .any(|d| matches!(d.stage, Stage::Running { .. } | Stage::Queued));
                 if transferring {
                     self.error = Some(
-                        "pause downloads first — they write to the files being checked".to_owned(),
+                        "pause downloads first — they write to the files being checked".into(),
                     );
                     return Task::none();
                 }
                 if let Some(what) = self.maintenance() {
-                    self.error = Some(format!("wait for {what} to finish first"));
+                    self.error = Some(format!("wait for {what} to finish first").into());
                     return Task::none();
                 }
                 self.scan_for = Some(self.selected.code.clone());
@@ -6194,7 +6194,7 @@ impl Lightforge {
                         self.pump()
                     }
                     Err(e) => {
-                        self.error = Some(e);
+                        self.error = Some(e.into());
                         self.pump()
                     }
                     Ok(report) if report.is_healthy() => {
@@ -6265,7 +6265,7 @@ impl Lightforge {
                     }
                     Err(tasks::Unrepaired::Failed(e)) => {
                         self.owed_repair = None;
-                        self.error = Some(e);
+                        self.error = Some(e.into());
                         self.pump()
                     }
                 }
@@ -6278,7 +6278,7 @@ impl Lightforge {
                 let scanned = self.scan_for.take().unwrap_or_else(|| self.selected.code.clone());
                 match *result {
                     Err(e) => {
-                        self.error = Some(e);
+                        self.error = Some(e.into());
                         self.pump()
                     }
                     Ok(scan) => {
@@ -6303,7 +6303,7 @@ impl Lightforge {
 
             Message::ClearShaderCache => {
                 let Some(dirs) = self.dirs.as_ref() else {
-                    self.error = Some("no cache directory available".to_owned());
+                    self.error = Some("no cache directory available".into());
                     return Task::none();
                 };
                 // Per product, so this cannot take another product's shaders
@@ -6315,7 +6315,7 @@ impl Lightforge {
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                         self.status = "no shader cache to clear".to_owned()
                     }
-                    Err(e) => self.error = Some(format!("{}: {e}", dir.display())),
+                    Err(e) => self.error = Some(format!("{}: {e}", dir.display()).into()),
                 }
                 Task::none()
             }
@@ -6526,7 +6526,7 @@ impl Lightforge {
         // drive may have gone away while the user read the size.
         if let Some(target) = dialog.target() {
             if let Err(e) = self.target_install(&dialog.code, &target.id) {
-                self.error = Some(e);
+                self.error = Some(e.into());
                 return Task::none();
             }
         }
@@ -6839,11 +6839,11 @@ impl Lightforge {
             return;
         }
         let Some(dirs) = self.dirs.as_ref() else {
-            self.error = Some("no config directory available".to_owned());
+            self.error = Some("no config directory available".into());
             return;
         };
         if let Err(e) = self.config.save(&dirs.config_file()) {
-            self.error = Some(chain(&e));
+            self.error = Some(Problem::of(&e));
         }
     }
 
@@ -8153,7 +8153,7 @@ impl Lightforge {
             None => STEAM_KEYBOARD.to_owned(),
         };
         if let Err(e) = tasks::open_url(&url) {
-            self.error = Some(e);
+            self.error = Some(e.into());
         }
     }
 
@@ -8163,7 +8163,7 @@ impl Lightforge {
             return;
         }
         if let Err(e) = tasks::open_url(STEAM_KEYBOARD_CLOSE) {
-            self.error = Some(e);
+            self.error = Some(e.into());
         }
     }
 
@@ -9085,7 +9085,7 @@ impl Lightforge {
         }
 
         left = left.push(match (&self.error, action) {
-            (Some(e), _) => text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR),
+            (Some(e), _) => problem(e),
             // The drive outranks whatever the last refresh had to say: a
             // "latest 11.2.7" under a game that cannot be started is the
             // wrong fact to be reading.
@@ -9093,8 +9093,9 @@ impl Lightforge {
                 "{drive} is not mounted — the game is still on it, untouched"
             ))
             .size(theme::LABEL)
-            .color(theme::ERROR),
-            (None, _) => text(self.status.clone()).size(theme::LABEL).color(theme::MUTED),
+            .color(theme::ERROR)
+            .into(),
+            (None, _) => text(self.status.clone()).size(theme::LABEL).color(theme::MUTED).into(),
         });
 
         left = self.scan_progress(left);
@@ -9352,7 +9353,7 @@ impl Lightforge {
             .map(Element::from),
         );
         if let Some(e) = &self.error {
-            body = body.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
+            body = body.push(problem(e));
         }
 
         self.page(
@@ -10413,7 +10414,7 @@ impl Lightforge {
             );
         }
         if let Some(e) = &self.error {
-            body = body.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
+            body = body.push(problem(e));
         }
 
         body = body.push(match self.addon_tab {
@@ -11579,8 +11580,7 @@ impl Lightforge {
         // goes where it is useful rather than being thrown away.
         let mut content = column![].spacing(theme::MD).width(Length::Fill);
         if let Some(e) = &self.error {
-            content =
-                content.push(text(format!("⚠ {e}")).size(theme::LABEL).color(theme::ERROR));
+            content = content.push(problem(e));
         }
         // Storage and Proton name each of their own groups, Drives and Add
         // a drive; Games and their Proton, and Builds, so an outer heading
@@ -14617,6 +14617,28 @@ fn secondary(label: &str, message: Message) -> Action<'static> {
     }
 }
 
+/// An error as the user sees it: what went wrong, what to do about it, and
+/// the one button that does it, when there is one.
+fn problem(problem: &Problem) -> Element<'_, Message> {
+    use lightforge_core::advice::Fix;
+
+    let mut body = column![text(format!("⚠ {}", problem.message)).size(theme::LABEL).color(theme::ERROR)]
+        .spacing(theme::XS);
+    let Some(advice) = &problem.advice else { return body.into() };
+    body = body.push(text(advice.todo.clone()).size(theme::LABEL).color(theme::TEXT));
+
+    let fix = advice.fix.as_ref().map(|fix| match fix {
+        Fix::DeepScan => ("Run Deep Scan", Message::DeepScan),
+        Fix::ProtonSettings => ("Open Proton settings", Message::ShowSettingsTab(SettingsTab::Proton)),
+        Fix::StorageSettings => ("Open Storage settings", Message::ShowSettingsTab(SettingsTab::Storage)),
+        Fix::CopyCommand(command) => ("Copy the command", Message::CopyRuntimeCommand(command.clone())),
+    });
+    if let Some((label, message)) = fix {
+        body = body.push(secondary(label, message).keyed(format!("problem fix {label}"), true));
+    }
+    body.into()
+}
+
 /// A heading over a hairline, then its body, Settings' unit of grouping.
 fn section<'a>(title: impl Into<String>, body: Element<'a, Message>) -> Element<'a, Message> {
     column![
@@ -15343,7 +15365,7 @@ mod tests {
         // restored and resumed without anyone pressing the button.
         let _ = app.enqueue();
         assert!(app.queue.is_empty(), "a download was queued onto a drive that is not there");
-        assert_eq!(app.error.as_deref(), Some("nvme2 is not mounted"));
+        assert_eq!(app.error.as_ref().map(|e| e.message.as_str()), Some("nvme2 is not mounted"));
     }
 
     /// Dragging a tile moves its whole line, branches and all, and only in
@@ -15618,7 +15640,7 @@ mod tests {
         );
         // Only the save complains, and only because this harness has no
         // config directory, the removal itself was not refused.
-        assert_ne!(app.error.as_deref(), Some("that is the only game left — add another first"));
+        assert_ne!(app.error.as_ref().map(|e| e.message.as_str()), Some("that is the only game left — add another first"));
     }
 
     /// The header cannot be emptied, and a line is now the unit, so the last
@@ -15645,7 +15667,7 @@ mod tests {
         let _ = app.update(Message::RemoveProduct(ProductCode::ClassicEra));
 
         assert_eq!(app.choices.len(), 2, "the only line was removed");
-        assert_eq!(app.error.as_deref(), Some("that is the only game left — add another first"));
+        assert_eq!(app.error.as_ref().map(|e| e.message.as_str()), Some("that is the only game left — add another first"));
     }
 
     /// A game opened from Add a game is shown, not tracked, and survives the
@@ -15868,7 +15890,7 @@ mod tests {
         });
     }
 
-    fn stopped(cancelled: bool) -> Result<Complete, String> {
+    fn stopped(cancelled: bool) -> Result<Complete, Problem> {
         Ok(Complete { complete: false, cancelled, files: 0, version: None })
     }
 

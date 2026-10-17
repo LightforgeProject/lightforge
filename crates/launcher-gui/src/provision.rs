@@ -7,6 +7,7 @@
 //! otherwise miss a line entirely.
 
 use lightforge_core::error::chain;
+use crate::tasks::Problem;
 use lightforge_core::net::Http;
 use lightforge_core::config::Config;
 use lightforge_core::paths::{AppDirs, Layout};
@@ -39,12 +40,12 @@ impl Progress {
 pub async fn install_build(
     version: String,
     tx: tokio::sync::watch::Sender<Progress>,
-) -> Result<(), String> {
-    let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
+) -> Result<(), Problem> {
+    let dirs = AppDirs::discover().map_err(|e| Problem::of(&e))?;
     setup::install_build(&dirs, &version, reporter(tx))
         .await
         .map(|_| ())
-        .map_err(|e| chain(&e))
+        .map_err(|e| Problem::of(&e))
 }
 
 /// Turn setup [`Event`]s into [`Progress`] updates on `tx`.
@@ -85,11 +86,11 @@ pub async fn run(
     config: Config,
     proton_version: Option<String>,
     tx: tokio::sync::watch::Sender<Progress>,
-) -> Result<Status, String> {
-    let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
+) -> Result<Status, Problem> {
+    let dirs = AppDirs::discover().map_err(|e| Problem::of(&e))?;
     setup::run(&layout, &dirs, &config, proton_version.as_deref(), reporter(tx))
         .await
-        .map_err(|e| chain(&e))
+        .map_err(|e| Problem::of(&e))
 }
 
 /// Read what is already provisioned, off the UI thread.
