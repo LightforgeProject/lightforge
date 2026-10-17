@@ -1628,7 +1628,7 @@ pub async fn discard_download(
     let departing = reclaim::Build::remote(code, remote.build_config.clone(), cdn);
     let reclaim = reclaim::plan(&http, &install, &departing).await.map_err(|e| chain(&e))?;
     let freed = tokio::task::spawn_blocking(move || {
-        reclaim::execute(&install, &reclaim).map_err(|e| chain(&e))
+        reclaim::execute(&install, &reclaim, |_| {}).map_err(|e| chain(&e))
     })
     .await
     .map_err(|e| chain(&e))??;
@@ -1694,6 +1694,7 @@ pub async fn uninstall(
     http: Option<Http>,
     layout: Layout,
     code: ProductCode,
+    copied: std::sync::Arc<std::sync::atomic::AtomicU64>,
 ) -> Result<u64, String> {
     use lightforge_core::tact::{productdb, reclaim, uninstall};
 
@@ -1722,7 +1723,10 @@ pub async fn uninstall(
         let removed = uninstall::execute(&install, &code, &plan, &windows_path)
             .map_err(|e| chain(&e))?;
         let reclaimed = match &reclaim {
-            Some(reclaim) => reclaim::execute(&install, reclaim).map_err(|e| chain(&e))?,
+            Some(reclaim) => reclaim::execute(&install, reclaim, |bytes| {
+                copied.store(bytes, std::sync::atomic::Ordering::Relaxed)
+            })
+            .map_err(|e| chain(&e))?,
             None => 0,
         };
         productdb::unregister(&layout.agent_dir(), code.as_str()).map_err(|e| chain(&e))?;
@@ -1804,7 +1808,7 @@ mod uninstall_tests {
 
         let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
         // No client: the reclaim is skipped, which is what this test isolates.
-        runtime.block_on(uninstall(None, layout.clone(), ProductCode::ClassicEra)).unwrap();
+        runtime.block_on(uninstall(None, layout.clone(), ProductCode::ClassicEra, Default::default())).unwrap();
 
         assert!(!era.exists());
         assert!(

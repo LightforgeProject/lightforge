@@ -271,6 +271,11 @@ impl Index {
         }
     }
 
+    /// Keep only the entries `keep` accepts, preserving their order.
+    pub fn retain(&mut self, keep: impl FnMut(&Entry) -> bool) {
+        self.entries.retain(keep);
+    }
+
     pub fn remove(&mut self, key: &[u8; KEY_SIZE]) -> Option<Entry> {
         let i = self.entries.binary_search_by(|e| e.key.cmp(key)).ok()?;
         Some(self.entries.remove(i))

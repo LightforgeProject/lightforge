@@ -3,8 +3,8 @@
 //! Every version in one install writes into the same CASC store, so deleting
 //! a version's folder frees only its executables, its game data stays in
 //! `Data/`, interleaved with the others'. This finds the store entries only
-//! the departing version uses, drops them from the indices, and deletes any
-//! `data.NNN` archive that leaves with nothing live in it.
+//! the departing version uses, drops them from the indices, and compacts the
+//! archives that leaves mostly dead, see [`super::compact`].
 //!
 //! Two rules keep it from ever touching another version's files:
 //!
@@ -14,22 +14,25 @@
 //! * If any remaining version's manifest cannot be read, there is no plan.
 //!   Nothing is reclaimed on a guess.
 //!
-//! Entries dropped from an archive that still holds other files become dead
-//! space: invisible to every client, but still on disk until something
-//! rewrites that archive.
+//! Entries dropped from an archive not worth rewriting, under a quarter of it
+//! dead afterwards, stay behind as dead space: invisible to every client, but
+//! still on disk until a later compaction gets to it.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeSet, HashSet};
+use std::path::Path;
 
 use crate::buildinfo::{BuildInfo, BuildInfoError};
 use crate::net::Http;
 use crate::product::ProductCode;
 
 use super::cdn::{CdnError, Client};
+use super::compact::{self, CompactError, Compaction};
 use super::config::BuildConfig;
 use super::idx::Entry;
 use super::manifest::DownloadManifest;
-use super::storage::{archive_name, Storage, StorageError};
+use super::storage::{Storage, StorageError};
+#[cfg(test)]
+use super::storage::archive_name;
 use super::verify::{self, Snapshot, VerifyError};
 use super::version::Cdn;
 
@@ -45,8 +48,8 @@ pub enum ReclaimError {
     Storage(#[from] StorageError),
     #[error(transparent)]
     Verify(#[from] VerifyError),
-    #[error("cannot remove {path}: {source}")]
-    Io { path: PathBuf, source: std::io::Error },
+    #[error(transparent)]
+    Compact(#[from] CompactError),
 }
 
 /// What reclaiming one version's data would do.
@@ -54,11 +57,14 @@ pub enum ReclaimError {
 pub struct Reclaim {
     /// Store entries only the departing version uses.
     pub entries: Vec<Entry>,
-    /// Archives that would hold nothing live afterwards, and so are deleted.
+    /// Archives compacted afterwards, or deleted when nothing is left in them.
     pub archives: Vec<u16>,
-    /// Bytes of disk those archives free.
+    /// Bytes of other versions' files the compaction copies.
+    pub moved: u64,
+    /// Bytes of disk freed.
     pub freed: u64,
-    /// Bytes of dropped entries left behind in archives that are kept.
+    /// Dead bytes left in the archives it touches that are not worth
+    /// rewriting.
     pub stranded: u64,
     /// The store as planned against; execution refuses if it has moved.
     pub snapshot: Snapshot,
@@ -130,7 +136,8 @@ pub async fn plan(
     Ok(select(store.files(), &departing, &keep, store.data_dir(), snapshot))
 }
 
-/// The pure half of [`plan`]: which entries go and which archives empty.
+/// The pure half of [`plan`]: which entries go, and which archives that
+/// leaves worth compacting.
 fn select<'a>(
     files: impl Iterator<Item = &'a Entry>,
     departing: &HashSet<[u8; 9]>,
@@ -138,45 +145,31 @@ fn select<'a>(
     data_dir: &Path,
     snapshot: Snapshot,
 ) -> Reclaim {
-    let mut live: BTreeMap<u16, usize> = BTreeMap::new();
-    let mut entries = Vec::new();
-    for entry in files {
-        *live.entry(entry.archive_id).or_default() += 1;
-        if departing.contains(&entry.key) && !keep.contains(&entry.key) {
-            entries.push(*entry);
-        }
-    }
+    let (entries, live): (Vec<Entry>, Vec<Entry>) = files
+        .copied()
+        .partition(|e| departing.contains(&e.key) && !keep.contains(&e.key));
 
-    let mut dropped: BTreeMap<u16, (usize, u64)> = BTreeMap::new();
-    for entry in &entries {
-        let slot = dropped.entry(entry.archive_id).or_default();
-        slot.0 += 1;
-        slot.1 += u64::from(entry.size);
-    }
+    // Only archives this version had files in. Dead space elsewhere is a
+    // whole-store compaction's business, not this uninstall's.
+    let touched: BTreeSet<u16> = entries.iter().map(|e| e.archive_id).collect();
+    let usage = compact::usage(data_dir, live.iter(), entries.iter());
+    let Compaction { archives, moved, freed, left } =
+        Compaction::choose(&usage, |a| touched.contains(&a));
 
-    let mut reclaim = Reclaim { entries, snapshot, ..Reclaim::default() };
-    for (archive, (count, bytes)) in dropped {
-        match live.get(&archive) == Some(&count) {
-            true => {
-                reclaim.archives.push(archive);
-                reclaim.freed += std::fs::metadata(data_dir.join(archive_name(archive)))
-                    .map(|m| m.len())
-                    .unwrap_or(bytes);
-            }
-            false => reclaim.stranded += bytes,
-        }
-    }
-    reclaim
+    Reclaim { entries, archives, moved, freed, stranded: left, snapshot }
 }
 
 /// Carry out `reclaim` against the store under `install`, returning the
-/// bytes freed.
+/// bytes freed. `progress` hears the bytes the compaction has copied.
 ///
 /// Refuses if the store changed since the plan was made, its entries are
 /// positions in files, and a store that moved may hold something else there
-/// now. An archive is deleted only if, after the indices are rewritten,
-/// nothing at all points into it. Never call against a live client.
-pub fn execute(install: &Path, reclaim: &Reclaim) -> Result<u64, ReclaimError> {
+/// now. Never call against a live client.
+pub fn execute(
+    install: &Path,
+    reclaim: &Reclaim,
+    progress: impl FnMut(u64),
+) -> Result<u64, ReclaimError> {
     if reclaim.entries.is_empty() {
         return Ok(0);
     }
@@ -186,23 +179,7 @@ pub fn execute(install: &Path, reclaim: &Reclaim) -> Result<u64, ReclaimError> {
     }
 
     verify::remove_entries(&data_dir, reclaim.entries.iter().copied())?;
-
-    let referenced: BTreeSet<u16> =
-        Storage::open(install)?.files().map(|e| e.archive_id).collect();
-    let mut freed = 0;
-    for archive in &reclaim.archives {
-        if referenced.contains(archive) {
-            continue;
-        }
-        let path = data_dir.join(archive_name(*archive));
-        let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        match std::fs::remove_file(&path) {
-            Ok(()) => freed += bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(source) => return Err(ReclaimError::Io { path, source }),
-        }
-    }
-    Ok(freed)
+    Ok(compact::rewrite(install, &reclaim.archives, progress)?)
 }
 
 /// Every file an installed build's download manifest lists, as the 9-byte
@@ -273,19 +250,26 @@ mod tests {
         let archive = root.path().join("Data/data").join(archive_name(0));
 
         // 3 is still wanted: its archive stays, only 1 and 2 leave the index.
+        // Two thirds of the archive go dead, so it is rewritten around 3.
         let partial = plan_for(root.path(), &[1, 2, 3], &[3]);
-        assert!(partial.archives.is_empty());
-        assert_eq!(execute(root.path(), &partial).unwrap(), 0);
-        assert!(archive.exists());
-        let store = Storage::open(root.path()).unwrap();
+        assert_eq!(partial.archives, vec![0]);
+        assert_eq!(partial.moved, 94);
+        assert!(execute(root.path(), &partial, |_| {}).unwrap() > 0);
+        assert!(!archive.exists());
+        let mut store = Storage::open(root.path()).unwrap();
         let left: Vec<u8> = store.files().map(|e| e.key[0]).collect();
         assert_eq!(left, vec![3]);
+        let mut key = [0u8; 16];
+        key[0] = 3;
+        let moved = *store.locate(&key).unwrap();
+        assert_eq!(store.read_raw(&moved).unwrap()[30..], [3; 64]);
 
-        // Now nothing wants it: the archive goes.
+        // Now nothing wants it: its archive goes, nothing copied.
         let whole = plan_for(root.path(), &[3], &[]);
-        assert_eq!(whole.archives, vec![0]);
-        assert!(execute(root.path(), &whole).unwrap() > 0);
-        assert!(!archive.exists());
+        assert_eq!(whole.archives, vec![moved.archive_id]);
+        assert_eq!(whole.moved, 0);
+        assert!(execute(root.path(), &whole, |_| {}).unwrap() > 0);
+        assert!(!root.path().join("Data/data").join(archive_name(moved.archive_id)).exists());
     }
 
     #[test]
@@ -301,21 +285,22 @@ mod tests {
         writer.finish().unwrap();
 
         assert!(matches!(
-            execute(root.path(), &stale),
+            execute(root.path(), &stale, |_| {}),
             Err(ReclaimError::Verify(VerifyError::StoreChanged))
         ));
         assert_eq!(Storage::open(root.path()).unwrap().files().count(), 3);
     }
 
     #[test]
-    fn only_unshared_entries_go_and_only_emptied_archives_are_freed() {
+    fn only_unshared_entries_go_and_only_mostly_dead_archives_are_rewritten() {
         let files = [
             // Archive 5: all MoP-only, emptied, freed whole.
             entry(1, 5, 100),
             entry(2, 5, 100),
-            // Archive 6: one MoP-only file beside a shared one, stranded.
+            // Archive 6: one small MoP-only file beside a large shared one,
+            // not worth copying the shared one for: stranded.
             entry(3, 6, 40),
-            entry(4, 6, 60),
+            entry(4, 6, 600),
             // Archive 7: retail only, untouched.
             entry(9, 7, 500),
         ];
@@ -327,6 +312,7 @@ mod tests {
         let gone: Vec<u8> = reclaim.entries.iter().map(|e| e.key[0]).collect();
         assert_eq!(gone, vec![1, 2, 3]);
         assert_eq!(reclaim.archives, vec![5]);
+        assert_eq!(reclaim.moved, 0);
         assert_eq!(reclaim.stranded, 40);
     }
 }

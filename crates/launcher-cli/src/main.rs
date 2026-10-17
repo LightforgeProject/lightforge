@@ -441,6 +441,19 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Rewrite the store's archives that are mostly dead space, copying what
+    /// still lives in them into fresh ones. Prints the plan unless `--yes`.
+    ///
+    /// Dead space is what dropped files leave behind: earlier patches, a
+    /// repair, or a version uninstalled before uninstalling compacted.
+    Compact {
+        /// Install root. Defaults to the managed WoW install.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Actually rewrite. Without this, nothing is touched.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Write `.product.db` so Battle.net will adopt an existing install.
     ///
     /// Agent refuses to locate an install without this file (error 2800). The
@@ -584,6 +597,22 @@ enum Command {
 /// `World of Warcraft/` folder rather than one product, and with libraries
 /// there can be more than one. The default library is the useful answer, and
 /// `--path` is how you name another.
+/// A progress callback for a compaction copying `total` bytes: one line per
+/// whole percent, overwritten in place.
+fn copy_progress(total: u64) -> impl FnMut(u64) {
+    let mut shown = None;
+    move |copied| {
+        let percent = (copied * 100).checked_div(total).unwrap_or(100).min(100);
+        if shown != Some(percent) {
+            shown = Some(percent);
+            eprint!("\rcopying         {percent:3}%");
+            if percent == 100 {
+                eprintln!();
+            }
+        }
+    }
+}
+
 fn default_install(layout: &Layout) -> std::path::PathBuf {
     layout
         .default_library()
@@ -2470,7 +2499,8 @@ async fn main() -> Result<()> {
             println!("install         {}", install.display());
             println!("departing       {} ({})", code.as_str(), departing.build_key);
             println!("entries         {} used by nothing else installed", plan.entries.len());
-            println!("archives        {} emptied, deleted whole", plan.archives.len());
+            println!("archives        {} compacted or deleted", plan.archives.len());
+            println!("copies          {:.2} GiB other versions still use", gib(plan.moved));
             println!("frees           {:.2} GiB", gib(plan.freed));
             println!(
                 "stranded        {:.2} GiB left as dead space in shared archives",
@@ -2486,7 +2516,31 @@ async fn main() -> Result<()> {
             if let Some(process) = lightforge_core::preflight::scan(&layout).first() {
                 anyhow::bail!("close {} first — the store is in use", process.name);
             }
-            let freed = reclaim::execute(&install, &plan)?;
+            let freed = reclaim::execute(&install, &plan, copy_progress(plan.moved))?;
+            println!("\nfreed           {:.2} GiB", gib(freed));
+        }
+        Command::Compact { path, yes } => {
+            use lightforge_core::tact::compact;
+
+            let install = path.unwrap_or_else(|| default_install(&layout));
+            let gib = |b: u64| b as f64 / 1024f64.powi(3);
+            let (plan, snapshot) = compact::plan(&install)?;
+            println!("install         {}", install.display());
+            println!("archives        {} to rewrite or delete", plan.archives.len());
+            println!("copies          {:.2} GiB", gib(plan.moved));
+            println!("frees           {:.2} GiB", gib(plan.freed));
+            println!("left            {:.2} GiB of dead space not worth rewriting", gib(plan.left));
+
+            if !yes || plan.archives.is_empty() {
+                if !plan.archives.is_empty() {
+                    println!("\nnothing changed. Re-run with --yes to go ahead.");
+                }
+                return Ok(());
+            }
+            if let Some(process) = lightforge_core::preflight::scan(&layout).first() {
+                anyhow::bail!("close {} first — the store is in use", process.name);
+            }
+            let freed = compact::execute(&install, &plan, &snapshot, copy_progress(plan.moved))?;
             println!("\nfreed           {:.2} GiB", gib(freed));
         }
         Command::ProductDb { path, products, account_country, geo_country, agent_tags, dry_run } => {

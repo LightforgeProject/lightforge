@@ -21,7 +21,7 @@ group_names='Everyday|Setup, Proton and the prefix|Battle.net|Games: install, up
 group_cmds='paths config status update-check play preflight
 setup proton proton-check proton-install prefix prefix-init prefix-link
 battlenet-fetch battlenet-setup battlenet-config battlenet-run product-db
-download plan verify reindex uninstall reclaim build-info build-info-set
+download plan verify reindex uninstall reclaim compact build-info build-info-set
 addons addon-search addon-install addon-import addon-update addon-remove addon-adopt addon-fingerprints addon-token backup-list backup-create backup-restore
 products assets
 cdn-fetch cdn-archive content casc idx casc-rebuild casc-verify'

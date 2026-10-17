@@ -493,6 +493,29 @@ Options:
           Print help (see a summary with '-h')
 ```
 
+### `lightforge compact`
+
+```text
+Rewrite the store's archives that are mostly dead space, copying what still lives in them into fresh ones. Prints the plan unless `--yes`.
+
+Dead space is what dropped files leave behind: earlier patches, a repair, or a version uninstalled before uninstalling compacted.
+
+Usage: lightforge compact [OPTIONS]
+
+Options:
+      --path <PATH>
+          Install root. Defaults to the managed WoW install
+
+      --root <ROOT>
+          Override the Blizzard root (default: ~/Games/Blizzard)
+
+      --yes
+          Actually rewrite. Without this, nothing is touched
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
 ### `lightforge build-info`
 
 ```text

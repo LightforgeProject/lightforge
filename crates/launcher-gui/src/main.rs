@@ -938,6 +938,8 @@ struct UninstallDialog {
     plan: Option<Result<tasks::UninstallPreview, String>>,
     /// Deleting: the buttons are held until it answers.
     working: bool,
+    /// Bytes the compaction has copied so far, written by the task.
+    copied: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// The confirmation before a download is given up.
@@ -4772,6 +4774,7 @@ impl Lightforge {
                     label: self.selected.label.clone(),
                     plan: None,
                     working: false,
+                    copied: Arc::default(),
                 });
                 Task::perform(
                     tasks::uninstall_plan(self.http.clone(), self.layout.clone(), code.clone()),
@@ -4814,7 +4817,7 @@ impl Lightforge {
                 let code = dialog.code.clone();
                 let http = self.http.clone();
                 Task::perform(
-                    tasks::uninstall(http, self.layout.clone(), code.clone()),
+                    tasks::uninstall(http, self.layout.clone(), code.clone(), dialog.copied.clone()),
                     move |result| Message::Uninstalled(code.clone(), result),
                 )
             }
@@ -6421,6 +6424,7 @@ impl Lightforge {
             || self.setup_running
             || self.addons_busy
             || self.scanning
+            || self.uninstall_dialog.as_ref().is_some_and(|d| d.working)
         {
             true => Subscription::batch([
                 closing,
@@ -12499,7 +12503,8 @@ impl Lightforge {
                             // space until something rewrites it.
                             Some(Ok(r)) if r.stranded > 0 => format!(
                                 "Game data it shares with {others} stays. About {} of its own \
-                                 sits in archives shared with them and stays as unused space.",
+                                 is scattered too thinly through their archives to be worth \
+                                 rewriting and stays as unused space.",
                                 size_of(r.stranded)
                             ),
                             Some(Ok(_)) => format!("Game data it shares with {others} stays."),
@@ -12511,7 +12516,23 @@ impl Lightforge {
                         (note, theme::MUTED)
                     }
                 };
-                body = body.push(text(note).size(theme::LABEL).color(color)).push(muted(
+                body = body.push(text(note).size(theme::LABEL).color(color));
+                if let Some(r) = reclaim.filter(|r| r.moved > 0) {
+                    let line = match dialog.working {
+                        true => format!(
+                            "Compacting: {} of {} copied.",
+                            size_of(dialog.copied.load(std::sync::atomic::Ordering::Relaxed).min(r.moved)),
+                            size_of(r.moved)
+                        ),
+                        false => format!(
+                            "To free its space, {} of the game data they still use is copied into \
+                             fresh archives first. That can take a few minutes.",
+                            size_of(r.moved)
+                        ),
+                    };
+                    body = body.push(muted(line, theme::LABEL));
+                }
+                body = body.push(muted(
                     "Its addons and settings (Interface, WTF) are deleted with it. Battle.net \
                      stops listing it too."
                         .to_owned(),

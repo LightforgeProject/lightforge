@@ -166,6 +166,12 @@ impl Storage {
         Ok(raw)
     }
 
+    /// Close the cached handle on an archive, so deleting the file gives its
+    /// space back now rather than when this store is dropped.
+    pub fn close_archive(&mut self, archive_id: u16) {
+        self.archives.remove(&archive_id);
+    }
+
     /// Counts for the UI and `lightforge casc`.
     pub fn stats(&self) -> Stats {
         let indices = self.indices();
