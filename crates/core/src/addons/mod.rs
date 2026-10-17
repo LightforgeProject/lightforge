@@ -424,19 +424,6 @@ impl Installed {
     fn has_id(&self, provider: &Provider, id: &str) -> bool {
         self.ids.get(provider).is_some_and(|known| known == id)
     }
-
-    /// Whether this looks like part of a larger addon rather than its own
-    /// thing, `BigWigs_Options` next to `BigWigs`, for example.
-    ///
-    /// A guess, and named as one: it only matters for grouping in a list, never
-    /// for deciding what to install or delete.
-    pub fn parent_of(&self, others: &[Installed]) -> Option<String> {
-        let (prefix, _) = self.folder.split_once('_')?;
-        others
-            .iter()
-            .find(|o| o.folder == prefix && o.folder != self.folder)
-            .map(|o| o.folder.clone())
-    }
 }
 
 /// Scan a product's `AddOns` directory.

@@ -451,9 +451,6 @@ pub struct Preflight {
     /// setting this once at install time does not hold.
     managed: Vec<ProductCode>,
     grace: Duration,
-    clear_agent_cache: bool,
-    clear_staging: bool,
-    reapply_config: bool,
 }
 
 impl Preflight {
@@ -462,9 +459,6 @@ impl Preflight {
             user: user.into(),
             managed: Vec::new(),
             grace: DEFAULT_GRACE,
-            clear_agent_cache: true,
-            clear_staging: true,
-            reapply_config: true,
         }
     }
 
@@ -477,28 +471,6 @@ impl Preflight {
     /// How long a process gets between `SIGTERM` and `SIGKILL`.
     pub fn with_grace(mut self, grace: Duration) -> Self {
         self.grace = grace;
-        self
-    }
-
-    /// Keep Agent's directory cache.
-    ///
-    /// The cache is `Agent/data/cache` and nothing else. Clearing Agent's whole
-    /// directory would take `product.db` with it, and Battle.net would forget
-    /// every install it has been shown.
-    pub fn keep_agent_cache(mut self) -> Self {
-        self.clear_agent_cache = false;
-        self
-    }
-
-    /// Keep the installer's `.extract` staging directory.
-    pub fn keep_staging(mut self) -> Self {
-        self.clear_staging = false;
-        self
-    }
-
-    /// Leave `Battle.net.config` and the per-account configs alone.
-    pub fn keep_config(mut self) -> Self {
-        self.reapply_config = false;
         self
     }
 
@@ -529,33 +501,25 @@ impl Preflight {
         }
 
         // Everything below this line depends on the prefix being quiet.
-        let agent_cache = if self.clear_agent_cache {
-            remove_dir(&layout.agent_cache_dir())?
-        } else {
-            None
-        };
-        let staging = if self.clear_staging {
-            remove_dir(&layout.battle_net_staging())?
-        } else {
-            None
-        };
+        // Agent's cache is `Agent/data/cache` and nothing else: clearing the
+        // whole directory would take `product.db` with it, and Battle.net
+        // would forget every install it has been shown.
+        let agent_cache = remove_dir(&layout.agent_cache_dir())?;
+        let staging = remove_dir(&layout.battle_net_staging())?;
         stamp(&mut timings, "clear caches");
 
         // The per-account file is the client's, not ours: it is recreated on
         // login and after a prefix update, each time without `HideOnClose`. A
         // one-shot write at setup does not survive, so it is re-applied here
         // on every launch.
-        let mut configs = Vec::new();
-        if self.reapply_config {
-            let mut tweaks = battlenet::default_tweaks(layout);
-            tweaks.extend(battlenet::product_tweaks(&self.managed));
-            configs.push(battlenet::configure(layout, &self.user, &tweaks)?);
-            configs.extend(battlenet::configure_accounts(
-                layout,
-                &self.user,
-                &battlenet::account_tweaks(),
-            )?);
-        }
+        let mut tweaks = battlenet::default_tweaks(layout);
+        tweaks.extend(battlenet::product_tweaks(&self.managed));
+        let mut configs = vec![battlenet::configure(layout, &self.user, &tweaks)?];
+        configs.extend(battlenet::configure_accounts(
+            layout,
+            &self.user,
+            &battlenet::account_tweaks(),
+        )?);
 
         stamp(&mut timings, "battle.net config");
 
@@ -1076,7 +1040,7 @@ mod tests {
     }
 
     #[test]
-    fn the_milestone_3_guard_never_claims_a_pause() {
+    fn the_no_downloads_guard_never_claims_a_pause() {
         let mut guard = NoDownloads;
         assert!(!guard.pause(&ProductCode::Retail).unwrap());
         assert!(!guard.resume(&ProductCode::Retail).unwrap());

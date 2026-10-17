@@ -36,7 +36,7 @@ tokio = { workspace = true, features = ["rt", "sync"] }
 #
 # `cargo-deb` and `cargo-generate-rpm` both write their format natively, so
 # neither `dpkg` nor `rpmbuild` has to exist on the machine doing the
-# packaging — which matters, because this one is Arch. Both are driven from
+# packaging, which matters, because this one is Arch. Both are driven from
 # the `deb` / `rpm` targets in the Makefile, never on their own: they package
 # the **container** binaries (`make release`), and a package built from a host
 # build would demand the host's glibc. See `Containerfile`.

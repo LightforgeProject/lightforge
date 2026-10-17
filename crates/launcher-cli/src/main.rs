@@ -2943,7 +2943,8 @@ async fn main() -> Result<()> {
             let locale: Locale = locale.parse().context("parsing --locale")?;
 
             // The build key is already recorded in .build.info, which is the
-            // file M3's writer maintains. This is where the two halves meet.
+            // file the `buildinfo` writer maintains. This is where the two
+            // halves meet.
             let info = BuildInfo::load(path.join(".build.info"))
                 .with_context(|| format!("reading {}", path.join(".build.info").display()))?;
             let build_key = info.get(&code, lightforge_core::buildinfo::COL_BUILD_KEY)?;

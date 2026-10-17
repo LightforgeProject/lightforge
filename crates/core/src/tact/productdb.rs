@@ -509,15 +509,32 @@ fn replace(path: &Path, existing: &[u8], merged: &[u8]) -> Result<bool, ProductD
         return Ok(false);
     }
     let temp = path.with_extension("db.lightforge-tmp");
-    std::fs::write(&temp, merged).map_err(|source| ProductDbError::Io {
-        path: temp.clone(),
-        source,
-    })?;
-    std::fs::rename(&temp, path).map_err(|source| ProductDbError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    persist(&temp, merged, path)?;
     Ok(true)
+}
+
+/// Write `bytes` to `temp`, flush them to disk, and rename `temp` over `path`.
+///
+/// The flush comes before the rename: without it a crash can keep the rename
+/// and lose the data, which leaves an empty registry where a good one was.
+fn persist(temp: &Path, bytes: &[u8], path: &Path) -> Result<(), ProductDbError> {
+    use std::io::Write;
+
+    let at = |p: &Path| {
+        let p = p.to_path_buf();
+        move |source| ProductDbError::Io { path: p.clone(), source }
+    };
+    let mut file = std::fs::File::create(temp).map_err(at(temp))?;
+    file.write_all(bytes).map_err(at(temp))?;
+    file.sync_all().map_err(at(temp))?;
+    drop(file);
+    std::fs::rename(temp, path).map_err(at(path))?;
+
+    // Durability of the rename, not of the contents.
+    if let Some(Ok(dir)) = path.parent().map(std::fs::File::open) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
 }
 
 /// Write `.product.db` into an install root, atomically.
@@ -528,16 +545,7 @@ fn replace(path: &Path, existing: &[u8], merged: &[u8]) -> Result<bool, ProductD
 pub fn write(install_root: &Path, installs: &[ProductInstall]) -> Result<PathBuf, ProductDbError> {
     let path = install_root.join(".product.db");
     let temp = install_root.join(".product.db.lightforge-tmp");
-    let bytes = encode(installs);
-
-    std::fs::write(&temp, &bytes).map_err(|source| ProductDbError::Io {
-        path: temp.clone(),
-        source,
-    })?;
-    std::fs::rename(&temp, &path).map_err(|source| ProductDbError::Io {
-        path: path.clone(),
-        source,
-    })?;
+    persist(&temp, &encode(installs), &path)?;
     Ok(path)
 }
 

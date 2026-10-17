@@ -30,7 +30,7 @@ pick which one you open.
 Where it has been proven so far: a **123 GiB Retail install** downloaded,
 verified byte-for-byte against its own checksums, adopted by Battle.net and
 played; a full Classic Era install from empty; a store rebuilt from scratch
-after deliberate corruption. **666 tests** in the tree. One 22 MB binary, no
+after deliberate corruption. **775 tests** in the tree. One 22 MB binary, no
 Electron, no background service, nothing running when the launcher is closed.
 
 It is a beta, it has had one pair of eyes on it, and the section below says
@@ -123,7 +123,7 @@ remedies that have never been run on a real machine carry `// UNVERIFIED`
 markers saying so. Nothing was committed unread. A reverted writer-thread
 rewrite is still recorded in the notes so nobody tries it again.
 
-What you should take from that: judge it on the 666 tests, on the 123 GiB
+What you should take from that: judge it on the 775 tests, on the 123 GiB
 install that Battle.net adopted, and on the code. All three are in front of
 you. [TECHDOC.md](TECHDOC.md) goes further into both the pipeline and the
 method.

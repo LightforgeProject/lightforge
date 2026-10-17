@@ -51,14 +51,14 @@ md5 = "0.8"
 open = "5"
 # The file picker: the XDG desktop portal, spoken directly. `async-std` rather
 # than the default `tokio` feature only to leave zbus exactly as iced already
-# builds it — this adds no second D-Bus stack.
+# builds it, so this adds no second D-Bus stack.
 ashpd = { version = "0.12", default-features = false, features = ["async-std"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 sha2 = "0.10"
 # Default features are deliberately off, and **no transport feature at all**:
 # the launcher implements sentry's `Transport` over its own `core::net::Http`
 # (see `report.rs`). `sentry/reqwest` wants reqwest 0.13 beside our 0.12, and
-# its `rustls` feature switches the *shared* rustls onto `aws-lc-rs` — so the
+# its `rustls` feature switches the *shared* rustls onto `aws-lc-rs`, so the
 # release was building a second HTTP client, a platform certificate verifier
 # and a whole second crypto provider in C for a client we already had.
 # `panic` would install a panic hook, and a report is only ever sent with

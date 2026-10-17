@@ -10,7 +10,7 @@
 //! redoes. Like [`crate::tact::install`], it reports through an [`Event`]
 //! callback so both front-ends can drive it.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::battlenet::{self, SetupReport};
 use crate::config::Config;
@@ -369,11 +369,6 @@ pub fn is_ready(layout: &Layout, dirs: &AppDirs, config: &Config) -> bool {
 /// The directory a first run would install Proton into, for display.
 pub fn proton_dir(dirs: &AppDirs) -> PathBuf {
     dirs.proton_dir()
-}
-
-/// True when `path` looks like a Proton build Lightforge itself installed.
-pub fn is_managed(dirs: &AppDirs, path: &Path) -> bool {
-    path.starts_with(dirs.proton_dir())
 }
 
 #[cfg(test)]

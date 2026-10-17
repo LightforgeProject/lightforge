@@ -47,16 +47,6 @@ impl SteamRoot {
         &self.path
     }
 
-    /// Where third-party compatibility tools (Proton-GE and friends) live.
-    pub fn compat_tools_dir(&self) -> PathBuf {
-        self.path.join("compatibilitytools.d")
-    }
-
-    /// Valve's own Proton builds, installed as regular Steam apps.
-    pub fn steamapps_common(&self) -> PathBuf {
-        self.path.join("steamapps").join("common")
-    }
-
     /// Every library folder Steam knows about, **filtered to those that
     /// currently exist**.
     ///
