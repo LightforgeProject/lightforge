@@ -865,6 +865,10 @@ pub struct Installed {
     pub install_path: String,
     /// Installed version, when the record carries one.
     pub version: Option<String>,
+    /// Build config hash of what is on disk: the installed key (field 14),
+    /// else the active one (12). The only record of a pre-installed build,
+    /// which Agent keeps here after taking its `.build.info` row away.
+    pub build_key: Option<String>,
     /// Product family, e.g. `wow` for every WoW flavour. Empty when absent,
     /// which is the normal state for a single-title game like Hearthstone.
     pub family: String,
@@ -918,6 +922,7 @@ fn decode_install(bytes: &[u8]) -> Option<Installed> {
     let mut install_path = String::new();
     let mut family = String::new();
     let mut version = None;
+    let (mut active, mut installed) = (None, None);
 
     for (field, value) in Fields::new(bytes) {
         match (field, value) {
@@ -934,8 +939,12 @@ fn decode_install(bytes: &[u8]) -> Option<Installed> {
                 for (field, value) in Fields::new(cached) {
                     if let (1, Wire::Bytes(base)) = (field, value) {
                         for (field, value) in Fields::new(base) {
-                            if let (7, Wire::Bytes(b)) = (field, value) {
-                                version = Some(string(b)).filter(|v: &String| !v.is_empty());
+                            let text = |b| Some(string(b)).filter(|v: &String| !v.is_empty());
+                            match (field, value) {
+                                (7, Wire::Bytes(b)) => version = text(b),
+                                (12, Wire::Bytes(b)) => active = text(b),
+                                (14, Wire::Bytes(b)) => installed = text(b),
+                                _ => {}
                             }
                         }
                     }
@@ -953,6 +962,7 @@ fn decode_install(bytes: &[u8]) -> Option<Installed> {
         product_code,
         install_path,
         version,
+        build_key: installed.or(active),
         family,
     })
 }
@@ -1059,6 +1069,7 @@ mod read_tests {
         assert_eq!(read[0].product, install.product);
         assert_eq!(read[0].install_path, install.install_path);
         assert_eq!(read[0].version.as_deref(), Some(install.version.as_str()));
+        assert_eq!(read[0].build_key.as_deref(), Some(install.build_key.as_str()));
         assert_eq!(read[0].family, install.family);
     }
 
@@ -1316,6 +1327,7 @@ mod read_tests {
             product_code: product.into(),
             install_path: "C:/whatever".into(),
             version: None,
+            build_key: None,
             family: String::new(),
         };
         assert!(plumbing("agent").is_infrastructure());

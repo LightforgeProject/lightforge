@@ -1736,6 +1736,67 @@ pub async fn uninstall(
     .map_err(|e| chain(&e))?
 }
 
+/// What freeing a store's unused game data would do: data no installed or
+/// pre-installed version uses, plus dead space older passes left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unused {
+    /// Bytes of disk it would free.
+    pub freeable: u64,
+    /// Bytes of data still in use it copies first.
+    pub moved: u64,
+}
+
+/// Plan freeing the unused data in the store under `install`. Changes nothing.
+pub async fn unused_plan(http: Option<Http>, install: PathBuf) -> Result<Unused, String> {
+    use lightforge_core::tact::{compact, reclaim};
+    let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
+    let prune = reclaim::plan_unused(&http, &install).await.map_err(|e| chain(&e))?;
+    // Archives the prune already rewrites are counted once, by the prune.
+    let rewritten: HashSet<u16> = prune.archives.iter().copied().collect();
+    let (dead, _) =
+        tokio::task::spawn_blocking(move || compact::plan_where(&install, |a| !rewritten.contains(&a)))
+            .await
+            .map_err(|e| chain(&e))?
+            .map_err(|e| chain(&e))?;
+    Ok(Unused { freeable: prune.freed + dead.freed, moved: prune.moved + dead.moved })
+}
+
+/// Free the unused data in the store under `install`: drop what no version
+/// uses, then compact. Planned again here rather than trusted from when the
+/// page opened. Returns the bytes freed; `copied` hears the copy's progress.
+pub async fn free_unused(
+    http: Option<Http>,
+    layout: Layout,
+    install: PathBuf,
+    copied: std::sync::Arc<std::sync::atomic::AtomicU64>,
+) -> Result<u64, String> {
+    use lightforge_core::tact::{compact, reclaim};
+    use std::sync::atomic::Ordering;
+
+    let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
+    let busy = tokio::task::spawn_blocking(move || lightforge_core::preflight::scan(&layout))
+        .await
+        .map_err(|e| chain(&e))?;
+    if let Some(process) = busy.first() {
+        return Err(format!("close {} first — the game files are in use", process.name));
+    }
+
+    let prune = reclaim::plan_unused(&http, &install).await.map_err(|e| chain(&e))?;
+    tokio::task::spawn_blocking(move || {
+        let pruned = reclaim::execute(&install, &prune, |bytes| copied.store(bytes, Ordering::Relaxed))
+            .map_err(|e| chain(&e))?;
+        let base = prune.moved;
+        let (dead, snapshot) = compact::plan(&install).map_err(|e| chain(&e))?;
+        let compacted = compact::execute(&install, &dead, &snapshot, |bytes| {
+            copied.store(base + bytes, Ordering::Relaxed)
+        })
+        .map_err(|e| chain(&e))?;
+        Ok(pruned + compacted)
+    })
+    .await
+    .map_err(|e| chain(&e))?
+}
+
 /// Measure Settings > Storage. Walks the whole game install.
 pub async fn storage(layout: Layout, dirs: AppDirs) -> lightforge_core::storage::Report {
     let fallback = lightforge_core::storage::Report {
@@ -1840,6 +1901,7 @@ mod registry_tests {
             product_code: product_code.to_owned(),
             install_path: "C:/Program Files (x86)/Whatever".to_owned(),
             version: version.map(str::to_owned),
+            build_key: None,
             family: String::new(),
         }
     }

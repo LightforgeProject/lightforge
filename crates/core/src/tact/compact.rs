@@ -144,10 +144,18 @@ pub fn usage<'a>(
 
 /// Plan a compaction of the whole store under `install`. Changes nothing.
 pub fn plan(install: &Path) -> Result<(Compaction, Snapshot), CompactError> {
+    plan_where(install, |_| true)
+}
+
+/// [`plan`], considering only the archives `consider` allows.
+pub fn plan_where(
+    install: &Path,
+    consider: impl FnMut(u16) -> bool,
+) -> Result<(Compaction, Snapshot), CompactError> {
     let store = Storage::open(install)?;
     let snapshot = Snapshot::take(store.data_dir())?;
     let usage = usage(store.data_dir(), store.files(), std::iter::empty());
-    Ok((Compaction::choose(&usage, |_| true), snapshot))
+    Ok((Compaction::choose(&usage, consider), snapshot))
 }
 
 /// Carry out `compaction` against the store under `install`, if it is still

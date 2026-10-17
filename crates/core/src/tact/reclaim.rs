@@ -1,18 +1,28 @@
-//! Giving back the shared store's space when one WoW version is uninstalled.
+//! Giving back the shared store's space: when one WoW version is uninstalled,
+//! and for data no version uses any more.
 //!
 //! Every version in one install writes into the same CASC store, so deleting
 //! a version's folder frees only its executables, its game data stays in
-//! `Data/`, interleaved with the others'. This finds the store entries only
-//! the departing version uses, drops them from the indices, and compacts the
-//! archives that leaves mostly dead, see [`super::compact`].
+//! `Data/`, interleaved with the others'. [`plan`] finds the store entries only
+//! the departing version uses; [`plan_unused`] finds the ones no version uses,
+//! which is what every patch leaves behind. Either drops them from the
+//! indices and compacts the archives that leaves mostly dead, see
+//! [`super::compact`].
 //!
-//! Two rules keep it from ever touching another version's files:
+//! Three rules keep it from ever touching another version's files:
 //!
-//! * The keep-set comes from the builds that are **installed**: each row's
-//!   `Build Key` in `.build.info`: not from what the CDN serves today. A
-//!   version a patch behind still needs files its newer build dropped.
-//! * If any remaining version's manifest cannot be read, there is no plan.
-//!   Nothing is reclaimed on a guess.
+//! * The keep-set comes from the builds that are **on disk**, not from what
+//!   the CDN serves today: every `.build.info` row, and every product
+//!   `.product.db` still records without one. Agent takes a pre-installed
+//!   build's row away and keeps its data, the WoW Forever stress test lost its
+//!   row that way on 2026-10-17 with all 1.2 M of its files still in the
+//!   store. A version a patch behind still needs files its newer build
+//!   dropped.
+//! * A build keeps more than its download manifest: everything its build
+//!   config names, encoding, root, `vfs-*`, the patch manifests, which the
+//!   client reads out of the store and no manifest lists.
+//! * If any version's manifests cannot be read, there is no plan. Nothing is
+//!   reclaimed on a guess.
 //!
 //! Entries dropped from an archive not worth rewriting, under a quarter of it
 //! dead afterwards, stay behind as dead space: invisible to every client, but
@@ -27,7 +37,9 @@ use crate::product::ProductCode;
 
 use super::cdn::{CdnError, Client};
 use super::compact::{self, CompactError, Compaction};
-use super::config::BuildConfig;
+use super::config::{self as tact_config, BuildConfig};
+use super::encoding::Encoding;
+use super::productdb::{self, ProductDbError};
 use super::idx::Entry;
 use super::manifest::DownloadManifest;
 use super::storage::{Storage, StorageError};
@@ -50,6 +62,15 @@ pub enum ReclaimError {
     Verify(#[from] VerifyError),
     #[error(transparent)]
     Compact(#[from] CompactError),
+    #[error(transparent)]
+    ProductDb(#[from] ProductDbError),
+    #[error(
+        "{product} is recorded in .product.db but its build cannot be worked out, \
+         so its data cannot be told apart from unused data"
+    )]
+    Unaccounted { product: String },
+    #[error("{product}'s {what} is not in the store, so what it needs cannot be listed")]
+    NotInStore { product: String, what: &'static str },
 }
 
 /// What reclaiming one version's data would do.
@@ -110,9 +131,44 @@ impl Build {
     }
 }
 
+/// Every build whose data lives in the store under `install`: each
+/// `.build.info` row, then each product `.product.db` records without one.
+///
+/// A record with no build key, or with no row anywhere to say which CDN
+/// serves it, is an error rather than skipped: skipping it would class its
+/// whole build as unused.
+pub fn builds(install: &Path) -> Result<Vec<Build>, ReclaimError> {
+    let info = BuildInfo::load(install.join(".build.info"))?;
+    let mut builds = info
+        .products()
+        .map(|product| Build::installed(&info, &product))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let records = match productdb::read(&install.join(".product.db")) {
+        Ok(records) => records,
+        Err(ProductDbError::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            Vec::new()
+        }
+        Err(e) => return Err(e.into()),
+    };
+    for record in records.iter().filter(|r| !r.is_infrastructure()) {
+        let product: ProductCode = record.product.parse().expect("product codes are infallible");
+        if builds.iter().any(|b| b.product == product) {
+            continue;
+        }
+        let unaccounted = || ReclaimError::Unaccounted { product: record.product.clone() };
+        let build_key = record.build_key.clone().ok_or_else(unaccounted)?;
+        // Every WoW version in one install comes from the same CDN path, so
+        // a sibling's row says where this one is served from.
+        let cdn = builds.first().map(|b| b.cdn.clone()).ok_or_else(unaccounted)?;
+        builds.push(Build { product, build_key, cdn });
+    }
+    Ok(builds)
+}
+
 /// Work out what removing `departing`'s data from the store under `install`
-/// would free. Every product still in `.build.info` other than it is kept.
-/// Reads the indices and each build's download manifest; changes nothing.
+/// would free. Every other build in [`builds`] is kept. Reads the indices and
+/// each build's manifests; changes nothing.
 ///
 /// `departing` is usually [`Build::installed`] read just before the product's
 /// row goes; it can also name a build already uninstalled, whose data was
@@ -122,35 +178,49 @@ pub async fn plan(
     install: &Path,
     departing: &Build,
 ) -> Result<Reclaim, ReclaimError> {
-    let info = BuildInfo::load(install.join(".build.info"))?;
+    let config = build_config(http, install, departing).await?;
+    let gone = manifest_keys(http, departing, &config).await?;
 
-    let gone = manifest_keys(http, departing).await?;
+    let mut store = Storage::open(install)?;
     let mut keep = HashSet::new();
-    for product in info.products().filter(|p| p != &departing.product) {
-        keep.extend(manifest_keys(http, &Build::installed(&info, &product)?).await?);
+    for build in builds(install)?.iter().filter(|b| b.product != departing.product) {
+        keep.extend(keep_keys(http, install, &mut store, build).await?);
     }
-    let departing = gone;
 
-    let store = Storage::open(install)?;
     let snapshot = Snapshot::take(store.data_dir())?;
-    Ok(select(store.files(), &departing, &keep, store.data_dir(), snapshot))
+    let gone = |e: &Entry| gone.contains(&e.key) && !keep.contains(&e.key);
+    Ok(select(store.files(), gone, store.data_dir(), snapshot))
+}
+
+/// Work out what dropping every entry no build in [`builds`] uses would
+/// free: what patches, repairs and old builds left behind. Changes nothing.
+///
+/// Refuses, rather than guessing, when any build cannot be accounted for.
+/// Never act on it while a download is running or paused: what that has
+/// written so far belongs to no build yet.
+pub async fn plan_unused(http: &Http, install: &Path) -> Result<Reclaim, ReclaimError> {
+    let mut store = Storage::open(install)?;
+    let mut keep = HashSet::new();
+    for build in builds(install)? {
+        keep.extend(keep_keys(http, install, &mut store, &build).await?);
+    }
+
+    let snapshot = Snapshot::take(store.data_dir())?;
+    Ok(select(store.files(), |e| !keep.contains(&e.key), store.data_dir(), snapshot))
 }
 
 /// The pure half of [`plan`]: which entries go, and which archives that
 /// leaves worth compacting.
 fn select<'a>(
     files: impl Iterator<Item = &'a Entry>,
-    departing: &HashSet<[u8; 9]>,
-    keep: &HashSet<[u8; 9]>,
+    gone: impl Fn(&Entry) -> bool,
     data_dir: &Path,
     snapshot: Snapshot,
 ) -> Reclaim {
-    let (entries, live): (Vec<Entry>, Vec<Entry>) = files
-        .copied()
-        .partition(|e| departing.contains(&e.key) && !keep.contains(&e.key));
+    let (entries, live): (Vec<Entry>, Vec<Entry>) = files.copied().partition(|e| gone(e));
 
-    // Only archives this version had files in. Dead space elsewhere is a
-    // whole-store compaction's business, not this uninstall's.
+    // Only archives the dropped files were in. Dead space elsewhere is a
+    // whole-store compaction's business, not this pass's.
     let touched: BTreeSet<u16> = entries.iter().map(|e| e.archive_id).collect();
     let usage = compact::usage(data_dir, live.iter(), entries.iter());
     let Compaction { archives, moved, freed, left } =
@@ -182,18 +252,83 @@ pub fn execute(
     Ok(compact::rewrite(install, &reclaim.archives, progress)?)
 }
 
+/// A build's config: from the store's own `Data/config` when it is there,
+/// which is every installed build, else from the CDN.
+async fn build_config(http: &Http, install: &Path, build: &Build) -> Result<BuildConfig, ReclaimError> {
+    BuildConfig::parse(&config_text(http, install, build).await?)
+        .map_err(|e| ReclaimError::Manifest { product: build.product.as_str().to_owned(), reason: e.to_string() })
+}
+
+async fn config_text(http: &Http, install: &Path, build: &Build) -> Result<String, ReclaimError> {
+    let local = tact_config::config_path(&install.join("Data").join("config"), &build.build_key)
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok());
+    if let Some(text) = local {
+        return Ok(text);
+    }
+    let cdn_err = |source| ReclaimError::Cdn { product: build.product.as_str().to_owned(), source };
+    let client = Client::from_cdn(&build.cdn).map_err(cdn_err)?;
+    client.fetch_config(http, &build.build_key).await.map_err(cdn_err)
+}
+
+/// Everything in the store `build` needs: its download manifest's files, and
+/// every key its build config names, with the content-key-only ones (root,
+/// patch) resolved through its encoding manifest.
+async fn keep_keys(
+    http: &Http,
+    install: &Path,
+    store: &mut Storage,
+    build: &Build,
+) -> Result<HashSet<[u8; 9]>, ReclaimError> {
+    let text = config_text(http, install, build).await?;
+    let product = build.product.as_str().to_owned();
+    let config = BuildConfig::parse(&text)
+        .map_err(|e| ReclaimError::Manifest { product: product.clone(), reason: e.to_string() })?;
+    let mut keep = manifest_keys(http, build, &config).await?;
+
+    let named: Vec<[u8; 16]> = text
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .filter(|(name, _)| !name.trim().ends_with("-size"))
+        .flat_map(|(_, value)| value.split_whitespace().filter_map(|h| tact_config::parse_hash(h).ok()))
+        .collect();
+
+    let ekey = config.encoding.ekey.ok_or_else(|| ReclaimError::Manifest {
+        product: product.clone(),
+        reason: "no encoding key".to_owned(),
+    })?;
+    let raw = store.read(&ekey).map_err(|_| ReclaimError::NotInStore {
+        product: product.clone(),
+        what: "encoding manifest",
+    })?;
+    let encoding = Encoding::parse(&raw)
+        .map_err(|e| ReclaimError::Manifest { product: product.clone(), reason: e.to_string() })?;
+    drop(raw);
+
+    let short = |k: &[u8; 16]| -> [u8; 9] { k[..9].try_into().expect("9 of 16 bytes") };
+    for hash in &named {
+        keep.insert(short(hash));
+        if let Some(ekey) = encoding.ekey_for(hash) {
+            keep.insert(short(&ekey));
+        }
+    }
+    Ok(keep)
+}
+
 /// Every file an installed build's download manifest lists, as the 9-byte
 /// keys the indices store: all of them, regardless of tags, since a keep-set
 /// that is too large only costs space, and one too small costs files.
-async fn manifest_keys(http: &Http, build: &Build) -> Result<HashSet<[u8; 9]>, ReclaimError> {
+async fn manifest_keys(
+    http: &Http,
+    build: &Build,
+    config: &BuildConfig,
+) -> Result<HashSet<[u8; 9]>, ReclaimError> {
     let name = build.product.as_str().to_owned();
     let cdn_err = |source| ReclaimError::Cdn { product: name.clone(), source };
     let bad = |reason: String| ReclaimError::Manifest { product: name.clone(), reason };
 
     let client = Client::from_cdn(&build.cdn).map_err(cdn_err)?;
-    let config = client.fetch_config(http, &build.build_key).await.map_err(cdn_err)?;
-    let build = BuildConfig::parse(&config).map_err(|e| bad(e.to_string()))?;
-    let pair = build.download.ok_or_else(|| bad("no download manifest".to_owned()))?;
+    let pair = config.download.as_ref().ok_or_else(|| bad("no download manifest".to_owned()))?;
     let ekey = pair.ekey.ok_or_else(|| bad("no download manifest key".to_owned()))?;
     let bytes = client.fetch_loose(http, &ekey, &pair.ckey, None).await.map_err(cdn_err)?;
     let manifest = DownloadManifest::parse(&bytes).map_err(|e| bad(e.to_string()))?;
@@ -240,7 +375,9 @@ mod tests {
     fn plan_for(root: &Path, departing: &[u8], keep: &[u8]) -> Reclaim {
         let store = Storage::open(root).unwrap();
         let snapshot = Snapshot::take(store.data_dir()).unwrap();
-        select(store.files(), &keys(departing), &keys(keep), store.data_dir(), snapshot)
+        let (departing, keep) = (keys(departing), keys(keep));
+        let gone = |e: &Entry| departing.contains(&e.key) && !keep.contains(&e.key);
+        select(store.files(), gone, store.data_dir(), snapshot)
     }
 
     #[test]
@@ -270,6 +407,69 @@ mod tests {
         assert_eq!(whole.moved, 0);
         assert!(execute(root.path(), &whole, |_| {}).unwrap() > 0);
         assert!(!root.path().join("Data/data").join(archive_name(moved.archive_id)).exists());
+    }
+
+    /// `.build.info` with one row per `(product, build key)`, served from
+    /// `tpr/wow` like every WoW version.
+    fn write_build_info(dir: &Path, rows: &[(&str, &str)]) {
+        let mut text = "Branch!STRING:0|Active!DEC:1|Build Key!HEX:16|CDN Path!STRING:0|\
+                        CDN Hosts!STRING:0|CDN Servers!STRING:0|Product!STRING:0\n"
+            .to_owned();
+        for (product, key) in rows {
+            text += &format!("eu|1|{key}|tpr/wow|eu.cdn.blizzard.com|http://eu.cdn.blizzard.com|{product}\n");
+        }
+        std::fs::write(dir.join(".build.info"), text).unwrap();
+    }
+
+    fn record(product: &str, build_key: &str) -> productdb::ProductInstall {
+        productdb::ProductInstall {
+            product: product.into(),
+            install_path: "C:/Program Files (x86)/World of Warcraft".into(),
+            region: "eu".into(),
+            locale: "enUS".into(),
+            account_country: String::new(),
+            geo_country: String::new(),
+            flavor_dir: String::new(),
+            version: "1.0".into(),
+            build_key: build_key.into(),
+            tags: String::new(),
+            key_ring: None,
+            family: "wow".into(),
+            installed_at_ms: 0,
+        }
+    }
+
+    /// The stress test on 2026-10-17: Agent took its `.build.info` row away
+    /// and kept its data. Its `.product.db` record is all that says so.
+    #[test]
+    fn a_pre_installed_build_without_a_row_is_still_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        write_build_info(dir.path(), &[("wow", &"a".repeat(32))]);
+        productdb::write(dir.path(), &[record("wow", &"a".repeat(32)), record("wowf", &"f".repeat(32))])
+            .unwrap();
+
+        let builds = builds(dir.path()).unwrap();
+        let found: Vec<(&str, &str)> =
+            builds.iter().map(|b| (b.product.as_str(), b.build_key.as_str())).collect();
+        let (a, f) = ("a".repeat(32), "f".repeat(32));
+        assert_eq!(found, vec![("wow", a.as_str()), ("wowf", f.as_str())]);
+        // Served from where its sibling is.
+        assert_eq!(builds[1].cdn.path, "tpr/wow");
+    }
+
+    #[test]
+    fn a_record_whose_build_cannot_be_named_refuses_the_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        write_build_info(dir.path(), &[("wow", &"a".repeat(32))]);
+        productdb::write(dir.path(), &[record("wowf", "")]).unwrap();
+        assert!(matches!(builds(dir.path()), Err(ReclaimError::Unaccounted { .. })));
+    }
+
+    #[test]
+    fn no_product_db_means_the_rows_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        write_build_info(dir.path(), &[("wow", &"a".repeat(32))]);
+        assert_eq!(builds(dir.path()).unwrap().len(), 1);
     }
 
     #[test]
@@ -307,7 +507,8 @@ mod tests {
         let departing = keys(&[1, 2, 3, 4]);
         let keep = keys(&[4, 9]);
         let dir = std::env::temp_dir();
-        let reclaim = select(files.iter(), &departing, &keep, &dir, Snapshot::default());
+        let gone = |e: &Entry| departing.contains(&e.key) && !keep.contains(&e.key);
+        let reclaim = select(files.iter(), gone, &dir, Snapshot::default());
 
         let gone: Vec<u8> = reclaim.entries.iter().map(|e| e.key[0]).collect();
         assert_eq!(gone, vec![1, 2, 3]);

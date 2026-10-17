@@ -441,6 +441,20 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Drop game data no installed or pre-installed version uses, then compact
+    /// what that leaves. Prints the plan unless `--yes`.
+    ///
+    /// That data is mostly what earlier patches left behind. Never run it
+    /// while a download is running or paused: what that has fetched so far
+    /// belongs to no version yet, and would have to be fetched again.
+    Prune {
+        /// Install root. Defaults to the managed WoW install.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Actually drop and compact. Without this, nothing is touched.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Rewrite the store's archives that are mostly dead space, copying what
     /// still lives in them into fresh ones. Prints the plan unless `--yes`.
     ///
@@ -2506,6 +2520,39 @@ async fn main() -> Result<()> {
                 "stranded        {:.2} GiB left as dead space in shared archives",
                 gib(plan.stranded)
             );
+
+            if !yes || plan.entries.is_empty() {
+                if !plan.entries.is_empty() {
+                    println!("\nnothing changed. Re-run with --yes to go ahead.");
+                }
+                return Ok(());
+            }
+            if let Some(process) = lightforge_core::preflight::scan(&layout).first() {
+                anyhow::bail!("close {} first — the store is in use", process.name);
+            }
+            let freed = reclaim::execute(&install, &plan, copy_progress(plan.moved))?;
+            println!("\nfreed           {:.2} GiB", gib(freed));
+        }
+        Command::Prune { path, yes } => {
+            use lightforge_core::net::Http;
+            use lightforge_core::tact::reclaim;
+
+            let install = path.unwrap_or_else(|| default_install(&layout));
+            let gib = |b: u64| b as f64 / 1024f64.powi(3);
+            let http = Http::new()?;
+            let builds = reclaim::builds(&install)?;
+            let plan = reclaim::plan_unused(&http, &install).await?;
+            let unused: u64 = plan.entries.iter().map(|e| u64::from(e.size)).sum();
+            println!("install         {}", install.display());
+            println!(
+                "keeps           {}",
+                builds.iter().map(|b| b.product.as_str()).collect::<Vec<_>>().join(", ")
+            );
+            println!("unused          {} files, {:.2} GiB", plan.entries.len(), gib(unused));
+            println!("archives        {} compacted or deleted", plan.archives.len());
+            println!("copies          {:.2} GiB still in use", gib(plan.moved));
+            println!("frees           {:.2} GiB", gib(plan.freed));
+            println!("stranded        {:.2} GiB left as dead space", gib(plan.stranded));
 
             if !yes || plan.entries.is_empty() {
                 if !plan.entries.is_empty() {

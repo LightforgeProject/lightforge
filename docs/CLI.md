@@ -493,6 +493,29 @@ Options:
           Print help (see a summary with '-h')
 ```
 
+### `lightforge prune`
+
+```text
+Drop game data no installed or pre-installed version uses, then compact what that leaves. Prints the plan unless `--yes`.
+
+That data is mostly what earlier patches left behind. Never run it while a download is running or paused: what that has fetched so far belongs to no version yet, and would have to be fetched again.
+
+Usage: lightforge prune [OPTIONS]
+
+Options:
+      --path <PATH>
+          Install root. Defaults to the managed WoW install
+
+      --root <ROOT>
+          Override the Blizzard root (default: ~/Games/Blizzard)
+
+      --yes
+          Actually drop and compact. Without this, nothing is touched
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
 ### `lightforge compact`
 
 ```text

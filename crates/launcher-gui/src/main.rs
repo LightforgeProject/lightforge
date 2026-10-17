@@ -720,6 +720,10 @@ enum Message {
     /// Clear what this library holds that is only a cache.
     ClearDrive(String),
     DriveCleared(String, Result<u64, String>),
+    /// What freeing a library's unused game data would free, by library id.
+    UnusedPlanned(String, Result<tasks::Unused, String>),
+    FreeUnused(String),
+    UnusedFreed(String, Result<u64, String>),
     /// Open a library's folder in the file manager.
     OpenDrive(String),
     OpenConfigFolder,
@@ -941,6 +945,20 @@ struct UninstallDialog {
     /// Bytes the compaction has copied so far, written by the task.
     copied: Arc<std::sync::atomic::AtomicU64>,
 }
+
+/// One library's unused game data on Settings > Storage.
+enum UnusedData {
+    Checking,
+    Ready(tasks::Unused),
+    /// Freeing it: bytes copied so far, written by the task, and the total.
+    Freeing { copied: Arc<std::sync::atomic::AtomicU64>, total: u64 },
+    /// What the last check or free had to say: how much it freed, or why not.
+    Said(String),
+}
+
+/// Below this the row is not shown: a button that frees a few megabytes is
+/// noise on the page.
+const UNUSED_WORTH_SHOWING: u64 = 100 * 1024 * 1024;
 
 /// The confirmation before a download is given up.
 ///
@@ -1671,6 +1689,8 @@ struct Lightforge {
     partitions: Vec<library::Partition>,
     /// What clearing one drive last freed, by library id.
     drive_notice: Option<(String, String)>,
+    /// Each library's unused game data, as last checked, by library id.
+    unused: HashMap<String, UnusedData>,
     /// Whether nothing is installed yet, as last checked.
     ///
     /// Cached beside `drive_states` and for the same reason: it is two
@@ -1908,6 +1928,7 @@ impl Lightforge {
             downgrade_ok: HashSet::new(),
             partitions: Vec::new(),
             drive_notice: None,
+            unused: HashMap::new(),
             library_empty: false,
             drive_states: HashMap::new(),
             tools: HostTools::detect(),
@@ -4614,7 +4635,7 @@ impl Lightforge {
                         // found again.
                         self.refresh_drives();
                         self.drive_notice = None;
-                        self.measure_storage()
+                        Task::batch([self.measure_storage(), self.check_unused()])
                     }
                     _ => Task::none(),
                 }
@@ -4730,6 +4751,46 @@ impl Lightforge {
                     tasks::clear_library(layout, library),
                     move |result| Message::DriveCleared(id.clone(), result),
                 )
+            }
+
+            Message::UnusedPlanned(id, result) => {
+                if !matches!(self.unused.get(&id), Some(UnusedData::Freeing { .. })) {
+                    let state = match result {
+                        Ok(plan) => UnusedData::Ready(plan),
+                        Err(e) => UnusedData::Said(e),
+                    };
+                    self.unused.insert(id, state);
+                }
+                Task::none()
+            }
+
+            Message::FreeUnused(id) => {
+                let Some(library) = self.config.libraries.iter().find(|l| l.id == id) else {
+                    return Task::none();
+                };
+                let install = self.layout.wow_install_in(library);
+                if self.downloading_into(&install) {
+                    return Task::none();
+                }
+                let total = match self.unused.get(&id) {
+                    Some(UnusedData::Ready(plan)) => plan.moved,
+                    _ => return Task::none(),
+                };
+                let copied = Arc::<std::sync::atomic::AtomicU64>::default();
+                self.unused.insert(id.clone(), UnusedData::Freeing { copied: copied.clone(), total });
+                Task::perform(
+                    tasks::free_unused(self.http.clone(), self.layout.clone(), install, copied),
+                    move |result| Message::UnusedFreed(id.clone(), result),
+                )
+            }
+
+            Message::UnusedFreed(id, result) => {
+                let note = match result {
+                    Ok(bytes) => format!("freed {}", size_of(bytes)),
+                    Err(e) => e,
+                };
+                self.unused.insert(id, UnusedData::Said(note));
+                self.measure_storage()
             }
 
             Message::DriveCleared(id, result) => {
@@ -6274,6 +6335,35 @@ impl Lightforge {
         self.save_config();
     }
 
+    /// Work out each library's unused game data, off the UI thread. A
+    /// library being freed right now is left to finish.
+    fn check_unused(&mut self) -> Task<Message> {
+        let mut tasks = Vec::new();
+        for library in &self.config.libraries {
+            let install = self.layout.wow_install_in(library);
+            if matches!(self.unused.get(&library.id), Some(UnusedData::Freeing { .. })) {
+                continue;
+            }
+            if !install.join(".build.info").is_file() {
+                self.unused.remove(&library.id);
+                continue;
+            }
+            self.unused.insert(library.id.clone(), UnusedData::Checking);
+            let id = library.id.clone();
+            tasks.push(Task::perform(tasks::unused_plan(self.http.clone(), install), move |result| {
+                Message::UnusedPlanned(id.clone(), result)
+            }));
+        }
+        Task::batch(tasks)
+    }
+
+    /// Whether a download, running or waiting, writes into `install`. What it
+    /// has fetched so far belongs to no version yet, so freeing unused data
+    /// would throw it away.
+    fn downloading_into(&self, install: &Path) -> bool {
+        self.queue.iter().any(|d| self.layout.wow_install(&d.code) == install)
+    }
+
     /// Re-measure what Settings > Storage shows, off the UI thread.
     fn measure_storage(&mut self) -> Task<Message> {
         let Some(dirs) = self.dirs.clone() else {
@@ -6425,6 +6515,7 @@ impl Lightforge {
             || self.addons_busy
             || self.scanning
             || self.uninstall_dialog.as_ref().is_some_and(|d| d.working)
+            || self.unused.values().any(|u| matches!(u, UnusedData::Freeing { .. }))
         {
             true => Subscription::batch([
                 closing,
@@ -13027,6 +13118,7 @@ impl Lightforge {
                 card = card.push(muted(note.clone(), theme::LABEL));
             }
         }
+        card = card.extend(self.unused_rows(library));
 
         let mut actions = row![Space::new().width(Length::Fill)]
             .spacing(theme::SM)
@@ -13053,6 +13145,52 @@ impl Lightforge {
         card = card.push(actions);
 
         container(card).padding(theme::MD).width(Length::Fill).style(theme::row).into()
+    }
+
+    /// A drive card's "Unused game data" row and the line under it.
+    fn unused_rows<'a>(&'a self, library: &'a storage::LibraryUsage) -> Vec<Element<'a, Message>> {
+        let label = || text("Unused game data").size(theme::BODY).into();
+        let Some(state) = self.unused.get(&library.id) else {
+            return Vec::new();
+        };
+        match state {
+            UnusedData::Checking => vec![muted("checking for unused game data…".to_owned(), theme::CAPTION).into()],
+            // Nothing worth a button: told by absence, like an empty cache.
+            UnusedData::Ready(plan) if plan.freeable < UNUSED_WORTH_SHOWING => Vec::new(),
+            UnusedData::Ready(plan) => {
+                let busy = self
+                    .config
+                    .libraries
+                    .iter()
+                    .find(|l| l.id == library.id)
+                    .is_some_and(|l| self.downloading_into(&self.layout.wow_install_in(l)));
+                let action = secondary("Free up", Message::FreeUnused(library.id.clone())).enabled(!busy);
+                let note = match busy {
+                    true => "Finish or cancel the download on this drive first.".to_owned(),
+                    false if plan.moved > 0 => format!(
+                        "Left behind by patches and versions that are gone. {} of game data \
+                         still in use is copied first. The game and Battle.net have to be closed.",
+                        size_of(plan.moved)
+                    ),
+                    false => "Left behind by patches and versions that are gone. The game and \
+                              Battle.net have to be closed."
+                        .to_owned(),
+                };
+                vec![
+                    usage_row(label(), plan.freeable, Some(action)),
+                    muted(note, theme::CAPTION).into(),
+                ]
+            }
+            UnusedData::Freeing { copied, total } => {
+                let done = copied.load(std::sync::atomic::Ordering::Relaxed).min(*total);
+                vec![muted(
+                    format!("freeing unused game data… {} of {} copied", size_of(done), size_of(*total)),
+                    theme::LABEL,
+                )
+                .into()]
+            }
+            UnusedData::Said(note) => vec![muted(note.clone(), theme::LABEL).into()],
+        }
     }
 
     /// The version, and where its configuration lives.
