@@ -78,6 +78,17 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.0.0-beta.5" date="2026-10-18">
+      <description>
+        <p>
+          Full controller support for the Steam Deck and Steam Machine, a
+          double-click installer, safer addon and Proton updates, backups of
+          your WoW settings, and error messages that say how to fix the
+          problem.
+        </p>
+      </description>
+      <url>https://github.com/LightforgeProject/lightforge/blob/main/RELEASES.md</url>
+    </release>
     <release version="1.0.0-beta.4" date="2026-10-14">
       <description>
         <p>

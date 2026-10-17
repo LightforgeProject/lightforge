@@ -582,9 +582,13 @@ enum Message {
     /// Whether it actually left the machine.
     ReportSent(bool),
     ReportCancel,
-    /// Open Settings on a particular tab, for a link that means a specific
-    /// page rather than "settings somewhere".
+    /// Open Settings at a particular section, for a link that means a
+    /// specific page rather than "settings somewhere".
     ShowSettingsTab(SettingsTab),
+    /// The Settings page scrolled, by any means.
+    SettingsScrolled(scrollable::Viewport),
+    /// Where each Settings section sits on the page, as last laid out.
+    SettingsMeasured(SettingsLayout),
     /// A switch on a Game Optimizations panel was flipped.
     Tweak(Scope, Tweak, bool),
     /// A starting point was chosen, setting the frames-versus-scenery switches.
@@ -1033,7 +1037,7 @@ struct DowngradeDialog {
     label: String,
 }
 
-/// Which section of Settings is showing.
+/// A section of the Settings page, and its entry in the index beside it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum SettingsTab {
     General,
@@ -1047,16 +1051,33 @@ enum SettingsTab {
 }
 
 impl SettingsTab {
+    /// In page order: the switches people change most first, then the
+    /// longer cards, then the ones visited once.
     const ALL: [Self; 8] = [
         Self::General,
-        Self::Setup,
-        Self::Proton,
-        Self::BattleNet,
         Self::Downloads,
         Self::Addons,
+        Self::BattleNet,
+        Self::Proton,
         Self::Storage,
+        Self::Setup,
         Self::About,
     ];
+
+    /// The id of the section's container on the page, which is how it is
+    /// found to be jumped to.
+    fn anchor(self) -> &'static str {
+        match self {
+            Self::General => "settings General",
+            Self::Setup => "settings Setup",
+            Self::Proton => "settings Proton",
+            Self::BattleNet => "settings Battle.net",
+            Self::Downloads => "settings Downloads",
+            Self::Addons => "settings Addons",
+            Self::Storage => "settings Storage",
+            Self::About => "settings About",
+        }
+    }
 
     fn label(self) -> &'static str {
         match self {
@@ -1070,6 +1091,104 @@ impl SettingsTab {
             Self::About => "About",
         }
     }
+}
+
+/// Where the Settings sections sat when the page was last laid out.
+///
+/// In layout coordinates, which are the page's own: a scrolled page is laid
+/// out once at its full height, and scrolling only moves where it is drawn.
+/// So a section's `y` less `top` is the offset that brings it to the top of
+/// the page, and its bounds compare directly with where [`focus`] recorded a
+/// control.
+#[derive(Debug, Clone, Default)]
+struct SettingsLayout {
+    /// Where the page's content starts.
+    top: f32,
+    /// In page order, which is the order the measuring found them in.
+    sections: Vec<(SettingsTab, iced::Rectangle)>,
+}
+
+impl SettingsLayout {
+    fn bounds(&self, tab: SettingsTab) -> Option<iced::Rectangle> {
+        self.sections.iter().find(|(t, _)| *t == tab).map(|(_, bounds)| *bounds)
+    }
+
+    /// How far down the page `tab` starts.
+    fn offset(&self, tab: SettingsTab) -> Option<f32> {
+        self.bounds(tab).map(|bounds| bounds.y - self.top)
+    }
+
+    /// The section someone looking at `viewport` is reading, given that the
+    /// index marks `marked`.
+    ///
+    /// The first one with more than a sliver still on screen. Except at the
+    /// very bottom of the page, where the last few sections can never reach
+    /// the top at all: there one the index already marks, About after a
+    /// click, keeps its mark for as long as its heading is on screen, instead
+    /// of handing it to whichever longer section ends just above it.
+    fn reading(&self, viewport: &scrollable::Viewport, marked: SettingsTab) -> Option<SettingsTab> {
+        let y = viewport.absolute_offset().y;
+        let shown = viewport.bounds().height;
+        let at_end = y + shown >= viewport.content_bounds().height - 1.0;
+        if at_end && self.offset(marked).is_some_and(|top| top >= y && top < y + shown) {
+            return Some(marked);
+        }
+        self.sections
+            .iter()
+            .find(|(_, bounds)| bounds.y - self.top + bounds.height > y + theme::LG)
+            .or(self.sections.last())
+            .map(|(tab, _)| *tab)
+    }
+}
+
+/// A section a jump scrolled to, kept at the top while the page settles.
+struct SettingsAnchor {
+    tab: SettingsTab,
+    /// The offset it was last scrolled to.
+    y: f32,
+    /// The one before, when the page grew and it had to move again.
+    prior: Option<f32>,
+    since: Instant,
+}
+
+/// Find where every Settings section sits on the page.
+fn measure_settings() -> Task<Message> {
+    use iced::advanced::widget::operation::{Outcome, Scrollable};
+    use iced::advanced::widget::{Id, Operation};
+
+    struct Measure(SettingsLayout);
+
+    impl Operation<SettingsLayout> for Measure {
+        fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<SettingsLayout>)) {
+            operate(self);
+        }
+
+        fn container(&mut self, id: Option<&Id>, bounds: iced::Rectangle) {
+            let Some(id) = id else { return };
+            if let Some(tab) = SettingsTab::ALL.into_iter().find(|tab| *id == Id::new(tab.anchor())) {
+                self.0.sections.push((tab, bounds));
+            }
+        }
+
+        fn scrollable(
+            &mut self,
+            id: Option<&Id>,
+            _bounds: iced::Rectangle,
+            content_bounds: iced::Rectangle,
+            _translation: iced::Vector,
+            _state: &mut dyn Scrollable,
+        ) {
+            if id == Some(&Id::new(SETTINGS_PAGE)) {
+                self.0.top = content_bounds.y;
+            }
+        }
+
+        fn finish(&self) -> Outcome<SettingsLayout> {
+            Outcome::Some(self.0.clone())
+        }
+    }
+
+    iced::advanced::widget::operate(Measure(SettingsLayout::default())).map(Message::SettingsMeasured)
 }
 
 /// Where a product stands on [`proton::SHOP_BUILD`].
@@ -1858,7 +1977,16 @@ struct Lightforge {
     addons_busy: bool,
     addon_report: Option<lightforge_core::addons::Report>,
     addon_tab: AddonTab,
+    /// The section the index marks: the one in view, or the one just jumped
+    /// to.
     settings_tab: SettingsTab,
+    /// A section to scroll to once the page has been measured.
+    settings_jump: Option<SettingsTab>,
+    /// How many times the jump has found its section not yet laid out.
+    settings_jump_tries: u8,
+    settings_anchor: Option<SettingsAnchor>,
+    settings_layout: SettingsLayout,
+    settings_viewport: Option<scrollable::Viewport>,
     search_input: String,
     search: addonwork::SearchOutcome,
     searching: bool,
@@ -2042,7 +2170,12 @@ impl Lightforge {
             addons_busy: false,
             addon_report: None,
             addon_tab: AddonTab::Mine,
-            settings_tab: SettingsTab::Setup,
+            settings_tab: SettingsTab::General,
+            settings_jump: None,
+            settings_jump_tries: 0,
+            settings_anchor: None,
+            settings_layout: SettingsLayout::default(),
+            settings_viewport: None,
             search_input: String::new(),
             search: addonwork::SearchOutcome::default(),
             searching: false,
@@ -2979,7 +3112,19 @@ impl Lightforge {
     /// the hundred-odd places that assign it means nothing can be forgotten.
     fn update(&mut self, message: Message) -> Task<Message> {
         let before = (self.status.clone(), self.error.clone());
+        // Anything may change how tall a Settings section is, a scan
+        // finishing, a list arriving, so while a jump is holding its section
+        // at the top, every message re-measures. Only for a moment after the
+        // jump: after that the page has settled, and a reader scrolling it
+        // is the only thing that moves the index.
+        let settling = self.screen == Screen::Settings
+            && self.settings_anchor.as_ref().is_some_and(|a| a.since.elapsed() < SETTINGS_JUMP_SETTLE)
+            && !matches!(message, Message::SettingsMeasured(_) | Message::SettingsScrolled(_));
         let task = self.step(message);
+        let task = match settling {
+            true => Task::batch([task, measure_settings()]),
+            false => task,
+        };
 
         if self.status != before.0 && !self.status.is_empty() {
             self.remember(self.status.clone());
@@ -4012,7 +4157,8 @@ impl Lightforge {
                     ),
                     None => Task::none(),
                 };
-                // Open on settings, whose first card is setup, when the machine
+                let mut opened = Task::none();
+                // Open on settings, at its setup section, when the machine
                 // cannot launch anything yet, but never yank the user out of
                 // a screen they chose.
                 if let Some(status) = &status {
@@ -4025,7 +4171,13 @@ impl Lightforge {
                         && self.wizard.is_none()
                     {
                         self.screen = Screen::Settings;
-                        self.settings_tab = SettingsTab::Setup;
+                        self.settings_jump = Some(SettingsTab::Setup);
+                        // Behind the splash on a first start, where nothing
+                        // of the page is drawn to be jumped into yet. Taking
+                        // the splash away arrives on the page, jump and all.
+                        if self.splash.is_none() {
+                            opened = self.arrived();
+                        }
                     }
                 }
                 // Installing Battle.net is what puts its mark in the prefix,
@@ -4034,7 +4186,7 @@ impl Lightforge {
                 self.bnet_icon =
                     self.layout.battle_net_icon().and_then(|path| art::try_mark(&path));
                 self.setup = status;
-                measure
+                Task::batch([measure, opened])
             }
 
             Message::Wizard(msg) => wizard::update(self, msg),
@@ -4899,33 +5051,84 @@ impl Lightforge {
                 }
             }
 
+            // A jump, not a page: measured first, because the sections above
+            // it may have changed height since the page was last measured,
+            // a Proton table that filled in or a drive that appeared.
             Message::SettingsTab(tab) => {
                 self.settings_tab = tab;
-                self.error = None;
-                match tab {
-                    // Asked on the way in, so the install picker is
-                    // populated by the time anyone looks at it. It used to
-                    // be hidden behind a button, and the caption where it
-                    // should have been told you to go and press that button
-                    // in a different section of the page.
-                    //
-                    // Only when there is nothing to show: the answer is
-                    // cached by ETag, but a request per tab click is still a
-                    // request per tab click.
-                    SettingsTab::Proton if self.proton_available.is_empty() => {
-                        Task::done(Message::CheckProton)
+                self.settings_jump = Some(tab);
+                self.settings_jump_tries = 0;
+                self.settings_anchor = None;
+                measure_settings()
+            }
+
+            Message::SettingsScrolled(viewport) => {
+                self.settings_viewport = Some(viewport);
+                if let Some(anchor) = &self.settings_anchor {
+                    let max = (viewport.content_bounds().height - viewport.bounds().height).max(0.0);
+                    let at = |y: f32| (viewport.absolute_offset().y - y.min(max)).abs() < 1.0;
+                    // Where the jump put the page, or where it had put it
+                    // before the page grew and it moved again: both are
+                    // the jump's own doing. So is anything reported in
+                    // the moment before it lands, which is the page saying
+                    // where it was. Anywhere else is a wheel or the
+                    // scrollbar, and the index follows the reader again.
+                    let ours = at(anchor.y) || anchor.prior.is_some_and(at);
+                    if !ours {
+                        if anchor.since.elapsed() < SETTINGS_JUMP_STALE {
+                            return Task::none();
+                        }
+                        self.settings_anchor = None;
                     }
-                    SettingsTab::Storage => {
-                        // Scanned when the page opens rather than polled: a
-                        // drive appearing while the page is shut is not news,
-                        // and this is also where a library that moved gets
-                        // found again.
-                        self.refresh_drives();
-                        self.drive_notice = None;
-                        Task::batch([self.measure_storage(), self.check_unused()])
-                    }
-                    _ => Task::none(),
                 }
+                measure_settings()
+            }
+
+            Message::SettingsMeasured(layout) => {
+                self.settings_layout = layout;
+                if let Some(tab) = self.settings_jump {
+                    let Some(y) = self.settings_layout.offset(tab) else {
+                        // Asked for in the same update that opened the page,
+                        // so measured against the screen it replaced. Again
+                        // once the page has been drawn, but not forever: a
+                        // section that never appears is not worth a timer.
+                        self.settings_jump_tries += 1;
+                        if self.settings_jump_tries > SETTINGS_JUMP_TRIES {
+                            self.settings_jump = None;
+                            return Task::none();
+                        }
+                        return Task::perform(tasks::after(Duration::from_millis(16)), |()| ())
+                            .then(|()| measure_settings());
+                    };
+                    self.settings_jump = None;
+                    self.settings_anchor = Some(SettingsAnchor { tab, y, prior: None, since: Instant::now() });
+                    return iced::widget::operation::scroll_to(
+                        SETTINGS_PAGE,
+                        scrollable::AbsoluteOffset { x: 0.0, y },
+                    );
+                }
+                // Held where the jump put it while the page fills in under
+                // it: the drives and the Proton list arrive a moment after
+                // the page opens, and every section below them moves down.
+                if let Some(anchor) = &mut self.settings_anchor {
+                    self.settings_tab = anchor.tab;
+                    let Some(y) = self.settings_layout.offset(anchor.tab) else { return Task::none() };
+                    if (y - anchor.y).abs() < 1.0 {
+                        return Task::none();
+                    }
+                    anchor.prior = Some(anchor.y);
+                    anchor.y = y;
+                    return iced::widget::operation::scroll_to(
+                        SETTINGS_PAGE,
+                        scrollable::AbsoluteOffset { x: 0.0, y },
+                    );
+                }
+                if let Some(viewport) = &self.settings_viewport {
+                    if let Some(tab) = self.settings_layout.reading(viewport, self.settings_tab) {
+                        self.settings_tab = tab;
+                    }
+                }
+                Task::none()
             }
 
             Message::StorageMeasured(report) => {
@@ -5695,7 +5898,7 @@ impl Lightforge {
             }
 
             Message::ShowSettingsTab(tab) => {
-                self.settings_tab = tab;
+                self.settings_jump = Some(tab);
                 self.update(Message::Show(Screen::Settings))
             }
 
@@ -5973,7 +6176,21 @@ impl Lightforge {
                 }
                 self.focus_entering -= 1;
                 if let Some(region) = self.focus_into {
-                    if let Some(first) = focus::first(&focus::live_in(region)) {
+                    let mut places = focus::live_in(region);
+                    // Into the section just jumped to, not whatever was at the
+                    // top before the jump: it takes a frame or two to scroll
+                    // into view, and these retries are what wait it out.
+                    // Compared in layout coordinates, the ones the sections
+                    // were measured in.
+                    if region == SETTINGS_PAGE {
+                        if let Some(section) = self.settings_layout.bounds(self.settings_tab) {
+                            places.retain(|place| {
+                                focus::spot(&place.target)
+                                    .is_some_and(|spot| section.contains(spot.bounds.center()))
+                            });
+                        }
+                    }
+                    if let Some(first) = focus::first(&places) {
                         self.focus_into = None;
                         self.focus_entering = 0;
                         self.focus = Some(first);
@@ -7876,8 +8093,36 @@ impl Lightforge {
             {
                 self.popular_if_unasked()
             }
+            Screen::Settings => self.settings_arrived(),
             _ => Task::none(),
         }
+    }
+
+    /// Settings opened: at the top, or at the section a link asked for.
+    ///
+    /// Everything a section fetches for itself is asked for here, now that
+    /// they are all one page. The Proton release list, so the install picker
+    /// is populated by the time anyone scrolls to it; only when there is
+    /// nothing to show, since the answer is cached by ETag but a request per
+    /// visit is still a request. And the drives, scanned when the page opens
+    /// rather than polled: a drive appearing while the page is shut is not
+    /// news, and this is also where a library that moved gets found again.
+    fn settings_arrived(&mut self) -> Task<Message> {
+        // At the top unless a link said otherwise, which is a jump too: the
+        // page is still where it was when Settings is chosen from the menu
+        // while it is already open.
+        self.settings_tab = self.settings_jump.unwrap_or(SettingsTab::ALL[0]);
+        self.settings_jump = Some(self.settings_tab);
+        self.settings_jump_tries = 0;
+        self.settings_anchor = None;
+        self.settings_viewport = None;
+        self.refresh_drives();
+        self.drive_notice = None;
+        let proton = match self.proton_available.is_empty() {
+            true => Task::done(Message::CheckProton),
+            false => Task::none(),
+        };
+        Task::batch([proton, self.measure_storage(), self.check_unused(), measure_settings()])
     }
 
     /// Ask for the headlines.
@@ -11537,58 +11782,64 @@ impl Lightforge {
         .into()
     }
 
-    /// Settings, laid out the way Battle.net lays out its own: a list of
-    /// sections on the left and one section at a time on the right, as flat
-    /// rows at one shared width rather than a stack of boxes that each size
-    /// themselves.
+    /// Settings: every section on one page, with an index down the left
+    /// that jumps to each and marks the one being read.
+    ///
+    /// It used to be one section at a time, the way Battle.net lays out its
+    /// own, and half the sections were a switch or two on an empty page.
+    /// Rows stay flat at one shared width rather than a stack of boxes that
+    /// each size themselves.
     fn settings(&self) -> Element<'_, Message> {
         let mut nav = column![].spacing(theme::XS).width(Length::Fixed(SETTINGS_NAV_WIDTH));
         for tab in SettingsTab::ALL {
+            // Pressable while marked too: the mark follows the scrolling, so
+            // the marked entry is not necessarily where its section starts.
             let entry = button(text(tab.label()).size(theme::tap_text(theme::BODY)))
                 .width(Length::Fill)
-                .padding(theme::tap([theme::SM, theme::MD]));
-            // The tab on show still takes the ring, or there would be no
-            // way back into the list from the page beside it.
-            nav = nav.push(self.ring(
-                focus::Target::SettingsTab(tab),
-                Some(Message::SettingsTab(tab)),
-                match self.settings_tab == tab {
-                    true => entry.style(theme::selected),
-                    false => entry.style(theme::ghost).on_press(Message::SettingsTab(tab)),
-                },
-            ));
+                .padding(theme::tap([theme::SM, theme::MD]))
+                .on_press(Message::SettingsTab(tab))
+                .style(match self.settings_tab == tab {
+                    true => theme::selected,
+                    false => theme::ghost,
+                });
+            nav = nav.push(self.ring(focus::Target::SettingsTab(tab), Some(Message::SettingsTab(tab)), entry));
         }
 
-        let (title, body) = match self.settings_tab {
-            SettingsTab::Setup => ("Setup", self.setup_section()),
-            SettingsTab::General => ("General", self.general_section()),
-            SettingsTab::Proton => ("Proton", self.proton_section()),
-            SettingsTab::BattleNet => ("Battle.net", self.battle_net_section()),
-            SettingsTab::Downloads => ("Downloads", self.downloads_section()),
-            SettingsTab::Addons => ("Addons", self.addons_section()),
-            SettingsTab::Storage => ("Storage", self.storage_section()),
-            SettingsTab::About => ("About", self.about_section()),
-        };
-
         // The error leads rather than trails: a failed setup run is reported
-        // here, and at the foot of a scrolled section it would go unseen.
+        // here, and at the foot of the page it would go unseen.
         //
         // Every section takes the width it is given. The column used to be
         // capped at a form's measure, which left two thirds of the window
         // empty on a wide monitor and crammed every figure into the left of
         // it; the rows inside already right-align their controls, so the space
         // goes where it is useful rather than being thrown away.
-        let mut content = column![].spacing(theme::MD).width(Length::Fill);
+        let mut content = column![].spacing(theme::XL).width(Length::Fill);
         if let Some(e) = &self.error {
             content = content.push(problem(e));
         }
-        // Storage and Proton name each of their own groups, Drives and Add
-        // a drive; Games and their Proton, and Builds, so an outer heading
-        // above the first of them is a title for a title.
-        content = content.push(match self.settings_tab {
-            SettingsTab::Storage | SettingsTab::Proton => body,
-            _ => section(title, body),
-        });
+        for tab in SettingsTab::ALL {
+            let body = match tab {
+                SettingsTab::Setup => self.setup_section(),
+                SettingsTab::General => self.general_section(),
+                SettingsTab::Proton => self.proton_section(),
+                SettingsTab::BattleNet => self.battle_net_section(),
+                SettingsTab::Downloads => self.downloads_section(),
+                SettingsTab::Addons => self.addons_section(),
+                SettingsTab::Storage => self.storage_section(),
+                SettingsTab::About => self.about_section(),
+            };
+            // Storage and Proton name each of their own groups, Drives and
+            // Add a drive; Games and their Proton, and Builds, so an outer
+            // heading above the first of them is a title for a title.
+            let body = match tab {
+                SettingsTab::Storage | SettingsTab::Proton => body,
+                _ => section(tab.label(), body),
+            };
+            content = content.push(container(body).id(tab.anchor()).width(Length::Fill));
+        }
+        // Room to scroll the last section's heading up to where the others
+        // land, most of the time; [`SettingsLayout::reading`] covers the rest.
+        content = content.push(Space::new().height(Length::Fixed(theme::XL * 4.0)));
 
         column![
             self.header(),
@@ -11600,6 +11851,8 @@ impl Lightforge {
                 focus::pane(
                     SETTINGS_PAGE,
                     scrollable(container(content).padding([0.0, theme::LG]))
+                        .id(SETTINGS_PAGE)
+                        .on_scroll(Message::SettingsScrolled)
                         .width(Length::Fill)
                         .height(Length::Fill),
                 ),
@@ -14103,6 +14356,15 @@ const FOCUS_ENTER_FRAMES: u8 = 10;
 /// The scrolled page beside the Settings list, as a focus region.
 const SETTINGS_PAGE: &str = "settings";
 
+/// How many frames a jump into Settings waits for its section to be laid out.
+const SETTINGS_JUMP_TRIES: u8 = 30;
+
+/// How long after a jump the page is still reporting where it was before it.
+const SETTINGS_JUMP_STALE: Duration = Duration::from_millis(400);
+
+/// How long a jump keeps its section at the top while the page fills in.
+const SETTINGS_JUMP_SETTLE: Duration = Duration::from_secs(3);
+
 /// How far an arrow with nothing to move to scrolls the page instead.
 const FOCUS_SCROLL: f32 = 160.0;
 
@@ -14908,7 +15170,7 @@ impl canvas::Program<Message> for Spinner {
     }
 }
 
-/// One release's notes as a bulleted list.
+/// One release's notes: its intro, then a bulleted list.
 ///
 /// Shared by the popup and the Lightforge Updates page so the two cannot
 /// drift. The bullet is a character rather than a drawn mark: these are lines
@@ -14917,7 +15179,7 @@ fn release_notes(release: &lightforge_core::releases::Release) -> Element<'stati
     // Prose, so a little more leading than a label gets: a note that wraps
     // should not read as two notes run together.
     let leading = iced::widget::text::LineHeight::Relative(1.45);
-    column(release.notes.iter().map(|note| {
+    let notes = column(release.notes.iter().map(|note| {
         row![
             text("·").size(theme::BODY).color(theme::MUTED).line_height(leading),
             text(note.clone()).size(theme::BODY).line_height(leading).width(Length::Fill),
@@ -14925,8 +15187,16 @@ fn release_notes(release: &lightforge_core::releases::Release) -> Element<'stati
         .spacing(theme::SM)
         .into()
     }))
-    .spacing(theme::SM)
-    .into()
+    .spacing(theme::SM);
+    match &release.intro {
+        Some(intro) => column![
+            text(intro.clone()).size(theme::BODY).line_height(leading).width(Length::Fill),
+            notes,
+        ]
+        .spacing(theme::MD)
+        .into(),
+        None => notes.into(),
+    }
 }
 
 fn sweep() -> f32 {
@@ -15563,7 +15833,7 @@ mod tests {
         page();
         focus::put(focus::Target::NotesDismiss, at(700.0, 500.0), send(Message::DismissPatchNotes), 1);
         app.patch_notes = Some(PatchNotes {
-            release: lightforge_core::releases::Release { version: "9.9.9".to_owned(), notes: vec![] },
+            release: lightforge_core::releases::Release { version: "9.9.9".to_owned(), intro: None, notes: vec![] },
             mute: false,
         });
         let _ = app.update(Message::FocusStep(focus::Step::Down));

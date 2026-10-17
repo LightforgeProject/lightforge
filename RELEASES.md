@@ -1,6 +1,69 @@
 # Lightforge release notes
 
 
+## 1.0.0-beta.5
+
+Lightforge 1.0.0-beta.5 is a big one: full controller support for the Steam
+Deck and Steam Machine, safer handling of your game files and addons, and
+error messages that tell you how to fix the problem.
+
+- Handheld/Console Mode. On SteamOS, setup asks whether this is a handheld or
+  console (Steam Deck, Steam Machine) or a desktop PC running SteamOS, and
+  Settings > General has the same switch on any system. With it on, Lightforge
+  runs fullscreen, with buttons, tabs and game tiles sized for touch and
+  gamepad.
+- Full controller support in Handheld/Console Mode, setup wizard included. The
+  D-pad, the left stick, A and B work out of the box, and text fields bring up
+  Steam's on-screen keyboard. WoW: Forever plays well on a controller, so it
+  mattered to me that Lightforge does too.
+- Settings > General can add Lightforge to your Steam library with its own
+  artwork, so it starts from Game Mode like any other game.
+- New installer for SteamOS, Bazzite and other systems: download
+  lightforge-installer.desktop from the releases page and double-click it. It
+  downloads the newest version, verifies it, installs it into your home folder
+  and starts Lightforge, with no terminal needed. Run it again any time to
+  update.
+- New game optimization for WoW: Forever that turns on its controller mode.
+- Errors now say what to do. Common problems like a full drive, a lost
+  connection or damaged game files come with a suggestion, and where possible
+  a button that fixes it.
+- Settings is now one page. The list on the left jumps to each section and
+  marks the one you are reading.
+- The cog next to Play now opens Game Settings: the game's Proton, its addons
+  and its backups in one place. The cog menu itself is shorter.
+- Your WoW settings folder (WTF) is backed up before the first launch of each
+  new build. Five backups are kept per game, and you can restore or delete
+  them in Game Settings.
+- Drag games along the game bar to put them in any order, for example WoW:
+  Forever first or Retail last.
+- Right-click a game in the game bar to remove it. "Add a game" is now "All
+  Games", and opening a game there no longer adds it to the bar until you
+  install or play it.
+- WoW: Forever now gets the addons made for its own game version.
+- Addon updates can no longer lose an addon. The new version is fully written
+  before the old one is replaced, so a full disk or a failed write leaves the
+  installed addon as it was.
+- A failed or interrupted Proton-GE install no longer leaves a broken
+  half-installed build behind.
+- Uninstalling a WoW version now frees all of its space by compacting the game
+  data it shared with your other versions. Settings > Storage can also free
+  game data that no installed version uses anymore.
+- Only one task can write to a game's files at a time, so a download, a repair
+  and a launch can no longer overlap.
+- Settings you change in the game's own options now stay yours. Lightforge's
+  optimizations no longer overwrite them at the next launch.
+- Bug reports now have categories, and a contact address is required so I can
+  reach you for follow-up testing.
+- Bazzite, Silverblue and other Fedora Atomic systems now get working setup
+  advice (rpm-ostree instead of dnf), and INSTALL.md explains how to install
+  Lightforge there.
+- Lightforge starts faster: it opens with the artwork it already has instead
+  of waiting for a check.
+- lightforge-gui --version now prints the version instead of starting the
+  launcher.
+- General stability and bug fixes.
+
+
 ## 1.0.0-beta.4
 
 - Added the WoW: Forever stress test. It sits beside the beta in Forever's
