@@ -509,15 +509,32 @@ fn replace(path: &Path, existing: &[u8], merged: &[u8]) -> Result<bool, ProductD
         return Ok(false);
     }
     let temp = path.with_extension("db.lightforge-tmp");
-    std::fs::write(&temp, merged).map_err(|source| ProductDbError::Io {
-        path: temp.clone(),
-        source,
-    })?;
-    std::fs::rename(&temp, path).map_err(|source| ProductDbError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    persist(&temp, merged, path)?;
     Ok(true)
+}
+
+/// Write `bytes` to `temp`, flush them to disk, and rename `temp` over `path`.
+///
+/// The flush comes before the rename: without it a crash can keep the rename
+/// and lose the data, which leaves an empty registry where a good one was.
+fn persist(temp: &Path, bytes: &[u8], path: &Path) -> Result<(), ProductDbError> {
+    use std::io::Write;
+
+    let at = |p: &Path| {
+        let p = p.to_path_buf();
+        move |source| ProductDbError::Io { path: p.clone(), source }
+    };
+    let mut file = std::fs::File::create(temp).map_err(at(temp))?;
+    file.write_all(bytes).map_err(at(temp))?;
+    file.sync_all().map_err(at(temp))?;
+    drop(file);
+    std::fs::rename(temp, path).map_err(at(path))?;
+
+    // Durability of the rename, not of the contents.
+    if let Some(Ok(dir)) = path.parent().map(std::fs::File::open) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
 }
 
 /// Write `.product.db` into an install root, atomically.
@@ -528,17 +545,29 @@ fn replace(path: &Path, existing: &[u8], merged: &[u8]) -> Result<bool, ProductD
 pub fn write(install_root: &Path, installs: &[ProductInstall]) -> Result<PathBuf, ProductDbError> {
     let path = install_root.join(".product.db");
     let temp = install_root.join(".product.db.lightforge-tmp");
-    let bytes = encode(installs);
-
-    std::fs::write(&temp, &bytes).map_err(|source| ProductDbError::Io {
-        path: temp.clone(),
-        source,
-    })?;
-    std::fs::rename(&temp, &path).map_err(|source| ProductDbError::Io {
-        path: path.clone(),
-        source,
-    })?;
+    persist(&temp, &encode(installs), &path)?;
     Ok(path)
+}
+
+/// Put `installs` into an install root's `.product.db`, keeping every other
+/// product's record already there.
+///
+/// Products share one install root, so [`write`] with only the product just
+/// installed would drop its siblings, and Battle.net's Locate then no longer
+/// finds them. A file that does not decode as records is replaced, as there
+/// is nothing in it to keep.
+pub fn upsert(install_root: &Path, installs: &[ProductInstall]) -> Result<PathBuf, ProductDbError> {
+    let path = install_root.join(".product.db");
+    let Ok(existing) = std::fs::read(&path) else {
+        return write(install_root, installs);
+    };
+    match splice(&existing, installs) {
+        Some(merged) => {
+            replace(&path, &existing, &merged)?;
+            Ok(path)
+        }
+        None => write(install_root, installs),
+    }
 }
 
 /// Agent's tag expression for a region, locale and account.
@@ -865,6 +894,10 @@ pub struct Installed {
     pub install_path: String,
     /// Installed version, when the record carries one.
     pub version: Option<String>,
+    /// Build config hash of what is on disk: the installed key (field 14),
+    /// else the active one (12). The only record of a pre-installed build,
+    /// which Agent keeps here after taking its `.build.info` row away.
+    pub build_key: Option<String>,
     /// Product family, e.g. `wow` for every WoW flavour. Empty when absent,
     /// which is the normal state for a single-title game like Hearthstone.
     pub family: String,
@@ -918,6 +951,7 @@ fn decode_install(bytes: &[u8]) -> Option<Installed> {
     let mut install_path = String::new();
     let mut family = String::new();
     let mut version = None;
+    let (mut active, mut installed) = (None, None);
 
     for (field, value) in Fields::new(bytes) {
         match (field, value) {
@@ -934,8 +968,12 @@ fn decode_install(bytes: &[u8]) -> Option<Installed> {
                 for (field, value) in Fields::new(cached) {
                     if let (1, Wire::Bytes(base)) = (field, value) {
                         for (field, value) in Fields::new(base) {
-                            if let (7, Wire::Bytes(b)) = (field, value) {
-                                version = Some(string(b)).filter(|v: &String| !v.is_empty());
+                            let text = |b| Some(string(b)).filter(|v: &String| !v.is_empty());
+                            match (field, value) {
+                                (7, Wire::Bytes(b)) => version = text(b),
+                                (12, Wire::Bytes(b)) => active = text(b),
+                                (14, Wire::Bytes(b)) => installed = text(b),
+                                _ => {}
                             }
                         }
                     }
@@ -953,6 +991,7 @@ fn decode_install(bytes: &[u8]) -> Option<Installed> {
         product_code,
         install_path,
         version,
+        build_key: installed.or(active),
         family,
     })
 }
@@ -1059,7 +1098,21 @@ mod read_tests {
         assert_eq!(read[0].product, install.product);
         assert_eq!(read[0].install_path, install.install_path);
         assert_eq!(read[0].version.as_deref(), Some(install.version.as_str()));
+        assert_eq!(read[0].build_key.as_deref(), Some(install.build_key.as_str()));
         assert_eq!(read[0].family, install.family);
+    }
+
+    #[test]
+    fn upserting_one_product_keeps_its_siblings() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), &[install("wow", "12.0.0.1"), install("wow_classic_era", "1.15.0.1")]).unwrap();
+
+        upsert(dir.path(), &[install("wow_classic_era", "1.15.0.2")]).unwrap();
+
+        let read = super::read(&dir.path().join(".product.db")).unwrap();
+        let versions: Vec<_> =
+            read.iter().map(|r| (r.product.as_str(), r.version.as_deref())).collect();
+        assert_eq!(versions, [("wow", Some("12.0.0.1")), ("wow_classic_era", Some("1.15.0.2"))]);
     }
 
     fn install(product: &str, version: &str) -> ProductInstall {
@@ -1316,6 +1369,7 @@ mod read_tests {
             product_code: product.into(),
             install_path: "C:/whatever".into(),
             version: None,
+            build_key: None,
             family: String::new(),
         };
         assert!(plumbing("agent").is_infrastructure());

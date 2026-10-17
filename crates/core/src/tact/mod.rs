@@ -16,6 +16,7 @@
 
 pub mod archive;
 pub mod cdn;
+pub mod compact;
 pub mod config;
 pub mod content;
 pub mod download;

@@ -280,10 +280,6 @@ impl LinkState {
         matches!(self, Self::Correct | Self::Pending(_))
     }
 
-    /// Whether [`ensure_link`] can fix this without the user deciding anything.
-    pub fn is_repairable(&self) -> bool {
-        !matches!(self, Self::Correct | Self::Pending(_) | Self::Occupied)
-    }
 }
 
 /// Classify what sits at `link` relative to the intended `target`.
@@ -598,7 +594,7 @@ mod tests {
         let state = inspect_link(&link, &target);
         assert_eq!(state, LinkState::Pending(target.clone()));
         // Correct as it stands: nothing to repair, and setup is finished.
-        assert!(state.is_usable() && !state.is_repairable());
+        assert!(state.is_usable());
         assert_eq!(ensure_link(&link, &target).unwrap(), state);
         assert!(!target.exists(), "linking must not conjure the install");
     }

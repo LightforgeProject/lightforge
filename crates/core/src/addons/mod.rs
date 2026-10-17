@@ -357,11 +357,12 @@ pub fn flavor_of(code: &ProductCode) -> &'static str {
             "retail"
         }
         ProductCode::Classic | ProductCode::ClassicPtr => "classic",
-        // Forever and its beta run on the 1.x line, so their addons are Era addons.
-        ProductCode::ClassicEra
-        | ProductCode::EraPtr
-        | ProductCode::ClassicBeta
-        | ProductCode::Forever => "classic_era",
+        ProductCode::ClassicEra | ProductCode::EraPtr => "classic_era",
+        // Its own flavor: CurseForge files Forever-only addons under a version
+        // type of their own, which asking for Era never reached. Forever runs
+        // the 1.x line, so the proxy falls back to Era addons per addon, and
+        // most of what a Forever player installs still comes from there.
+        ProductCode::ClassicBeta | ProductCode::Forever => "forever",
         // An unknown or custom product is almost always a retail-line server.
         ProductCode::Custom(_) => "retail",
     }
@@ -423,19 +424,6 @@ pub struct Installed {
 impl Installed {
     fn has_id(&self, provider: &Provider, id: &str) -> bool {
         self.ids.get(provider).is_some_and(|known| known == id)
-    }
-
-    /// Whether this looks like part of a larger addon rather than its own
-    /// thing, `BigWigs_Options` next to `BigWigs`, for example.
-    ///
-    /// A guess, and named as one: it only matters for grouping in a list, never
-    /// for deciding what to install or delete.
-    pub fn parent_of(&self, others: &[Installed]) -> Option<String> {
-        let (prefix, _) = self.folder.split_once('_')?;
-        others
-            .iter()
-            .find(|o| o.folder == prefix && o.folder != self.folder)
-            .map(|o| o.folder.clone())
     }
 }
 
@@ -618,6 +606,16 @@ pub enum AddonError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Forever asks for its own flavor, which the proxy backs with Era addons;
+    /// Era itself never asks for Forever's, whose builds target the 1.60 API.
+    #[test]
+    fn forever_has_its_own_flavor_and_era_keeps_its() {
+        assert_eq!(flavor_of(&ProductCode::ClassicBeta), "forever");
+        assert_eq!(flavor_of(&ProductCode::Forever), "forever");
+        assert_eq!(flavor_of(&ProductCode::ClassicEra), "classic_era");
+        assert_eq!(flavor_of(&ProductCode::EraPtr), "classic_era");
+    }
 
     /// A trimmed copy of a real WoWUp export, structure verified against the
     /// genuine article, not assumed.

@@ -18,21 +18,25 @@ use std::path::PathBuf;
 use iced::widget::{column, container, image, row, scrollable, text, text_input, Space};
 use iced::{Alignment, ContentFit, Element, Length};
 
+use lightforge_core::config::SteamOsUse;
 use lightforge_core::error::chain;
 use lightforge_core::discover::{self, Found, HandOff, Origin, WowInstall};
 use lightforge_core::product::{Branch, Kind, ProductCode};
 use lightforge_core::tact::install::LOCALES;
 use lightforge_core::tact::version::Region;
 
-use crate::theme;
+use crate::{focus, theme};
 use crate::{
-    action_button, field_row, mono, muted, secondary, size_of, Lightforge, Message,
+    action_button, clickable, field_row, mono, muted, secondary, size_of, Lightforge, Message,
 };
 
 /// How big the Discord and X marks are drawn on the last slide. Larger than the
 /// logo menu's glyph: there they label a row of text, here they are the thing
 /// being offered.
 const MARK: f32 = 32.0;
+
+/// How wide the region and language pickers are: the longest locale name.
+const PICKER: f32 = 300.0;
 
 /// Which slide is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,8 +162,6 @@ pub enum Msg {
     Open,
     Next,
     Back,
-    /// Leave it, and do not open it again by itself.
-    Later,
     Region(Region),
     Locale(String),
     /// The artwork prefetch finished, with the number of products it cached.
@@ -175,6 +177,8 @@ pub enum Msg {
     /// Take a drive back off the list. Nothing on it is deleted.
     RemoveDrive(String),
     WantBattleNet(bool),
+    /// What this SteamOS machine is for. Only ever sent on SteamOS.
+    SteamOsUse(SteamOsUse),
     /// Done, write the config and get out of the way.
     Finish,
 }
@@ -251,13 +255,11 @@ pub fn update(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
             prefetch(app)
         }
 
-        Msg::Later | Msg::Finish => {
-            let finishing = matches!(msg, Msg::Finish);
+        Msg::Finish => {
             let pending = app.wizard.as_ref().map(|w| w.pending.clone()).unwrap_or_default();
             app.wizard = None;
-            // Both ways out mark the first run as seen: someone who dismissed
-            // the wizard has seen it, and meeting it again on the next start
-            // would be nagging. Settings keeps the button.
+            // Marks the first run as seen; Settings keeps the button for a
+            // second one.
             app.config.setup_complete = true;
             // A fresh install has nothing to be told what is new about: the
             // notes describe the version it has just been set up with. Marked
@@ -265,7 +267,13 @@ pub fn update(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
             // build the wizard was running.
             app.config.patch_notes_seen = Some(env!("CARGO_PKG_VERSION").to_owned());
             app.save_config();
-            if finishing && !pending.is_empty() {
+            // Played from Game Mode, so it belongs in the Steam library
+            // there. A failure is said in Settings, under the button that
+            // tries again; setup is done either way.
+            if app.console() {
+                app.add_to_steam();
+            }
+            if !pending.is_empty() {
                 link_hand_offs(app, &pending);
             }
             app.go_to(crate::Screen::Dashboard);
@@ -394,6 +402,14 @@ pub fn update(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
                 wizard.drive_error = outcome.err();
             }
             iced::Task::none()
+        }
+
+        Msg::SteamOsUse(answer) => {
+            app.config.steamos_use = Some(answer);
+            app.save_config();
+            // The window changes with the answer, fullscreen for a console,
+            // so whoever answered sees what they chose straight away.
+            app.window_mode()
         }
 
         Msg::WantBattleNet(want) => {
@@ -672,6 +688,15 @@ fn link_hand_offs(app: &mut Lightforge, pending: &[(HandOff, PathBuf)]) {
     };
 }
 
+/// What sends the slide on: its button in the footer, as a place for the ring.
+pub fn forward(wizard: &Wizard) -> focus::Target {
+    let message = match wizard.step {
+        Step::Done => Msg::Finish,
+        _ => Msg::Next,
+    };
+    focus::Target::Key(format!("{:?}", Message::Wizard(message)))
+}
+
 /// Fetch every tracked product's artwork into the cache, before anyone looks at
 /// a panel. This is the "it looks weird on the first start" fix, done where the
 /// user is reading a slide anyway.
@@ -736,25 +761,22 @@ fn dots(step: Step) -> Element<'static, Message> {
     row.into()
 }
 
-/// Back, the step's own button, and the way out.
+/// Back, and the step's own button.
+///
+/// No way out halfway: every step can be passed without doing anything, so
+/// the button that skipped them all only ever caught a stray press, and on a
+/// controller one press of A was enough to lose the setup.
 fn footer<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     let mut actions = row![].spacing(theme::SM).align_y(Alignment::Center);
 
     if wizard.step.back().is_some() && wizard.step != Step::Done {
         actions = actions.push(secondary("Back", Message::Wizard(Msg::Back)).enabled(!app.busy));
     }
-    // The way out sits with Back rather than under the step's own button: it
-    // is the quiet choice, and a column of two buttons in the corner reads as
-    // one decision with two answers, which this is not.
-    if wizard.step != Step::Done {
-        actions =
-            actions.push(secondary("Set up later", Message::Wizard(Msg::Later)).enabled(true));
-    }
     actions = actions.push(Space::new().width(Length::Fill));
 
     // What the step's own button says, and whether it can be pressed yet.
     let (label, ready): (&str, bool) = match wizard.step {
-        Step::Welcome => ("Get started", true),
+        Step::Welcome => ("Get started", welcome_answered(app)),
         Step::Place => ("Look for my games", true),
         Step::Found => (
             match wizard.rows.iter().any(|row| row.take) {
@@ -781,6 +803,12 @@ fn footer<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     actions.into()
 }
 
+/// Whether the first slide can be left. On SteamOS the Deck-or-desktop
+/// question has to be answered first.
+fn welcome_answered(app: &Lightforge) -> bool {
+    !app.steamos || app.config.steamos_use.is_some()
+}
+
 fn welcome(app: &Lightforge) -> Element<'_, Message> {
     let mut body = column![
         text(
@@ -805,24 +833,51 @@ fn welcome(app: &Lightforge) -> Element<'_, Message> {
 
     body = body.push(field_row(
         "Region".to_owned(),
-        iced::widget::pick_list(regions, Some(RegionChoice(app.config.region)), |choice| {
-            Message::Wizard(Msg::Region(choice.0))
-        })
-        .text_size(theme::BODY)
-        .padding(theme::SM)
-        .into(),
+        app.picker(
+            "wizard region".to_owned(),
+            regions,
+            Some(RegionChoice(app.config.region)),
+            "",
+            |choice| Message::Wizard(Msg::Region(choice.0)),
+            Length::Fixed(PICKER),
+            theme::BODY,
+        ),
     ));
     body = body.push(field_row(
         "Language".to_owned(),
-        iced::widget::pick_list(
+        app.picker(
+            "wizard language".to_owned(),
             locales,
             Some(LocaleChoice(app.config.locale.clone())),
+            "",
             |choice| Message::Wizard(Msg::Locale(choice.0)),
-        )
-        .text_size(theme::BODY)
-        .padding(theme::SM)
-        .into(),
+            Length::Fixed(PICKER),
+            theme::BODY,
+        ),
     ));
+    // Asked, not guessed: the same OS runs a handheld, a box under a
+    // television, and a desktop, and nothing on the machine says which.
+    if app.steamos {
+        let picked = app.config.steamos_use;
+        let answer = |label: &'static str, value: SteamOsUse| {
+            clickable(
+                format!("steamos {value:?}"),
+                iced::widget::radio(label, value, picked, |answer| {
+                    Message::Wizard(Msg::SteamOsUse(answer))
+                })
+                .text_size(theme::tap_text(theme::BODY)),
+            )
+        };
+        body = body.push(
+            column![
+                text("How will you use Lightforge on this SteamOS device?").size(theme::BODY),
+                answer("Steam Deck or Steam Machine: Controller Input", SteamOsUse::Console),
+                answer("SteamOS on a desktop PC: Mouse and Keyboard Input", SteamOsUse::Desktop),
+            ]
+            .spacing(theme::SM),
+        );
+    }
+
     body = body.extend(
         app.hint(
             "The region decides which of Blizzard's version services a download comes from, \
@@ -847,12 +902,15 @@ fn place<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     body = body.push(field_row(
         "Install to".to_owned(),
         row![
-            text_input("~/Games/Blizzard", &app.location_input)
-                .on_input(Message::LocationChanged)
-                .on_submit(Message::UseLocation)
-                .style(theme::field)
-                .size(theme::BODY)
-                .padding(theme::SM),
+            clickable(
+                "wizard location",
+                text_input("~/Games/Blizzard", &app.location_input)
+                    .on_input(Message::LocationChanged)
+                    .on_submit(Message::UseLocation)
+                    .style(theme::field)
+                    .size(theme::BODY)
+                    .padding(theme::SM),
+            ),
             secondary("Use this", Message::UseLocation).enabled(app.library_empty),
         ]
         .spacing(theme::SM)
@@ -921,11 +979,12 @@ fn place<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
         );
     }
 
-    body = body.push(
+    body = body.push(focus::region(
+        "wizard drives",
         scrollable(drives)
             .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
             .style(theme::scrollbar),
-    );
+    ));
     if let Some(error) = &wizard.drive_error {
         body = body.push(muted(error.clone(), theme::CAPTION));
     }
@@ -1020,9 +1079,11 @@ fn found<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
         }
 
         let tick: Element<Message> = match row.blocked.is_none() {
-            true => iced::widget::checkbox(row.take)
-                .on_toggle(move |on| Message::Wizard(Msg::Take(index, on)))
-                .into(),
+            true => clickable(
+                format!("wizard take {index}"),
+                crate::tick(row.take)
+                    .on_toggle(move |on| Message::Wizard(Msg::Take(index, on))),
+            ),
             false => Space::new().width(Length::Fixed(theme::MD)).into(),
         };
         list = list.push(
@@ -1033,21 +1094,25 @@ fn found<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
             .style(theme::row),
         );
     }
-    body = body.push(
+    body = body.push(focus::region(
+        "wizard found",
         scrollable(list)
             .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
             .style(theme::scrollbar),
-    );
+    ));
 
     body = body.push(field_row(
         "Somewhere else".to_owned(),
         row![
-            text_input("~/Games/battlenet, or a World of Warcraft folder", &wizard.pointed)
-                .on_input(|path| Message::Wizard(Msg::PointInput(path)))
-                .on_submit(Message::Wizard(Msg::Point))
-                .style(theme::field)
-                .size(theme::BODY)
-                .padding(theme::SM),
+            clickable(
+                "wizard pointed",
+                text_input("~/Games/battlenet, or a World of Warcraft folder", &wizard.pointed)
+                    .on_input(|path| Message::Wizard(Msg::PointInput(path)))
+                    .on_submit(Message::Wizard(Msg::Point))
+                    .style(theme::field)
+                    .size(theme::BODY)
+                    .padding(theme::SM),
+            ),
             secondary("Look here", Message::Wizard(Msg::Point)).enabled(!wizard.pointed.is_empty()),
         ]
         .spacing(theme::SM)
@@ -1083,12 +1148,13 @@ fn install<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> 
             .size(theme::BODY),
     );
 
-    body = body.push(
-        iced::widget::checkbox(wizard.battle_net)
+    body = body.push(clickable(
+        "wizard battle.net",
+        crate::tick(wizard.battle_net)
             .label("Install Battle.net")
             .on_toggle(|on| Message::Wizard(Msg::WantBattleNet(on)))
-            .text_size(theme::BODY),
-    );
+            .text_size(theme::tap_text(theme::BODY)),
+    ));
     if !wizard.battle_net {
         body = body.push(muted(
             "Important! Only World of Warcraft games will work for now. You can install \
@@ -1127,11 +1193,11 @@ fn games<'a>(app: &'a Lightforge) -> Element<'a, Message> {
         if app.installed_versions.contains_key(entry.code.as_str()) {
             facts = facts.push(muted("installed".to_owned(), theme::CAPTION));
         }
+        let key = format!("game {}", entry.code.as_str());
         let action: Element<Message> = match tracked(&entry.code) {
             true => secondary("Remove", Message::RemoveProduct(entry.code.clone()))
-                .enabled(app.choices.len() > 1)
-                .into(),
-            false => secondary("Add", Message::AddProduct(entry.code.clone())).enabled(true).into(),
+                .keyed(key, app.choices.len() > 1),
+            false => secondary("Add", Message::AddProduct(entry.code.clone())).keyed(key, true),
         };
         container(
             row![mark, facts.width(Length::Fill), action]
@@ -1164,11 +1230,12 @@ fn games<'a>(app: &'a Lightforge) -> Element<'a, Message> {
         }
     }
 
-    body = body.push(
+    body = body.push(focus::region(
+        "wizard games",
         scrollable(list)
             .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
             .style(theme::scrollbar),
-    );
+    ));
     body.into()
 }
 
@@ -1181,6 +1248,15 @@ fn done<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     })
     .size(theme::BODY)]
     .spacing(theme::MD);
+
+    if app.console() {
+        body = body.push(muted(
+            "Lightforge goes into your Steam library as we close this, with its own \
+             artwork. It shows there the next time Steam starts."
+                .to_owned(),
+            theme::CAPTION,
+        ));
+    }
 
     if !wizard.pending.is_empty() {
         body = body.push(muted(
@@ -1211,8 +1287,8 @@ fn done<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     body = body.push(
         container(
             row![
-                crate::link_square(crate::discord_icon(), crate::DISCORD_URL, MARK),
-                crate::link_square(crate::x_icon(), crate::X_URL, MARK),
+                mark(crate::discord_icon(), crate::DISCORD_URL),
+                mark(crate::x_icon(), crate::X_URL),
             ]
             .spacing(theme::MD),
         )
@@ -1242,8 +1318,8 @@ fn done<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
                 .color(theme::MUTED)
                 .center(),
                 row![
-                    crate::link_square(crate::kofi_icon(), crate::KOFI_URL, MARK),
-                    crate::link_square(crate::paypal_icon(), crate::PAYPAL_URL, MARK),
+                    mark(crate::kofi_icon(), crate::KOFI_URL),
+                    mark(crate::paypal_icon(), crate::PAYPAL_URL),
                 ]
                 .spacing(theme::MD),
             ]
@@ -1257,7 +1333,13 @@ fn done<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     body.into()
 }
 
-/// A region as a `pick_list` option; the widget needs `Display`.
+/// One of the last slide's marks, as a place for the ring.
+fn mark(icon: iced::widget::image::Handle, url: Option<&'static str>) -> Element<'static, Message> {
+    let press = url.map_or(focus::Press::Off, |url| focus::Press::Send(Message::OpenLink(url)));
+    focus::ring(focus::Target::Link(url.unwrap_or_default()), press, crate::link_square(icon, url, MARK))
+}
+
+/// A region as a picker option; the widget needs `Display`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RegionChoice(Region);
 
@@ -1267,7 +1349,7 @@ impl std::fmt::Display for RegionChoice {
     }
 }
 
-/// A locale as a `pick_list` option, named in its own language.
+/// A locale as a picker option, named in its own language.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LocaleChoice(String);
 
@@ -1303,6 +1385,63 @@ mod tests {
             version: None,
             bytes: 2048,
         }
+    }
+
+    /// Only SteamOS is asked, and there the first slide waits for an answer.
+    #[test]
+    fn steamos_has_to_say_what_it_is_for_before_setup_goes_on() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.config.steamos_use = None;
+
+        app.steamos = false;
+        assert!(welcome_answered(&app), "a desktop distro was held on a SteamOS question");
+
+        app.steamos = true;
+        assert!(!welcome_answered(&app));
+        let _ = update(&mut app, Msg::SteamOsUse(SteamOsUse::Console));
+        assert_eq!(app.config.steamos_use, Some(SteamOsUse::Console));
+        assert!(welcome_answered(&app));
+    }
+
+    /// Setup by keys: the first key lands on the slide's own button, Enter
+    /// walks the slides, and Escape steps back and never leaves.
+    #[test]
+    fn setup_walks_by_enter_and_steps_back_by_escape() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.splash = None;
+        app.steamos = false;
+        app.wizard = Some(Wizard::default());
+        let at = |x, y| iced::Rectangle { x, y, width: 120.0, height: 30.0 };
+        let send = |message| focus::Press::Send(message);
+
+        let slide = |app: &Lightforge| {
+            focus::reset();
+            let wizard = app.wizard.as_ref().unwrap();
+            focus::put(focus::Target::Key("picker wizard region".to_owned()), at(200.0, 200.0), send(Message::MenuClick), 0);
+            focus::put(forward(wizard), at(600.0, 600.0), send(Message::Wizard(match wizard.step {
+                Step::Done => Msg::Finish,
+                _ => Msg::Next,
+            })), 0);
+        };
+
+        slide(&app);
+        let _ = app.update(Message::FocusStep(focus::Step::Down));
+        assert_eq!(app.focus, Some(forward(app.wizard.as_ref().unwrap())));
+        let _ = app.update(Message::FocusPress);
+        assert_eq!(app.wizard.as_ref().unwrap().step, Step::Place);
+
+        let _ = app.update(Message::FocusBack);
+        assert_eq!(app.wizard.as_ref().unwrap().step, Step::Welcome);
+        let _ = app.update(Message::FocusBack);
+        assert!(app.wizard.is_some(), "Escape on the first slide left setup");
+
+        // Opened from Settings, where Escape otherwise means "back to Play".
+        app.screen = crate::Screen::Settings;
+        let _ = app.update(Message::FocusBack);
+        assert!(app.wizard.is_some(), "Escape in setup over Settings left setup");
+        assert_eq!(app.screen, crate::Screen::Settings);
     }
 
     #[test]

@@ -29,7 +29,7 @@ GLIBC_MAX ?= 2.36
 BINARIES := lightforge lightforge-gui
 
 .PHONY: release image check-glibc clean-release cli-doc check-cli-doc \
-	packages deb rpm tarball checksums github-names check-binaries \
+	packages deb rpm tarball installer checksums github-names check-binaries \
 	clean-packages install uninstall
 
 ## Build release binaries against an old glibc, and verify they are portable.
@@ -126,7 +126,7 @@ uninstall:
 ## rebuilding 27 MB of GUI three times to produce three files from the same
 ## two binaries is a minute nobody needs to spend. Run `make release` first —
 ## each target checks the binaries are there.
-packages: tarball deb rpm checksums
+packages: tarball deb rpm installer checksums
 	@echo
 	@echo "Release artifacts in $(DIST):"
 	@ls -lh $(DIST) | awk 'NR>1 {print "  " $$9 "  " $$5}'
@@ -148,6 +148,14 @@ tarball: check-binaries
 	       target/tarball/lightforge-$(VERSION)/
 	@tar -czf $(DIST)/$(TARBALL) -C target/tarball lightforge-$(VERSION)
 	@echo "ok   $(DIST)/$(TARBALL)"
+
+## The double-click installer, published beside the packages so the release
+## page has one file a Steam Deck user can take. It carries no version: it
+## fetches install.sh from main, which picks the newest release itself.
+installer:
+	@mkdir -p $(DIST)
+	@cp packaging/installer/lightforge-installer.desktop $(DIST)/
+	@echo "ok   $(DIST)/lightforge-installer.desktop"
 
 ## A .deb, written natively — no `dpkg` on this machine.
 ##
@@ -192,11 +200,19 @@ checksums: github-names
 	@cd $(DIST) && rm -f SHA256SUMS && sha256sum lightforge* > SHA256SUMS
 	@cat $(DIST)/SHA256SUMS
 
-## Fail with a useful sentence rather than a missing-file error from tar.
+## Fail with a useful sentence rather than a missing-file error from tar,
+## and refuse binaries built from another version: packages are named from
+## Cargo.toml, so stale binaries would ship under the new name (beta.2 nearly
+## did). The timeout is for a GUI built before it answered `--version`,
+## which would open a window instead and hold the build.
 check-binaries:
 	@for bin in $(addprefix $(OUT)/,$(BINARIES)); do \
 	  [ -f "$$bin" ] || { echo "missing $$bin — run \`make release\` first"; exit 1; }; \
+	  got=$$(timeout 10 "$$bin" --version 2>/dev/null); \
+	  want="$$(basename "$$bin") $(VERSION)"; \
+	  [ "$$got" = "$$want" ] || { echo "$$bin reports '$$got', expected '$$want' — run \`make release\`"; exit 1; }; \
 	done
+	@echo "ok   binaries are $(VERSION)"
 
 clean-packages:
 	rm -rf $(DIST) target/tarball target/debian target/container/generate-rpm

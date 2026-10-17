@@ -15,7 +15,7 @@
 //! iced gives no cascade, so "restraint" here means type, spacing and one
 //! accent rather than effects.
 
-use iced::widget::{button, container, overlay, pick_list, scrollable, text_editor, text_input};
+use iced::widget::{button, container, scrollable, text_editor, text_input};
 use iced::{border, gradient, Background, Border, Color, Font, Radians, Shadow, Theme, Vector};
 
 // ---------------------------------------------------------------- palette --
@@ -205,6 +205,47 @@ pub fn logo_size(aspect: f32, ink: f32) -> (f32, f32) {
 /// it no longer does. Not as large as that freedom allows, though, the band
 /// is a card over the artwork now, and a card is sized by what it holds.
 pub const TILE: f32 = 40.0;
+
+/// Drawn for a Steam Deck or Steam Machine: held in a hand or read from a
+/// sofa, pressed with a thumb or a controller. Set by the view at the start
+/// of each frame, from the answer setup asked for on SteamOS, so the shared
+/// builders below can read it without every page passing it down.
+static CONSOLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_console(on: bool) {
+    CONSOLE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn console() -> bool {
+    CONSOLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A product tile's edge: [`TILE`], or a thumb's worth more on a console.
+pub fn tile() -> f32 {
+    match console() {
+        true => 52.0,
+        false => TILE,
+    }
+}
+
+/// Padding for something pressed, `[vertical, horizontal]`. On a console a
+/// button grows to about 42 points tall, the size Steam's own Game Mode
+/// buttons are on the same screen, from the 32 a mouse is happy with.
+pub fn tap(padding: [f32; 2]) -> [f32; 2] {
+    match console() {
+        true => [padding[0] + 5.0, padding[1] + XS],
+        false => padding,
+    }
+}
+
+/// Text on something pressed: a step up on a console, where the screen is
+/// seven inches across or across the room.
+pub fn tap_text(size: f32) -> f32 {
+    match console() {
+        true => size + 2.0,
+        false => size,
+    }
+}
 
 /// A headline's picture on the News page, and the 16:9 box it sits in.
 ///
@@ -447,6 +488,38 @@ pub fn row(_theme: &Theme) -> container::Style {
     }
 }
 
+/// [`row`] as a button, for a row that is itself the click target, the
+/// games in All Games. The hover lights the whole row, for the reason
+/// [`card_button`] gives: a highlight inside a static row says only part of
+/// it is pressable. Buttons inside it still take their own clicks first.
+pub fn row_button(_theme: &Theme, status: button::Status) -> button::Style {
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    // A twentieth of the way to the text colour: the same small lift as
+    // `ghost`'s hover wash, mixed in because a row is opaque.
+    let lift = |c: f32, t: f32| c + (t - c) * 0.05;
+    button::Style {
+        background: Some(Background::Color(match hovered {
+            true => Color {
+                r: lift(RAISED.r, TEXT.r),
+                g: lift(RAISED.g, TEXT.g),
+                b: lift(RAISED.b, TEXT.b),
+                a: RAISED.a,
+            },
+            false => RAISED,
+        })),
+        text_color: TEXT,
+        border: Border {
+            color: match hovered {
+                true => Color { a: 0.24, ..TEXT },
+                false => BORDER,
+            },
+            width: 1.0,
+            radius: RADIUS_SM.into(),
+        },
+        ..button::Style::default()
+    }
+}
+
 /// The shape of a scrollbar: narrow, and embedded rather than floating.
 ///
 /// iced's default is 10pt wide and drawn *over* the content, which on a list
@@ -681,23 +754,17 @@ pub fn selected(_theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-/// The branch picker, and the list it drops down.
-///
-/// iced's default is a light control, which was tolerable when the picker sat
-/// on the page and is not once it sits inside the header band. Both halves are
-/// styled: the closed control and its overlay menu are separate types, and
-/// styling only one leaves a pale list hanging off a dark button.
-pub fn picker(_theme: &Theme, status: pick_list::Status) -> pick_list::Style {
-    let hovered =
-        matches!(status, pick_list::Status::Hovered | pick_list::Status::Opened { .. });
-    pick_list::Style {
-        background: Background::Color(match hovered {
+/// A dropdown's face: the button of a picker whose list is a menu of our own,
+/// since a `pick_list` keeps its open state to itself and a keyboard can
+/// neither open it nor move through it.
+pub fn picker_button(_theme: &Theme, status: button::Status) -> button::Style {
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    button::Style {
+        background: Some(Background::Color(match hovered {
             true => RAISED,
             false => SURFACE,
-        }),
+        })),
         text_color: TEXT,
-        placeholder_color: MUTED,
-        handle_color: MUTED,
         border: Border {
             color: match hovered {
                 true => BORDER_OVER_ART,
@@ -706,21 +773,7 @@ pub fn picker(_theme: &Theme, status: pick_list::Status) -> pick_list::Style {
             width: 1.0,
             radius: RADIUS_SM.into(),
         },
-    }
-}
-
-/// The open list behind [`picker`].
-pub fn picker_menu(_theme: &Theme) -> overlay::menu::Style {
-    overlay::menu::Style {
-        background: Background::Color(SURFACE),
-        text_color: TEXT,
-        border: Border { color: BORDER, width: 1.0, radius: RADIUS_SM.into() },
-        selected_background: Background::Color(Color { a: 0.18, ..ACCENT }),
-        selected_text_color: TEXT,
-        // 0.14 fixed the software renderer's shadow damage (iced-rs/iced#2715),
-        // so a shadow here is safe again, but the menu never had one, and
-        // adding one is a design decision rather than part of this port.
-        shadow: iced::Shadow::default(),
+        ..button::Style::default()
     }
 }
 

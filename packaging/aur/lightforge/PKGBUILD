@@ -3,20 +3,20 @@
 # Builds from the tagged source. For the prebuilt binaries, see `lightforge-bin`.
 
 pkgname=lightforge
-pkgver=1.0.0beta.4
+pkgver=1.0.0beta.5
 pkgrel=1
-# The upstream tag. AUR versions may not contain a hyphen, so `1.0.0-beta.4`
-# becomes `1.0.0beta.4` here — which `vercmp` orders *before* `1.0.0`, so the
+# The upstream tag. AUR versions may not contain a hyphen, so `1.0.0-beta.5`
+# becomes `1.0.0beta.5` here — which `vercmp` orders *before* `1.0.0`, so the
 # eventual stable release upgrades cleanly and needs no `epoch`.
-_tag=v1.0.0-beta.4
-pkgdesc='Native Linux launcher for World of Warcraft, with Battle.net managed for you'
+_tag=v1.0.0-beta.5
+pkgdesc='Install, update and play World of Warcraft on Linux, and a home for all your other Battle.net games'
 arch=('x86_64')
 url='https://github.com/LightforgeProject/lightforge'
 license=('GPL-3.0-or-later')
 # The launcher opens Vulkan, Wayland and X11 at run time rather than linking
-# them, so there is nothing to depend on but libc — and it falls back to
-# software rendering by itself when there is no GPU it can use.
-depends=('glibc' 'gcc-libs' 'fontconfig')
+# them, so there is nothing to depend on but libc and libudev (gamepads) — and
+# it falls back to software rendering by itself when there is no GPU it can use.
+depends=('glibc' 'gcc-libs' 'fontconfig' 'systemd-libs')
 makedepends=('cargo')
 optdepends=(
   'wine: 32-bit runtime for the Battle.net installer (needs multilib)'
@@ -32,8 +32,8 @@ source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
 # Of GitHub's generated source archive for the tag, which is not
 # byte-identical to anything produced locally. Regenerate with `updpkgsums`.
 # `SKIP` until the tag exists: GitHub generates the source archive, so run
-# `updpkgsums` once v1.0.0-beta.4 is pushed, before uploading.
-sha256sums=('67cb3ebb007c5f48569ca9c5884ca28050eef899842d67e8dd2153a673e4ef19')
+# `updpkgsums` once v1.0.0-beta.5 is pushed, before uploading.
+sha256sums=('SKIP')
 _srcdir="$pkgname-${_tag#v}"
 
 prepare() {

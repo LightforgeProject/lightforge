@@ -10,7 +10,7 @@
 //! redoes. Like [`crate::tact::install`], it reports through an [`Event`]
 //! callback so both front-ends can drive it.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::battlenet::{self, SetupReport};
 use crate::config::Config;
@@ -133,15 +133,18 @@ pub async fn run(
     proton_version: Option<&str>,
     mut on_event: impl FnMut(Event),
 ) -> Result<Status, SetupError> {
+    let http = Http::new()?;
+    let mut status = Status::inspect(layout, dirs, config);
+
     // Before anything is downloaded. Battle.net's installer is 32-bit, and it
     // is the only 32-bit thing in this sequence, so a machine with no 32-bit
     // userspace sails through Proton and prefix creation and dies on the last
     // step. Checking here costs one `stat` and saves a 400 MB download the
-    // user could not have used.
-    runtime::check_loader()?;
-
-    let http = Http::new()?;
-    let mut status = Status::inspect(layout, dirs, config);
+    // user could not have used. Only when Battle.net is still to come: WoW
+    // alone is 64-bit, and a setup that declined Battle.net needs none of it.
+    if !status.battle_net && status.battle_net_wanted {
+        runtime::check_loader()?;
+    }
 
     // 1. Proton. Everything else runs *through* a Proton build, so this is
     //    first whether the user cares about it or not.
@@ -366,11 +369,6 @@ pub fn is_ready(layout: &Layout, dirs: &AppDirs, config: &Config) -> bool {
 /// The directory a first run would install Proton into, for display.
 pub fn proton_dir(dirs: &AppDirs) -> PathBuf {
     dirs.proton_dir()
-}
-
-/// True when `path` looks like a Proton build Lightforge itself installed.
-pub fn is_managed(dirs: &AppDirs, path: &Path) -> bool {
-    path.starts_with(dirs.proton_dir())
 }
 
 #[cfg(test)]

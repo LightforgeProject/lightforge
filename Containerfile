@@ -1,8 +1,9 @@
 # The build environment for a release binary.
 #
 # Lightforge links almost nothing dynamically — `ldd` on a release build shows
-# `libc`, `libgcc_s` and `libm` and nothing else, because Vulkan, Wayland and
-# X11 are all opened at run time rather than linked at build time. So the only
+# `libc`, `libgcc_s`, `libm` and `libudev` (gamepads, through gilrs) and
+# nothing else, because Vulkan, Wayland and X11 are all opened at run time
+# rather than linked at build time. So the only
 # thing this image decides is **which glibc the binary demands**, and that is
 # the whole reason it exists.
 #
@@ -17,12 +18,11 @@
 ARG RUST_IMAGE=docker.io/library/rust:bookworm
 FROM ${RUST_IMAGE}
 
-# `pkg-config` is not needed by anything today and is here because the first
-# crate that wants it fails with a message nobody enjoys reading. Everything
+# `libudev-dev` is for gilrs, which finds it through `pkg-config`. Everything
 # else a desktop app usually needs at build time — Vulkan, Wayland, X11,
 # fontconfig — is genuinely absent on purpose: see the note above.
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends pkg-config \
+    && apt-get install --yes --no-install-recommends pkg-config libudev-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

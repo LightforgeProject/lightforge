@@ -555,7 +555,7 @@ pub const AUTOSTART_MINIMIZED_KEY: &str = "User.Client.AutoStartMinimized";
 ///
 /// Both have to be re-applied before each start, because the client writes the
 /// window state back from its live window every time it exits, the same reason
-/// the game's CVars are re-asserted per launch rather than set once.
+/// the game's CVars are reconciled per launch rather than set once.
 pub fn window_state_tweaks(minimized: bool) -> Vec<Tweak> {
     vec![
         Tweak::new(

@@ -7,6 +7,8 @@
 use std::path::PathBuf;
 
 use lightforge_core::error::chain;
+
+use crate::tasks::Problem;
 use lightforge_core::addons::catalog::{Catalog, Request};
 use lightforge_core::addons::manage::{self, Event, Options, Report};
 use lightforge_core::addons::richtext;
@@ -84,6 +86,8 @@ pub struct Listing {
     /// is how "0 installed · 3 managed" happens.
     pub stale: usize,
     pub dir: PathBuf,
+    /// Why the ledger could not be read, when it could not.
+    pub problem: Option<String>,
 }
 
 /// Scan a product's addons and fold in what the ledger knows.
@@ -94,15 +98,21 @@ pub async fn list(layout: Layout, code: ProductCode) -> Listing {
         let path = AppDirs::discover()
             .ok()
             .map(|dirs| manage::ledger_path(dirs.data_dir(), &dir, &code));
-        let mut ledger = path
-            .as_ref()
-            .and_then(|path| Ledger::load(path).ok())
-            .unwrap_or_default();
+        // An unreadable ledger is said, not shown as "nothing managed":
+        // install, update and remove all refuse it, and a page that looks
+        // fine while every button fails is the worse of the two.
+        let (mut ledger, problem) = match path.as_ref().map(|path| Ledger::load(path)) {
+            Some(Ok(ledger)) => (ledger, None),
+            Some(Err(e)) => (Ledger::default(), Some(chain(&e))),
+            None => (Ledger::default(), None),
+        };
 
         // An addon whose folders are all gone is not installed, whatever the
         // ledger says, and offering to update it is a promise we cannot keep.
         // Only ever reconciled against a directory we could read.
-        if dir.is_dir() {
+        // Never against a ledger that did not load: saving the stand-in
+        // would replace the user's file, the one record of what is ours.
+        if dir.is_dir() && problem.is_none() {
             let dropped = ledger.prune_missing(&dir);
             if !dropped.is_empty() {
                 if let Some(path) = &path {
@@ -128,6 +138,7 @@ pub async fn list(layout: Layout, code: ProductCode) -> Listing {
             stale: ledger.addons.len() - managed,
             rows: rows_from(&installed, &ledger),
             dir,
+            problem,
         }
     })
     .await
@@ -447,6 +458,7 @@ fn options(
         pinned,
         reinstall: false,
         channel,
+        backup: Some(crate::tasks::settings_backup(layout, &dirs, code)),
     })
 }
 
@@ -467,11 +479,11 @@ pub async fn import(
     // than taking the newest of each.
     pinned: bool,
     tx: tokio::sync::watch::Sender<Progress>,
-) -> Result<Report, String> {
-    let collection = Collection::parse(&token).map_err(|e| chain(&e))?;
+) -> Result<Report, Problem> {
+    let collection = Collection::parse(&token).map_err(|e| Problem::of(&e))?;
     let requests = manage::requests_from(&collection);
     if requests.is_empty() {
-        return Err("that token names no addons Lightforge can install".to_owned());
+        return Err("that token names no addons Lightforge can install".into());
     }
     run(http, layout, code, requests, Mode { pinned, ..Mode::default() }, channel, tx).await
 }
@@ -483,10 +495,10 @@ pub async fn update(
     code: ProductCode,
     channel: Channel,
     tx: tokio::sync::watch::Sender<Progress>,
-) -> Result<Report, String> {
-    let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
+) -> Result<Report, Problem> {
+    let dirs = AppDirs::discover().map_err(|e| Problem::of(&e))?;
     let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
-        .map_err(|e| chain(&e))?;
+        .map_err(|e| Problem::of(&e))?;
     let requests = manage::update_requests(&ledger, channel);
 
     if requests.is_empty() {
@@ -506,13 +518,24 @@ pub async fn auto_update(
     channel: Channel,
     default_auto: bool,
     tx: tokio::sync::watch::Sender<Progress>,
-) -> Result<Option<Report>, String> {
-    let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
+) -> Result<Option<Report>, Problem> {
+    let dirs = AppDirs::discover().map_err(|e| Problem::of(&e))?;
     let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
-        .map_err(|e| chain(&e))?;
+        .map_err(|e| Problem::of(&e))?;
     let requests = manage::auto_update_requests(&ledger, channel, default_auto);
 
     if requests.is_empty() {
+        return Ok(None);
+    }
+    // A game already running in the prefix, one this run of Lightforge did
+    // not start, has the addons loaded and writes beside them on exit.
+    let in_game = {
+        let layout = layout.clone();
+        tokio::task::spawn_blocking(move || !lightforge_core::preflight::games_running(&layout).is_empty())
+            .await
+            .unwrap_or(true)
+    };
+    if in_game {
         return Ok(None);
     }
     run(http, layout, code, requests, Mode::default(), channel, tx).await.map(Some)
@@ -538,7 +561,7 @@ async fn run(
     mode: Mode,
     channel: Channel,
     tx: tokio::sync::watch::Sender<Progress>,
-) -> Result<Report, String> {
+) -> Result<Report, Problem> {
     let options = Options {
         reinstall: mode.reinstall,
         ..options(&layout, &code, mode.pinned, channel)
@@ -574,7 +597,7 @@ async fn run(
 
     manage::install_all(&http, catalog.as_ref(), &requests, &options, on_event)
         .await
-        .map_err(|e| chain(&e))
+        .map_err(|e| Problem::of(&e))
 }
 
 /// Search every provider that can answer.
@@ -631,7 +654,7 @@ pub async fn install_one(
     id: String,
     channel: Channel,
     tx: tokio::sync::watch::Sender<Progress>,
-) -> Result<Report, String> {
+) -> Result<Report, Problem> {
     run(
         http,
         layout,
@@ -762,7 +785,7 @@ pub async fn install_version(
     id: String,
     file_id: String,
     tx: tokio::sync::watch::Sender<Progress>,
-) -> Result<Report, String> {
+) -> Result<Report, Problem> {
     run(
         http,
         layout,
@@ -790,10 +813,10 @@ pub async fn reinstall_one(
     id: String,
     channel: Channel,
     tx: tokio::sync::watch::Sender<Progress>,
-) -> Result<Report, String> {
-    let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
+) -> Result<Report, Problem> {
+    let dirs = AppDirs::discover().map_err(|e| Problem::of(&e))?;
     let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
-        .map_err(|e| chain(&e))?;
+        .map_err(|e| Problem::of(&e))?;
     let pinned_file = ledger.find(&provider, &id).and_then(|record| record.pinned.clone());
 
     run(

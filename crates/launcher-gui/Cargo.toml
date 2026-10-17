@@ -8,7 +8,7 @@ repository.workspace = true
 homepage.workspace = true
 # Doubles as the .deb/.rpm one-line summary, so it is written for someone
 # reading a package list rather than for a crate index.
-description = "Install, update and play World of Warcraft on Linux"
+description = "Install, update and play World of Warcraft on Linux, and a home for all your other Battle.net games"
 
 [[bin]]
 name = "lightforge-gui"
@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 lightforge-core.workspace = true
 futures-util.workspace = true
+gilrs.workspace = true
 anyhow.workspace = true
 iced.workspace = true
 image.workspace = true
@@ -35,7 +36,7 @@ tokio = { workspace = true, features = ["rt", "sync"] }
 #
 # `cargo-deb` and `cargo-generate-rpm` both write their format natively, so
 # neither `dpkg` nor `rpmbuild` has to exist on the machine doing the
-# packaging — which matters, because this one is Arch. Both are driven from
+# packaging, which matters, because this one is Arch. Both are driven from
 # the `deb` / `rpm` targets in the Makefile, never on their own: they package
 # the **container** binaries (`make release`), and a package built from a host
 # build would demand the host's glibc. See `Containerfile`.
@@ -63,7 +64,7 @@ Addons, per-game Proton pinning and graphics tuning are built in."""
 # assembled on a rolling-release machine from binaries built in a Debian 12
 # container. The floor is stated instead, and `make check-glibc` is what
 # proves the binaries honour it.
-depends = "libc6 (>= 2.36), libgcc-s1"
+depends = "libc6 (>= 2.36), libgcc-s1, libudev1"
 # Battle.net's installer is the one 32-bit binary in the sequence. WoW itself
 # never needs this, so it is a suggestion rather than a dependency.
 suggests = "wine32"
@@ -91,7 +92,7 @@ assets = [
 [package.metadata.generate-rpm]
 name = "lightforge"
 url = "https://github.com/LightforgeProject/lightforge"
-summary = "Install, update and play World of Warcraft on Linux"
+summary = "Install, update and play World of Warcraft on Linux, and a home for all your other Battle.net games"
 # Stated rather than discovered, for the same reason as the deb's `depends`.
 auto-req = "disabled"
 # There are no scriptlets, so nothing in the package needs a shell.
@@ -120,3 +121,5 @@ assets = [
 
 [package.metadata.generate-rpm.requires]
 glibc = ">= 2.36"
+# libudev.so.1, for gamepads.
+systemd-libs = "*"

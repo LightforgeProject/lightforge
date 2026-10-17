@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use iced::widget::image::Handle;
+use lightforge_core::backup;
+use lightforge_core::advice::{advise, Advice};
 use lightforge_core::error::chain;
 use lightforge_core::assets::{Manifest, Pipeline};
 use lightforge_core::config::Config;
@@ -27,6 +29,46 @@ use lightforge_core::tact::version::{self, Region, Version};
 use lightforge_core::tweaks::{HostTools, Tweaks};
 
 use crate::art::Art;
+
+/// An error on its way to the screen: what went wrong, and what to do about
+/// it when that is known.
+///
+/// Built with [`Problem::of`] while the error still has its type, because
+/// that is the only point at which [`advise`](lightforge_core::advice::advise)
+/// can tell a full drive from a dropped connection. A plain `String` converts
+/// into one with no advice, so a path that has not been taught any yet still
+/// reports exactly what it did before.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Problem {
+    pub message: String,
+    pub advice: Option<Advice>,
+}
+
+impl Problem {
+    pub fn of(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self { message: chain(error), advice: advise(error) }
+    }
+}
+
+impl From<String> for Problem {
+    fn from(message: String) -> Self {
+        Self { message, advice: None }
+    }
+}
+
+impl From<&str> for Problem {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+
+/// The message alone. The advice is for the screen; the status history and
+/// a bug report want what actually went wrong.
+impl std::fmt::Display for Problem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
 
 /// One product's situation, as of a refresh.
 #[derive(Debug, Clone)]
@@ -237,7 +279,16 @@ pub async fn cached_theme(
             Some(manifest) => cached_icons(&pipeline, manifest, &codes),
             None => HashMap::new(),
         };
-        Themed { manifest: manifest.map(Arc::new), branding, icons }
+        let warm = manifest.as_ref().is_some_and(|manifest| {
+            let wants_art = manifest.slot(&code, |t| t.logo.as_ref()).is_some()
+                && manifest.slot(&code, |t| t.background.as_ref()).is_some();
+            let wants_icons = codes
+                .iter()
+                .filter(|c| manifest.own_theme(c).is_some_and(|t| t.icon.is_some()))
+                .count();
+            (!wants_art || branding.is_some()) && icons.len() == wants_icons
+        });
+        Themed { manifest: manifest.map(Arc::new), branding, icons, warm }
     })
     .await
     .unwrap_or_default()
@@ -270,6 +321,10 @@ pub struct Themed {
     pub manifest: Option<Arc<Manifest>>,
     pub branding: Option<Art>,
     pub icons: HashMap<ProductCode, Mark>,
+    /// Set only by the cache-only pass: everything the first screen draws
+    /// was on disk, the selected game's art and every product's mark, so the
+    /// splash has nothing left to wait for.
+    pub warm: bool,
 }
 
 /// A product's decoded mark, beside the file it came from.
@@ -354,6 +409,9 @@ pub async fn check_for_update(
     found
 }
 
+/// How many products a prefetch fetches at once.
+const PREFETCH_AT_ONCE: usize = 4;
+
 pub async fn prefetch_within(
     budget: std::time::Duration,
     http: Option<Http>,
@@ -384,17 +442,37 @@ pub async fn prefetch(
             return 0;
         }
     };
-    let mut cached = 0;
-    for code in &codes {
-        // One at a time rather than joined: these are big files off one host,
-        // and a first run has plenty of other things it would rather have the
-        // connection for.
-        if pipeline.resolve_with(&http, &manifest, code).await.is_ok() {
-            cached += 1;
-        }
-        let _ = pipeline.icon(&http, &manifest, code).await;
-    }
-    crate::trace::mark(format_args!("prefetched art for {cached}/{} products", codes.len()));
+    use futures_util::StreamExt;
+
+    // A few products at a time. This only runs with art missing, usually a
+    // first run, where everything is a real download: one at a time made the
+    // splash the sum of every transfer, and all at once would open a dozen
+    // connections to one host (no HTTP/2 here) fighting over a slow link.
+    //
+    // Each future owns its handles: borrowing them across `buffer_unordered`
+    // trips the compiler's higher-ranked `Send` check on the task.
+    let manifest = Arc::new(manifest);
+    let total = codes.len();
+    let cached = futures_util::stream::iter(codes)
+        .map(|code| {
+            let (http, pipeline, manifest) = (http.clone(), pipeline.clone(), Arc::clone(&manifest));
+            async move {
+                match pipeline.resolve_with(&http, &manifest, &code).await {
+                    // Branding carries the icon; asking again is a round trip.
+                    Ok(_) => true,
+                    // A hand-off has a mark and no art.
+                    Err(_) => {
+                        let _ = pipeline.icon(&http, &manifest, &code).await;
+                        false
+                    }
+                }
+            }
+        })
+        .buffer_unordered(PREFETCH_AT_ONCE)
+        .filter(|resolved| std::future::ready(*resolved))
+        .count()
+        .await;
+    crate::trace::mark(format_args!("prefetched art for {cached}/{total} products"));
     cached
 }
 
@@ -470,7 +548,7 @@ pub async fn theme(
         None => None,
     };
 
-    Themed { manifest: Some(manifest), branding, icons }
+    Themed { manifest: Some(manifest), branding, icons, warm: false }
 }
 
 /// What a running transfer publishes for the UI to read.
@@ -512,7 +590,7 @@ pub async fn download(
     optional_tags: Vec<String>,
     cancel: Cancel,
     tx: tokio::sync::watch::Sender<TransferState>,
-) -> Result<Summary, String> {
+) -> Result<Summary, Problem> {
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
 
     // The download runs on its own thread with its own runtime, and the result
@@ -529,7 +607,7 @@ pub async fn download(
             let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
                 Ok(runtime) => runtime,
                 Err(e) => {
-                    let _ = done_tx.send(Err(chain(&e)));
+                    let _ = done_tx.send(Err(Problem::of(&e)));
                     return;
                 }
             };
@@ -538,7 +616,7 @@ pub async fn download(
                 // Deliberately not the app's shared client: this runtime is
                 // built here and torn down with the thread, and a reqwest
                 // client's connections belong to the runtime that opened them.
-                let http = Http::new().map_err(|e| chain(&e))?;
+                let http = Http::new().map_err(|e| Problem::of(&e))?;
                 let dest = layout.wow_install(&code);
                 // The library's own path, not the default one. `.product.db`
                 // records where Battle.net should look, and a product on an
@@ -615,11 +693,11 @@ pub async fn download(
 
                 install::run(&http, &dest, &code, &options, &cancel, on_event)
                     .await
-                    .map_err(|e| chain(&e))
+                    .map_err(|e| Problem::of(&e))
             });
             let _ = done_tx.send(result);
         })
-        .map_err(|e| chain(&e))?;
+        .map_err(|e| Problem::of(&e))?;
 
     done_rx.await.map_err(|_| "the download thread stopped unexpectedly".to_owned())?
 }
@@ -722,8 +800,8 @@ pub async fn preflight(
     code: ProductCode,
     downloads: SharedDownloads,
     runs: Runs,
-) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
+) -> Result<(), Problem> {
+    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         // The same build the launch will use. The prefix is shared, so
         // clearing it with one Proton and then launching under another is how
         // you get an unasked-for prefix upgrade between the two.
@@ -734,10 +812,10 @@ pub async fn preflight(
             .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
             .unwrap_or_default();
         let started = Instant::now();
-        let report = Preflight::new(Config::default().prefix_user)
+        let report = Preflight::new(config.prefix_user.clone())
             .with_managed(config.managed_products())
             .run(&runner, &layout, Some(&code), &mut guard)
-            .map_err(|e| chain(&e))?;
+            .map_err(|e| Problem::of(&e))?;
         // The report is for the CLI, which prints it. Here the outcome is
         // binary, the prefix is ready or the launch does not happen, but the
         // stage timings are worth tracing: a launch that feels stuck is one
@@ -757,7 +835,7 @@ pub async fn preflight(
         Ok(())
     })
     .await
-    .map_err(|e| chain(&e))?
+    .map_err(|e| Problem::of(&e))?
 }
 
 /// How long the game itself gets to appear in the prefix before the watch
@@ -790,6 +868,90 @@ const WATCH_POLL: Duration = Duration::from_millis(500);
 /// third of a second of a button that looks stuck.
 const EXIT_POLL: Duration = Duration::from_millis(150);
 
+/// Where this game's settings backups go, and how many it keeps.
+pub fn settings_backup(layout: &Layout, dirs: &AppDirs, code: &ProductCode) -> backup::Plan {
+    let keep = Config::load_or_default(&dirs.config_file())
+        .map_or(backup::DEFAULT_KEEP, |config| config.backup_keep);
+    backup::Plan::for_product(layout, dirs, code, keep)
+}
+
+/// A game's settings backups, newest first.
+pub async fn list_backups(layout: Layout, code: ProductCode) -> Result<Vec<backup::Backup>, String> {
+    tokio::task::spawn_blocking(move || {
+        let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
+        settings_backup(&layout, &dirs, &code).list().map_err(|e| chain(&e))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Back up a game's settings now, answering with the sentence to show.
+pub async fn create_backup(layout: Layout, code: ProductCode) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
+        let plan = settings_backup(&layout, &dirs, &code);
+        Ok(match plan.create(backup::Reason::Manual).map_err(|e| chain(&e))? {
+            Some(_) => "Backed up.".to_owned(),
+            None if plan.account_dir.is_dir() => "Nothing changed since the last backup.".to_owned(),
+            None => "Nothing to back up yet: the game has not been started.".to_owned(),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Put one backup back. Refused while a game runs: the client writes
+/// SavedVariables when it exits and would overwrite the restore.
+pub async fn restore_backup(layout: Layout, code: ProductCode, archive: PathBuf) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        if !lightforge_core::preflight::games_running(&layout).is_empty() {
+            return Err("Close the game first, it would overwrite the restore when it exits.".to_owned());
+        }
+        let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
+        let plan = settings_backup(&layout, &dirs, &code);
+        let backups = plan.list().map_err(|e| chain(&e))?;
+        let chosen = backups
+            .iter()
+            .find(|b| b.path == archive)
+            .ok_or("That backup is no longer there.")?;
+        plan.restore(chosen).map_err(|e| chain(&e))?;
+        Ok(format!("Restored the backup from {}.", chosen.when()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Delete one backup, answering with the sentence to show.
+pub async fn delete_backup(layout: Layout, code: ProductCode, archive: PathBuf) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
+        let plan = settings_backup(&layout, &dirs, &code);
+        let backups = plan.list().map_err(|e| chain(&e))?;
+        let chosen = backups
+            .iter()
+            .find(|b| b.path == archive)
+            .ok_or("That backup is no longer there.")?;
+        plan.delete(chosen).map_err(|e| chain(&e))?;
+        Ok(format!("Deleted the backup from {}.", chosen.when()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The first launch on a new build gets a settings backup first.
+///
+/// Never fatal, unlike the one before an addon update: an update can wait for
+/// a backup, but refusing to start the game over one is the wrong trade. Runs
+/// behind the pre-flight gate, with the client closed.
+fn back_up_before_launch(layout: &Layout, code: &ProductCode) {
+    let Ok(dirs) = AppDirs::discover() else { return };
+    match settings_backup(layout, &dirs, code).before_launch() {
+        Ok(Some(taken)) => crate::trace::mark(format!("launch: settings backed up to {}", taken.path.display())),
+        Ok(None) => {}
+        Err(e) => eprintln!("lightforge: could not back up settings before launch: {}", chain(&e)),
+    }
+}
+
 /// Run the game, returning when *the game* has exited.
 ///
 /// Not when the prefix is quiet. Proton launches the client through its own
@@ -810,8 +972,8 @@ const EXIT_POLL: Duration = Duration::from_millis(150);
 /// The fallback path, nothing recognisable ever appeared, keeps the old
 /// behaviour, because a launch that produced no game is exactly the case where
 /// the child's exit status is the only thing worth reporting.
-pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
+pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Problem> {
+    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         // The install's native path, *not* the `C:\Program Files (x86)`
         // symlink. This is half of what makes the in-game shop work, and the
         // other half is [`Layout::wow_drive`]. Wine resolves a Unix path to
@@ -823,22 +985,29 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
         let flavor = layout.wow_install(&code).join(&*code.install_dir());
         let exe = lightforge_core::paths::game_executable(&flavor, &code);
         if !exe.is_file() {
-            return Err(format!("no game at {}", exe.display()));
+            return Err(format!("no game at {}", exe.display()).into());
         }
+
+        back_up_before_launch(&layout, &code);
 
         let (tweaks, tools) = tweaks_for(&code);
 
-        // Re-asserted here, not when the toggle was flipped: the client
+        // Reconciled here, not when the toggle was flipped: the client
         // rewrites Config.wtf from memory every time it exits, so a value
-        // written once is a value the next session may well have thrown away.
-        // This runs behind the pre-flight gate, with the client closed.
+        // written once may be gone, or changed by the player in the game's own
+        // options, which then stays theirs. Behind the pre-flight gate, with
+        // the client closed.
         let cvars = layout.wtf_dir(&code).join("Config.wtf");
-        let (set, unset) = tweaks.cvars();
-        if let Err(e) = lightforge_core::cvars::apply(&cvars, &set, &unset) {
+        match lightforge_core::cvars::reconcile(&cvars, &tweaks.cvars(), lightforge_core::tweaks::RETIRED) {
+            Ok(done) if !done.yielded.is_empty() => crate::trace::mark(format!(
+                "launch: left as set in the game: {}",
+                done.yielded.join(", ")
+            )),
+            Ok(_) => {}
             // Not fatal. A settings file Lightforge could not write is a
             // worse game, not an unplayable one, and refusing to launch over
             // it would be the wrong trade.
-            eprintln!("lightforge: could not apply client settings: {e}");
+            Err(e) => eprintln!("lightforge: could not apply client settings: {e}"),
         }
 
         let runner = runner_for(&layout, &code, Runs::Game)?;
@@ -853,7 +1022,7 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
         // What the prefix held before the click, so a session already running
         // under another launcher is not mistaken for this one's.
         let before = lightforge_core::preflight::games_running(&layout);
-        let mut child = launch.spawn().map_err(|e| chain(&e))?;
+        let mut child = launch.spawn().map_err(|e| Problem::of(&e))?;
         crate::trace::mark(format!("launch: spawned {}", exe.display()));
 
         let watch = exe.file_name().map(|n| n.to_string_lossy().into_owned());
@@ -894,7 +1063,7 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
         }
     })
     .await
-    .map_err(|e| chain(&e))?
+    .map_err(|e| Problem::of(&e))?
 }
 
 /// What [`watch_for`] saw.
@@ -999,8 +1168,8 @@ fn settle(
 
 /// Wait the Proton child out and report what it said, the old contract, kept
 /// for the launches where nothing better is knowable.
-fn reap(mut child: std::process::Child) -> Result<String, String> {
-    let status = child.wait().map_err(|e| chain(&e))?;
+fn reap(mut child: std::process::Child) -> Result<String, Problem> {
+    let status = child.wait().map_err(|e| Problem::of(&e))?;
     Ok(format!("game exited ({status})"))
 }
 
@@ -1020,12 +1189,13 @@ pub async fn launch_via_battle_net(
     user: String,
     family: Option<String>,
     minimized: bool,
-) -> Result<Handoff, String> {
-    tokio::task::spawn_blocking(move || {
+) -> Result<Handoff, Problem> {
+    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch, Readiness};
         use lightforge_core::preflight;
 
         let runner = runner_for(&layout, &code, Runs::BattleNet)?;
+        back_up_before_launch(&layout, &code);
 
         // Counted too, though nothing here winds the prefix down: a direct
         // launch's wind-down may still be pending, and a client that has been
@@ -1070,7 +1240,7 @@ pub async fn launch_via_battle_net(
             let tools = HostTools::detect();
             let wrappers = config_tweaks().wrappers(&tools);
             battlenet::launch_wrapped(&runner, &layout, &how, &wrappers)
-                .map_err(|e| chain(&e))?;
+                .map_err(|e| Problem::of(&e))?;
 
             if battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT)
                 == Readiness::NeedsAttention
@@ -1096,7 +1266,7 @@ pub async fn launch_via_battle_net(
         // anything but WoW came out of the client's own catalogue;
         // `Launch::command` falls back to the compiled-in table without one.
         let launch = Launch::Product { code: code.clone(), exec: family };
-        battlenet::launch(&runner, &layout, &launch).map_err(|e| chain(&e))?;
+        battlenet::launch(&runner, &layout, &launch).map_err(|e| Problem::of(&e))?;
 
         Ok(
             match preflight::wait_for_game_start(&layout, &before, HANDOFF_TIMEOUT) {
@@ -1106,7 +1276,7 @@ pub async fn launch_via_battle_net(
         )
     })
     .await
-    .map_err(|e| chain(&e))?
+    .map_err(|e| Problem::of(&e))?
 }
 
 /// Open the client's install flow for a game, dialog and all.
@@ -1131,8 +1301,8 @@ pub async fn install_via_battle_net(
     user: String,
     uid: String,
     label: String,
-) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
+) -> Result<String, Problem> {
+    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch};
 
         let runner = runner_for(&layout, &code, Runs::BattleNet)?;
@@ -1146,12 +1316,12 @@ pub async fn install_via_battle_net(
         );
 
         battlenet::launch(&runner, &layout, &Launch::InstallFlow { uid })
-            .map_err(|e| chain(&e))?;
+            .map_err(|e| Problem::of(&e))?;
 
         Ok(format!("Battle.net is asking where to install {label}"))
     })
     .await
-    .map_err(|e| chain(&e))?
+    .map_err(|e| Problem::of(&e))?
 }
 
 /// What came of a hand-off.
@@ -1188,13 +1358,13 @@ const HANDOFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180)
 ///
 /// Split from the launch so the screen can say which game is running in
 /// between, instead of "handing off…" for the length of a session.
-pub async fn await_game_exit(layout: Layout, game: GameProcess) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
+pub async fn await_game_exit(layout: Layout, game: GameProcess) -> Result<String, Problem> {
+    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         lightforge_core::preflight::wait_for_game_exit(&layout, game.pid);
         Ok(format!("{} exited", game.name))
     })
     .await
-    .map_err(|e| chain(&e))?
+    .map_err(|e| Problem::of(&e))?
 }
 
 /// What Battle.net reports as installed, keyed by product code.
@@ -1292,8 +1462,8 @@ pub async fn open_battle_net(
     layout: Layout,
     code: ProductCode,
     user: String,
-) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
+) -> Result<String, Problem> {
+    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch};
 
         let runner = runner_for(&layout, &code, Runs::BattleNet)?;
@@ -1305,11 +1475,11 @@ pub async fn open_battle_net(
             &user,
             &battlenet::window_state_tweaks(false),
         );
-        battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| chain(&e))?;
+        battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| Problem::of(&e))?;
         Ok("Battle.net opening".to_owned())
     })
     .await
-    .map_err(|e| chain(&e))?
+    .map_err(|e| Problem::of(&e))?
 }
 
 /// The Proton build a product launches under, with its per-product caches.
@@ -1521,7 +1691,7 @@ pub async fn discard_download(
     let departing = reclaim::Build::remote(code, remote.build_config.clone(), cdn);
     let reclaim = reclaim::plan(&http, &install, &departing).await.map_err(|e| chain(&e))?;
     let freed = tokio::task::spawn_blocking(move || {
-        reclaim::execute(&install, &reclaim).map_err(|e| chain(&e))
+        reclaim::execute(&install, &reclaim, |_| {}).map_err(|e| chain(&e))
     })
     .await
     .map_err(|e| chain(&e))??;
@@ -1587,15 +1757,16 @@ pub async fn uninstall(
     http: Option<Http>,
     layout: Layout,
     code: ProductCode,
-) -> Result<u64, String> {
+    copied: std::sync::Arc<std::sync::atomic::AtomicU64>,
+) -> Result<u64, Problem> {
     use lightforge_core::tact::{productdb, reclaim, uninstall};
 
     let alive = layout.clone();
     let busy = tokio::task::spawn_blocking(move || lightforge_core::preflight::scan(&alive))
         .await
-        .map_err(|e| chain(&e))?;
+        .map_err(|e| Problem::of(&e))?;
     if let Some(process) = busy.first() {
-        return Err(format!("close {} first — the game files are in use", process.name));
+        return Err(format!("close {} first — the game files are in use", process.name).into());
     }
 
     let install = layout.wow_install(&code);
@@ -1603,7 +1774,7 @@ pub async fn uninstall(
         .library(&code)
         .map(|library| library.windows_wow_path())
         .unwrap_or_else(|| lightforge_core::paths::WINDOWS_WOW_PATH.to_owned());
-    let plan = uninstall::plan(&install, &code).map_err(|e| chain(&e))?;
+    let plan = uninstall::plan(&install, &code).map_err(|e| Problem::of(&e))?;
     // A reclaim that cannot be planned is skipped, not fatal: the uninstall
     // itself is still exactly what was asked for.
     let reclaim = match &http {
@@ -1611,15 +1782,79 @@ pub async fn uninstall(
         None => None,
     };
 
-    tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         let removed = uninstall::execute(&install, &code, &plan, &windows_path)
-            .map_err(|e| chain(&e))?;
+            .map_err(|e| Problem::of(&e))?;
         let reclaimed = match &reclaim {
-            Some(reclaim) => reclaim::execute(&install, reclaim).map_err(|e| chain(&e))?,
+            Some(reclaim) => reclaim::execute(&install, reclaim, |bytes| {
+                copied.store(bytes, std::sync::atomic::Ordering::Relaxed)
+            })
+            .map_err(|e| Problem::of(&e))?,
             None => 0,
         };
-        productdb::unregister(&layout.agent_dir(), code.as_str()).map_err(|e| chain(&e))?;
+        productdb::unregister(&layout.agent_dir(), code.as_str()).map_err(|e| Problem::of(&e))?;
         Ok(removed.bytes + reclaimed)
+    })
+    .await
+    .map_err(|e| Problem::of(&e))?
+}
+
+/// What freeing a store's unused game data would do: data no installed or
+/// pre-installed version uses, plus dead space older passes left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unused {
+    /// Bytes of disk it would free.
+    pub freeable: u64,
+    /// Bytes of data still in use it copies first.
+    pub moved: u64,
+}
+
+/// Plan freeing the unused data in the store under `install`. Changes nothing.
+pub async fn unused_plan(http: Option<Http>, install: PathBuf) -> Result<Unused, String> {
+    use lightforge_core::tact::{compact, reclaim};
+    let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
+    let prune = reclaim::plan_unused(&http, &install).await.map_err(|e| chain(&e))?;
+    // Archives the prune already rewrites are counted once, by the prune.
+    let rewritten: HashSet<u16> = prune.archives.iter().copied().collect();
+    let (dead, _) =
+        tokio::task::spawn_blocking(move || compact::plan_where(&install, |a| !rewritten.contains(&a)))
+            .await
+            .map_err(|e| chain(&e))?
+            .map_err(|e| chain(&e))?;
+    Ok(Unused { freeable: prune.freed + dead.freed, moved: prune.moved + dead.moved })
+}
+
+/// Free the unused data in the store under `install`: drop what no version
+/// uses, then compact. Planned again here rather than trusted from when the
+/// page opened. Returns the bytes freed; `copied` hears the copy's progress.
+pub async fn free_unused(
+    http: Option<Http>,
+    layout: Layout,
+    install: PathBuf,
+    copied: std::sync::Arc<std::sync::atomic::AtomicU64>,
+) -> Result<u64, String> {
+    use lightforge_core::tact::{compact, reclaim};
+    use std::sync::atomic::Ordering;
+
+    let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
+    let busy = tokio::task::spawn_blocking(move || lightforge_core::preflight::scan(&layout))
+        .await
+        .map_err(|e| chain(&e))?;
+    if let Some(process) = busy.first() {
+        return Err(format!("close {} first — the game files are in use", process.name));
+    }
+
+    let prune = reclaim::plan_unused(&http, &install).await.map_err(|e| chain(&e))?;
+    tokio::task::spawn_blocking(move || {
+        let pruned = reclaim::execute(&install, &prune, |bytes| copied.store(bytes, Ordering::Relaxed))
+            .map_err(|e| chain(&e))?;
+        let base = prune.moved;
+        let (dead, snapshot) = compact::plan(&install).map_err(|e| chain(&e))?;
+        let compacted = compact::execute(&install, &dead, &snapshot, |bytes| {
+            copied.store(base + bytes, Ordering::Relaxed)
+        })
+        .map_err(|e| chain(&e))?;
+        Ok(pruned + compacted)
     })
     .await
     .map_err(|e| chain(&e))?
@@ -1697,7 +1932,7 @@ mod uninstall_tests {
 
         let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
         // No client: the reclaim is skipped, which is what this test isolates.
-        runtime.block_on(uninstall(None, layout.clone(), ProductCode::ClassicEra)).unwrap();
+        runtime.block_on(uninstall(None, layout.clone(), ProductCode::ClassicEra, Default::default())).unwrap();
 
         assert!(!era.exists());
         assert!(
@@ -1729,6 +1964,7 @@ mod registry_tests {
             product_code: product_code.to_owned(),
             install_path: "C:/Program Files (x86)/Whatever".to_owned(),
             version: version.map(str::to_owned),
+            build_key: None,
             family: String::new(),
         }
     }
@@ -1856,7 +2092,7 @@ const NEWS_IMAGE_BATCH: usize = 6;
 pub async fn news_background(bytes: &'static [u8]) -> Handle {
     tokio::task::spawn_blocking(move || crate::art::decode_bundled(bytes))
         .await
-        .unwrap_or_else(|_| Handle::from_bytes(bytes))
+        .unwrap_or_else(|_| crate::art::placeholder())
 }
 
 /// Fetch the News page's headlines.

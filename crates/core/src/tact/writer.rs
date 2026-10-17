@@ -32,6 +32,10 @@ use super::storage::{archive_name, EKey};
 /// Largest an archive may get: index entries carry a 30-bit offset.
 pub const MAX_ARCHIVE_SIZE: u64 = 1 << 30;
 
+/// Highest archive number an index entry can hold: the 10 bits left above
+/// the 30-bit offset in its 40-bit location.
+pub const MAX_ARCHIVE_ID: u16 = (1 << 10) - 1;
+
 /// Generation a bucket's first index is written at when the store has none.
 ///
 /// **Never zero.** A real install's generations sit around 0x32-0x38, the
@@ -59,6 +63,9 @@ pub struct StoreWriter {
     /// Generation to write each bucket's index at, when rebuilding a store
     /// whose numbering should be preserved.
     generations: HashMap<u8, u32>,
+    /// Open each new archive at the lowest free number rather than after the
+    /// highest. See [`StoreWriter::filling_gaps`].
+    fill_gaps: bool,
 }
 
 impl StoreWriter {
@@ -101,7 +108,21 @@ impl StoreWriter {
             files: 0,
             bytes: 0,
             generations: HashMap::new(),
+            fill_gaps: false,
         })
+    }
+
+    /// Number new archives from the lowest free `data.NNN` instead of after
+    /// the highest.
+    ///
+    /// Compaction deletes archives from the middle of the range and writes
+    /// their survivors into new ones. Always appending would walk the numbers
+    /// up towards [`MAX_ARCHIVE_ID`] with every pass, so a compacting writer
+    /// reuses the holes. A download keeps appending: it never deletes, so it
+    /// has no holes worth filling.
+    pub fn filling_gaps(mut self) -> Self {
+        self.fill_gaps = true;
+        self
     }
 
     /// Write `bucket`'s index at a specific generation instead of the next
@@ -116,10 +137,6 @@ impl StoreWriter {
     pub fn with_max_archive_size(mut self, bytes: u64) -> Self {
         self.max_archive = bytes.min(MAX_ARCHIVE_SIZE);
         self
-    }
-
-    pub fn files_written(&self) -> usize {
-        self.files
     }
 
     pub fn bytes_written(&self) -> u64 {
@@ -182,6 +199,64 @@ impl StoreWriter {
         let entry = Entry { key, archive_id: self.archive_id, offset, size: total as u32 };
         self.index_for(&entry).insert(entry);
         Ok(entry)
+    }
+
+    /// Move a file already in the store to the writer's current position.
+    ///
+    /// `raw` is the entry exactly as [`super::storage::Storage::read_raw`]
+    /// returned it for `from`: header and payload. The header is kept byte
+    /// for byte except checksum B, which encodes the position and so has to
+    /// be recomputed. Rebuilding it from scratch would quietly turn a
+    /// full-width key, which Agent writes and this writer does not, into a
+    /// padded one.
+    ///
+    /// Unlike [`StoreWriter::write`], the key already being indexed is the
+    /// point, not a reason to skip: the entry is replaced with its new home.
+    /// The bytes at `from` stay where they are and become dead space.
+    pub fn relocate(&mut self, from: &Entry, raw: &[u8]) -> Result<Entry, WriteError> {
+        let total = raw.len() as u64;
+        if total != u64::from(from.size) || !Header::verify(raw, from.archive_id, from.offset) {
+            return Err(WriteError::BadHeader { archive_id: from.archive_id, offset: from.offset });
+        }
+        if total > self.max_archive {
+            return Err(WriteError::FileTooLarge { size: total, max: self.max_archive });
+        }
+        if self.archive.is_none() || self.offset + total > self.max_archive {
+            self.roll_archive()?;
+        }
+
+        let offset = self.offset as u32;
+        let mut header = [0u8; CASC_ENTRY_HEADER];
+        header.copy_from_slice(&raw[..CASC_ENTRY_HEADER]);
+        let b = super::entry::checksum_b(&header, self.archive_id, offset);
+        header[0x1a..0x1e].copy_from_slice(&b.to_le_bytes());
+
+        let archive = self.archive.as_mut().expect("an archive is open");
+        let path = || self.data_dir.join(archive_name(self.archive_id));
+        archive
+            .write_all(&header)
+            .and_then(|()| archive.write_all(&raw[CASC_ENTRY_HEADER..]))
+            .map_err(|source| WriteError::Io { path: path(), source })?;
+
+        self.offset += total;
+        self.files += 1;
+        self.bytes += total;
+
+        let entry = Entry { key: from.key, archive_id: self.archive_id, offset, size: from.size };
+        self.index_for(&entry).insert(entry);
+        Ok(entry)
+    }
+
+    /// Drop every index entry pointing into `archive_id`, its markers
+    /// included, ahead of deleting the file.
+    ///
+    /// The caller must already have moved or given up every file in it; this
+    /// does not check. The next [`StoreWriter::checkpoint`] publishes the
+    /// result, and only after that is the archive safe to delete.
+    pub fn forget_archive(&mut self, archive_id: u16) {
+        for index in self.indices.values_mut() {
+            index.retain(|e| e.archive_id != archive_id);
+        }
     }
 
     /// Make everything written so far durable, without ending the store.
@@ -262,12 +337,20 @@ impl StoreWriter {
 
     /// Open the next archive and seed its reserved head.
     fn roll_archive(&mut self) -> Result<(), WriteError> {
+        let had_open = self.archive.is_some();
         if let Some(mut open) = self.archive.take() {
             let path = self.data_dir.join(archive_name(self.archive_id));
             open.flush()
                 .and_then(|()| open.into_inner().map_err(std::io::Error::from)?.sync_all())
                 .map_err(|source| WriteError::Io { path, source })?;
-            self.archive_id += 1;
+        }
+        self.archive_id = match (self.fill_gaps, had_open) {
+            (true, _) => lowest_free_archive_id(&self.data_dir)?,
+            (false, true) => self.archive_id + 1,
+            (false, false) => self.archive_id,
+        };
+        if self.archive_id > MAX_ARCHIVE_ID {
+            return Err(WriteError::OutOfArchiveNumbers);
         }
 
         let path = self.data_dir.join(archive_name(self.archive_id));
@@ -360,10 +443,34 @@ fn next_archive_id(data_dir: &Path) -> Result<u16, WriteError> {
     Ok(highest.map_or(0, |id| id + 1))
 }
 
+/// The lowest `data.NNN` number with no file behind it.
+fn lowest_free_archive_id(data_dir: &Path) -> Result<u16, WriteError> {
+    let taken: std::collections::HashSet<u16> = match std::fs::read_dir(data_dir) {
+        Ok(entries) => entries
+            .flatten()
+            .filter_map(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .strip_prefix("data.")
+                    .and_then(|n| n.parse::<u16>().ok())
+            })
+            .collect(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Default::default(),
+        Err(source) => return Err(WriteError::Io { path: data_dir.to_path_buf(), source }),
+    };
+    Ok((0..=u16::MAX).find(|id| !taken.contains(id)).unwrap_or(u16::MAX))
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum WriteError {
     #[error("a {size}-byte entry cannot fit in an archive capped at {max} bytes")]
     FileTooLarge { size: u64, max: u64 },
+
+    #[error("the entry at archive {archive_id} offset {offset} has a header that does not verify")]
+    BadHeader { archive_id: u16, offset: u32 },
+
+    #[error("every archive number an index can address (0-{MAX_ARCHIVE_ID}) is taken")]
+    OutOfArchiveNumbers,
 
     #[error(transparent)]
     Idx(#[from] IdxError),
@@ -516,7 +623,6 @@ mod tests {
         assert!(writer.contains(&ekey(1)));
         let again = writer.write(&ekey(1), &payload).unwrap();
         assert_eq!(first, again, "the second write must report the first location");
-        assert_eq!(writer.files_written(), 1);
 
         let summary = writer.finish().unwrap();
         assert_eq!(summary.files, 1);

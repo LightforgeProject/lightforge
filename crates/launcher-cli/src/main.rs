@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use lightforge_core::backup;
 use lightforge_core::buildinfo::BuildInfo;
 use lightforge_core::config::Config;
 use lightforge_core::paths::{AppDirs, Layout};
@@ -359,6 +360,24 @@ enum Command {
         #[arg(long, default_value = "wow")]
         product: String,
     },
+    /// List a game's `WTF/Account` backups, newest first.
+    BackupList {
+        #[arg(long, default_value = "wow")]
+        product: String,
+    },
+    /// Back up a game's `WTF/Account` now. Skipped when nothing changed.
+    BackupCreate {
+        #[arg(long, default_value = "wow")]
+        product: String,
+    },
+    /// Restore a backup over `WTF/Account`. The current state is backed up
+    /// first, so a restore can be undone the same way.
+    BackupRestore {
+        /// The number `backup-list` shows (1 is the newest), or the file name.
+        backup: String,
+        #[arg(long, default_value = "wow")]
+        product: String,
+    },
     /// Decode a WoWUp import token and print what it contains.
     AddonToken {
         /// The token, or `@path` to read it from a file.
@@ -419,6 +438,33 @@ enum Command {
         #[arg(long)]
         path: Option<PathBuf>,
         /// Actually delete. Without this, nothing is touched.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Drop game data no installed or pre-installed version uses, then compact
+    /// what that leaves. Prints the plan unless `--yes`.
+    ///
+    /// That data is mostly what earlier patches left behind. Never run it
+    /// while a download is running or paused: what that has fetched so far
+    /// belongs to no version yet, and would have to be fetched again.
+    Prune {
+        /// Install root. Defaults to the managed WoW install.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Actually drop and compact. Without this, nothing is touched.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Rewrite the store's archives that are mostly dead space, copying what
+    /// still lives in them into fresh ones. Prints the plan unless `--yes`.
+    ///
+    /// Dead space is what dropped files leave behind: earlier patches, a
+    /// repair, or a version uninstalled before uninstalling compacted.
+    Compact {
+        /// Install root. Defaults to the managed WoW install.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Actually rewrite. Without this, nothing is touched.
         #[arg(long)]
         yes: bool,
     },
@@ -565,6 +611,22 @@ enum Command {
 /// `World of Warcraft/` folder rather than one product, and with libraries
 /// there can be more than one. The default library is the useful answer, and
 /// `--path` is how you name another.
+/// A progress callback for a compaction copying `total` bytes: one line per
+/// whole percent, overwritten in place.
+fn copy_progress(total: u64) -> impl FnMut(u64) {
+    let mut shown = None;
+    move |copied| {
+        let percent = (copied * 100).checked_div(total).unwrap_or(100).min(100);
+        if shown != Some(percent) {
+            shown = Some(percent);
+            eprint!("\rcopying         {percent:3}%");
+            if percent == 100 {
+                eprintln!();
+            }
+        }
+    }
+}
+
 fn default_install(layout: &Layout) -> std::path::PathBuf {
     layout
         .default_library()
@@ -590,20 +652,45 @@ fn restore_sigpipe() {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> std::process::ExitCode {
+    use lightforge_core::advice::{advise, Fix};
+
+    match run().await {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        // What returning the error from `main` printed, then what to do about
+        // it, when that is known.
+        Err(error) => {
+            eprintln!("Error: {error:?}");
+            if let Some(advice) = advise(error.as_ref()) {
+                eprintln!("\nhint: {}", advice.todo);
+                match advice.fix {
+                    Some(Fix::CopyCommand(command)) => eprintln!("      {command}"),
+                    Some(Fix::DeepScan) => eprintln!("      lightforge verify --deep --repair"),
+                    _ => {}
+                }
+            }
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<()> {
     restore_sigpipe();
     let cli = Cli::parse();
+
+    // A config that exists but cannot be read stops every command, the way
+    // the GUI stops. Falling back to the defaults would point the command at
+    // `~/Games/Blizzard` whatever the file said, and the helpers further down
+    // that read the config again rely on this having parsed.
+    let dirs = AppDirs::discover().context("resolving XDG directories")?;
+    let config = Config::load_or_default(&dirs.config_file())
+        .with_context(|| format!("reading {}", dirs.config_file().display()))?;
 
     // `--root` overrides everything; otherwise the config decides, and only
     // then the default. The GUI resolves it through the same function.
     let layout = match &cli.root {
         Some(root) => Layout::with_root(root),
-        None => AppDirs::discover()
-            .ok()
-            .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
-            .unwrap_or_default()
-            .layout()
-            .context("resolving the Blizzard root")?,
+        None => config.layout().context("resolving the Blizzard root")?,
     };
 
     match cli.command {
@@ -955,7 +1042,7 @@ async fn main() -> Result<()> {
             let mut downloads = NoDownloads;
             let mut download_paused = false;
             if !skip_preflight {
-                let report = Preflight::new(Config::default().prefix_user).with_managed(managed_products())
+                let report = Preflight::new(config.prefix_user.clone()).with_managed(managed_products())
                     .run(&runner, &layout, code.as_ref(), &mut downloads)
                     .context("pre-flight cleanup")?;
                 print_preflight(&report);
@@ -1054,21 +1141,26 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let report = Preflight::new(Config::default().prefix_user).with_managed(managed_products())
+            let report = Preflight::new(config.prefix_user.clone()).with_managed(managed_products())
                 .run(&runner, &layout, Some(&code), &mut NoDownloads)
                 .context("pre-flight cleanup")?;
             print_preflight(&report);
 
             // After pre-flight, with the client closed: it rewrites Config.wtf
             // from memory on exit, so anything set once is not still set.
-            let (set, unset) = tweaks.cvars();
-            match lightforge_core::cvars::apply(
+            match lightforge_core::cvars::reconcile(
                 &layout.wtf_dir(&code).join("Config.wtf"),
-                &set,
-                &unset,
+                &tweaks.cvars(),
+                lightforge_core::tweaks::RETIRED,
             ) {
-                Ok(0) => {}
-                Ok(n) => println!("applied {n} client setting(s)"),
+                Ok(done) => {
+                    if done.changed > 0 {
+                        println!("applied {} client setting(s)", done.changed);
+                    }
+                    if !done.yielded.is_empty() {
+                        println!("left as set in the game: {}", done.yielded.join(", "));
+                    }
+                }
                 Err(e) => eprintln!("could not apply client settings: {e}"),
             }
 
@@ -1084,7 +1176,6 @@ async fn main() -> Result<()> {
             }
         }
         Command::Preflight { proton, product, dry_run, grace } => {
-            use lightforge_core::config::Config;
             use lightforge_core::preflight::{self, NoDownloads, Preflight};
 
             let code: Option<ProductCode> =
@@ -1109,7 +1200,7 @@ async fn main() -> Result<()> {
             let (runner, build) = proton_runner(&layout, proton.as_deref())?;
             println!("using {} ({})", build.version, build.path.display());
 
-            let report = Preflight::new(Config::default().prefix_user).with_managed(managed_products())
+            let report = Preflight::new(config.prefix_user.clone()).with_managed(managed_products())
                 .with_grace(std::time::Duration::from_secs(grace))
                 .run(&runner, &layout, code.as_ref(), &mut NoDownloads)
                 .context("pre-flight cleanup")?;
@@ -1793,6 +1884,10 @@ async fn main() -> Result<()> {
                 pinned: false,
                 reinstall: false,
                 channel: addon_channel(&dirs),
+                // A directory given by hand may not belong to this game, and
+                // its settings are not the ones an update there could touch.
+                backup: (dir == layout.addons_dir(&code))
+                    .then(|| settings_backup(&layout, &dirs, &code)),
             };
             let client = addon_origin(catalog.as_deref(), &dirs).map(Catalog::new);
             let http = Http::new().context("http client")?;
@@ -1991,6 +2086,7 @@ async fn main() -> Result<()> {
                 pinned: false,
                 reinstall: false,
                 channel: addon_channel(&dirs),
+                backup: Some(settings_backup(&layout, &dirs, &code)),
             };
 
             // install_all fills the channel in from the ledger or the default.
@@ -2037,6 +2133,7 @@ async fn main() -> Result<()> {
                 pinned,
                 reinstall: false,
                 channel: addon_channel(&dirs),
+                backup: Some(settings_backup(&layout, &dirs, &code)),
             };
             println!("addons dir      {}", options.addons_dir.display());
             println!("flavor          {}\n", options.flavor);
@@ -2050,7 +2147,7 @@ async fn main() -> Result<()> {
                     &options.flavor,
                 )
                 .await?;
-                for entry in &resolved {
+                for (_, entry) in &resolved {
                     let detail = entry.unavailable_reason().unwrap_or_else(|| {
                         format!(
                             "{} {}",
@@ -2090,6 +2187,7 @@ async fn main() -> Result<()> {
                 pinned: false,
                 reinstall: false,
                 channel: addon_channel(&dirs),
+                backup: Some(settings_backup(&layout, &dirs, &code)),
             };
 
             let http = Http::new()?;
@@ -2098,6 +2196,56 @@ async fn main() -> Result<()> {
             })
             .await?;
             print_addon_report(&report);
+        }
+        Command::BackupList { product } => {
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let plan = settings_backup(&layout, &dirs, &code);
+            let backups = plan.list().context("reading backups")?;
+            if backups.is_empty() {
+                println!("no backups in {}", plan.dir.display());
+            }
+            for (n, b) in backups.iter().enumerate() {
+                println!(
+                    "{:>2}  {}  {:<36} {:<16} {:>8.1} MiB  {}",
+                    n + 1,
+                    b.when(),
+                    b.reason.label(),
+                    b.build.as_deref().unwrap_or("-"),
+                    b.size as f64 / 1048576.0,
+                    b.name(),
+                );
+            }
+        }
+        Command::BackupCreate { product } => {
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let plan = settings_backup(&layout, &dirs, &code);
+            match plan.create(backup::Reason::Manual).context("backing up")? {
+                Some(b) => println!("backed up to {}", b.path.display()),
+                None if plan.account_dir.is_dir() => println!("unchanged since the last backup"),
+                None => println!("nothing to back up: {} does not exist", plan.account_dir.display()),
+            }
+        }
+        Command::BackupRestore { backup: which, product } => {
+            let code: ProductCode = product.parse().expect("product codes are infallible");
+            let dirs = AppDirs::discover().context("resolving XDG directories")?;
+            let running = lightforge_core::preflight::games_running(&layout);
+            if !running.is_empty() {
+                anyhow::bail!("close the game first: {} is running", running[0].name);
+            }
+            let plan = settings_backup(&layout, &dirs, &code);
+            let backups = plan.list().context("reading backups")?;
+            let chosen = match which.parse::<usize>() {
+                Ok(n) => n.checked_sub(1).and_then(|i| backups.get(i)),
+                Err(_) => backups.iter().find(|b| b.name() == which),
+            }
+            .with_context(|| format!("no backup {which}; see `lightforge backup-list`"))?;
+            let safety = plan.restore(chosen).context("restoring")?;
+            println!("restored {} ({})", chosen.name(), chosen.when());
+            if let Some(safety) = safety {
+                println!("the replaced settings are in {}", safety.name());
+            }
         }
         Command::AddonRemove { id, provider, product } => {
             use lightforge_core::addons::{self, manage};
@@ -2111,6 +2259,7 @@ async fn main() -> Result<()> {
                 pinned: false,
                 reinstall: false,
                 channel: addon_channel(&dirs),
+                backup: Some(settings_backup(&layout, &dirs, &code)),
             };
 
             let removed = manage::remove(&options, &provider, &id)?;
@@ -2393,7 +2542,8 @@ async fn main() -> Result<()> {
             println!("install         {}", install.display());
             println!("departing       {} ({})", code.as_str(), departing.build_key);
             println!("entries         {} used by nothing else installed", plan.entries.len());
-            println!("archives        {} emptied, deleted whole", plan.archives.len());
+            println!("archives        {} compacted or deleted", plan.archives.len());
+            println!("copies          {:.2} GiB other versions still use", gib(plan.moved));
             println!("frees           {:.2} GiB", gib(plan.freed));
             println!(
                 "stranded        {:.2} GiB left as dead space in shared archives",
@@ -2409,7 +2559,64 @@ async fn main() -> Result<()> {
             if let Some(process) = lightforge_core::preflight::scan(&layout).first() {
                 anyhow::bail!("close {} first — the store is in use", process.name);
             }
-            let freed = reclaim::execute(&install, &plan)?;
+            let freed = reclaim::execute(&install, &plan, copy_progress(plan.moved))?;
+            println!("\nfreed           {:.2} GiB", gib(freed));
+        }
+        Command::Prune { path, yes } => {
+            use lightforge_core::net::Http;
+            use lightforge_core::tact::reclaim;
+
+            let install = path.unwrap_or_else(|| default_install(&layout));
+            let gib = |b: u64| b as f64 / 1024f64.powi(3);
+            let http = Http::new()?;
+            let builds = reclaim::builds(&install)?;
+            let plan = reclaim::plan_unused(&http, &install).await?;
+            let unused: u64 = plan.entries.iter().map(|e| u64::from(e.size)).sum();
+            println!("install         {}", install.display());
+            println!(
+                "keeps           {}",
+                builds.iter().map(|b| b.product.as_str()).collect::<Vec<_>>().join(", ")
+            );
+            println!("unused          {} files, {:.2} GiB", plan.entries.len(), gib(unused));
+            println!("archives        {} compacted or deleted", plan.archives.len());
+            println!("copies          {:.2} GiB still in use", gib(plan.moved));
+            println!("frees           {:.2} GiB", gib(plan.freed));
+            println!("stranded        {:.2} GiB left as dead space", gib(plan.stranded));
+
+            if !yes || plan.entries.is_empty() {
+                if !plan.entries.is_empty() {
+                    println!("\nnothing changed. Re-run with --yes to go ahead.");
+                }
+                return Ok(());
+            }
+            if let Some(process) = lightforge_core::preflight::scan(&layout).first() {
+                anyhow::bail!("close {} first — the store is in use", process.name);
+            }
+            let freed = reclaim::execute(&install, &plan, copy_progress(plan.moved))?;
+            println!("\nfreed           {:.2} GiB", gib(freed));
+        }
+        Command::Compact { path, yes } => {
+            use lightforge_core::tact::compact;
+
+            let install = path.unwrap_or_else(|| default_install(&layout));
+            let gib = |b: u64| b as f64 / 1024f64.powi(3);
+            let (plan, snapshot) = compact::plan(&install)?;
+            println!("install         {}", install.display());
+            println!("archives        {} to rewrite or delete", plan.archives.len());
+            println!("copies          {:.2} GiB", gib(plan.moved));
+            println!("frees           {:.2} GiB", gib(plan.freed));
+            println!("left            {:.2} GiB of dead space not worth rewriting", gib(plan.left));
+
+            if !yes || plan.archives.is_empty() {
+                if !plan.archives.is_empty() {
+                    println!("\nnothing changed. Re-run with --yes to go ahead.");
+                }
+                return Ok(());
+            }
+            if let Some(process) = lightforge_core::preflight::scan(&layout).first() {
+                anyhow::bail!("close {} first — the store is in use", process.name);
+            }
+            let freed = compact::execute(&install, &plan, &snapshot, copy_progress(plan.moved))?;
             println!("\nfreed           {:.2} GiB", gib(freed));
         }
         Command::ProductDb { path, products, account_country, geo_country, agent_tags, dry_run } => {
@@ -2758,7 +2965,8 @@ async fn main() -> Result<()> {
             let locale: Locale = locale.parse().context("parsing --locale")?;
 
             // The build key is already recorded in .build.info, which is the
-            // file M3's writer maintains. This is where the two halves meet.
+            // file the `buildinfo` writer maintains. This is where the two
+            // halves meet.
             let info = BuildInfo::load(path.join(".build.info"))
                 .with_context(|| format!("reading {}", path.join(".build.info").display()))?;
             let build_key = info.get(&code, lightforge_core::buildinfo::COL_BUILD_KEY)?;
@@ -3119,6 +3327,13 @@ fn read_token(token: &str) -> Result<String> {
 ///
 /// The CLI has no settings UI, so it reads the same `addon_channel` the GUI
 /// writes rather than inventing a second default.
+/// Where this game's settings backups go, and how many it keeps.
+fn settings_backup(layout: &Layout, dirs: &AppDirs, code: &ProductCode) -> backup::Plan {
+    let keep = Config::load_or_default(&dirs.config_file())
+        .map_or(backup::DEFAULT_KEEP, |config| config.backup_keep);
+    backup::Plan::for_product(layout, dirs, code, keep)
+}
+
 fn addon_channel(dirs: &AppDirs) -> lightforge_core::addons::Channel {
     Config::load_or_default(&dirs.config_file())
         .map(|config| config.addon_channel)

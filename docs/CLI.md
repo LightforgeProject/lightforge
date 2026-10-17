@@ -27,7 +27,7 @@ install your config points at, so you rarely have to pass one.
 - [Setup, Proton and the prefix](#setup-proton-and-the-prefix)
 - [Battle.net](#battlenet)
 - [Games: install, update, remove](#games-install-update-remove)
-- [Addons](#addons)
+- [Addons and settings backups](#addons-and-settings-backups)
 - [Catalogue and artwork](#catalogue-and-artwork)
 - [Digging into the CDN and CASC](#digging-into-the-cdn-and-casc)
 
@@ -493,6 +493,52 @@ Options:
           Print help (see a summary with '-h')
 ```
 
+### `lightforge prune`
+
+```text
+Drop game data no installed or pre-installed version uses, then compact what that leaves. Prints the plan unless `--yes`.
+
+That data is mostly what earlier patches left behind. Never run it while a download is running or paused: what that has fetched so far belongs to no version yet, and would have to be fetched again.
+
+Usage: lightforge prune [OPTIONS]
+
+Options:
+      --path <PATH>
+          Install root. Defaults to the managed WoW install
+
+      --root <ROOT>
+          Override the Blizzard root (default: ~/Games/Blizzard)
+
+      --yes
+          Actually drop and compact. Without this, nothing is touched
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `lightforge compact`
+
+```text
+Rewrite the store's archives that are mostly dead space, copying what still lives in them into fresh ones. Prints the plan unless `--yes`.
+
+Dead space is what dropped files leave behind: earlier patches, a repair, or a version uninstalled before uninstalling compacted.
+
+Usage: lightforge compact [OPTIONS]
+
+Options:
+      --path <PATH>
+          Install root. Defaults to the managed WoW install
+
+      --root <ROOT>
+          Override the Blizzard root (default: ~/Games/Blizzard)
+
+      --yes
+          Actually rewrite. Without this, nothing is touched
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
 ### `lightforge build-info`
 
 ```text
@@ -526,7 +572,7 @@ Options:
   -h, --help                   Print help
 ```
 
-## Addons
+## Addons and settings backups
 
 ### `lightforge addons`
 
@@ -684,6 +730,48 @@ Arguments:
 Options:
       --root <ROOT>  Override the Blizzard root (default: ~/Games/Blizzard)
   -h, --help         Print help
+```
+
+### `lightforge backup-list`
+
+```text
+List a game's `WTF/Account` backups, newest first
+
+Usage: lightforge backup-list [OPTIONS]
+
+Options:
+      --product <PRODUCT>  [default: wow]
+      --root <ROOT>        Override the Blizzard root (default: ~/Games/Blizzard)
+  -h, --help               Print help
+```
+
+### `lightforge backup-create`
+
+```text
+Back up a game's `WTF/Account` now. Skipped when nothing changed
+
+Usage: lightforge backup-create [OPTIONS]
+
+Options:
+      --product <PRODUCT>  [default: wow]
+      --root <ROOT>        Override the Blizzard root (default: ~/Games/Blizzard)
+  -h, --help               Print help
+```
+
+### `lightforge backup-restore`
+
+```text
+Restore a backup over `WTF/Account`. The current state is backed up first, so a restore can be undone the same way
+
+Usage: lightforge backup-restore [OPTIONS] <BACKUP>
+
+Arguments:
+  <BACKUP>  The number `backup-list` shows (1 is the newest), or the file name
+
+Options:
+      --product <PRODUCT>  [default: wow]
+      --root <ROOT>        Override the Blizzard root (default: ~/Games/Blizzard)
+  -h, --help               Print help
 ```
 
 ## Catalogue and artwork

@@ -621,7 +621,7 @@ pub struct ProductProfile {
     /// CDN/patch endpoint override used by the downloader, if set.
     pub cdn_override: Option<String>,
     /// Performance settings for this product: launch wrappers, environment,
-    /// and the client CVars Lightforge re-asserts before each launch.
+    /// and the client CVars Lightforge reconciles before each launch.
     pub tweaks: crate::tweaks::Tweaks,
     /// Optional content opted in to, by download-manifest tag name, e.g.
     /// `HighRes`. Empty matches Battle.net, which installs none of it unless

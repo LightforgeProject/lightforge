@@ -10,6 +10,8 @@
 //!
 //! ```text
 //! ## 0.2.0
+//! A sentence or two about the release as a whole.
+//!
 //! - One line about one change.
 //! - Another.
 //!
@@ -18,7 +20,8 @@
 //! ```
 //!
 //! The file is hard-wrapped, so a line under a bullet that is not itself a
-//! bullet continues it. Anything before the first heading, a title, an
+//! bullet continues it, and the lines between a heading and its first bullet
+//! are the release's intro. Anything before the first heading, a title, an
 //! explanation, belongs to no release and is dropped, as is a release with
 //! no bullets under it: a popup with an empty body is worse than none.
 
@@ -30,6 +33,8 @@ pub const SOURCE: &str = include_str!("../../../RELEASES.md");
 pub struct Release {
     /// The version exactly as the heading spells it, e.g. `0.2.0`.
     pub version: String,
+    /// What the release is about, before the list of what changed.
+    pub intro: Option<String>,
     /// One line per change, without its bullet.
     pub notes: Vec<String>,
 }
@@ -55,7 +60,7 @@ fn parse(source: &str) -> Vec<Release> {
         if let Some(version) = line.strip_prefix("## ") {
             let version = version.trim();
             if !version.is_empty() {
-                releases.push(Release { version: version.to_owned(), notes: Vec::new() });
+                releases.push(Release { version: version.to_owned(), intro: None, notes: Vec::new() });
             }
             continue;
         }
@@ -75,12 +80,20 @@ fn parse(source: &str) -> Vec<Release> {
             // first version of this read only the first of them and cut every
             // long note off mid-sentence. The wrap is a fact about the file,
             // not about the sentence.
-            None if !line.is_empty() => {
-                if let Some(last) = release.notes.last_mut() {
+            None if !line.is_empty() => match release.notes.last_mut() {
+                Some(last) => {
                     last.push(' ');
                     last.push_str(line);
                 }
-            }
+                // Before the first bullet: the intro, wrapped the same way.
+                None => match &mut release.intro {
+                    Some(intro) => {
+                        intro.push(' ');
+                        intro.push_str(line);
+                    }
+                    None => release.intro = Some(line.to_owned()),
+                },
+            },
             _ => {}
         }
     }
@@ -112,7 +125,7 @@ mod tests {
         let parsed = parse(
             "# Lightforge\n\nSome prose.\n\n- a bullet before any heading\n\n\
              ## 0.2.0\n- second release, first note\n- and its second\n\n\
-             ## 0.1.0\n\nProse under a heading.\n* the first release\n",
+             ## 0.1.0\n\nProse under a heading,\nwrapped.\n* the first release\n",
         );
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].version, "0.2.0");
@@ -120,6 +133,9 @@ mod tests {
         // Newest first, which is the order the file is written in.
         assert_eq!(parsed[1].version, "0.1.0");
         assert_eq!(parsed[1].notes, vec!["the first release"]);
+        // The prose under a heading is that release's intro, and only its.
+        assert_eq!(parsed[0].intro, None);
+        assert_eq!(parsed[1].intro.as_deref(), Some("Prose under a heading, wrapped."));
     }
 
     /// The file is hard-wrapped like everything else in the repository, and a

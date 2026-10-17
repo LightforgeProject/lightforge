@@ -9,10 +9,27 @@ packaging/
 ├── pro.tuxcore.Lightforge.desktop        the menu entry
 ├── pro.tuxcore.Lightforge.metainfo.xml   AppStream, for software centres
 ├── icons/hicolor/…                       16px → 512px, plus the SVG
+├── installer/
+│   ├── lightforge-installer.desktop      the double-click installer
+│   └── install.sh                        what it runs, fetched from main
 └── aur/
     ├── lightforge/PKGBUILD               builds from the tagged source
     └── lightforge-bin/PKGBUILD           installs the released binaries
 ```
+
+## The installer
+
+`lightforge-installer.desktop` is a release asset for people who will never
+open a terminal, Steam Deck owners first. Double-clicked, it opens a terminal
+window and runs `install.sh` from the `main` branch on GitHub, which finds the
+newest release, checks it against `SHA256SUMS`, and installs it into the home
+folder: the binaries in `~/.local/bin`, the menu entry and icons under
+`~/.local/share`. Running it again updates.
+
+Because it is fetched from `main`, a fix to `install.sh` reaches everyone
+without a release, and nothing in it is reachable before it is merged there.
+To test a change before that, run it straight from the tree:
+`bash packaging/installer/install.sh [tarball]`.
 
 The `.deb` and `.rpm` are not here: their metadata lives in
 `crates/launcher-gui/Cargo.toml`, because `cargo-deb` and `cargo-generate-rpm`
@@ -30,7 +47,7 @@ the others do not, the taskbar shows a placeholder instead of the icon.
 
 ```bash
 make release    # the binaries, in a Debian 12 container — see ../Containerfile
-make packages   # tarball + .deb + .rpm + SHA256SUMS, into target/dist/
+make packages   # tarball + .deb + .rpm + installer + SHA256SUMS, into target/dist/
 ```
 
 `make packages` deliberately does not depend on `make release`: it would
@@ -48,16 +65,16 @@ cargo install cargo-deb cargo-generate-rpm
 
 ### Why the version changes shape
 
-`1.0.0-beta.4` is a valid semver prerelease and an invalid package version
+`1.0.0-beta.5` is a valid semver prerelease and an invalid package version
 nearly everywhere else.
 
 | | |
 | --- | --- |
-| Cargo | `1.0.0-beta.4` |
-| deb / rpm | `1.0.0~beta.4` — `~` sorts *before* `1.0.0`, `-` does not |
-| AUR | `1.0.0beta.4` — hyphens are not allowed at all |
+| Cargo | `1.0.0-beta.5` |
+| deb / rpm | `1.0.0~beta.5` — `~` sorts *before* `1.0.0`, `-` does not |
+| AUR | `1.0.0beta.5` — hyphens are not allowed at all |
 
-`vercmp 1.0.0beta.4 1.0.0` is `-1`, so the Arch version orders correctly too
+`vercmp 1.0.0beta.5 1.0.0` is `-1`, so the Arch version orders correctly too
 and the stable release will need no `epoch`. The Makefile derives the deb and
 rpm forms from `Cargo.toml`; the two PKGBUILDs carry theirs by hand.
 
@@ -123,13 +140,13 @@ make check-cli-doc        # docs/CLI.md matches the binary
 make release              # binaries + the glibc floor check
 make packages             # tarball, .deb, .rpm, SHA256SUMS
 
-git tag -a v1.0.0-beta.4 -m 'Lightforge 1.0.0-beta.4'
-git push origin v1.0.0-beta.4
-git push github v1.0.0-beta.4
+git tag -a v1.0.0-beta.5 -m 'Lightforge 1.0.0-beta.5'
+git push origin v1.0.0-beta.5
+git push github v1.0.0-beta.5
 
-gh release create v1.0.0-beta.4 \
+gh release create v1.0.0-beta.5 \
   --repo LightforgeProject/lightforge \
-  --title 'Lightforge 1.0.0-beta.4' \
+  --title 'Lightforge 1.0.0-beta.5' \
   --prerelease \
   target/dist/*
 ```
@@ -138,7 +155,7 @@ Then fill the two `sha256sums` in the PKGBUILDs — they are `SKIP` until the
 tag exists, because the sums are of files GitHub has not generated yet:
 
 - `lightforge` hashes GitHub's own source archive
-  (`.../archive/refs/tags/v1.0.0-beta.4.tar.gz`), which is not byte-identical
+  (`.../archive/refs/tags/v1.0.0-beta.5.tar.gz`), which is not byte-identical
   to anything produced locally. `updpkgsums` fetches it and fills it in.
 - `lightforge-bin` hashes the tarball `make packages` just built, so its sum
   is already in `target/dist/SHA256SUMS`.
@@ -165,7 +182,7 @@ git clone ssh://aur@aur.archlinux.org/lightforge.git aur-lightforge
 cp packaging/aur/lightforge/PKGBUILD aur-lightforge/
 cd aur-lightforge
 makepkg --printsrcinfo > .SRCINFO     # mandatory, and must match the PKGBUILD
-git add PKGBUILD .SRCINFO && git commit -m 'Lightforge 1.0.0-beta.4' && git push
+git add PKGBUILD .SRCINFO && git commit -m 'Lightforge 1.0.0-beta.5' && git push
 ```
 
 `.SRCINFO` is generated rather than written, and is not kept in this repo for

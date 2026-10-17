@@ -9,7 +9,9 @@
 //! or clap.
 
 pub mod addons;
+pub mod advice;
 pub mod assets;
+pub mod backup;
 pub mod battlenet;
 pub mod buildinfo;
 pub mod config;
@@ -29,8 +31,10 @@ pub mod proton;
 pub mod releases;
 pub mod runtime;
 pub mod setup;
+mod staging;
 pub mod state;
 pub mod steam;
+pub mod steam_shortcut;
 pub mod storage;
 pub mod tact;
 pub mod transfers;

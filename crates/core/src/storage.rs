@@ -16,6 +16,8 @@ pub enum StorageError {
     Disk { path: PathBuf, source: std::io::Error },
     #[error("cannot remove {path}: {source}")]
     Remove { path: PathBuf, source: std::io::Error },
+    #[error("Battle.net or a game is running in the prefix; close it before clearing its files")]
+    PrefixBusy,
 }
 
 /// Capacity of the filesystem a path lives on.
@@ -247,6 +249,11 @@ pub fn report(layout: &Layout, dirs: &AppDirs) -> Report {
 pub fn clear_library(layout: &Layout, library: &crate::library::Library) -> Result<u64, StorageError> {
     if !library.state().is_present() {
         return Ok(0);
+    }
+    // Pre-flight deletes these only once the prefix is quiet: Agent and the
+    // bootstrapper use them while they run, an install in progress included.
+    if !crate::preflight::scan(layout).is_empty() {
+        return Err(StorageError::PrefixBusy);
     }
     let mut freed = 0;
     for path in [layout.battle_net_staging(), layout.agent_cache_dir()] {

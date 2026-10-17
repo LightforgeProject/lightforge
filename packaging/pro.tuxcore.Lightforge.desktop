@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=Lightforge
-GenericName=WoW Launcher
-Comment=Install, update and play World of Warcraft on Linux
+GenericName=Battle.net Games Launcher
+Comment=Install, update and play World of Warcraft on Linux, and a home for all your other Battle.net games
 Exec=lightforge-gui
 TryExec=lightforge-gui
 Icon=pro.tuxcore.Lightforge

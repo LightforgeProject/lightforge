@@ -419,7 +419,7 @@ fn supports(game_versions: &[String], flavor: &str) -> bool {
             .unwrap_or(0);
         match flavor {
             "retail" => major >= 9,
-            "classic_era" => major == 1,
+            "classic_era" | "forever" => major == 1,
             "classic" => (2..=5).contains(&major),
             _ => true,
         }

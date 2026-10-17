@@ -271,6 +271,30 @@ impl Index {
         }
     }
 
+    /// Keep only the entries `keep` accepts, preserving their order.
+    pub fn retain(&mut self, keep: impl FnMut(&Entry) -> bool) {
+        self.entries.retain(keep);
+    }
+
+    /// Remove exactly `entry`, matched on its location as well as its key.
+    ///
+    /// A key can be indexed twice, a file and its headerless alias, so
+    /// removing by key alone may take the wrong one of the pair.
+    pub fn remove_entry(&mut self, entry: &Entry) -> bool {
+        let start = self.entries.partition_point(|e| e.key < entry.key);
+        let found = self.entries[start..]
+            .iter()
+            .take_while(|e| e.key == entry.key)
+            .position(|e| e.archive_id == entry.archive_id && e.offset == entry.offset);
+        match found {
+            Some(at) => {
+                self.entries.remove(start + at);
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn remove(&mut self, key: &[u8; KEY_SIZE]) -> Option<Entry> {
         let i = self.entries.binary_search_by(|e| e.key.cmp(key)).ok()?;
         Some(self.entries.remove(i))
@@ -655,6 +679,21 @@ mod tests {
     fn the_data_section_lands_where_blizzard_puts_it() {
         // One block table entry -> body ends at 0x18 -> padded to 0x20.
         assert_eq!(data_offset(1), 0x20);
+    }
+
+    #[test]
+    fn removing_one_of_a_key_pair_takes_exactly_that_one() {
+        // A file and its headerless alias: same key, the alias 30 bytes on.
+        let mut idx = Index::new(0);
+        idx.insert(entry([1; 9], 0, 0, 10));
+        let file = entry([5; 9], 4, 1000, 130);
+        let alias = entry([5; 9], 4, 1030, 100);
+        idx.entries.extend([file, alias]);
+        idx.insert(entry([9; 9], 0, 0, 10));
+
+        assert!(idx.remove_entry(&alias));
+        assert_eq!(idx.entries().iter().filter(|e| e.key == [5; 9]).collect::<Vec<_>>(), [&file]);
+        assert!(!idx.remove_entry(&alias), "already gone");
     }
 
     #[test]

@@ -207,7 +207,11 @@ impl Plan {
 
             match (extends, current.as_mut()) {
                 (true, Some(run)) => {
-                    run.length = (piece_end - u64::from(run.offset)) as u32;
+                    // Never shorter: a piece lying wholly inside the run so far
+                    // must not cut it back to its own end, which left every
+                    // piece past that point outside what was fetched.
+                    let end = (piece_end - u64::from(run.offset)) as u32;
+                    run.length = run.length.max(end);
                     run.pieces.push(Piece {
                         ekey,
                         ckey: ckeys.get(&ekey).copied(),
@@ -372,6 +376,22 @@ mod tests {
             plan.runs[0].pieces.iter().map(|p| p.at).collect::<Vec<_>>(),
             [0, 100, 200]
         );
+    }
+
+    #[test]
+    fn a_piece_inside_another_does_not_shorten_the_run() {
+        // Sorted by offset: A spans 0..1000, B sits inside it at 10..30.
+        let keys = [key(1), key(2)];
+        let locations = located("a", &[(key(1), 1000, 0), (key(2), 20, 10)], &keys);
+
+        let plan = Plan::build(&want(&keys), &locations, &no_loose(), &HashMap::new(), |_| false, Options::default());
+
+        assert_eq!(plan.requests(), 1);
+        assert_eq!(plan.runs[0].length, 1000, "cut back to B's end, A was never fetched whole");
+        let body = vec![0u8; 1000];
+        for piece in &plan.runs[0].pieces {
+            assert!(plan.runs[0].slice(&body, piece).is_some());
+        }
     }
 
     #[test]

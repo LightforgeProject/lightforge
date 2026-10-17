@@ -252,6 +252,9 @@ fn packager_flavors(flavor: &str) -> Vec<&'static str> {
     match flavor {
         "retail" => vec!["mainline", "retail"],
         "classic_era" => vec!["classic", "vanilla", "era"],
+        // Forever runs Era addons; a package built for it by name is taken
+        // too.
+        "forever" => vec!["forever", "classic", "vanilla", "era"],
         "classic" => vec!["mists", "cata", "wrath", "bcc", "tbc"],
         _ => vec!["mainline"],
     }

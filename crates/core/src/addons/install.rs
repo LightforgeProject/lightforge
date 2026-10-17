@@ -14,7 +14,6 @@
 //!    and addons from another manager are never touched, because Lightforge did
 //!    not put them there.
 
-use std::collections::BTreeMap;
 use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
 
@@ -207,24 +206,25 @@ impl Ledger {
         }
     }
 
-    /// Write atomically, temp file beside it, then rename.
+    /// Write atomically: a temp file of its own beside it, fsynced, then
+    /// renamed. Every product's ledger lives in one directory, so a shared
+    /// temp name let two saves rename each other's contents into place.
     pub fn save(&self, path: &Path) -> Result<(), InstallError> {
+        use std::io::Write;
+
         let dir = path.parent().unwrap_or_else(|| Path::new("."));
-        std::fs::create_dir_all(dir).map_err(|source| InstallError::Io {
-            path: dir.to_path_buf(),
-            source,
-        })?;
+        let io = |p: &Path| {
+            let p = p.to_path_buf();
+            move |source| InstallError::Io { path: p, source }
+        };
+        std::fs::create_dir_all(dir).map_err(io(dir))?;
 
         let json = serde_json::to_vec_pretty(self).expect("ledger serializes");
-        let temp = dir.join(".addons.json.tmp");
-        std::fs::write(&temp, &json).map_err(|source| InstallError::Io {
-            path: temp.clone(),
-            source,
-        })?;
-        std::fs::rename(&temp, path).map_err(|source| InstallError::Io {
-            path: path.to_path_buf(),
-            source,
-        })
+        let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(io(dir))?;
+        temp.write_all(&json).map_err(io(temp.path()))?;
+        temp.as_file().sync_all().map_err(io(temp.path()))?;
+        temp.persist(path).map_err(|e| InstallError::Io { path: path.to_path_buf(), source: e.error })?;
+        Ok(())
     }
 
     pub fn find(&self, provider: &str, id: &str) -> Option<&Record> {
@@ -236,11 +236,29 @@ impl Ledger {
     }
 
     /// Record an install, replacing any previous record of the same addon.
-    pub fn record(&mut self, record: Record) {
+    ///
+    /// A folder belongs to one record. The package just extracted replaced
+    /// these folders on disk, so another record claiming them, the same addon
+    /// from a different provider most often, loses them, and goes once it
+    /// has none left. Two owners meant removing either deleted folders the
+    /// other was still counting on. Returns the names of records dropped.
+    pub fn record(&mut self, record: Record) -> Vec<String> {
         self.addons
             .retain(|r| !(r.id == record.id && r.provider == record.provider));
+        let mut dropped = Vec::new();
+        for other in &mut self.addons {
+            other.folders.retain(|f| !record.folders.contains(f));
+        }
+        self.addons.retain(|r| {
+            let keep = !r.folders.is_empty();
+            if !keep {
+                dropped.push(r.name.clone());
+            }
+            keep
+        });
         self.addons.push(record);
         self.addons.sort_by_key(|r| r.name.to_lowercase());
+        dropped
     }
 
     /// Drop records whose folders have all vanished from disk.
@@ -304,8 +322,27 @@ pub struct Extracted {
 ///
 /// Replaces the folders it contains: an update must not leave a removed file
 /// from the previous version behind, since a stale `.lua` can break an addon
-/// far more confusingly than a missing one.
-pub fn extract(package: &[u8], addons_dir: &Path) -> Result<Extracted, InstallError> {
+/// far more confusingly than a missing one. `retire` names more folders to
+/// take away in the same step, the ones a repair replaces that this build no
+/// longer ships.
+///
+/// Nothing installed is touched until the whole package is on disk. It is
+/// written to a staging folder beside `AddOns`, on the same filesystem, and
+/// only then swapped in folder by folder with renames. A full disk or an I/O
+/// error while writing leaves the old addon exactly as it was, and a failed
+/// rename puts back every folder already swapped.
+pub fn extract(package: &[u8], addons_dir: &Path, retire: &[String]) -> Result<Extracted, InstallError> {
+    extract_within(package, addons_dir, retire, MAX_UNCOMPRESSED)
+}
+
+/// [`extract`] with the size limit as a parameter, so a test can trip it
+/// without writing half a gigabyte.
+fn extract_within(
+    package: &[u8],
+    addons_dir: &Path,
+    retire: &[String],
+    limit: u64,
+) -> Result<Extracted, InstallError> {
     let mut archive =
         zip::ZipArchive::new(Cursor::new(package)).map_err(InstallError::Archive)?;
 
@@ -339,9 +376,12 @@ pub fn extract(package: &[u8], addons_dir: &Path) -> Result<Extracted, InstallEr
             continue;
         }
 
-        total += entry.size();
-        if total > MAX_UNCOMPRESSED {
-            return Err(InstallError::TooLarge { limit: MAX_UNCOMPRESSED });
+        // What the archive claims, a cheap early refusal. The sizes are the
+        // packager's word, so the limit is enforced again below on the bytes
+        // that actually come out.
+        total = total.saturating_add(entry.size());
+        if total > limit {
+            return Err(InstallError::TooLarge { limit });
         }
         planned.push((index, relative, folder));
     }
@@ -356,22 +396,32 @@ pub fn extract(package: &[u8], addons_dir: &Path) -> Result<Extracted, InstallEr
         return Err(InstallError::NoAddonFolders);
     }
 
-    // Clear the previous copy of each folder this package owns.
-    for folder in &folders {
-        let target = addons_dir.join(folder);
-        if target.exists() {
-            std::fs::remove_dir_all(&target).map_err(|source| InstallError::Io {
-                path: target,
-                source,
-            })?;
+    // A retired folder is replaced wholesale like the others, so it has to be
+    // one plain name inside `AddOns`, the same rule the ledger's are held to.
+    for folder in retire {
+        if Path::new(folder).components().count() != 1 || safe_relative(Path::new(folder)).is_none() {
+            return Err(InstallError::UnsafePath(folder.clone()));
         }
     }
+
+    let io = |path: &Path| {
+        let path = path.to_path_buf();
+        move |source| InstallError::Io { path, source }
+    };
+    std::fs::create_dir_all(addons_dir).map_err(io(addons_dir))?;
+    // `Interface`, not `AddOns`: neither the client nor `scan` ever looks
+    // at a folder there that is not an addon.
+    let interface = addons_dir.parent().unwrap_or(addons_dir);
+    // Dropped at the end either way, taking the replaced copies with it.
+    let staging = crate::staging::create_in(interface).map_err(io(interface))?;
+    let fresh = staging.path().join("new");
+    let old = staging.path().join("old");
 
     let mut files = 0usize;
     let mut bytes = 0u64;
     for (index, relative, _) in &planned {
         let mut entry = archive.by_index(*index).map_err(InstallError::Archive)?;
-        let dest = addons_dir.join(relative);
+        let dest = fresh.join(relative);
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|source| InstallError::Io {
                 path: parent.to_path_buf(),
@@ -379,22 +429,79 @@ pub fn extract(package: &[u8], addons_dir: &Path) -> Result<Extracted, InstallEr
             })?;
         }
 
-        let mut contents = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut contents).map_err(|source| InstallError::Io {
-            path: dest.clone(),
-            source,
-        })?;
-        std::fs::write(&dest, &contents).map_err(|source| InstallError::Io {
-            path: dest.clone(),
-            source,
-        })?;
+        // Streamed, and capped at what is left of the budget plus one byte so
+        // going over is detectable. A header that says 1 byte in front of a
+        // deflate stream that inflates to gigabytes is otherwise read to the
+        // end: the zip reader bounds the compressed bytes, not the output.
+        let remaining = limit - bytes;
+        let io = |source| InstallError::Io { path: dest.clone(), source };
+        let mut file = std::fs::File::create(&dest).map_err(io)?;
+        let written = std::io::copy(&mut (&mut entry).take(remaining + 1), &mut file).map_err(io)?;
+        if written > remaining {
+            return Err(InstallError::TooLarge { limit });
+        }
 
         files += 1;
-        bytes += contents.len() as u64;
+        bytes += written;
     }
 
+    let retired: Vec<&String> = retire.iter().filter(|f| !folders.contains(f)).collect();
+    swap(addons_dir, &fresh, &old, &folders, &retired)?;
     Ok(Extracted { folders, files, bytes })
 }
+
+/// Move the installed folders out to `old` and the staged ones in, putting
+/// everything back if any rename fails.
+fn swap(
+    addons_dir: &Path,
+    fresh: &Path,
+    old: &Path,
+    folders: &[String],
+    retired: &[&String],
+) -> Result<(), InstallError> {
+    std::fs::create_dir_all(old).map_err(|source| InstallError::Io { path: old.to_path_buf(), source })?;
+    let mut moved_out: Vec<&str> = Vec::new();
+    let mut moved_in: Vec<&str> = Vec::new();
+
+    let result = swap_steps(addons_dir, fresh, old, folders, retired, &mut moved_out, &mut moved_in);
+    if result.is_err() {
+        for name in moved_in.iter().rev() {
+            let _ = std::fs::rename(addons_dir.join(name), fresh.join(name));
+        }
+        for name in moved_out.iter().rev() {
+            let _ = std::fs::rename(old.join(name), addons_dir.join(name));
+        }
+    }
+    result
+}
+
+fn swap_steps<'a>(
+    addons_dir: &Path,
+    fresh: &Path,
+    old: &Path,
+    folders: &'a [String],
+    retired: &[&'a String],
+    moved_out: &mut Vec<&'a str>,
+    moved_in: &mut Vec<&'a str>,
+) -> Result<(), InstallError> {
+    for name in folders.iter().chain(retired.iter().copied()) {
+        let target = addons_dir.join(name);
+        match std::fs::rename(&target, old.join(name)) {
+            Ok(()) => moved_out.push(name),
+            // Not installed yet, or already removed by hand.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => return Err(InstallError::Io { path: target, source }),
+        }
+    }
+    for name in folders {
+        let target = addons_dir.join(name);
+        std::fs::rename(fresh.join(name), &target)
+            .map_err(|source| InstallError::Io { path: target, source })?;
+        moved_in.push(name);
+    }
+    Ok(())
+}
+
 
 /// Delete the folders an install wrote, and forget it.
 ///
@@ -410,7 +517,14 @@ pub fn remove(
         .forget(provider, id)
         .ok_or_else(|| InstallError::NotTracked(id.to_owned()))?;
 
-    delete_folders(addons_dir, &record.folders)
+    // Never a folder another record still names. `record` keeps that from
+    // arising now, but ledgers written before it can hold one folder twice.
+    let own: Vec<String> = record
+        .folders
+        .into_iter()
+        .filter(|f| !ledger.addons.iter().any(|r| r.folders.contains(f)))
+        .collect();
+    delete_folders(addons_dir, &own)
 }
 
 /// Delete addon folders, and report which were actually there.
@@ -457,17 +571,6 @@ fn safe_relative(path: &Path) -> Option<PathBuf> {
         }
     }
     (!out.as_os_str().is_empty()).then_some(out)
-}
-
-/// Group installed folders by the addon that owns them, from the ledger.
-pub fn owners(ledger: &Ledger) -> BTreeMap<String, String> {
-    let mut map = BTreeMap::new();
-    for record in &ledger.addons {
-        for folder in &record.folders {
-            map.insert(folder.clone(), record.name.clone());
-        }
-    }
-    map
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -521,6 +624,39 @@ mod tests {
         buffer
     }
 
+    /// Rewrite every declared uncompressed size in `zip` to 1 byte, in the
+    /// local headers and the central directory both, the way a hostile
+    /// package would lie about it.
+    fn understated(mut zip: Vec<u8>) -> Vec<u8> {
+        let mut at = 0;
+        while at + 4 <= zip.len() {
+            let field = match &zip[at..at + 4] {
+                b"PK\x03\x04" => Some(at + 22),
+                b"PK\x01\x02" => Some(at + 24),
+                _ => None,
+            };
+            if let Some(field) = field {
+                zip[field..field + 4].copy_from_slice(&1u32.to_le_bytes());
+            }
+            at += 1;
+        }
+        zip
+    }
+
+    #[test]
+    fn an_entry_that_inflates_past_its_declared_size_is_stopped() {
+        let body = vec![0u8; 64 * 1024];
+        let package = understated(zip_with(&[("Bomb/Bomb.toc", b"## Title: Bomb"), ("Bomb/big.lua", &body)]));
+        let dir = tmpdir("understated");
+        let addons = dir.join("Interface/AddOns");
+
+        // The declared total is 2 bytes, well under the limit; only the
+        // bytes actually written can catch this.
+        let result = extract_within(&package, &addons, &[], 4 * 1024);
+        assert!(matches!(result, Err(InstallError::TooLarge { limit: 4096 })), "{result:?}");
+        assert!(!addons.join("Bomb").exists(), "nothing half-written is left installed");
+    }
+
     fn tmpdir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("lightforge-addon-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -538,7 +674,7 @@ mod tests {
         ]);
         let dir = tmpdir("multi");
 
-        let extracted = extract(&package, &dir).unwrap();
+        let extracted = extract(&package, &dir, &[]).unwrap();
         assert_eq!(extracted.folders, vec!["BigWigs", "BigWigs_Options"]);
         assert_eq!(extracted.files, 3);
         assert!(dir.join("BigWigs/BigWigs.toc").is_file());
@@ -553,7 +689,7 @@ mod tests {
             ("../../../evil.txt", b"pwned"),
         ]);
 
-        let err = extract(&package, &dir).unwrap_err();
+        let err = extract(&package, &dir, &[]).unwrap_err();
         assert!(
             matches!(err, InstallError::UnsafePath(_)),
             "expected a path refusal, got {err:?}"
@@ -566,27 +702,84 @@ mod tests {
     #[test]
     fn an_update_replaces_a_folder_rather_than_merging_into_it() {
         let dir = tmpdir("replace");
-        extract(&zip_with(&[("Addon/old.lua", b"old"), ("Addon/keep.toc", b"v1")]), &dir).unwrap();
+        extract(&zip_with(&[("Addon/old.lua", b"old"), ("Addon/keep.toc", b"v1")]), &dir, &[]).unwrap();
         assert!(dir.join("Addon/old.lua").is_file());
 
         // The new version dropped old.lua. A stale file left behind is worse
         // than a missing one: it still loads.
-        extract(&zip_with(&[("Addon/keep.toc", b"v2")]), &dir).unwrap();
+        extract(&zip_with(&[("Addon/keep.toc", b"v2")]), &dir, &[]).unwrap();
         assert!(!dir.join("Addon/old.lua").exists());
         assert_eq!(std::fs::read(dir.join("Addon/keep.toc")).unwrap(), b"v2");
+    }
+
+    /// An `AddOns` inside its own `Interface`, so the staging folder an
+    /// extract makes is this test's alone to look for.
+    fn addons_dir(name: &str) -> PathBuf {
+        let dir = tmpdir(name).join("AddOns");
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn staging_left(addons: &Path) -> bool {
+        std::fs::read_dir(addons.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|e| e.file_name().to_string_lossy().starts_with(crate::staging::PREFIX))
+    }
+
+    #[test]
+    fn a_failed_write_leaves_the_installed_addon_untouched() {
+        let dir = addons_dir("failed-write");
+        extract(&zip_with(&[("Addon/Addon.toc", b"v1"), ("Addon/core.lua", b"v1")]), &dir, &[]).unwrap();
+
+        // `x` as a file and then as a folder: the second write fails halfway
+        // through the package, the way a full disk would.
+        let broken = zip_with(&[("Addon/Addon.toc", b"v2"), ("Addon/x", b"file"), ("Addon/x/y", b"dir")]);
+        assert!(matches!(extract(&broken, &dir, &[]), Err(InstallError::Io { .. })));
+
+        assert_eq!(std::fs::read(dir.join("Addon/Addon.toc")).unwrap(), b"v1");
+        assert_eq!(std::fs::read(dir.join("Addon/core.lua")).unwrap(), b"v1");
+        assert!(!staging_left(&dir));
+    }
+
+    #[test]
+    fn a_retired_folder_goes_in_the_same_swap() {
+        let dir = addons_dir("retire");
+        extract(&zip_with(&[("Main/Main.toc", b"v1"), ("Main_Old/Main_Old.toc", b"v1")]), &dir, &[])
+            .unwrap();
+        std::fs::create_dir_all(dir.join("Someone_Else")).unwrap();
+
+        let retire = ["Main".to_owned(), "Main_Old".to_owned()];
+        extract(&zip_with(&[("Main/Main.toc", b"v2")]), &dir, &retire).unwrap();
+
+        assert_eq!(std::fs::read(dir.join("Main/Main.toc")).unwrap(), b"v2");
+        assert!(!dir.join("Main_Old").exists());
+        assert!(dir.join("Someone_Else").exists());
+        assert!(!staging_left(&dir));
+    }
+
+    #[test]
+    fn a_retired_folder_must_be_one_plain_name() {
+        let dir = addons_dir("retire-unsafe");
+        let package = zip_with(&[("Main/Main.toc", b"v1")]);
+        for bad in ["../Elsewhere", "Main/Sub"] {
+            let err = extract(&package, &dir, &[bad.to_owned()]).unwrap_err();
+            assert!(matches!(err, InstallError::UnsafePath(_)), "{bad}: {err:?}");
+        }
+        assert!(!dir.join("Main").exists());
     }
 
     #[test]
     fn a_package_with_only_top_level_files_has_no_addon_to_install() {
         let dir = tmpdir("flat");
         let package = zip_with(&[("readme.txt", b"hello")]);
-        assert!(matches!(extract(&package, &dir), Err(InstallError::NoAddonFolders)));
+        assert!(matches!(extract(&package, &dir, &[]), Err(InstallError::NoAddonFolders)));
     }
 
     #[test]
     fn removal_deletes_only_what_the_ledger_recorded() {
         let dir = tmpdir("remove");
-        extract(&zip_with(&[("Mine/Mine.toc", b"x"), ("Mine_Extra/Mine_Extra.toc", b"y")]), &dir)
+        extract(&zip_with(&[("Mine/Mine.toc", b"x"), ("Mine_Extra/Mine_Extra.toc", b"y")]), &dir, &[])
             .unwrap();
         std::fs::create_dir_all(dir.join("HandInstalled")).unwrap();
         std::fs::write(dir.join("HandInstalled/thing.toc"), b"not ours").unwrap();
@@ -608,6 +801,52 @@ mod tests {
         // The addon we did not install is untouched.
         assert!(dir.join("HandInstalled/thing.toc").is_file());
         assert!(ledger.find("curse", "1").is_none());
+    }
+
+    fn questie(provider: &str, id: &str, folders: &[&str]) -> Record {
+        Record {
+            provider: provider.into(),
+            id: id.into(),
+            name: "Questie".into(),
+            folders: folders.iter().map(|f| (*f).to_owned()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn installing_from_a_second_provider_takes_the_folders_over() {
+        // Seen live: Questie from WoWInterface, then from CurseForge, left
+        // both records claiming `Questie`.
+        let mut ledger = Ledger::default();
+        ledger.record(questie("wowinterface", "24994", &["Questie"]));
+        let dropped = ledger.record(questie("curse", "334372", &["Questie", "QuestieDB"]));
+
+        assert_eq!(dropped, ["Questie"]);
+        assert!(ledger.find("wowinterface", "24994").is_none());
+        assert_eq!(ledger.addons.len(), 1);
+    }
+
+    #[test]
+    fn a_record_keeps_the_folders_nobody_else_took() {
+        let mut ledger = Ledger::default();
+        ledger.record(questie("wowinterface", "1", &["Shared", "OnlyMine"]));
+        ledger.record(questie("curse", "2", &["Shared"]));
+        assert_eq!(ledger.find("wowinterface", "1").unwrap().folders, ["OnlyMine"]);
+    }
+
+    #[test]
+    fn removal_leaves_a_folder_another_record_still_names() {
+        // A ledger written before ownership was enforced.
+        let dir = tmpdir("shared-folder");
+        std::fs::create_dir_all(dir.join("Questie")).unwrap();
+        std::fs::create_dir_all(dir.join("QuestieDB")).unwrap();
+        let mut ledger = Ledger::default();
+        ledger.addons.push(questie("wowinterface", "24994", &["Questie"]));
+        ledger.addons.push(questie("curse", "334372", &["Questie", "QuestieDB"]));
+
+        let removed = remove(&mut ledger, &dir, "wowinterface", "24994").unwrap();
+        assert!(removed.is_empty());
+        assert!(dir.join("Questie").is_dir(), "the CurseForge record still owns it");
     }
 
     #[test]

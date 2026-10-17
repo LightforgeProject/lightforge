@@ -50,7 +50,83 @@ pub enum Kind {
     Feedback,
 }
 
+/// What a report is about, picked in the dialog before it can be sent.
+///
+/// Two jobs: it puts the report in a pile on the issue list (a tag, and a
+/// prefix on the title, which is the one thing the list shows), and for a bug
+/// it decides what is attached beside the base bundle. A report about addons
+/// carries the addon list, one about the settings carries the settings; the
+/// rest of the machine's state is noise for that question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Category {
+    /// The game itself: it will not start, crashes, looks or runs wrong.
+    Game,
+    Addons,
+    /// Installing, updating, repairing, the download queue and the drives.
+    Downloader,
+    Settings,
+    /// Battle.net and the games it starts for us.
+    BattleNet,
+    /// Lightforge's own window: layout, controls, the controller.
+    Launcher,
+    General,
+}
+
+impl Category {
+    pub const ALL: [Category; 7] = [
+        Self::Game,
+        Self::Addons,
+        Self::Downloader,
+        Self::Settings,
+        Self::BattleNet,
+        Self::Launcher,
+        Self::General,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Game => "Game",
+            Self::Addons => "Addons",
+            Self::Downloader => "Downloader",
+            Self::Settings => "Settings",
+            Self::BattleNet => "Battle.net",
+            Self::Launcher => "Launcher",
+            Self::General => "General",
+        }
+    }
+
+    /// The tag value, stable and lower-case so a GlitchTip search for
+    /// `category:addons` keeps working whatever the label becomes.
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::Game => "game",
+            Self::Addons => "addons",
+            Self::Downloader => "downloader",
+            Self::Settings => "settings",
+            Self::BattleNet => "battlenet",
+            Self::Launcher => "launcher",
+            Self::General => "general",
+        }
+    }
+}
+
+impl std::fmt::Display for Category {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
 static CLIENT: OnceLock<Option<Arc<sentry::Client>>> = OnceLock::new();
+
+/// Feedback goes out without what the `contexts` integration adds to every
+/// event, OS, kernel, device, runtime: [`Kind::Feedback`] promises no
+/// diagnostics, and the card never shows them.
+fn without_machine_details(mut event: sentry::protocol::Event<'static>) -> Option<sentry::protocol::Event<'static>> {
+    if event.tags.get("type").map(String::as_str) == Some("feedback") {
+        event.contexts.clear();
+    }
+    Some(event)
+}
 
 /// One report at a time.
 ///
@@ -163,6 +239,8 @@ fn client(http: Option<Http>, runtime: tokio::runtime::Handle) -> Option<Arc<sen
             // `send_default_pii` before doing it. A desktop hostname is
             // usually somebody's name.
             options.server_name = Some("redacted".into());
+            // After the integrations, so it sees what they added.
+            options.before_send = Some(Arc::new(without_machine_details));
 
             // Parsed rather than handed to `from_config` as a string, which
             // panics on a malformed DSN. A typo in the constant should cost a
@@ -196,6 +274,7 @@ pub struct Shot {
 /// One report, assembled by the dialog and handed over whole.
 pub struct Report {
     pub kind: Kind,
+    pub category: Category,
     pub note: String,
     /// An address, a Discord name, or nothing. The one piece of personal data
     /// in either report, and it is here because they typed it.
@@ -271,9 +350,13 @@ pub async fn send(report: Report, http: Option<Http>) -> bool {
         // One at a time; see `SENDING`.
         let _sending = SENDING.lock().unwrap_or_else(|e| e.into_inner());
         let Some(client) = client(http, runtime) else { return false };
-        let Report { kind, note, contact, tags, shot: _, history } = report;
+        let Report { kind, category, note, contact, tags, shot: _, history } = report;
 
-        let mut event = sentry::protocol::Event { message: Some(note), ..Default::default() };
+        // The category leads the message because the message is the issue's
+        // title, and the title is all the issue list shows.
+        let message = format!("[{}] {}", category.label(), note.trim());
+        let mut event = sentry::protocol::Event { message: Some(message), ..Default::default() };
+        event.tags.insert("category".to_owned(), category.tag().to_owned());
 
         for (key, value) in tags {
             event.tags.insert(key, value);
@@ -433,6 +516,20 @@ mod tests {
         let body = String::from_utf8_lossy(&body);
         assert!(body.contains("\"type\":\"event\""), "not an event envelope: {body}");
         assert!(body.contains("a report"), "the message did not travel: {body}");
+    }
+
+    #[test]
+    fn feedback_leaves_the_machine_details_behind() {
+        let context = || sentry::protocol::Context::Os(Box::default());
+        let mut feedback = sentry::protocol::Event::default();
+        feedback.tags.insert("type".to_owned(), "feedback".to_owned());
+        feedback.contexts.insert("os".to_owned(), context());
+        assert!(without_machine_details(feedback).unwrap().contexts.is_empty());
+
+        // A bug report keeps them: its card shows the same facts.
+        let mut bug = sentry::protocol::Event::default();
+        bug.contexts.insert("os".to_owned(), context());
+        assert_eq!(without_machine_details(bug).unwrap().contexts.len(), 1);
     }
 
     #[test]

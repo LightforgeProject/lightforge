@@ -1,8 +1,9 @@
 //! Steam installation discovery.
 //!
 //! Lightforge targets Proton-GE from a Steam library, so it needs to find the
-//! Steam root and enumerate library folders. Both are read-only operations,
-//! Lightforge never writes into Steam's configuration.
+//! Steam root and enumerate library folders. Both only read; the one thing
+//! Lightforge writes into Steam is its own library entry, see
+//! [`crate::steam_shortcut`], and only when asked to.
 
 use std::path::{Path, PathBuf};
 
@@ -44,16 +45,6 @@ impl SteamRoot {
 
     pub fn path(&self) -> &Path {
         &self.path
-    }
-
-    /// Where third-party compatibility tools (Proton-GE and friends) live.
-    pub fn compat_tools_dir(&self) -> PathBuf {
-        self.path.join("compatibilitytools.d")
-    }
-
-    /// Valve's own Proton builds, installed as regular Steam apps.
-    pub fn steamapps_common(&self) -> PathBuf {
-        self.path.join("steamapps").join("common")
     }
 
     /// Every library folder Steam knows about, **filtered to those that

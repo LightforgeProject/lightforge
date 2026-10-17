@@ -330,7 +330,36 @@ impl Http {
             .map_err(|e| NetError::Request { url: url.to_owned(), source: e })
     }
 
+    /// Stream `url` to `dest`, returning the SHA-512 of what was written.
+    ///
+    /// Written to `<dest>.part` and renamed only once complete, so `dest`
+    /// existing means the whole file arrived. Callers skip a download whose
+    /// file is already there, and a truncated one in its place used to be run,
+    /// or unpacked, on every attempt after.
     pub async fn download(
+        &self,
+        url: &str,
+        dest: &Path,
+        on_progress: impl FnMut(u64, Option<u64>),
+    ) -> Result<String, NetError> {
+        let mut part = dest.as_os_str().to_owned();
+        part.push(".part");
+        let part = PathBuf::from(part);
+        let result = self.download_to(url, &part, on_progress).await;
+        let result = match result {
+            Ok(digest) => tokio::fs::rename(&part, dest)
+                .await
+                .map(|()| digest)
+                .map_err(|source| NetError::Io { path: dest.to_path_buf(), source }),
+            Err(e) => Err(e),
+        };
+        if result.is_err() {
+            let _ = tokio::fs::remove_file(&part).await;
+        }
+        result
+    }
+
+    async fn download_to(
         &self,
         url: &str,
         dest: &Path,
@@ -382,7 +411,15 @@ impl Http {
             on_progress(written, total);
         }
 
+        // A connection closed cleanly mid-body is not an error to the stream.
+        if let Some(total) = total.filter(|&total| total != written) {
+            return Err(NetError::Truncated { url: url.to_owned(), expected: total, got: written });
+        }
         file.flush().await.map_err(|e| NetError::Io {
+            path: dest.to_path_buf(),
+            source: e,
+        })?;
+        file.sync_all().await.map_err(|e| NetError::Io {
             path: dest.to_path_buf(),
             source: e,
         })?;
@@ -511,6 +548,9 @@ pub enum NetError {
 
     #[error("{url} returned HTTP {status}")]
     Status { url: String, status: u16 },
+
+    #[error("{url} ended after {got} of {expected} bytes")]
+    Truncated { url: String, expected: u64, got: u64 },
 
     #[error("GitHub API rate limit reached for {url} — retry within the hour")]
     RateLimited { url: String },

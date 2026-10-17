@@ -299,6 +299,15 @@ fn shutdown_timed(
         return Ok(Vec::new());
     }
 
+    // `wineserver -k` below takes every process in the prefix with it, and a
+    // running game is in the prefix too. The GUI never gets here mid-session,
+    // but the CLI's `play` and Battle.net launch would end a raid without a
+    // logout or a SavedVariables write.
+    let games = games_running(layout);
+    if !games.is_empty() {
+        return Err(PreflightError::GameRunning(games));
+    }
+
     // Idempotent and near-instant on a prefix with no server running.
     runner.wineserver_kill()?;
     stamp(timings, "wineserver -k -w");
@@ -442,9 +451,6 @@ pub struct Preflight {
     /// setting this once at install time does not hold.
     managed: Vec<ProductCode>,
     grace: Duration,
-    clear_agent_cache: bool,
-    clear_staging: bool,
-    reapply_config: bool,
 }
 
 impl Preflight {
@@ -453,9 +459,6 @@ impl Preflight {
             user: user.into(),
             managed: Vec::new(),
             grace: DEFAULT_GRACE,
-            clear_agent_cache: true,
-            clear_staging: true,
-            reapply_config: true,
         }
     }
 
@@ -468,28 +471,6 @@ impl Preflight {
     /// How long a process gets between `SIGTERM` and `SIGKILL`.
     pub fn with_grace(mut self, grace: Duration) -> Self {
         self.grace = grace;
-        self
-    }
-
-    /// Keep Agent's directory cache.
-    ///
-    /// The cache is `Agent/data/cache` and nothing else. Clearing Agent's whole
-    /// directory would take `product.db` with it, and Battle.net would forget
-    /// every install it has been shown.
-    pub fn keep_agent_cache(mut self) -> Self {
-        self.clear_agent_cache = false;
-        self
-    }
-
-    /// Keep the installer's `.extract` staging directory.
-    pub fn keep_staging(mut self) -> Self {
-        self.clear_staging = false;
-        self
-    }
-
-    /// Leave `Battle.net.config` and the per-account configs alone.
-    pub fn keep_config(mut self) -> Self {
-        self.reapply_config = false;
         self
     }
 
@@ -520,33 +501,25 @@ impl Preflight {
         }
 
         // Everything below this line depends on the prefix being quiet.
-        let agent_cache = if self.clear_agent_cache {
-            remove_dir(&layout.agent_cache_dir())?
-        } else {
-            None
-        };
-        let staging = if self.clear_staging {
-            remove_dir(&layout.battle_net_staging())?
-        } else {
-            None
-        };
+        // Agent's cache is `Agent/data/cache` and nothing else: clearing the
+        // whole directory would take `product.db` with it, and Battle.net
+        // would forget every install it has been shown.
+        let agent_cache = remove_dir(&layout.agent_cache_dir())?;
+        let staging = remove_dir(&layout.battle_net_staging())?;
         stamp(&mut timings, "clear caches");
 
         // The per-account file is the client's, not ours: it is recreated on
         // login and after a prefix update, each time without `HideOnClose`. A
         // one-shot write at setup does not survive, so it is re-applied here
         // on every launch.
-        let mut configs = Vec::new();
-        if self.reapply_config {
-            let mut tweaks = battlenet::default_tweaks(layout);
-            tweaks.extend(battlenet::product_tweaks(&self.managed));
-            configs.push(battlenet::configure(layout, &self.user, &tweaks)?);
-            configs.extend(battlenet::configure_accounts(
-                layout,
-                &self.user,
-                &battlenet::account_tweaks(),
-            )?);
-        }
+        let mut tweaks = battlenet::default_tweaks(layout);
+        tweaks.extend(battlenet::product_tweaks(&self.managed));
+        let mut configs = vec![battlenet::configure(layout, &self.user, &tweaks)?];
+        configs.extend(battlenet::configure_accounts(
+            layout,
+            &self.user,
+            &battlenet::account_tweaks(),
+        )?);
 
         stamp(&mut timings, "battle.net config");
 
@@ -591,19 +564,6 @@ pub struct Report {
 pub struct Timing {
     pub stage: &'static str,
     pub took: Duration,
-}
-
-impl Report {
-    /// Whether anything at all needed doing. A quiet report is the good case.
-    pub fn is_clean(&self) -> bool {
-        self.processes.is_empty()
-            && self.agent_cache_removed.is_none()
-            && self.staging_removed.is_none()
-    }
-
-    pub fn bytes_reclaimed(&self) -> u64 {
-        self.agent_cache_removed.unwrap_or(0) + self.staging_removed.unwrap_or(0)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -757,6 +717,12 @@ pub enum PreflightError {
         .0.iter().map(|p| format!("{} (pid {})", p.name, p.pid)).collect::<Vec<_>>().join(", ")
     )]
     StillRunning(Vec<PrefixProcess>),
+
+    #[error(
+        "a game is running in the prefix ({}); close it first, cleaning the prefix would end it",
+        .0.iter().map(|g| format!("{} (pid {})", g.name, g.pid)).collect::<Vec<_>>().join(", ")
+    )]
+    GameRunning(Vec<GameProcess>),
 
     #[error("a download for `{0}` is writing to CASC storage and could not be paused")]
     DownloadBusy(ProductCode),
@@ -1032,22 +998,6 @@ mod tests {
     }
 
     #[test]
-    fn a_clean_report_says_so() {
-        let report = Report {
-            processes: Vec::new(),
-            agent_cache_removed: None,
-            staging_removed: None,
-            configs: vec![PathBuf::from("/x/Battle.net.config")],
-            download_paused: false,
-            // Timings are measurement, not work: a pass that did nothing still
-            // took time to establish that, and that does not make it unclean.
-            timings: vec![Timing { stage: "scan", took: Duration::from_millis(61) }],
-        };
-        assert!(report.is_clean());
-        assert_eq!(report.bytes_reclaimed(), 0);
-    }
-
-    #[test]
     fn a_surviving_process_names_itself_in_the_error() {
         let err = PreflightError::StillRunning(vec![PrefixProcess {
             pid: 4242,
@@ -1061,7 +1011,7 @@ mod tests {
     }
 
     #[test]
-    fn the_milestone_3_guard_never_claims_a_pause() {
+    fn the_no_downloads_guard_never_claims_a_pause() {
         let mut guard = NoDownloads;
         assert!(!guard.pause(&ProductCode::Retail).unwrap());
         assert!(!guard.resume(&ProductCode::Retail).unwrap());

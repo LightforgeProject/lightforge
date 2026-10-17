@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/LightforgeProject/lightforge/actions/workflows/ci.yml/badge.svg)](https://github.com/LightforgeProject/lightforge/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-E9AB28?style=flat-square)](LICENSE)
-[![Status: beta](https://img.shields.io/badge/status-1.0.0--beta.2-00B4FF?style=flat-square)](RELEASES.md)
+[![Status: beta](https://img.shields.io/badge/status-1.0.0--beta.5-00B4FF?style=flat-square)](RELEASES.md)
 [![Linux](https://img.shields.io/badge/platform-Linux-8A94A3?style=flat-square)](#requirements)
 [![Discord](https://img.shields.io/badge/chat-Discord-5865F2?style=flat-square)](https://discord.gg/vtTgmUV9Bq)
 
@@ -30,7 +30,7 @@ pick which one you open.
 Where it has been proven so far: a **123 GiB Retail install** downloaded,
 verified byte-for-byte against its own checksums, adopted by Battle.net and
 played; a full Classic Era install from empty; a store rebuilt from scratch
-after deliberate corruption. **666 tests** in the tree. One 22 MB binary, no
+after deliberate corruption. **774 tests** in the tree. One 22 MB binary, no
 Electron, no background service, nothing running when the launcher is closed.
 
 It is a beta, it has had one pair of eyes on it, and the section below says
@@ -123,7 +123,7 @@ remedies that have never been run on a real machine carry `// UNVERIFIED`
 markers saying so. Nothing was committed unread. A reverted writer-thread
 rewrite is still recorded in the notes so nobody tries it again.
 
-What you should take from that: judge it on the 666 tests, on the 123 GiB
+What you should take from that: judge it on the 774 tests, on the 123 GiB
 install that Battle.net adopted, and on the code. All three are in front of
 you. [TECHDOC.md](TECHDOC.md) goes further into both the pipeline and the
 method.
@@ -134,8 +134,15 @@ Grab a package from the
 [releases page](https://github.com/LightforgeProject/lightforge/releases):
 
 ```bash
-sudo apt install ./lightforge_1.0.0.beta.4-1_amd64.deb     # Debian, Ubuntu
-sudo dnf install ./lightforge-1.0.0.beta.4-1.x86_64.rpm    # Fedora, openSUSE
+sudo apt install ./lightforge_1.0.0.beta.5-1_amd64.deb     # Debian, Ubuntu
+sudo dnf install ./lightforge-1.0.0.beta.5-1.x86_64.rpm    # Fedora, openSUSE
+```
+
+On SteamOS, Bazzite and other systems, download `lightforge-installer.desktop`
+from the same page and double-click it, or run it from a terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LightforgeProject/lightforge/main/packaging/installer/install.sh | bash
 ```
 
 On Arch there's a PKGBUILD in the repository. The AUR has registrations
@@ -155,8 +162,8 @@ cargo build --release --locked
 ./target/release/lightforge-gui
 ```
 
-[**INSTALL.md**](INSTALL.md) covers the rest: the portable tarball for the
-Steam Deck, what you need per distro, the 32-bit package Battle.net's
+[**INSTALL.md**](INSTALL.md) covers the rest: the installer in more detail,
+the Steam Deck, what you need per distro, the 32-bit package Battle.net's
 installer quietly depends on, and how to remove it again.
 
 ## Requirements

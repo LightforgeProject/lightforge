@@ -229,17 +229,45 @@ pub struct Remedy {
     pub note: Option<String>,
 }
 
-/// The relevant fields of `/etc/os-release`.
+/// The relevant fields of `/etc/os-release`, and whether the system is an
+/// image-based one.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OsRelease {
     pub id: String,
     pub id_like: String,
     pub pretty_name: String,
+    /// Booted from an OSTree image: Silverblue, Kinoite, Bazzite and the
+    /// other Fedora Atomic variants. `/etc/os-release` says `fedora` on all
+    /// of them, so it cannot tell them apart from a plain install, and there
+    /// the package manager everyone knows cannot install anything.
+    pub atomic: bool,
 }
 
 impl OsRelease {
+    /// The running system's, or the file `LIGHTFORGE_OS_RELEASE` names.
+    ///
+    /// The override is for development: it lets one machine walk the paths
+    /// meant for another, the SteamOS setup question on an Arch desktop,
+    /// without a VM. Only the file is swapped; `atomic` is still read from
+    /// the real boot.
     pub fn read() -> Self {
-        Self::parse(&std::fs::read_to_string("/etc/os-release").unwrap_or_default())
+        let path = std::env::var_os("LIGHTFORGE_OS_RELEASE")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| "/etc/os-release".into());
+        Self {
+            // The marker OSTree itself writes at boot, and the one
+            // rpm-ostree checks before it agrees to run.
+            atomic: std::path::Path::new("/run/ostree-booted").exists(),
+            ..Self::parse(&std::fs::read_to_string(path).unwrap_or_default())
+        }
+    }
+
+    /// Valve's own SteamOS, on a Deck, a Steam Machine, or a desktop.
+    ///
+    /// The ID alone, not `ID_LIKE`: distributions built on SteamOS's base
+    /// are their own thing and are not asked the SteamOS question.
+    pub fn is_steamos(&self) -> bool {
+        self.id == "steamos"
     }
 
     pub fn parse(text: &str) -> Self {
@@ -257,6 +285,10 @@ impl OsRelease {
             }
         }
         os
+    }
+
+    fn is_fedora(&self) -> bool {
+        self.is("fedora")
     }
 
     /// Whether this system is, or is derived from, `family`.
@@ -313,6 +345,38 @@ pub fn remedy_for(os: &OsRelease) -> Remedy {
                     .to_owned(),
             ),
         )
+    } else if os.atomic && os.is_fedora() {
+        // UNVERIFIED. The root is a read-only image, so `dnf install` fails
+        // outright; packages are layered onto a new deployment instead.
+        // `--apply-live` also applies it to the running system, because this
+        // advice appears in the middle of Battle.net setup and a reboot there
+        // breaks the flow. It is meant for exactly this, a pure addition, but
+        // some images refuse it, hence the fallback in the note. Same package
+        // as plain Fedora, for the same reason: the i686 Wine pulls the whole
+        // 32-bit closure the installer needs.
+        (
+            Some("rpm-ostree install --apply-live wine.i686".to_owned()),
+            Some(
+                "Fedora Atomic layers packages onto its image; `--apply-live` \
+                 makes them usable without a restart. If it refuses, run the \
+                 same command without it and restart. `dnf install` cannot \
+                 work on this system"
+                    .to_owned(),
+            ),
+        )
+    } else if os.atomic {
+        // An image-based system that is not Fedora's: no layering tool we
+        // could name with any confidence, and a mutable-system command would
+        // be wrong.
+        (
+            None,
+            Some(
+                "This system boots from a read-only image, so the usual package \
+                 manager cannot install these. Add a 32-bit Wine the way your \
+                 distribution layers extra packages"
+                    .to_owned(),
+            ),
+        )
     } else if os.is("debian") {
         // UNVERIFIED. Debian and Ubuntu ship no i386 packages at all until
         // the architecture is enabled, which is why the first half exists;
@@ -339,7 +403,7 @@ pub fn remedy_for(os: &OsRelease) -> Remedy {
                     .to_owned(),
             ),
         )
-    } else if os.id == "fedora" || os.is("fedora") {
+    } else if os.is_fedora() {
         // VERIFIED on Fedora 44, after two wrong answers worth recording:
         //
         // `dnf install wine` resolves to x86_64 and installs nothing 32-bit
@@ -372,7 +436,39 @@ mod remedy_tests {
             id: id.into(),
             id_like: id_like.into(),
             pretty_name: format!("{id} (test)"),
+            atomic: false,
         }
+    }
+
+    fn atomic(id: &str, id_like: &str) -> OsRelease {
+        OsRelease { atomic: true, ..os(id, id_like) }
+    }
+
+    /// Bazzite and Silverblue report `ID=fedora`, and `dnf install` on a
+    /// read-only image is an instruction that cannot work.
+    #[test]
+    fn atomic_fedora_layers_with_rpm_ostree() {
+        for (id, like) in [("fedora", ""), ("bazzite", "fedora")] {
+            let remedy = remedy_for(&atomic(id, like));
+            let command = remedy.command.unwrap();
+            assert!(command.starts_with("rpm-ostree install --apply-live"), "{id}: {command}");
+            assert!(command.contains("wine.i686"), "{id}: {command}");
+            // The fallback when an image refuses a live apply.
+            assert!(remedy.note.unwrap().contains("restart"), "{id} must name the reboot fallback");
+        }
+    }
+
+    #[test]
+    fn a_plain_fedora_still_uses_dnf() {
+        let command = remedy_for(&os("fedora", "")).command.unwrap();
+        assert!(command.starts_with("sudo dnf install"), "{command}");
+    }
+
+    #[test]
+    fn another_image_based_system_gets_a_note_and_no_command() {
+        let remedy = remedy_for(&atomic("endless", ""));
+        assert!(remedy.command.is_none());
+        assert!(remedy.note.is_some());
     }
 
     /// The regression this table was corrected for, twice over.
@@ -411,6 +507,7 @@ mod remedy_tests {
                     _ => String::new(),
                 },
                 pretty_name: id.into(),
+                atomic: false,
             };
             let remedy = remedy_for(&os);
             let command = remedy.command.unwrap_or_default();
@@ -435,6 +532,14 @@ mod remedy_tests {
         assert_eq!(parsed.id, "debian");
         assert_eq!(parsed.pretty_name, "Debian GNU/Linux 13");
         assert!(parsed.id_like.is_empty());
+    }
+
+    /// SteamOS by its own ID only; something built on it is not asked.
+    #[test]
+    fn steamos_is_recognised_by_its_id_alone() {
+        assert!(os("steamos", "arch").is_steamos());
+        assert!(!os("arch", "").is_steamos());
+        assert!(!os("chimeraos", "steamos arch").is_steamos());
     }
 
     /// The case that started all this: Ubuntu is `ID=ubuntu ID_LIKE=debian`,

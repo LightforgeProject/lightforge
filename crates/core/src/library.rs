@@ -406,13 +406,6 @@ impl Libraries {
             .and_then(|id| self.get(id))
             .or_else(|| self.default())
     }
-
-    /// Make one library the default, and the rest not.
-    pub fn set_default(&mut self, id: &str) {
-        for entry in &mut self.entries {
-            entry.is_default = entry.id == id;
-        }
-    }
 }
 
 /// A mounted filesystem, as `/proc/self/mounts` describes it.

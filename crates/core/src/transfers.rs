@@ -68,8 +68,9 @@ impl Queue {
             .map_err(|source| TransfersError::Parse { path: path.to_path_buf(), source })
     }
 
-    /// Write via a temporary file, so a crash mid-save leaves the last good
-    /// queue rather than half of one. An empty queue removes the file.
+    /// Write via a temporary file, flushed before the rename, so a crash
+    /// mid-save leaves the last good queue rather than half of one or an
+    /// empty file. An empty queue removes the file.
     pub fn save(&self, path: &Path) -> Result<(), TransfersError> {
         let write = |source| TransfersError::Write { path: path.to_path_buf(), source };
         if self.entries.is_empty() {
@@ -82,8 +83,16 @@ impl Queue {
         let dir = path.parent().unwrap_or(Path::new("."));
         std::fs::create_dir_all(dir).map_err(write)?;
         let temp = dir.join(".queue.toml.tmp");
-        std::fs::write(&temp, text).map_err(write)?;
-        std::fs::rename(&temp, path).map_err(write)
+        let mut file = std::fs::File::create(&temp).map_err(write)?;
+        std::io::Write::write_all(&mut file, text.as_bytes()).map_err(write)?;
+        file.sync_all().map_err(write)?;
+        drop(file);
+        std::fs::rename(&temp, path).map_err(write)?;
+        // Durability of the rename, not of the contents.
+        if let Ok(handle) = std::fs::File::open(dir) {
+            let _ = handle.sync_all();
+        }
+        Ok(())
     }
 }
 

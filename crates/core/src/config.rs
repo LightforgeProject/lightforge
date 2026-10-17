@@ -15,6 +15,16 @@ use crate::proton::ProtonPin;
 /// Windows user name inside a Proton prefix.
 const DEFAULT_PREFIX_USER: &str = "steamuser";
 
+/// How Lightforge is used on a SteamOS machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SteamOsUse {
+    /// A Steam Deck or a Steam Machine: controller input.
+    Console,
+    /// SteamOS on a desktop PC: mouse and keyboard.
+    Desktop,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -142,6 +152,13 @@ pub struct Config {
     /// wizard says so when it is set.
     #[serde(default)]
     pub battle_net_declined: bool,
+    /// What a SteamOS machine is used as, asked during setup and only there.
+    ///
+    /// `None` everywhere else, and on SteamOS until the question is answered.
+    /// The same OS runs a handheld, a box under a television, and an ordinary
+    /// desktop, and nothing on the machine says which one this is.
+    #[serde(default)]
+    pub steamos_use: Option<SteamOsUse>,
     /// Whether the News panel is shown beside the game's key art.
     ///
     /// Off by default: a first run should show the game's key art and nothing
@@ -176,6 +193,9 @@ pub struct Config {
     /// release rather than on every start.
     #[serde(default)]
     pub update_seen: Option<String>,
+    /// How many `WTF/Account` backups each game keeps.
+    #[serde(default = "default_backup_keep")]
+    pub backup_keep: usize,
     /// Every product Lightforge manages, official and custom alike.
     pub products: Vec<Product>,
 }
@@ -205,6 +225,10 @@ fn yes() -> bool {
 /// The language a WoW install is in unless the user picked another.
 pub const DEFAULT_LOCALE: &str = "enUS";
 
+fn default_backup_keep() -> usize {
+    crate::backup::DEFAULT_KEEP
+}
+
 fn default_locale() -> String {
     DEFAULT_LOCALE.to_owned()
 }
@@ -232,11 +256,13 @@ impl Default for Config {
             locale: default_locale(),
             setup_complete: false,
             battle_net_declined: false,
+            steamos_use: None,
             news_on_play: false,
             patch_notes_muted: false,
             patch_notes_seen: None,
             check_for_updates: true,
             update_seen: None,
+            backup_keep: default_backup_keep(),
             products: Vec::new(),
         }
     }
@@ -267,6 +293,10 @@ impl Config {
     /// refusing to start.
     pub fn load_or_default(path: &std::path::Path) -> Result<Self, ConfigError> {
         match std::fs::read_to_string(path) {
+            // Lightforge never writes an empty file, so one is a save that
+            // did not finish. Read as TOML it would be every default, the
+            // home library included, which is the worst possible guess.
+            Ok(text) if text.trim().is_empty() => Err(ConfigError::Empty(path.to_path_buf())),
             Ok(text) => Self::from_toml(&text),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 Ok(Self::with_default_products())
@@ -282,30 +312,33 @@ impl Config {
         toml::from_str(s).map_err(ConfigError::Deserialize)
     }
 
-    /// Write `config.toml` atomically: temp file in the same directory, then
-    /// rename. A settings screen saves on every change, so a crash mid-write
-    /// must not be able to leave a half-written file behind, losing the user's
-    /// Proton pins to a truncated table would be worse than losing the edit.
+    /// Write `config.toml` atomically: temp file in the same directory,
+    /// fsync, then rename. A settings screen saves on every change, so a crash
+    /// mid-write must not be able to leave a half-written or empty file
+    /// behind, losing the user's Proton pins to a truncated table would be
+    /// worse than losing the edit. The temp name is unique, so the GUI and
+    /// the CLI saving at once cannot rename each other's half-written file.
     pub fn save(&self, path: &std::path::Path) -> Result<(), ConfigError> {
+        use std::io::Write;
+
         let text = self.to_toml()?;
         let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-        std::fs::create_dir_all(dir).map_err(|source| ConfigError::Io {
-            path: dir.to_path_buf(),
-            source,
-        })?;
+        let io = |p: &std::path::Path| {
+            let p = p.to_path_buf();
+            move |source| ConfigError::Io { path: p, source }
+        };
+        std::fs::create_dir_all(dir).map_err(io(dir))?;
 
-        let temp = dir.join(format!(
-            ".{}.tmp",
-            path.file_name().and_then(|n| n.to_str()).unwrap_or("config.toml")
-        ));
-        std::fs::write(&temp, text.as_bytes()).map_err(|source| ConfigError::Io {
-            path: temp.clone(),
-            source,
-        })?;
-        std::fs::rename(&temp, path).map_err(|source| ConfigError::Io {
-            path: path.to_path_buf(),
-            source,
-        })
+        let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(io(dir))?;
+        temp.write_all(text.as_bytes()).map_err(io(temp.path()))?;
+        temp.as_file().sync_all().map_err(io(temp.path()))?;
+        temp.persist(path).map_err(|e| ConfigError::Io { path: path.to_path_buf(), source: e.error })?;
+
+        // Durability of the rename, not of the contents.
+        if let Ok(handle) = std::fs::File::open(dir) {
+            let _ = handle.sync_all();
+        }
+        Ok(())
     }
 
     pub fn to_toml(&self) -> Result<String, ConfigError> {
@@ -532,6 +565,9 @@ pub enum ConfigError {
     #[error("could not parse config.toml")]
     Deserialize(#[source] toml::de::Error),
 
+    #[error("{0} is empty; move it aside to start over with defaults")]
+    Empty(PathBuf),
+
     #[error("could not serialize config")]
     Serialize(#[source] toml::ser::Error),
 
@@ -547,14 +583,50 @@ pub enum ConfigError {
 mod tests {
     use super::*;
 
+    #[test]
+    fn an_empty_file_is_an_error_not_the_defaults() {
+        // An empty file parses as every default, and the default library is
+        // the real `~/Games/Blizzard`, whatever the file was meant to say.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "\n  \n").unwrap();
+        assert!(matches!(Config::load_or_default(&path), Err(ConfigError::Empty(_))));
+    }
+
+    #[test]
+    fn a_saved_config_loads_back_and_leaves_no_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config::with_default_products();
+        config.save(&path).unwrap();
+        config.save(&path).unwrap();
+
+        assert_eq!(Config::load_or_default(&path).unwrap(), config);
+        let names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(names, ["config.toml"]);
+    }
+
     // The shared profile is new, so every config on disk predates it. A
     // missing key must default rather than fail the load, or an upgrade
     // bricks the launcher for everyone who already had one.
     #[test]
     fn a_config_without_a_battle_net_profile_still_loads() {
-        let config: Config = toml::from_str("install_root = \"/games/Blizzard\"").unwrap();
+        let config: Config = toml::from_str("blizzard_root = \"/games/Blizzard\"").unwrap();
         assert_eq!(config.battle_net_tweaks, crate::tweaks::Tweaks::default());
         assert!(config.battle_net_tweaks.is_default());
+    }
+
+    // Written as a word a person could type, and absent until answered.
+    #[test]
+    fn the_steamos_answer_is_a_plain_word_and_optional() {
+        let config: Config = toml::from_str("blizzard_root = \"/games/Blizzard\"").unwrap();
+        assert_eq!(config.steamos_use, None);
+
+        let config = Config { steamos_use: Some(SteamOsUse::Console), ..Config::default() };
+        let text = toml::to_string(&config).unwrap();
+        assert!(text.contains("steamos_use = \"console\""), "{text}");
+        let back: Config = toml::from_str(&text).unwrap();
+        assert_eq!(back.steamos_use, Some(SteamOsUse::Console));
     }
 
     #[test]

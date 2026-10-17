@@ -8,9 +8,11 @@
 //!   about in here, resolution, locale, account name, and a writer that
 //!   rebuilt the file from a managed set would silently reset the user's
 //!   entire client configuration.
-//! * A value written here is authoritative only until the next exit. Anything
-//!   Lightforge wants to *hold* has to be re-asserted before each launch,
-//!   which is why [`apply`] is cheap and idempotent rather than one-shot.
+//! * A value written here is authoritative only until the next exit, and the
+//!   player can change the same setting in the game's own options. So
+//!   [`reconcile`] runs before each launch against a record of what Lightforge
+//!   itself wrote: a setting it never wrote is never touched, and one the
+//!   player has changed since is left to the player.
 //!
 //! Nothing here touches the running client: the file is edited only while the
 //! game is closed, behind the same pre-flight gate as every other mutation.
@@ -131,27 +133,123 @@ fn parse_line(raw: &str) -> Line {
     }
 }
 
-/// Apply `settings` to the `Config.wtf` at `path`, removing `unset`.
+/// The record beside `Config.wtf` of what Lightforge wrote into it.
 ///
-/// Returns how many entries changed, so a caller can stay quiet when a
-/// re-assertion before launch found nothing to do, the common case.
-pub fn apply(
+/// Kept in the game's `WTF` folder rather than Lightforge's own data, so it
+/// travels with the file it describes when an install moves between drives.
+pub const RECORD: &str = ".lightforge-cvars.json";
+
+/// One setting Lightforge wrote.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Written {
+    pub value: String,
+    /// The player changed it in the game since: the value is theirs until
+    /// they ask Lightforge for a different one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub yielded: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct Record {
+    #[serde(default)]
+    written: std::collections::BTreeMap<String, Written>,
+}
+
+impl Record {
+    /// A record that cannot be read is treated as empty: the worst case is
+    /// that a setting Lightforge wrote is treated as the player's.
+    fn read(path: &Path) -> Self {
+        std::fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+}
+
+/// What a [`reconcile`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Reconciled {
+    /// Entries of `Config.wtf` written or removed.
+    pub changed: usize,
+    /// Settings left as the player set them in the game, though a toggle
+    /// asks for something else.
+    pub yielded: Vec<String>,
+}
+
+/// Bring the `Config.wtf` at `path` in line with `wanted`, the settings the
+/// enabled toggles ask for, touching only what Lightforge wrote.
+///
+/// Per setting, against the record of what was written last time:
+///
+/// * never written and not wanted: left alone, whatever its value;
+/// * wanted and not yet written: written, or adopted when already equal;
+/// * written, and the file still holds that value (or lost it): kept in step
+///   with `wanted`, and removed when no toggle asks for it any more;
+/// * written, and the file now holds something else: the player changed it.
+///   It is left alone and marked yielded, until the toggle is turned off or
+///   set to a different value, which is the player asking again.
+///
+/// `retired` are names earlier versions wrote by mistake, removed outright.
+pub fn reconcile(
     path: &Path,
-    settings: &[(&str, String)],
-    unset: &[&str],
-) -> Result<usize, CvarError> {
+    wanted: &[(&str, String)],
+    retired: &[&str],
+) -> Result<Reconciled, CvarError> {
+    let record_path = path.with_file_name(RECORD);
     let mut file = ConfigWtf::read(path)?;
-    let mut changed = 0;
-    for name in unset {
-        changed += usize::from(file.remove(name));
+    let old = Record::read(&record_path);
+    let mut record = Record::default();
+    let mut out = Reconciled::default();
+
+    for name in retired {
+        out.changed += usize::from(file.remove(name));
     }
-    for (name, value) in settings {
-        changed += usize::from(file.set(name, value));
+
+    let want = |name: &str| wanted.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, v)| v);
+
+    // What was written before and is no longer asked for.
+    for (name, written) in &old.written {
+        if want(name).is_some() {
+            continue;
+        }
+        if !written.yielded && file.get(name) == Some(written.value.as_str()) {
+            out.changed += usize::from(file.remove(name));
+        }
     }
-    if changed > 0 {
+
+    for (name, value) in wanted {
+        let current = file.get(name).map(str::to_owned);
+        let ours = match old.written.get(*name) {
+            None => true,
+            // Still ours, or the client dropped it: write it again. Changed
+            // in the game, it is the player's, unless the toggle now asks for
+            // a different value than it did, which is the player asking.
+            Some(w) if !w.yielded => {
+                current.is_none() || current.as_deref() == Some(w.value.as_str()) || w.value != *value
+            }
+            // The player's, unless they have since asked for something new.
+            Some(w) => w.value != *value,
+        };
+        let ours = ours || current.as_deref() == Some(value.as_str());
+        if ours {
+            out.changed += usize::from(file.set(name, value));
+            record.written.insert((*name).to_owned(), Written { value: value.clone(), yielded: false });
+        } else {
+            record.written.insert((*name).to_owned(), Written { value: value.clone(), yielded: true });
+            out.yielded.push((*name).to_owned());
+        }
+    }
+
+    if out.changed > 0 {
         write_atomic(path, file.render().as_bytes())?;
     }
-    Ok(changed)
+    // After Config.wtf, so a crash in between leaves a record that is behind
+    // the file, which the next run reads as "already equal, adopt it".
+    if record != old {
+        let json = serde_json::to_vec_pretty(&record).expect("a map of strings serializes");
+        write_atomic(&record_path, &json)?;
+    }
+    Ok(out)
 }
 
 /// Write via a temp file in the destination directory plus a rename: a crash
@@ -242,39 +340,122 @@ mod tests {
         assert_eq!(file, ConfigWtf::default());
     }
 
-    #[test]
-    fn apply_writes_only_when_something_changed() {
-        let dir = tempfile::tempdir().unwrap();
+    fn want(pairs: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
+        pairs.iter().map(|(n, v)| (*n, (*v).to_owned())).collect()
+    }
+
+    fn wtf(dir: &tempfile::TempDir, text: &str) -> PathBuf {
         let path = dir.path().join("Config.wtf");
-        std::fs::write(&path, SAMPLE).unwrap();
+        std::fs::write(&path, text).unwrap();
+        path
+    }
 
-        let settings = [("gxApi", "D3D11".to_owned()), ("scriptProfile", "0".to_owned())];
-        assert_eq!(apply(&path, &settings, &[]).unwrap(), 2);
-        // Re-asserting before every launch must be free when nothing drifted.
-        assert_eq!(apply(&path, &settings, &[]).unwrap(), 0);
+    /// The client rewriting the file on exit, with the player's choices.
+    fn player_sets(path: &Path, name: &str, value: &str) {
+        let mut file = ConfigWtf::read(path).unwrap();
+        file.set(name, value);
+        std::fs::write(path, file.render()).unwrap();
+    }
 
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert!(written.contains("SET gxApi \"D3D11\""));
-        assert!(written.contains("SET locale \"enGB\""));
+    fn get(path: &Path, name: &str) -> Option<String> {
+        ConfigWtf::read(path).unwrap().get(name).map(str::to_owned)
     }
 
     #[test]
-    fn a_toggle_switched_off_removes_its_settings() {
+    fn settings_lightforge_never_wrote_are_never_touched() {
+        // The bug this replaced: a default profile removed the player's own
+        // gxApi, frame cap and view distance before every launch.
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("Config.wtf");
-        std::fs::write(&path, SAMPLE).unwrap();
+        let path = wtf(&dir, "SET gxApi \"D3D12\"\nSET maxFPS \"144\"\nSET farclip \"5000\"\n");
 
-        assert_eq!(apply(&path, &[], &["gxApi", "neverSet"]).unwrap(), 1);
-        let file = ConfigWtf::read(&path).unwrap();
-        assert_eq!(file.get("gxApi"), None);
-        assert_eq!(file.get("locale"), Some("enGB"));
+        let done = reconcile(&path, &[], &[]).unwrap();
+        assert_eq!(done.changed, 0);
+        assert_eq!(get(&path, "gxApi").as_deref(), Some("D3D12"));
+        assert_eq!(get(&path, "maxFPS").as_deref(), Some("144"));
     }
 
     #[test]
-    fn a_file_that_does_not_exist_yet_is_created() {
+    fn a_wanted_setting_is_written_once_and_then_left_alone_when_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = wtf(&dir, SAMPLE);
+        let wanted = want(&[("gxApi", "D3D11"), ("scriptProfile", "0")]);
+
+        assert_eq!(reconcile(&path, &wanted, &[]).unwrap().changed, 2);
+        assert_eq!(reconcile(&path, &wanted, &[]).unwrap().changed, 0);
+        assert_eq!(get(&path, "locale").as_deref(), Some("enGB"));
+    }
+
+    #[test]
+    fn a_toggle_switched_off_takes_back_only_its_own_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = wtf(&dir, "SET locale \"enGB\"\n");
+        reconcile(&path, &want(&[("gxApi", "D3D11")]), &[]).unwrap();
+
+        assert_eq!(reconcile(&path, &[], &[]).unwrap().changed, 1);
+        assert_eq!(get(&path, "gxApi"), None);
+        assert_eq!(get(&path, "locale").as_deref(), Some("enGB"));
+    }
+
+    #[test]
+    fn a_setting_changed_in_the_game_is_the_players() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = wtf(&dir, "");
+        let wanted = want(&[("maxFPS", "60")]);
+        reconcile(&path, &wanted, &[]).unwrap();
+
+        player_sets(&path, "maxFPS", "144");
+        let done = reconcile(&path, &wanted, &[]).unwrap();
+        assert_eq!(done.yielded, ["maxFPS"]);
+        assert_eq!(get(&path, "maxFPS").as_deref(), Some("144"));
+
+        // Still theirs on the launch after, not reclaimed.
+        assert_eq!(reconcile(&path, &wanted, &[]).unwrap().changed, 0);
+        assert_eq!(get(&path, "maxFPS").as_deref(), Some("144"));
+
+        // Switching the toggle off leaves their value where it is.
+        reconcile(&path, &[], &[]).unwrap();
+        assert_eq!(get(&path, "maxFPS").as_deref(), Some("144"));
+    }
+
+    #[test]
+    fn asking_for_a_new_value_in_lightforge_takes_it_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = wtf(&dir, "");
+        reconcile(&path, &want(&[("maxFPS", "60")]), &[]).unwrap();
+        player_sets(&path, "maxFPS", "144");
+        reconcile(&path, &want(&[("maxFPS", "60")]), &[]).unwrap();
+
+        let done = reconcile(&path, &want(&[("maxFPS", "90")]), &[]).unwrap();
+        assert!(done.yielded.is_empty());
+        assert_eq!(get(&path, "maxFPS").as_deref(), Some("90"));
+    }
+
+    #[test]
+    fn a_value_the_client_dropped_is_written_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = wtf(&dir, "");
+        let wanted = want(&[("scriptProfile", "0")]);
+        reconcile(&path, &wanted, &[]).unwrap();
+
+        std::fs::write(&path, "").unwrap();
+        assert_eq!(reconcile(&path, &wanted, &[]).unwrap().changed, 1);
+        assert_eq!(get(&path, "scriptProfile").as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn retired_names_are_removed_outright() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = wtf(&dir, "SET addonProfilerEnabled \"0\"\nSET locale \"enGB\"\n");
+        assert_eq!(reconcile(&path, &[], &["addonProfilerEnabled"]).unwrap().changed, 1);
+        assert_eq!(get(&path, "addonProfilerEnabled"), None);
+    }
+
+    #[test]
+    fn a_file_that_does_not_exist_yet_is_created_with_its_record() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("WTF").join("Config.wtf");
-        assert_eq!(apply(&path, &[("scriptProfile", "0".to_owned())], &[]).unwrap(), 1);
+        assert_eq!(reconcile(&path, &want(&[("scriptProfile", "0")]), &[]).unwrap().changed, 1);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "SET scriptProfile \"0\"\n");
+        assert!(path.with_file_name(RECORD).is_file());
     }
 }

@@ -17,8 +17,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # The launcher links libc, libm and libgcc_s and opens everything else at
-      # run time, so a toolchain is the whole build environment.
+      # The launcher links libc, libm, libgcc_s and libudev and opens
+      # everything else at run time, so libudev's headers and a toolchain are
+      # the whole build environment. gilrs finds libudev through pkg-config.
+      - name: Install libudev
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libudev-dev
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
@@ -34,6 +38,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+
+      - name: Install libudev
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libudev-dev
 
       # Pinned, not @stable: every six-week release adds lints, and with
       # -D warnings that turns a toolchain bump into a red main on a commit
@@ -54,6 +61,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+
+      - name: Install libudev
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libudev-dev
 
       # Cargo.toml promises 1.90; this is what keeps that promise true.
       # The floor is wgpu-hal's ordered-float, reached through iced.

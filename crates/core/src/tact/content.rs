@@ -222,12 +222,6 @@ impl Content {
             .map_err(|source| ContentError::Read { what: "file", source })
     }
 
-    /// Read a file's decoded bytes by game-relative path.
-    pub fn read_path(&self, storage: &mut Storage, path: &str) -> Result<Vec<u8>, ContentError> {
-        let fdid = self.fdid_for_path(path).ok_or(ContentError::UnknownPath(path.to_owned()))?;
-        self.read_fdid(storage, fdid)
-    }
-
     /// Every file id in the build, ascending.
     pub fn file_ids(&self) -> impl Iterator<Item = u32> + '_ {
         self.root.fid_md5.keys().copied()
@@ -244,9 +238,6 @@ pub enum ContentError {
 
     #[error("file id {0} is not in this build's root manifest")]
     UnknownFileId(u32),
-
-    #[error("no file named `{0}` in this build's root manifest")]
-    UnknownPath(String),
 
     #[error("could not read the {what} from local storage")]
     Read {
@@ -322,9 +313,6 @@ mod tests {
         assert!(text.contains("669be7c403ea35a20f73ea7effcaa544"), "{text}");
 
         assert!(ContentError::UnknownFileId(1091001).to_string().contains("1091001"));
-        assert!(ContentError::UnknownPath("Interface/x.lua".into())
-            .to_string()
-            .contains("Interface/x.lua"));
     }
 
     #[test]

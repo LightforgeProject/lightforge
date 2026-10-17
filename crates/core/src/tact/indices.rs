@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 
 use futures_util::stream::{self, StreamExt};
 
-use super::archive::{ArchiveError, ArchiveIndex, FileIndex};
+use super::archive::{ArchiveError, ArchiveIndex};
 use super::cdn::{CdnError, Client};
 use crate::net::Http;
 
@@ -114,12 +114,6 @@ impl IndexCache {
         let path = self.path_of(hash);
         let bytes = std::fs::read(&path).map_err(|source| IndexError::Io { path: path.clone(), source })?;
         ArchiveIndex::parse(&bytes, hash).map_err(|source| IndexError::Parse { path, source })
-    }
-
-    pub fn load_file_index(&self, hash: &str) -> Result<FileIndex, IndexError> {
-        let path = self.path_of(hash);
-        let bytes = std::fs::read(&path).map_err(|source| IndexError::Io { path: path.clone(), source })?;
-        FileIndex::parse(&bytes).map_err(|source| IndexError::Parse { path, source })
     }
 
     /// Fetch every index in `wanted` that is not already cached.
