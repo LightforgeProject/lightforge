@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/LightforgeProject/lightforge/actions/workflows/ci.yml/badge.svg)](https://github.com/LightforgeProject/lightforge/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-E9AB28?style=flat-square)](LICENSE)
-[![Status: beta](https://img.shields.io/badge/status-1.0.0--beta.4-00B4FF?style=flat-square)](RELEASES.md)
+[![Status: beta](https://img.shields.io/badge/status-1.0.0--beta.5-00B4FF?style=flat-square)](RELEASES.md)
 [![Linux](https://img.shields.io/badge/platform-Linux-8A94A3?style=flat-square)](#requirements)
 [![Discord](https://img.shields.io/badge/chat-Discord-5865F2?style=flat-square)](https://discord.gg/vtTgmUV9Bq)
 
@@ -134,8 +134,8 @@ Grab a package from the
 [releases page](https://github.com/LightforgeProject/lightforge/releases):
 
 ```bash
-sudo apt install ./lightforge_1.0.0.beta.4-1_amd64.deb     # Debian, Ubuntu
-sudo dnf install ./lightforge-1.0.0.beta.4-1.x86_64.rpm    # Fedora, openSUSE
+sudo apt install ./lightforge_1.0.0.beta.5-1_amd64.deb     # Debian, Ubuntu
+sudo dnf install ./lightforge-1.0.0.beta.5-1.x86_64.rpm    # Fedora, openSUSE
 ```
 
 On SteamOS, Bazzite and other systems, download `lightforge-installer.desktop`
