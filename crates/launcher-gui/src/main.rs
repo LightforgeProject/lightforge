@@ -629,7 +629,7 @@ enum Message {
     /// Ask the version service what is current, and read what the build
     /// offers.
     CheckForUpdates,
-    CheckedForUpdates(Box<Result<lightforge_core::tact::install::Offerings, String>>),
+    CheckedForUpdates(ProductCode, Box<Result<lightforge_core::tact::install::Offerings, String>>),
     /// Plan against the build and fetch whatever the store is short, after
     /// checking what is there is not damaged.
     ScanAndRepair,
@@ -1588,7 +1588,12 @@ struct Lightforge {
     deep_cancel: Option<Cancel>,
     /// Damage a deep scan found and could not drop yet, because something
     /// was running in the prefix. Repaired from the cog menu.
-    owed_repair: Option<Box<lightforge_core::tact::verify::Report>>,
+    owed_repair: Option<(ProductCode, Box<lightforge_core::tact::verify::Report>)>,
+    /// The product a store scan, deep or not, is checking, so its result
+    /// lands on that product rather than whichever tile is selected by then.
+    scan_for: Option<ProductCode>,
+    /// A repair of damaged entries is rewriting the store's indices.
+    repairing: Option<ProductCode>,
     /// Versions Battle.net reports installed, read when the catalog opens.
     installed_versions: HashMap<String, String>,
     /// Product codes Battle.net itself uses, folded into the catalog.
@@ -1671,7 +1676,17 @@ struct Lightforge {
     /// the store open, and deleting a store out from under its own writer is
     /// not something to race. The `Downloaded` message is the run saying it
     /// has stopped, which is when this fires.
-    delete_after_cancel: Option<ProductCode>,
+    delete_after_cancel: Vec<ProductCode>,
+    /// A given-up download's files being removed right now.
+    discarding: Option<ProductCode>,
+    /// The product being launched, from pre-flight until it exits. Captured
+    /// on the click, so the launch, and what follows it, cannot move to a
+    /// tile selected in the meantime.
+    launching: Option<ProductCode>,
+    /// A launch whose pre-flight is done, held until the download it paused
+    /// has finished winding down: the client and a still-checkpointing
+    /// downloader would share one store.
+    launch_when_quiet: Option<Launch>,
     report_dialog: Option<ReportDialog>,
     /// Filled in once, shortly after startup. `None` until then, and a report
     /// sent in that window simply says so rather than blocking on it.
@@ -1885,6 +1900,8 @@ impl Lightforge {
             scanning: false,
             deep_cancel: None,
             owed_repair: None,
+            scan_for: None,
+            repairing: None,
             installed_versions: HashMap::new(),
             known_codes: Vec::new(),
             resume_after_play: Vec::new(),
@@ -1919,7 +1936,10 @@ impl Lightforge {
             uninstall_dialog: None,
             cancel_dialog: None,
             update_notice: None,
-            delete_after_cancel: None,
+            delete_after_cancel: Vec::new(),
+            discarding: None,
+            launching: None,
+            launch_when_quiet: None,
             report_dialog: None,
             system: None,
             history: std::collections::VecDeque::new(),
@@ -2307,9 +2327,18 @@ impl Lightforge {
             }
         }
 
+        // Scan, repair, compaction and uninstall rewrite the store the client
+        // is about to open. Downloads are not refused here: pre-flight pauses
+        // them, and the launch waits for them to come to rest.
+        if let Some(what) = self.maintenance() {
+            self.error = Some(format!("wait for {what} to finish first"));
+            return Task::none();
+        }
+
         self.busy = true;
         self.error = None;
         self.status = "pre-flight…".to_owned();
+        self.launching = Some(self.selected.code.clone());
 
         // An unattended addon pass is extracting into the directory the
         // client is about to read. Hold the launch until it is done rather
@@ -2349,6 +2378,73 @@ impl Lightforge {
             ),
             move |result| Message::PreflightDone(what, result),
         )
+    }
+
+    /// Start what a finished pre-flight cleared the way for.
+    fn start_launch(&mut self, what: Launch) -> Task<Message> {
+        let code = self.launching.clone().unwrap_or_else(|| self.selected.code.clone());
+
+        // The long wait starts here, so say what it actually is. The
+        // old code left "pre-flight…" on screen for the whole session
+        // and the wind-down after it, which reads as a stuck launcher
+        // rather than a running game.
+        match what {
+            Launch::Game => {
+                // Play unlocks when the *game* exits, not when the
+                // prefix is quiet, the wind-down behind it is watched
+                // and reaped without holding the button. See
+                // `tasks::run_game`.
+                self.status = "running — Play unlocks when the game closes".to_owned();
+                Task::batch([
+                    Task::perform(
+                        tasks::run_game(self.layout.clone(), code.clone()),
+                        Message::Launched,
+                    ),
+                    self.minimize_if_asked(),
+                ])
+            }
+            Launch::BattleNet => {
+                // Two steps, because Battle.net gives nothing back:
+                // the client is told to launch, then the prefix is
+                // watched until the game shows up. Until it does,
+                // this is still a launch in progress.
+                self.status = "handing off to Battle.net…".to_owned();
+                Task::perform(
+                    tasks::launch_via_battle_net(
+                        self.layout.clone(),
+                        code.clone(),
+                        self.config.prefix_user.clone(),
+                        self.family_of(&code),
+                        self.config.battle_net_minimized,
+                    ),
+                    Message::HandoffStarted,
+                )
+            }
+            Launch::Install => {
+                self.status = "opening Battle.net…".to_owned();
+                Task::perform(
+                    tasks::install_via_battle_net(
+                        self.layout.clone(),
+                        code.clone(),
+                        self.config.prefix_user.clone(),
+                        self.install_uid_of(&code),
+                        self.label_of(&code),
+                    ),
+                    Message::Launched,
+                )
+            }
+            Launch::Client => {
+                self.status = "opening Battle.net…".to_owned();
+                Task::perform(
+                    tasks::open_battle_net(
+                        self.layout.clone(),
+                        code.clone(),
+                        self.config.prefix_user.clone(),
+                    ),
+                    Message::Launched,
+                )
+            }
+        }
     }
 
     /// The warning this launch owes the user, or `None` to go ahead.
@@ -2583,17 +2679,61 @@ impl Lightforge {
     }
 
     /// The one transfer actually moving bytes, if any.
+    /// What, other than a download, is writing to a game store right now.
+    ///
+    /// Every WoW flavour in a library shares one CASC store, and nothing in
+    /// core stops two of Lightforge's own writers from opening it at once,
+    /// core only checks the prefix for processes. So the line is held here:
+    /// each of these is a writer, and none starts while another runs.
+    fn maintenance(&self) -> Option<&'static str> {
+        if self.scanning {
+            Some("the scan")
+        } else if self.repairing.is_some() {
+            Some("the repair")
+        } else if self.unused.values().any(|u| matches!(u, UnusedData::Freeing { .. })) {
+            Some("freeing unused game data")
+        } else if self.uninstall_dialog.as_ref().is_some_and(|d| d.working) {
+            Some("the uninstall")
+        } else if self.discarding.is_some() {
+            Some("removing the cancelled download")
+        } else {
+            None
+        }
+    }
+
+    /// [`Self::maintenance`], or a download still writing.
+    fn store_writer(&self) -> Option<&'static str> {
+        match self.running().is_some() || self.winding_down.is_some() {
+            true => Some("the download"),
+            false => self.maintenance(),
+        }
+    }
+
+    /// Whether a launch has to hold: a paused download is still winding
+    /// down, or the launched product's own run has not stopped yet.
+    fn launch_must_wait(&self) -> bool {
+        self.winding_down.is_some()
+            || self.queue.iter().any(|d| {
+                Some(&d.code) == self.launching.as_ref() && matches!(d.stage, Stage::Running { .. })
+            })
+    }
+
     fn running(&self) -> Option<&Download> {
         self.queue.iter().find(|d| matches!(d.stage, Stage::Running { .. }))
     }
 
     /// Put the selected product in the queue, starting it if nothing is running.
     fn enqueue(&mut self) -> Task<Message> {
-        let code = self.selected.code.clone();
+        self.enqueue_for(self.selected.code.clone())
+    }
+
+    /// Put `code` in the queue, starting it if nothing is running.
+    fn enqueue_for(&mut self, code: ProductCode) -> Task<Message> {
+        let label = self.label_of(&code);
         // The panel above should never offer this, but the download path is
         // the one that writes to disk, so it checks for itself.
         if self.kind_of(&code) == Kind::HandOff {
-            self.error = Some(format!("{} is installed through Battle.net", self.selected.label));
+            self.error = Some(format!("{label} is installed through Battle.net"));
             return Task::none();
         }
         // The panel holds this product when its drive is away, but the queue
@@ -2603,14 +2743,16 @@ impl Lightforge {
             self.error = Some(format!("{drive} is not mounted"));
             return Task::none();
         }
-        let label = self.selected.label.clone();
         self.error = None;
+        let showing = code == self.selected.code;
 
-        // Already in the queue: a queued entry stays put, a paused one is
-        // being resumed, as the same job, so its bar continues.
+        // Already in the queue: a queued entry stays put, a running one is
+        // left running, and a paused one is being resumed, as the same job,
+        // so its bar continues. Taking a running entry out would orphan its
+        // run, and the next one would start beside it on the same store.
         let mut job = Job::default();
         if let Some(existing) = self.queue.iter().position(|d| d.code == code) {
-            if matches!(self.queue[existing].stage, Stage::Queued) {
+            if matches!(self.queue[existing].stage, Stage::Queued | Stage::Running { .. }) {
                 return Task::none();
             }
             job = self.queue.remove(existing).resumed();
@@ -2630,22 +2772,42 @@ impl Lightforge {
         let waiting = self.queue.iter().any(|d| {
             d.code == self.selected.code && matches!(d.stage, Stage::Queued)
         });
-        if waiting {
+        if waiting && showing {
             self.status = "queued…".to_owned();
         }
         started
     }
 
-    /// Start the first queued transfer, if the line is free.
+    /// Do whatever was waiting for the store to be free: close the window,
+    /// remove a cancelled download's files, or start the first queued
+    /// transfer, in that order. Called whenever a writer finishes.
     ///
     /// One at a time on purpose: two downloads would split one connection and
     /// write into the same CASC store, making both slower and both ETAs
     /// fiction.
     fn pump(&mut self) -> Task<Message> {
-        // A deep scan reads the store a transfer would write. It does not
-        // refuse the download, it holds it: the queue picks up once the scan
-        // is done.
-        if self.running().is_some() || self.winding_down.is_some() || self.deep_cancel.is_some() {
+        // A launch waiting for the downloads pre-flight paused to come to
+        // rest goes first. Not on the whole line being free: with
+        // pause-while-playing off, another product's download is meant to
+        // keep running beside the game.
+        if self.launch_when_quiet.is_some() && !self.launch_must_wait() {
+            let what = self.launch_when_quiet.take().expect("checked above");
+            return self.start_launch(what);
+        }
+        // A deep scan reads the store a transfer would write, and maintenance
+        // rewrites it. Neither refuses the download, they hold it: the queue
+        // picks up once they are done.
+        if self.store_writer().is_some() || self.deep_cancel.is_some() {
+            return Task::none();
+        }
+        if let Some(id) = self.closing.take() {
+            return iced::window::close(id);
+        }
+        if !self.delete_after_cancel.is_empty() {
+            let code = self.delete_after_cancel.remove(0);
+            return self.remove_cancelled(code);
+        }
+        if self.launch_when_quiet.is_some() {
             return Task::none();
         }
         let Some(next) = self.queue.iter().position(|d| matches!(d.stage, Stage::Queued)) else {
@@ -2731,6 +2893,7 @@ impl Lightforge {
     /// product wants are the ones to go, which is what
     /// [`tasks::discard_download`] works out.
     fn remove_cancelled(&mut self, code: ProductCode) -> Task<Message> {
+        self.discarding = Some(code.clone());
         Task::perform(
             tasks::discard_download(
                 self.http.clone(),
@@ -3001,13 +3164,18 @@ impl Lightforge {
                 }
                 // Closing mid-transfer must not orphan what was fetched: trip
                 // the token, let the run checkpoint its store, then close.
-                match self.running().map(|d| d.code.clone()) {
-                    Some(code) => {
-                        // Saved as running a message ago; keep it that way.
-                        self.queue_frozen = true;
-                        self.pause(&code);
+                if let Some(code) = self.running().map(|d| d.code.clone()) {
+                    // Saved as running a message ago; keep it that way.
+                    self.queue_frozen = true;
+                    self.pause(&code);
+                }
+                // Anything else writing to a store, a pause still winding
+                // down, a repair, a compaction, is let finish too: `pump`
+                // closes the window once the last of them reports back.
+                match self.store_writer() {
+                    Some(what) => {
                         self.closing = Some(id);
-                        self.status = "finishing the download safely…".to_owned();
+                        self.status = format!("finishing {what} safely…");
                         Task::none()
                     }
                     None => iced::window::close(id),
@@ -3019,15 +3187,12 @@ impl Lightforge {
                 if self.winding_down.as_ref() == Some(&code) {
                     self.winding_down = None;
                 }
-                if let Some(id) = self.closing.take() {
-                    return iced::window::close(id);
-                }
                 // The run this was waiting on has stopped, so the store is
-                // closed and its files can go. Before everything below, which
-                // is all about a queue entry that no longer exists.
-                if self.delete_after_cancel.as_ref() == Some(&code) {
-                    self.delete_after_cancel = None;
-                    return Task::batch([self.pump(), self.remove_cancelled(code)]);
+                // closed and its files can go, which `pump` does before it
+                // starts anything else. Before everything below, which is all
+                // about a queue entry that no longer exists.
+                if self.delete_after_cancel.contains(&code) {
+                    return self.pump();
                 }
 
                 // Status and errors describe the selected product. A transfer
@@ -3101,6 +3266,7 @@ impl Lightforge {
 
             Message::Launched(result) => {
                 self.busy = false;
+                let launched = self.launching.take().unwrap_or_else(|| self.selected.code.clone());
                 match result {
                     Ok(note) => self.status = note,
                     Err(e) => self.error = Some(e),
@@ -3115,11 +3281,9 @@ impl Lightforge {
                         self.queue[at].sample.stage = "queued".to_owned();
                     }
                 }
-                let owed = self.downloads.pending().contains(&self.selected.code);
+                let owed = self.downloads.pending().contains(&launched);
                 if owed {
-                    if let Some(at) =
-                        self.queue.iter().position(|d| d.code == self.selected.code)
-                    {
+                    if let Some(at) = self.queue.iter().position(|d| d.code == launched) {
                         self.queue[at].stage = Stage::Queued;
                     }
                 }
@@ -3496,6 +3660,15 @@ impl Lightforge {
             }
 
             Message::ResumeDownload(code) => {
+                // Its game is running and has the store open: it goes back in
+                // the queue when the game exits, as pre-flight arranged.
+                if self.busy && self.launching.as_ref() == Some(&code) {
+                    if !self.resume_after_play.contains(&code) {
+                        self.resume_after_play.push(code);
+                    }
+                    self.status = "resumes when the game closes".to_owned();
+                    return Task::none();
+                }
                 // Back to the end of the queue rather than jumping the line:
                 // whatever is running was started first.
                 if let Some(at) = self.queue.iter().position(|d| d.code == code) {
@@ -3539,6 +3712,7 @@ impl Lightforge {
             }
 
             Message::CancelCleaned(code, result) => {
+                self.discarding = None;
                 let label = self
                     .catalog
                     .get(&code)
@@ -3567,6 +3741,7 @@ impl Lightforge {
                         Message::InstalledVersions,
                     ),
                     self.reload_if_showing(&code),
+                    self.pump(),
                 ])
             }
 
@@ -3575,13 +3750,12 @@ impl Lightforge {
                     return Task::none();
                 };
                 let code = dialog.code;
-                // Was it actually writing? A queued or paused entry has no run
-                // to wind down, so its files can go at once; a running one has
-                // to stop first, see `delete_after_cancel`.
-                let was_running = self
-                    .queue
-                    .iter()
-                    .any(|d| d.code == code && matches!(d.stage, Stage::Running { .. }));
+                // Finished while the dialog was open: there is no download
+                // left to give up, and its files are now an install.
+                if !self.queue.iter().any(|d| d.code == code) {
+                    self.status = format!("{} had already finished; nothing was cancelled", dialog.label);
+                    return Task::none();
+                }
                 self.drop_transfer(&code);
                 self.status = match delete {
                     true => "cancelled — removing the files…".to_owned(),
@@ -3590,81 +3764,31 @@ impl Lightforge {
                 if !delete {
                     return self.pump();
                 }
-                if was_running {
-                    self.delete_after_cancel = Some(code);
-                    return Task::none();
-                }
-                self.remove_cancelled(code)
+                // Removed once nothing is writing to the store any more: at
+                // once for a queued entry, after the wind-down for a running
+                // or just-paused one, after another product's run for a
+                // store they share. See `pump`.
+                self.delete_after_cancel.push(code);
+                self.pump()
             }
 
             Message::PreflightDone(what, result) => {
                 if let Err(e) = result {
                     self.busy = false;
+                    self.launching = None;
                     self.error = Some(e);
+                    return self.pump();
+                }
+                // Pre-flight trips the paused downloads' tokens and returns;
+                // the runs themselves are still flushing what was in flight
+                // and checkpointing their indices. The client opening the
+                // store under them is the overlap this whole gate exists for.
+                if self.launch_must_wait() {
+                    self.launch_when_quiet = Some(what);
+                    self.status = "pre-flight… waiting for the download to pause".to_owned();
                     return Task::none();
                 }
-
-                // The long wait starts here, so say what it actually is. The
-                // old code left "pre-flight…" on screen for the whole session
-                // and the wind-down after it, which reads as a stuck launcher
-                // rather than a running game.
-                match what {
-                    Launch::Game => {
-                        // Play unlocks when the *game* exits, not when the
-                        // prefix is quiet, the wind-down behind it is watched
-                        // and reaped without holding the button. See
-                        // `tasks::run_game`.
-                        self.status = "running — Play unlocks when the game closes".to_owned();
-                        Task::batch([
-                            Task::perform(
-                                tasks::run_game(self.layout.clone(), self.selected.code.clone()),
-                                Message::Launched,
-                            ),
-                            self.minimize_if_asked(),
-                        ])
-                    }
-                    Launch::BattleNet => {
-                        // Two steps, because Battle.net gives nothing back:
-                        // the client is told to launch, then the prefix is
-                        // watched until the game shows up. Until it does,
-                        // this is still a launch in progress.
-                        self.status = "handing off to Battle.net…".to_owned();
-                        Task::perform(
-                            tasks::launch_via_battle_net(
-                                self.layout.clone(),
-                                self.selected.code.clone(),
-                                self.config.prefix_user.clone(),
-                                self.family_of(&self.selected.code),
-                                self.config.battle_net_minimized,
-                            ),
-                            Message::HandoffStarted,
-                        )
-                    }
-                    Launch::Install => {
-                        self.status = "opening Battle.net…".to_owned();
-                        Task::perform(
-                            tasks::install_via_battle_net(
-                                self.layout.clone(),
-                                self.selected.code.clone(),
-                                self.config.prefix_user.clone(),
-                                self.install_uid_of(&self.selected.code),
-                                self.selected.label.clone(),
-                            ),
-                            Message::Launched,
-                        )
-                    }
-                    Launch::Client => {
-                        self.status = "opening Battle.net…".to_owned();
-                        Task::perform(
-                            tasks::open_battle_net(
-                                self.layout.clone(),
-                                self.selected.code.clone(),
-                                self.config.prefix_user.clone(),
-                            ),
-                            Message::Launched,
-                        )
-                    }
-                }
+                self.start_launch(what)
             }
 
             Message::ManageSubscription => {
@@ -4772,6 +4896,17 @@ impl Lightforge {
                 if self.downloading_into(&install) {
                     return Task::none();
                 }
+                // Compaction moves and deletes archives for minutes; nothing
+                // else may write the store meanwhile, and the client may not
+                // have it open. `pump` and pre-flight both hold while it runs.
+                if let Some(what) = self.store_writer() {
+                    self.error = Some(format!("wait for {what} to finish first"));
+                    return Task::none();
+                }
+                if self.launching.is_some() {
+                    self.error = Some("close the game first".to_owned());
+                    return Task::none();
+                }
                 let total = match self.unused.get(&id) {
                     Some(UnusedData::Ready(plan)) => plan.moved,
                     _ => return Task::none(),
@@ -4790,7 +4925,7 @@ impl Lightforge {
                     Err(e) => e,
                 };
                 self.unused.insert(id, UnusedData::Said(note));
-                self.measure_storage()
+                Task::batch([self.measure_storage(), self.pump()])
             }
 
             Message::DriveCleared(id, result) => {
@@ -4871,6 +5006,16 @@ impl Lightforge {
             }
 
             Message::UninstallConfirm => {
+                // Any writer, not only this product's own: the store is shared,
+                // and a reclaim rewrites archives another flavour is writing.
+                if let Some(what) = self.store_writer() {
+                    self.error = Some(format!("wait for {what} to finish first"));
+                    return Task::none();
+                }
+                if self.launching.is_some() {
+                    self.error = Some("close the game first".to_owned());
+                    return Task::none();
+                }
                 let Some(dialog) = self.uninstall_dialog.as_mut() else {
                     return Task::none();
                 };
@@ -4899,11 +5044,12 @@ impl Lightforge {
                                 Message::InstalledVersions,
                             ),
                             self.reload_if_showing(&code),
+                            self.pump(),
                         ])
                     }
                     Err(e) => {
                         self.error = Some(e);
-                        Task::none()
+                        self.pump()
                     }
                 }
             }
@@ -5719,27 +5865,31 @@ impl Lightforge {
                 self.busy = true;
                 self.error = None;
                 self.status = "checking for updates…".to_owned();
+                let code = self.selected.code.clone();
                 Task::perform(
                     tasks::offerings(
                         self.http.clone(),
-                        self.selected.code.clone(),
+                        code.clone(),
                         self.config.region,
-                        self.opted_optional(&self.selected.code),
+                        self.opted_optional(&code),
                         None,
                     ),
-                    |result| Message::CheckedForUpdates(Box::new(result)),
+                    move |result| Message::CheckedForUpdates(code.clone(), Box::new(result)),
                 )
             }
 
-            Message::CheckedForUpdates(result) => {
+            Message::CheckedForUpdates(code, result) => {
                 self.busy = false;
                 match *result {
                     Ok(offerings) => {
-                        let code = self.selected.code.clone();
                         // The point of the round trip: the optional list is
                         // only knowable from the manifest, and this is the
-                        // cheap way to learn it.
+                        // cheap way to learn it. Kept whichever product is
+                        // showing by now; the rest only describes this one.
                         self.remember_optional(&code, offerings.optional.clone());
+                        if code != self.selected.code {
+                            return Task::none();
+                        }
                         let current = self.local.version.as_deref() == Some(
                             offerings.remote.versions_name.as_str(),
                         );
@@ -5758,8 +5908,20 @@ impl Lightforge {
 
             Message::ScanAndRepair => {
                 self.gear_open = false;
+                // It drops damaged entries from the indices, so nothing else
+                // may be writing the store, and the client may not have it
+                // open.
+                if let Some(what) = self.store_writer() {
+                    self.error = Some(format!("wait for {what} to finish first"));
+                    return Task::none();
+                }
+                if self.launching.is_some() {
+                    self.error = Some("close the game first".to_owned());
+                    return Task::none();
+                }
                 self.error = None;
                 self.scanning = true;
+                self.scan_for = Some(self.selected.code.clone());
                 self.busy = true;
                 self.scan_sample = Default::default();
                 self.status = "checking stored files against their headers…".to_owned();
@@ -5792,6 +5954,11 @@ impl Lightforge {
                     );
                     return Task::none();
                 }
+                if let Some(what) = self.maintenance() {
+                    self.error = Some(format!("wait for {what} to finish first"));
+                    return Task::none();
+                }
+                self.scan_for = Some(self.selected.code.clone());
 
                 self.error = None;
                 self.scanning = true;
@@ -5810,6 +5977,7 @@ impl Lightforge {
 
             Message::DeepScanned(result) => {
                 self.scanning = false;
+                let scanned = self.scan_for.take().unwrap_or_else(|| self.selected.code.clone());
                 self.scan_rx = None;
                 let stopped = self.deep_cancel.take().is_some_and(|c| c.is_cancelled());
                 match *result {
@@ -5837,7 +6005,7 @@ impl Lightforge {
                             report.damaged.len(),
                             report.checked
                         );
-                        self.owed_repair = Some(Box::new(report));
+                        self.owed_repair = Some((scanned, Box::new(report)));
                         self.update(Message::RepairDamaged)
                     }
                 }
@@ -5845,26 +6013,42 @@ impl Lightforge {
 
             Message::RepairDamaged => {
                 self.gear_open = false;
-                let Some(report) = self.owed_repair.clone() else {
+                let Some((code, report)) = self.owed_repair.clone() else {
                     return Task::none();
                 };
-                // Held only for the index rewrite, milliseconds, since that
-                // is the one step a launching client must not overlap.
-                self.busy = true;
-                Task::perform(tasks::repair(self.layout.clone(), self.selected.code.clone(), *report), Message::Repaired)
+                // Kept owed, and said so, rather than started: the game has
+                // the store open, or something else is writing it.
+                let held = match self.store_writer() {
+                    Some(what) => Some(format!("wait for {what} to finish")),
+                    None => self.launching.is_some().then(|| "close the game".to_owned()),
+                };
+                if let Some(held) = held {
+                    self.status = format!(
+                        "{} damaged files found — {held}, then choose Repair Damaged Files",
+                        report.damaged.len()
+                    );
+                    return self.pump();
+                }
+                // A writer of its own rather than `busy`, which belongs to a
+                // launch and a session: clearing it here once re-enabled Play
+                // in the middle of one.
+                self.repairing = Some(code.clone());
+                Task::perform(tasks::repair(self.layout.clone(), code, *report), Message::Repaired)
             }
 
             Message::Repaired(result) => {
-                self.busy = false;
+                let code = self.repairing.take().unwrap_or_else(|| self.selected.code.clone());
                 match result {
                     Ok(removed) => {
                         self.owed_repair = None;
-                        self.status =
-                            format!("{removed} damaged files dropped — fetching them again");
-                        self.enqueue()
+                        if code == self.selected.code {
+                            self.status =
+                                format!("{removed} damaged files dropped — fetching them again");
+                        }
+                        self.enqueue_for(code)
                     }
                     Err(tasks::Unrepaired::InUse) => {
-                        let damaged = self.owed_repair.as_ref().map_or(0, |r| r.damaged.len());
+                        let damaged = self.owed_repair.as_ref().map_or(0, |(_, r)| r.damaged.len());
                         self.status = format!(
                             "{damaged} damaged files found — close the game and Battle.net, \
                              then choose Repair Damaged Files"
@@ -5883,10 +6067,11 @@ impl Lightforge {
                 self.scanning = false;
                 self.busy = false;
                 self.scan_rx = None;
+                let scanned = self.scan_for.take().unwrap_or_else(|| self.selected.code.clone());
                 match *result {
                     Err(e) => {
                         self.error = Some(e);
-                        Task::none()
+                        self.pump()
                     }
                     Ok(scan) => {
                         // Either way the download path runs: repair works by
@@ -5903,7 +6088,7 @@ impl Lightforge {
                                 scan.checked, scan.removed
                             ),
                         };
-                        self.enqueue()
+                        self.enqueue_for(scanned)
                     }
                 }
             }
@@ -9572,17 +9757,12 @@ impl Lightforge {
         };
 
         let installed = self.local.version.is_some();
-        let can_scan = installed && !self.busy && !self.scanning;
-        // Not while its own download is writing, nor while a scan reads.
-        let downloading = self
-            .queue
-            .iter()
-            .any(|d| d.code == self.selected.code && matches!(d.stage, Stage::Running { .. }));
-        let can_uninstall = installed
-            && !self.busy
-            && !self.scanning
-            && self.deep_cancel.is_none()
-            && !downloading;
+        // Offered only when the handler would go ahead: nothing else writing
+        // to the store, which every flavour shares, and no launch under way.
+        let store_free = self.store_writer().is_none() && self.deep_cancel.is_none();
+        let can_scan = installed && !self.busy && store_free;
+        let can_deep_scan = installed && !self.busy && !self.scanning && self.maintenance().is_none();
+        let can_uninstall = installed && !self.busy && store_free;
         // Anything in the queue for this product can be given up, running,
         // paused or still waiting its turn. Pause is on the button itself;
         // this is the one that ends it.
@@ -9594,7 +9774,7 @@ impl Lightforge {
                 item("Scan and Repair", Message::ScanAndRepair, can_scan),
                 match self.deep_cancel.is_some() {
                     true => item("Stop Deep Scan", Message::DeepScan, true),
-                    false => item("Deep Scan", Message::DeepScan, can_scan),
+                    false => item("Deep Scan", Message::DeepScan, can_deep_scan),
                 },
                 item("Open Files in Explorer", Message::OpenFiles, installed),
                 item("Copy Debug Info", Message::CopyDebug, true),
@@ -9604,7 +9784,7 @@ impl Lightforge {
             .extend(
                 self.owed_repair
                     .is_some()
-                    .then(|| item("Repair Damaged Files", Message::RepairDamaged, !self.busy)))
+                    .then(|| item("Repair Damaged Files", Message::RepairDamaged, !self.busy && store_free)))
             .extend(queued.then(|| {
                 item(
                     "Cancel Download",
@@ -13164,7 +13344,9 @@ impl Lightforge {
                     .iter()
                     .find(|l| l.id == library.id)
                     .is_some_and(|l| self.downloading_into(&self.layout.wow_install_in(l)));
-                let action = secondary("Free up", Message::FreeUnused(library.id.clone())).enabled(!busy);
+                let held = self.store_writer().is_some() || self.launching.is_some();
+                let action =
+                    secondary("Free up", Message::FreeUnused(library.id.clone())).enabled(!busy && !held);
                 let note = match busy {
                     true => "Finish or cancel the download on this drive first.".to_owned(),
                     false if plan.moved > 0 => format!(
@@ -15029,9 +15211,116 @@ mod tests {
 
         assert!(app.queue.is_empty(), "the entry goes either way");
         assert!(
-            app.delete_after_cancel.is_none(),
+            app.delete_after_cancel.is_empty(),
             "a queued entry had no run open, so nothing is deferred"
         );
+        assert_eq!(app.discarding, Some(code), "removed at once");
+    }
+
+    fn running(app: &mut Lightforge, code: &ProductCode) {
+        let (_tx, rx) = tokio::sync::watch::channel(TransferState::default());
+        app.queue.push(Download {
+            code: code.clone(),
+            label: "Retail".to_owned(),
+            stage: Stage::Running { rx, cancel: Cancel::new() },
+            sample: TransferState::default(),
+            rate: Rate::default(),
+            job: Job::default(),
+        });
+    }
+
+    fn stopped(cancelled: bool) -> Result<Complete, String> {
+        Ok(Complete { complete: false, cancelled, files: 0, version: None })
+    }
+
+    #[test]
+    fn a_running_download_is_removed_only_once_its_run_has_stopped() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+        let code = app.selected.code.clone();
+        running(&mut app, &code);
+        app.cancel_dialog =
+            Some(CancelDialog { code: code.clone(), label: "Retail".to_owned(), installed: None });
+
+        let _ = app.update(Message::CancelDownloadConfirm { delete: true });
+        assert_eq!(app.delete_after_cancel, std::slice::from_ref(&code));
+        assert_eq!(app.discarding, None, "the run is still winding down");
+
+        let _ = app.update(Message::Downloaded(code.clone(), stopped(true)));
+        assert!(app.delete_after_cancel.is_empty());
+        assert_eq!(app.discarding, Some(code));
+    }
+
+    #[test]
+    fn a_cancel_confirmed_after_the_install_finished_deletes_nothing() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+        let code = app.selected.code.clone();
+        app.cancel_dialog =
+            Some(CancelDialog { code: code.clone(), label: "Retail".to_owned(), installed: None });
+
+        let _ = app.update(Message::CancelDownloadConfirm { delete: true });
+        assert!(app.delete_after_cancel.is_empty());
+        assert_eq!(app.discarding, None);
+    }
+
+    #[test]
+    fn scan_and_repair_waits_for_a_running_download() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+        let code = app.selected.code.clone();
+        running(&mut app, &code);
+
+        let _ = app.update(Message::ScanAndRepair);
+        assert!(!app.scanning, "repair rewrites the indices the download is writing");
+        assert!(app.error.is_some());
+    }
+
+    #[test]
+    fn queueing_a_product_that_is_downloading_leaves_its_run_alone() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+        let code = app.selected.code.clone();
+        running(&mut app, &code);
+
+        let _ = app.enqueue_for(code.clone());
+        assert_eq!(app.queue.len(), 1);
+        assert!(matches!(app.queue[0].stage, Stage::Running { .. }));
+    }
+
+    #[test]
+    fn a_launch_waits_for_its_paused_download_to_come_to_rest() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+        let code = app.selected.code.clone();
+        running(&mut app, &code);
+        app.busy = true;
+        app.launching = Some(code.clone());
+
+        // Pre-flight tripped the token and returned; the run has not stopped.
+        let _ = app.update(Message::PreflightDone(Launch::Game, Ok(())));
+        assert_eq!(app.launch_when_quiet, Some(Launch::Game));
+
+        let _ = app.update(Message::Downloaded(code.clone(), stopped(true)));
+        assert_eq!(app.launch_when_quiet, None, "started once the run stopped");
+        assert!(app.status.starts_with("running"), "{}", app.status);
+        assert_eq!(app.launching, Some(code), "still this product's session");
+    }
+
+    #[test]
+    fn closing_waits_for_a_repair_to_finish() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+        app.repairing = Some(app.selected.code.clone());
+
+        let _ = app.update(Message::CloseRequested(iced::window::Id::unique()));
+        assert!(app.closing.is_some());
     }
 
     #[test]
@@ -15058,7 +15347,7 @@ mod tests {
         let _ = app.update(Message::CancelDownloadConfirm { delete: false });
 
         assert!(app.queue.is_empty());
-        assert!(app.delete_after_cancel.is_none(), "an update's files are never removed");
+        assert!(app.delete_after_cancel.is_empty(), "an update's files are never removed");
         assert_eq!(app.status, "cancelled");
     }
 
