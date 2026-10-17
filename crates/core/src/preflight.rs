@@ -566,19 +566,6 @@ pub struct Timing {
     pub took: Duration,
 }
 
-impl Report {
-    /// Whether anything at all needed doing. A quiet report is the good case.
-    pub fn is_clean(&self) -> bool {
-        self.processes.is_empty()
-            && self.agent_cache_removed.is_none()
-            && self.staging_removed.is_none()
-    }
-
-    pub fn bytes_reclaimed(&self) -> u64 {
-        self.agent_cache_removed.unwrap_or(0) + self.staging_removed.unwrap_or(0)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Watching a hand-off
 // ---------------------------------------------------------------------------
@@ -1008,22 +995,6 @@ mod tests {
             .battle_net_staging()
             .starts_with(layout.battle_net_dir()));
         assert!(layout.battle_net_staging().ends_with(".battle.net/.extract"));
-    }
-
-    #[test]
-    fn a_clean_report_says_so() {
-        let report = Report {
-            processes: Vec::new(),
-            agent_cache_removed: None,
-            staging_removed: None,
-            configs: vec![PathBuf::from("/x/Battle.net.config")],
-            download_paused: false,
-            // Timings are measurement, not work: a pass that did nothing still
-            // took time to establish that, and that does not make it unclean.
-            timings: vec![Timing { stage: "scan", took: Duration::from_millis(61) }],
-        };
-        assert!(report.is_clean());
-        assert_eq!(report.bytes_reclaimed(), 0);
     }
 
     #[test]

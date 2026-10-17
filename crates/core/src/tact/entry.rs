@@ -35,7 +35,6 @@
 //! Algorithm reference: <https://wowdev.wiki/CASC>.
 
 use super::idx::CASC_ENTRY_HEADER;
-use super::storage::EKey;
 
 /// Bytes of the key stored in an index entry, and mirrored in this header.
 const KEY_BYTES: usize = 9;
@@ -116,11 +115,6 @@ impl Header {
             && header.checksum_b == checksum_b(bytes, archive_id, offset)
     }
 
-    /// The full 16-byte encoding key this entry's truncated key came from,
-    /// as far as the header records it, the remaining 7 bytes are not stored.
-    pub fn key_prefix_matches(&self, ekey: &EKey) -> bool {
-        ekey[..KEY_BYTES] == self.key
-    }
 }
 
 /// `hashlittle` over the header up to the checksum fields.
@@ -230,7 +224,6 @@ mod tests {
         assert_eq!(parsed.key, key);
         assert_eq!(parsed.size, 4096);
         assert!(Header::verify(&built, 5, 12_345));
-        assert!(parsed.key_prefix_matches(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 0xaa, 0, 0, 0, 0, 0, 0]));
     }
 
     #[test]

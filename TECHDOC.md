@@ -435,7 +435,7 @@ pause and resume) and the addon ledger.
 
 ## Tests
 
-`cargo test` runs 775 tests and takes a few seconds. Four kinds:
+`cargo test` runs 774 tests and takes a few seconds. Four kinds:
 
 - **Unit tests** beside the code, testing behaviour rather than
   implementation. Many are regression tests with a comment naming the bug.

@@ -14,7 +14,6 @@
 //!    and addons from another manager are never touched, because Lightforge did
 //!    not put them there.
 
-use std::collections::BTreeMap;
 use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
 
@@ -572,17 +571,6 @@ fn safe_relative(path: &Path) -> Option<PathBuf> {
         }
     }
     (!out.as_os_str().is_empty()).then_some(out)
-}
-
-/// Group installed folders by the addon that owns them, from the ledger.
-pub fn owners(ledger: &Ledger) -> BTreeMap<String, String> {
-    let mut map = BTreeMap::new();
-    for record in &ledger.addons {
-        for folder in &record.folders {
-            map.insert(folder.clone(), record.name.clone());
-        }
-    }
-    map
 }
 
 #[derive(Debug, thiserror::Error)]

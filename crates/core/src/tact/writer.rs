@@ -139,10 +139,6 @@ impl StoreWriter {
         self
     }
 
-    pub fn files_written(&self) -> usize {
-        self.files
-    }
-
     pub fn bytes_written(&self) -> u64 {
         self.bytes
     }
@@ -627,7 +623,6 @@ mod tests {
         assert!(writer.contains(&ekey(1)));
         let again = writer.write(&ekey(1), &payload).unwrap();
         assert_eq!(first, again, "the second write must report the first location");
-        assert_eq!(writer.files_written(), 1);
 
         let summary = writer.finish().unwrap();
         assert_eq!(summary.files, 1);
