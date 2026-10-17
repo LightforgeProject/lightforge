@@ -1099,6 +1099,12 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Root<'_> {
             r.groups.clear();
         });
         self.content.as_widget().draw(tree, renderer, theme, style, layout, cursor, viewport);
+        // The overlays come next, and a [`layer`] in one, a picker's menu,
+        // counts from here: above the deepest layer the window drew. Counted
+        // from zero instead, a menu opened inside a dialog tied with the
+        // dialog, both stayed reachable, and the arrows walked on through the
+        // dialog rather than into the list.
+        with(|r| r.depth = r.top);
     }
 }
 

@@ -880,6 +880,23 @@ pub async fn restore_backup(layout: Layout, code: ProductCode, archive: PathBuf)
     .map_err(|e| e.to_string())?
 }
 
+/// Delete one backup, answering with the sentence to show.
+pub async fn delete_backup(layout: Layout, code: ProductCode, archive: PathBuf) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
+        let plan = settings_backup(&layout, &dirs, &code);
+        let backups = plan.list().map_err(|e| chain(&e))?;
+        let chosen = backups
+            .iter()
+            .find(|b| b.path == archive)
+            .ok_or("That backup is no longer there.")?;
+        plan.delete(chosen).map_err(|e| chain(&e))?;
+        Ok(format!("Deleted the backup from {}.", chosen.when()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// The first launch on a new build gets a settings backup first.
 ///
 /// Never fatal, unlike the one before an addon update: an update can wait for

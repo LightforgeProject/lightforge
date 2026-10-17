@@ -791,11 +791,18 @@ enum Message {
     CancelVersionPicker,
     OpenGameSettings,
     CloseGameSettings,
+    /// Something pressed in Game Settings that belongs to the page behind
+    /// it: the popup closes, then the message runs as if sent from there.
+    FromGameSettings(Box<Message>),
     BackupsListed(Result<Vec<lightforge_core::backup::Backup>, String>),
     BackupNow,
     AskRestore(PathBuf),
+    /// Delete was pressed on a backup; it waits for its confirmation.
+    AskDeleteBackup(PathBuf),
+    /// Back out of whichever confirmation a backup row is showing.
     CancelRestore,
     ConfirmRestore,
+    ConfirmDeleteBackup,
     BackupFinished(Result<String, String>),
     /// Open the detail view for one addon: provider, id, name.
     ShowAddonDetail(String, String, String),
@@ -1374,6 +1381,22 @@ struct AddonDetail {
     tab: DetailTab,
 }
 
+/// What a backup row is asking to confirm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackupAction {
+    Restore,
+    Delete,
+}
+
+/// What [`Lightforge::can_maintain`] allows right now.
+#[derive(Debug, Clone, Copy)]
+struct Maintain {
+    scan: bool,
+    deep_scan: bool,
+    uninstall: bool,
+    repair: bool,
+}
+
 /// The Game Settings popup, for the game that was selected when it opened.
 #[derive(Debug, Clone)]
 struct GameSettings {
@@ -1383,8 +1406,9 @@ struct GameSettings {
     backups: Option<Vec<lightforge_core::backup::Backup>>,
     /// A backup or restore is running; every button waits for it.
     working: bool,
-    /// The backup whose Restore was pressed, waiting for its confirmation.
-    confirm: Option<PathBuf>,
+    /// The backup whose Restore or Delete was pressed, waiting for its
+    /// confirmation, and which of the two it was.
+    confirm: Option<(PathBuf, BackupAction)>,
     /// The last outcome: a sentence, or what went wrong.
     note: Option<Result<String, String>>,
 }
@@ -4299,6 +4323,11 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::FromGameSettings(message) => {
+                self.game_settings = None;
+                self.update(*message)
+            }
+
             Message::BackupsListed(result) => {
                 // Dropped if the popup closed while the listing was out.
                 if let Some(settings) = self.game_settings.as_mut() {
@@ -4327,9 +4356,30 @@ impl Lightforge {
 
             Message::AskRestore(archive) => {
                 if let Some(settings) = self.game_settings.as_mut() {
-                    settings.confirm = Some(archive);
+                    settings.confirm = Some((archive, BackupAction::Restore));
                 }
                 Task::none()
+            }
+
+            Message::AskDeleteBackup(archive) => {
+                if let Some(settings) = self.game_settings.as_mut() {
+                    settings.confirm = Some((archive, BackupAction::Delete));
+                }
+                Task::none()
+            }
+
+            Message::ConfirmDeleteBackup => {
+                let Some(settings) = self.game_settings.as_mut() else {
+                    return Task::none();
+                };
+                let Some((archive, BackupAction::Delete)) = settings.confirm.take() else {
+                    return Task::none();
+                };
+                settings.working = true;
+                Task::perform(
+                    tasks::delete_backup(self.layout.clone(), settings.code.clone(), archive),
+                    Message::BackupFinished,
+                )
             }
 
             Message::CancelRestore => {
@@ -4343,7 +4393,7 @@ impl Lightforge {
                 let Some(settings) = self.game_settings.as_mut() else {
                     return Task::none();
                 };
-                let Some(archive) = settings.confirm.take() else {
+                let Some((archive, BackupAction::Restore)) = settings.confirm.take() else {
                     return Task::none();
                 };
                 settings.working = true;
@@ -7007,7 +7057,13 @@ impl Lightforge {
                 screen,
                 focus::layer(
                     mouse_area(container(card).center(Length::Fill).style(theme::scrim))
-                        .on_press(Message::MenuClick),
+                        // A click no control in the dialog wanted closes a
+                        // dropdown open in it, as a click on a page does;
+                        // otherwise it only stops at the dialog.
+                        .on_press(match self.panel_open() {
+                            true => Message::Dismiss,
+                            false => Message::MenuClick,
+                        }),
                 ),
             ]
             .into(),
@@ -9987,6 +10043,22 @@ impl Lightforge {
     /// panel's height as a magic number to sit clear of it. Taking its room
     /// from the spacer above the panel puts it in the right place by
     /// construction, at any window size.
+    /// Which of the store's maintenance actions would go ahead now, for the
+    /// cog menu and Game Settings alike, so the two cannot disagree.
+    ///
+    /// Offered only when the handler would go ahead: nothing else writing to
+    /// the store, which every flavour shares, and no launch under way.
+    fn can_maintain(&self) -> Maintain {
+        let installed = self.local.version.is_some();
+        let store_free = self.store_writer().is_none() && self.deep_cancel.is_none();
+        Maintain {
+            scan: installed && !self.busy && store_free,
+            deep_scan: installed && !self.busy && !self.scanning && self.maintenance().is_none(),
+            uninstall: installed && !self.busy && store_free,
+            repair: !self.busy && store_free,
+        }
+    }
+
     fn gear_menu(&self) -> Element<'_, Message> {
         let item = |label: &'static str, message: Message, enabled: bool| {
             self.ring(
@@ -10001,12 +10073,7 @@ impl Lightforge {
         };
 
         let installed = self.local.version.is_some();
-        // Offered only when the handler would go ahead: nothing else writing
-        // to the store, which every flavour shares, and no launch under way.
-        let store_free = self.store_writer().is_none() && self.deep_cancel.is_none();
-        let can_scan = installed && !self.busy && store_free;
-        let can_deep_scan = installed && !self.busy && !self.scanning && self.maintenance().is_none();
-        let can_uninstall = installed && !self.busy && store_free;
+        let can = self.can_maintain();
         // Anything in the queue for this product can be given up, running,
         // paused or still waiting its turn. Pause is on the button itself;
         // this is the one that ends it.
@@ -10015,20 +10082,13 @@ impl Lightforge {
             column![
                 item("Game Settings", Message::OpenGameSettings, installed),
                 item("Check for Updates", Message::CheckForUpdates, !self.busy),
-                item("Scan and Repair", Message::ScanAndRepair, can_scan),
-                match self.deep_cancel.is_some() {
-                    true => item("Stop Deep Scan", Message::DeepScan, true),
-                    false => item("Deep Scan", Message::DeepScan, can_deep_scan),
-                },
-                item("Open Files in Explorer", Message::OpenFiles, installed),
+                item("Scan and Repair", Message::ScanAndRepair, can.scan),
                 item("Copy Debug Info", Message::CopyDebug, true),
-                // Last and apart from the rest: the one entry that destroys.
-                item("Uninstall", Message::AskUninstall, can_uninstall),
             ]
             .extend(
                 self.owed_repair
                     .is_some()
-                    .then(|| item("Repair Damaged Files", Message::RepairDamaged, !self.busy && store_free)))
+                    .then(|| item("Repair Damaged Files", Message::RepairDamaged, can.repair)))
             .extend(queued.then(|| {
                 item(
                     "Cancel Download",
@@ -12377,85 +12437,194 @@ impl Lightforge {
     /// The Game Settings popup. Backups are its first section; the game's
     /// other per-product settings are meant to join them here.
     fn game_settings_card<'a>(&'a self, settings: &'a GameSettings) -> Element<'a, Message> {
+        // Four sections can outgrow the smallest window, so they scroll under
+        // a fixed title and Close, the way the patch notes do. The figure is
+        // [`WINDOW_MIN`]'s height less the title, the footer and the padding.
+        const SECTIONS_MAX: f32 = 560.0;
+
         let idle = !settings.working && !self.busy;
-        let keep = self.config.backup_keep;
+        let code = &settings.code;
+        let can = self.can_maintain();
 
-        let mut body = column![muted(
-            format!(
-                "Everything you set up in the game, every addon's SavedVariables, your key \
-                 bindings and macros, lives in WTF/Account. Lightforge backs it up before an \
-                 addon update and before the first launch on a new client build, and keeps \
-                 the newest {keep}."
-            ),
-            theme::LABEL,
-        )]
-        .spacing(theme::MD);
-
-        match settings.backups.as_deref() {
-            None => body = body.push(muted("reading backups…".to_owned(), theme::BODY)),
-            Some([]) => {
-                body = body.push(empty(
-                    "No backups yet.",
-                    "One is taken automatically the next time it is needed.",
-                ))
-            }
-            Some(backups) => {
-                let mut list = column![].spacing(theme::XS);
-                for backup in backups {
-                    let facts = [
-                        Some(backup.reason.label().to_owned()),
-                        backup.build.clone(),
-                        Some(size_of(backup.size)),
-                    ];
-                    let mut line = row![column![
-                        text(backup.when()).size(theme::BODY),
-                        muted(facts.into_iter().flatten().collect::<Vec<_>>().join(" · "), theme::CAPTION),
-                    ]
-                    .spacing(theme::XS)]
-                    .spacing(theme::SM)
-                    .align_y(Alignment::Center)
-                    .push(Space::new().width(Length::Fill));
-
-                    line = match settings.confirm.as_ref() == Some(&backup.path) {
-                        true => line
-                            .push(muted("Replace the current settings?".to_owned(), theme::LABEL))
-                            .push(secondary("Cancel", Message::CancelRestore).enabled(true))
-                            .push(action_button("Restore", theme::UPDATE, Message::ConfirmRestore).enabled(idle)),
-                        false => line.push(
-                            secondary("Restore", Message::AskRestore(backup.path.clone())).enabled(idle),
-                        ),
-                    };
-                    list = list.push(container(line).padding(theme::MD).style(theme::row));
-                }
-                // Five rows fit the popup; a longer `backup_keep` scrolls
-                // rather than pushing the buttons off the card.
-                let height = match backups.len() > 5 {
-                    true => Length::Fixed(5.0 * 66.0),
-                    false => Length::Shrink,
-                };
-                body = body.push(scrollable(list).height(height).style(theme::scrollbar));
-                body = body.push(muted(
-                    "Restoring backs up the current settings first, so it can be undone \
-                     the same way. The game has to be closed."
-                        .to_owned(),
-                    theme::CAPTION,
-                ));
-            }
+        // Every line of every section is the same shape as Settings: what it
+        // is on the left, the control on the right, buttons at their natural
+        // width. Stacked full-width buttons with their words on the left read
+        // as empty fields rather than as things to press.
+        fn line<'a>(label: &str, controls: Vec<Element<'a, Message>>) -> Element<'a, Message> {
+            row![text(label.to_owned()).size(theme::BODY).width(Length::Fill)]
+                .extend(controls)
+                .spacing(theme::SM)
+                .align_y(Alignment::Center)
+                .into()
         }
 
+        // Game: where it lives, and what can be done to the files there.
+        let dir = self.layout.product_dir(code);
+        let shown = match std::env::var_os("HOME").filter(|home| !home.is_empty()) {
+            Some(home) => match dir.strip_prefix(&home) {
+                Ok(rest) => Path::new("~").join(rest).display().to_string(),
+                Err(_) => dir.display().to_string(),
+            },
+            None => dir.display().to_string(),
+        };
+        let game = column![
+            row![
+                column![
+                    text("Location").size(theme::BODY),
+                    muted(shown, theme::LABEL),
+                ]
+                .spacing(theme::XS)
+                .width(Length::Fill),
+                secondary("Show in Explorer", Message::OpenFiles).enabled(true),
+            ]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center),
+            line(
+                "Game files",
+                vec![
+                    match self.deep_cancel.is_some() {
+                        true => secondary("Stop Deep Scan", Message::DeepScan).enabled(true),
+                        false => secondary(
+                            "Deep Scan",
+                            Message::FromGameSettings(Box::new(Message::DeepScan)),
+                        )
+                        .enabled(can.deep_scan),
+                    },
+                    secondary(
+                        "Scan & Repair",
+                        Message::FromGameSettings(Box::new(Message::ScanAndRepair)),
+                    )
+                    .enabled(can.scan),
+                ],
+            ),
+            line(
+                "Remove from this computer",
+                vec![action_button(
+                    "Uninstall",
+                    theme::ERROR,
+                    Message::FromGameSettings(Box::new(Message::AskUninstall)),
+                )
+                .enabled(can.uninstall)],
+            ),
+        ]
+        .spacing(theme::MD);
+
+        // Proton: the same pin as Settings › Proton, for whoever is here.
+        let unpinned = match Kind::of(code) {
+            Kind::Managed => Unpinned::Default,
+            Kind::HandOff => Unpinned::BattleNet,
+        };
+        let builds: Vec<ProtonChoice> = std::iter::once(ProtonChoice(None, unpinned))
+            .chain(
+                self.setup
+                    .iter()
+                    .flat_map(|s| s.installed.iter())
+                    .map(|build| ProtonChoice(Some(build.version.clone()), unpinned)),
+            )
+            .collect();
+        let pin = self.config.product(code).and_then(|p| p.profile.proton_ge_version.clone());
+        let for_code = code.clone();
+        let proton = line(
+            "Proton version",
+            vec![self.picker(
+                "game settings proton".to_owned(),
+                builds,
+                Some(ProtonChoice(pin, unpinned)),
+                "",
+                move |choice| Message::PinProductProton(for_code.clone(), choice),
+                Length::Fixed(260.0),
+                theme::BODY,
+            )],
+        );
+
+        // Addons: the way to the page that manages them.
+        let addons = line(
+            "Installed addons",
+            vec![secondary(
+                "Manage Addons",
+                Message::FromGameSettings(Box::new(Message::Show(Screen::Addons))),
+            )
+            .enabled(true)],
+        );
+
+        // Backups: the WTF backups, each restorable or deletable, and the
+        // button that takes one now.
+        let mut backups = column![line(
+            "Your in-game settings",
+            vec![secondary("Back up now", Message::BackupNow).enabled(idle)],
+        )]
+        .spacing(theme::SM);
+        match settings.backups.as_deref() {
+            None => backups = backups.push(muted("reading backups…".to_owned(), theme::BODY)),
+            Some([]) => backups = backups.push(muted("No backups yet.".to_owned(), theme::BODY)),
+            Some(list) => {
+                for backup in list {
+                    let asking = settings
+                        .confirm
+                        .as_ref()
+                        .filter(|(path, _)| path == &backup.path)
+                        .map(|(_, action)| *action);
+                    // The question replaces the details under the date while it
+                    // is asked, so the row only ever holds two buttons; beside
+                    // them it pushed the confirming one off the card.
+                    let under = match asking {
+                        Some(BackupAction::Restore) => {
+                            text("Replace the current settings with this backup?")
+                                .size(theme::CAPTION)
+                                .color(theme::UPDATE)
+                        }
+                        Some(BackupAction::Delete) => {
+                            text("Delete this backup?").size(theme::CAPTION).color(theme::ERROR)
+                        }
+                        None => {
+                            let facts = [
+                                Some(backup.reason.label().to_owned()),
+                                backup.build.clone(),
+                                Some(size_of(backup.size)),
+                            ];
+                            muted(facts.into_iter().flatten().collect::<Vec<_>>().join(" · "), theme::CAPTION)
+                        }
+                    };
+                    let mut line = row![column![text(backup.when()).size(theme::BODY), under]
+                        .spacing(theme::XS)
+                        .width(Length::Fill)]
+                    .spacing(theme::SM)
+                    .align_y(Alignment::Center);
+
+                    line = match asking {
+                        Some(BackupAction::Restore) => line
+                            .push(secondary("Cancel", Message::CancelRestore).enabled(true))
+                            .push(action_button("Restore", theme::UPDATE, Message::ConfirmRestore).enabled(idle)),
+                        Some(BackupAction::Delete) => line
+                            .push(secondary("Cancel", Message::CancelRestore).enabled(true))
+                            .push(action_button("Delete", theme::ERROR, Message::ConfirmDeleteBackup).enabled(idle)),
+                        None => line
+                            .push(secondary("Restore", Message::AskRestore(backup.path.clone())).enabled(idle))
+                            .push(secondary("Delete", Message::AskDeleteBackup(backup.path.clone())).enabled(idle)),
+                    };
+                    backups = backups.push(container(line).padding(theme::MD).style(theme::row));
+                }
+            }
+        }
         if let Some(note) = &settings.note {
-            body = body.push(match note {
+            backups = backups.push(match note {
                 Ok(line) => muted(line.clone(), theme::LABEL),
                 Err(e) => text(e.clone()).size(theme::LABEL).color(theme::ERROR),
             });
         }
 
+        let sections = column![
+            section("Game", game.into()),
+            section("Proton", proton),
+            section("Addons", addons),
+            section("Backups", backups.into()),
+        ]
+        .spacing(theme::LG);
+
         let actions = row![
-            secondary("Back up now", Message::BackupNow).enabled(idle),
             Space::new().width(Length::Fill),
             secondary("Close", Message::CloseGameSettings).enabled(true),
         ]
-        .spacing(theme::SM)
         .align_y(Alignment::Center);
 
         container(
@@ -12465,7 +12634,13 @@ impl Lightforge {
                     muted(settings.label.clone(), theme::LABEL),
                 ]
                 .spacing(theme::XS),
-                section("Settings backups", body.into()),
+                container(focus::region(
+                    "game settings",
+                    scrollable(sections)
+                        .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
+                        .style(theme::scrollbar),
+                ))
+                .max_height(SECTIONS_MAX),
                 actions,
             ]
             .spacing(theme::LG),

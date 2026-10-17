@@ -231,6 +231,18 @@ impl Plan {
         Ok(safety)
     }
 
+    /// Delete one backup, the player's own decision.
+    ///
+    /// Only a file this game's backup directory lists is removed: `backup`
+    /// is matched against [`Plan::list`] rather than trusted, so a stale or
+    /// foreign path is refused instead of deleted.
+    pub fn delete(&self, backup: &Backup) -> Result<(), BackupError> {
+        if !self.list()?.iter().any(|b| b.path == backup.path) {
+            return Err(BackupError::NotABackup(backup.path.clone()));
+        }
+        fs::remove_file(&backup.path).map_err(|e| BackupError::io(&backup.path, e))
+    }
+
     /// Write a backup without pruning, so a restore cannot rotate out the
     /// backup it is restoring.
     fn snapshot(&self, reason: Reason) -> Result<Option<Backup>, BackupError> {
@@ -519,6 +531,27 @@ mod tests {
         let left = plan.list().unwrap();
         assert_eq!(left.len(), 3);
         assert_eq!(left[0].build.as_deref(), Some("12.0.0.4"));
+    }
+
+    #[test]
+    fn delete_removes_only_a_listed_backup() {
+        let root = tempfile::tempdir().unwrap();
+        let plan = plan(root.path());
+        write(&plan.account_dir.join("A/SavedVariables/X.lua"), "X = 1");
+        let taken = plan.create(Reason::Manual).unwrap().unwrap();
+
+        // A file outside the backup directory is never removed, whatever it
+        // is called.
+        let elsewhere = root.path().join("elsewhere.tar.zst");
+        write(&elsewhere, "not ours");
+        let foreign = Backup { path: elsewhere.clone(), ..taken.clone() };
+        assert!(plan.delete(&foreign).is_err());
+        assert!(elsewhere.exists());
+
+        plan.delete(&taken).unwrap();
+        assert!(plan.list().unwrap().is_empty());
+        // The settings themselves are untouched.
+        assert!(plan.account_dir.join("A/SavedVariables/X.lua").exists());
     }
 
     #[test]
