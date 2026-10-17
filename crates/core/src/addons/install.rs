@@ -314,6 +314,17 @@ pub struct Extracted {
 /// error while writing leaves the old addon exactly as it was, and a failed
 /// rename puts back every folder already swapped.
 pub fn extract(package: &[u8], addons_dir: &Path, retire: &[String]) -> Result<Extracted, InstallError> {
+    extract_within(package, addons_dir, retire, MAX_UNCOMPRESSED)
+}
+
+/// [`extract`] with the size limit as a parameter, so a test can trip it
+/// without writing half a gigabyte.
+fn extract_within(
+    package: &[u8],
+    addons_dir: &Path,
+    retire: &[String],
+    limit: u64,
+) -> Result<Extracted, InstallError> {
     let mut archive =
         zip::ZipArchive::new(Cursor::new(package)).map_err(InstallError::Archive)?;
 
@@ -347,9 +358,12 @@ pub fn extract(package: &[u8], addons_dir: &Path, retire: &[String]) -> Result<E
             continue;
         }
 
-        total += entry.size();
-        if total > MAX_UNCOMPRESSED {
-            return Err(InstallError::TooLarge { limit: MAX_UNCOMPRESSED });
+        // What the archive claims, a cheap early refusal. The sizes are the
+        // packager's word, so the limit is enforced again below on the bytes
+        // that actually come out.
+        total = total.saturating_add(entry.size());
+        if total > limit {
+            return Err(InstallError::TooLarge { limit });
         }
         planned.push((index, relative, folder));
     }
@@ -397,18 +411,20 @@ pub fn extract(package: &[u8], addons_dir: &Path, retire: &[String]) -> Result<E
             })?;
         }
 
-        let mut contents = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut contents).map_err(|source| InstallError::Io {
-            path: dest.clone(),
-            source,
-        })?;
-        std::fs::write(&dest, &contents).map_err(|source| InstallError::Io {
-            path: dest.clone(),
-            source,
-        })?;
+        // Streamed, and capped at what is left of the budget plus one byte so
+        // going over is detectable. A header that says 1 byte in front of a
+        // deflate stream that inflates to gigabytes is otherwise read to the
+        // end: the zip reader bounds the compressed bytes, not the output.
+        let remaining = limit - bytes;
+        let io = |source| InstallError::Io { path: dest.clone(), source };
+        let mut file = std::fs::File::create(&dest).map_err(io)?;
+        let written = std::io::copy(&mut (&mut entry).take(remaining + 1), &mut file).map_err(io)?;
+        if written > remaining {
+            return Err(InstallError::TooLarge { limit });
+        }
 
         files += 1;
-        bytes += contents.len() as u64;
+        bytes += written;
     }
 
     let retired: Vec<&String> = retire.iter().filter(|f| !folders.contains(f)).collect();
@@ -592,6 +608,39 @@ mod tests {
             writer.finish().unwrap();
         }
         buffer
+    }
+
+    /// Rewrite every declared uncompressed size in `zip` to 1 byte, in the
+    /// local headers and the central directory both, the way a hostile
+    /// package would lie about it.
+    fn understated(mut zip: Vec<u8>) -> Vec<u8> {
+        let mut at = 0;
+        while at + 4 <= zip.len() {
+            let field = match &zip[at..at + 4] {
+                b"PK\x03\x04" => Some(at + 22),
+                b"PK\x01\x02" => Some(at + 24),
+                _ => None,
+            };
+            if let Some(field) = field {
+                zip[field..field + 4].copy_from_slice(&1u32.to_le_bytes());
+            }
+            at += 1;
+        }
+        zip
+    }
+
+    #[test]
+    fn an_entry_that_inflates_past_its_declared_size_is_stopped() {
+        let body = vec![0u8; 64 * 1024];
+        let package = understated(zip_with(&[("Bomb/Bomb.toc", b"## Title: Bomb"), ("Bomb/big.lua", &body)]));
+        let dir = tmpdir("understated");
+        let addons = dir.join("Interface/AddOns");
+
+        // The declared total is 2 bytes, well under the limit; only the
+        // bytes actually written can catch this.
+        let result = extract_within(&package, &addons, &[], 4 * 1024);
+        assert!(matches!(result, Err(InstallError::TooLarge { limit: 4096 })), "{result:?}");
+        assert!(!addons.join("Bomb").exists(), "nothing half-written is left installed");
     }
 
     fn tmpdir(name: &str) -> PathBuf {
