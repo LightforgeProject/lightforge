@@ -84,6 +84,8 @@ pub struct Listing {
     /// is how "0 installed · 3 managed" happens.
     pub stale: usize,
     pub dir: PathBuf,
+    /// Why the ledger could not be read, when it could not.
+    pub problem: Option<String>,
 }
 
 /// Scan a product's addons and fold in what the ledger knows.
@@ -94,15 +96,21 @@ pub async fn list(layout: Layout, code: ProductCode) -> Listing {
         let path = AppDirs::discover()
             .ok()
             .map(|dirs| manage::ledger_path(dirs.data_dir(), &dir, &code));
-        let mut ledger = path
-            .as_ref()
-            .and_then(|path| Ledger::load(path).ok())
-            .unwrap_or_default();
+        // An unreadable ledger is said, not shown as "nothing managed":
+        // install, update and remove all refuse it, and a page that looks
+        // fine while every button fails is the worse of the two.
+        let (mut ledger, problem) = match path.as_ref().map(|path| Ledger::load(path)) {
+            Some(Ok(ledger)) => (ledger, None),
+            Some(Err(e)) => (Ledger::default(), Some(chain(&e))),
+            None => (Ledger::default(), None),
+        };
 
         // An addon whose folders are all gone is not installed, whatever the
         // ledger says, and offering to update it is a promise we cannot keep.
         // Only ever reconciled against a directory we could read.
-        if dir.is_dir() {
+        // Never against a ledger that did not load: saving the stand-in
+        // would replace the user's file, the one record of what is ours.
+        if dir.is_dir() && problem.is_none() {
             let dropped = ledger.prune_missing(&dir);
             if !dropped.is_empty() {
                 if let Some(path) = &path {
@@ -128,6 +136,7 @@ pub async fn list(layout: Layout, code: ProductCode) -> Listing {
             stale: ledger.addons.len() - managed,
             rows: rows_from(&installed, &ledger),
             dir,
+            problem,
         }
     })
     .await
@@ -514,6 +523,17 @@ pub async fn auto_update(
     let requests = manage::auto_update_requests(&ledger, channel, default_auto);
 
     if requests.is_empty() {
+        return Ok(None);
+    }
+    // A game already running in the prefix, one this run of Lightforge did
+    // not start, has the addons loaded and writes beside them on exit.
+    let in_game = {
+        let layout = layout.clone();
+        tokio::task::spawn_blocking(move || !lightforge_core::preflight::games_running(&layout).is_empty())
+            .await
+            .unwrap_or(true)
+    };
+    if in_game {
         return Ok(None);
     }
     run(http, layout, code, requests, Mode::default(), channel, tx).await.map(Some)

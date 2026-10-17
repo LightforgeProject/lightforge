@@ -818,7 +818,7 @@ enum Message {
     SearchDone(Box<addonwork::SearchOutcome>),
     InstallAddon(String, String),
     CheckAddonUpdates,
-    AddonUpdatesChecked(Result<Vec<lightforge_core::addons::manage::UpdateStatus>, String>),
+    AddonUpdatesChecked(ProductCode, Result<Vec<lightforge_core::addons::manage::UpdateStatus>, String>),
 }
 
 /// What INSTALL opens before anything downloads: where it goes, what it
@@ -2709,6 +2709,12 @@ impl Lightforge {
         }
     }
 
+    /// Whether addon work may start: not while the user's own runs, nor
+    /// while the unattended pass is writing the same folder and ledger.
+    fn addons_locked(&self) -> bool {
+        self.addons_busy || self.addon_auto_running
+    }
+
     /// Whether a launch has to hold: a paused download is still winding
     /// down, or the launched product's own run has not stopped yet.
     fn launch_must_wait(&self) -> bool {
@@ -3183,7 +3189,14 @@ impl Lightforge {
             }
 
             Message::Downloaded(code, result) => {
-                self.downloads.finished(&code);
+                // A run a launch paused stops as cancelled, and is still owed
+                // its restart when the game exits: `finished` would forget
+                // that, which is why `Launched` never found anything owed.
+                let paused_by_launch = matches!(&result, Ok(done) if done.cancelled)
+                    && self.downloads.pending().contains(&code);
+                if !paused_by_launch {
+                    self.downloads.finished(&code);
+                }
                 if self.winding_down.as_ref() == Some(&code) {
                     self.winding_down = None;
                 }
@@ -4114,6 +4127,9 @@ impl Lightforge {
             }
 
             Message::AdoptAddons => {
+                if self.addons_locked() {
+                    return Task::none();
+                }
                 self.addons_busy = true;
                 self.error = None;
                 self.addon_auto_note = Some("looking up what is installed…".to_owned());
@@ -4325,6 +4341,9 @@ impl Lightforge {
             }
 
             Message::InstallVersion(provider, id, file_id) => {
+                if self.addons_locked() {
+                    return Task::none();
+                }
                 self.version_picker = None;
                 let (tx, rx) = tokio::sync::watch::channel(addonwork::Progress::default());
                 self.addon_rx = Some(rx);
@@ -4377,11 +4396,14 @@ impl Lightforge {
             }
 
             Message::AutoUpdateAddons => {
-                // Never against a running game, and never on top of work the
-                // user started: both write the same directory.
+                // Never against a running game, which writes SavedVariables
+                // beside the addons and loads them, and never on top of work
+                // the user started: both write the same directory. A game
+                // that was already running when Lightforge started is not a
+                // launch of ours, so the prefix itself is asked as well.
                 if self.addon_auto_running
                     || self.addons_busy
-                    || self.running().is_some()
+                    || self.launching.is_some()
                     || self.addon_auto_done.contains(&self.selected.code)
                 {
                     return Task::none();
@@ -4574,6 +4596,13 @@ impl Lightforge {
             }
 
             Message::AddonsListed(listing) => {
+                // A slow listing for the product shown before a switch.
+                if listing.dir != self.layout.addons_dir(&self.selected.code) {
+                    return Task::none();
+                }
+                if let Some(problem) = &listing.problem {
+                    self.error = Some(format!("the addon list cannot be read: {problem}"));
+                }
                 self.addons = *listing;
                 Task::none()
             }
@@ -4584,6 +4613,9 @@ impl Lightforge {
             }
 
             Message::ImportToken => {
+                if self.addons_locked() {
+                    return Task::none();
+                }
                 let token = self.token_input.trim().to_owned();
                 if token.is_empty() {
                     return Task::none();
@@ -4610,6 +4642,9 @@ impl Lightforge {
             }
 
             Message::UpdateAddons => {
+                if self.addons_locked() {
+                    return Task::none();
+                }
                 let (tx, rx) = tokio::sync::watch::channel(addonwork::Progress::default());
                 self.addon_rx = Some(rx);
                 self.addons_busy = true;
@@ -4635,6 +4670,9 @@ impl Lightforge {
                 match result {
                     Ok(report) => {
                         self.addon_report = Some(*report);
+                        // What was installed is no longer an update waiting.
+                        let installed = &self.addon_report.as_ref().expect("just set").installed;
+                        self.updates.retain(|u| !installed.contains(&u.name));
                         // The list on screen is now stale in both directions.
                         Task::perform(
                             addonwork::list(self.layout.clone(), self.selected.code.clone()),
@@ -4689,6 +4727,9 @@ impl Lightforge {
             }
 
             Message::RemoveAddon(provider, id) => {
+                if self.addons_locked() {
+                    return Task::none();
+                }
                 self.addon_remove_armed = None;
                 Task::perform(
                     addonwork::remove(
@@ -5182,6 +5223,9 @@ impl Lightforge {
             }
 
             Message::InstallAddon(provider, id) => {
+                if self.addons_locked() {
+                    return Task::none();
+                }
                 let (tx, rx) = tokio::sync::watch::channel(addonwork::Progress::default());
                 self.addon_rx = Some(rx);
                 self.addons_busy = true;
@@ -5203,6 +5247,9 @@ impl Lightforge {
             }
 
             Message::ReinstallAddon(provider, id) => {
+                if self.addons_locked() {
+                    return Task::none();
+                }
                 self.addon_menu_open = None;
                 let (tx, rx) = tokio::sync::watch::channel(addonwork::Progress::default());
                 self.addon_rx = Some(rx);
@@ -5225,17 +5272,23 @@ impl Lightforge {
                 )
             }
 
-            Message::CheckAddonUpdates => Task::perform(
-                addonwork::check_updates(
-                    self.http.clone(),
-                    self.layout.clone(),
-                    self.selected.code.clone(),
-                    self.config.addon_channel,
-                ),
-                Message::AddonUpdatesChecked,
-            ),
+            Message::CheckAddonUpdates => {
+                let code = self.selected.code.clone();
+                Task::perform(
+                    addonwork::check_updates(
+                        self.http.clone(),
+                        self.layout.clone(),
+                        code.clone(),
+                        self.config.addon_channel,
+                    ),
+                    move |result| Message::AddonUpdatesChecked(code.clone(), result),
+                )
+            }
 
-            Message::AddonUpdatesChecked(result) => {
+            Message::AddonUpdatesChecked(code, result) => {
+                if code != self.selected.code {
+                    return Task::none();
+                }
                 match result {
                     Ok(statuses) => self.updates = statuses,
                     Err(e) => self.error = Some(e),
@@ -8195,7 +8248,7 @@ impl Lightforge {
                 .width(Length::Fill)
                 .style(theme::divider),
         );
-        let reinstall = (!self.addons_busy)
+        let reinstall = (!self.addons_locked())
             .then(|| Message::ReinstallAddon(managed.provider.clone(), managed.id.clone()));
         rows = rows.push(self.ring(
             focus::Target::Key("addon menu entry Re-install".to_owned()),
@@ -8427,6 +8480,8 @@ impl Lightforge {
         self.addon_remove_armed = None;
         self.addon_menu_open = None;
         self.addon_auto_note = None;
+        // Another product's addons, and their badges with them.
+        self.updates.clear();
     }
 
     /// A screen that is not the dashboard: header, title, content.
@@ -10173,9 +10228,9 @@ impl Lightforge {
                 // Colour still carries state: blue is the one to press, grey
                 // is a thing you can do.
                 action_button("Check for updates", theme::PAUSE, Message::CheckAddonUpdates)
-                    .enabled(!self.addons_busy && self.addons.managed > 0),
+                    .enabled(!self.addons_locked() && self.addons.managed > 0),
                 action_button("Update all", theme::ACCENT, Message::UpdateAddons)
-                    .enabled(!self.addons_busy && self.addons.managed > 0),
+                    .enabled(!self.addons_locked() && self.addons.managed > 0),
                 action_button("Open folder", theme::PAUSE, Message::OpenAddonsDir)
                     .enabled(true),
             ]
@@ -10218,7 +10273,7 @@ impl Lightforge {
                         .spacing(theme::XS)
                         .width(Length::Fill),
                         action_button("Recognise them", theme::ACCENT, Message::AdoptAddons)
-                            .enabled(!self.addons_busy),
+                            .enabled(!self.addons_locked()),
                     ]
                     .spacing(theme::SM)
                     .align_y(Alignment::Center),
@@ -10464,7 +10519,7 @@ impl Lightforge {
                                 managed.id.clone(),
                             ),
                         )
-                        .enabled(!self.addons_busy),
+                        .enabled(!self.addons_locked()),
                     );
                 }
 
@@ -10488,7 +10543,7 @@ impl Lightforge {
                                     managed.id.clone(),
                                 ),
                             )
-                            .keyed(remove, !self.addons_busy),
+                            .keyed(remove, !self.addons_locked()),
                         )
                         .push(
                             secondary("Keep", Message::CancelRemoveAddon).enabled(true),
@@ -10501,7 +10556,7 @@ impl Lightforge {
                                 managed.id.clone(),
                             ),
                         )
-                        .keyed(remove, !self.addons_busy),
+                        .keyed(remove, !self.addons_locked()),
                     ),
                 };
 
@@ -10585,7 +10640,7 @@ impl Lightforge {
                             .padding(theme::SM),
                     ),
                     action_button("Import", theme::ACCENT, Message::ImportToken)
-                        .enabled(!self.addons_busy && !self.token_input.trim().is_empty()),
+                        .enabled(!self.addons_locked() && !self.token_input.trim().is_empty()),
                 ]
                 .spacing(theme::SM)
                 .align_y(Alignment::Center),
@@ -10666,7 +10721,7 @@ impl Lightforge {
                     .spacing(theme::XS)
                     .width(Length::Fill),
                     action_button("Export", theme::ACCENT, Message::ExportAddons)
-                        .enabled(!self.addons_busy && managed > 0),
+                        .enabled(!self.addons_locked() && managed > 0),
                 ]
                 .spacing(theme::MD)
                 .align_y(Alignment::Center),
@@ -10825,7 +10880,7 @@ impl Lightforge {
                     theme::INSTALL,
                     Message::InstallAddon(provider.clone(), listing.id.clone()),
                 )
-                .enabled(!self.addons_busy),
+                .enabled(!self.addons_locked()),
             });
             body = body.push(container(line).padding(theme::MD).style(theme::row));
         }
@@ -12327,7 +12382,7 @@ impl Lightforge {
                                 build.file_id.clone(),
                             ),
                         )
-                        .enabled(!self.addons_busy),
+                        .enabled(!self.addons_locked()),
                     );
                     list = list.push(container(line).padding(theme::MD).style(theme::row));
                 }
@@ -12435,7 +12490,7 @@ impl Lightforge {
                 theme::INSTALL,
                 Message::InstallAddon(detail.provider.clone(), detail.id.clone()),
             )
-            .enabled(!self.addons_busy);
+            .enabled(!self.addons_locked());
             footer = footer.push(install);
         }
         footer = footer.push(secondary("Close", Message::CloseAddonDetail).enabled(true));
@@ -15310,6 +15365,33 @@ mod tests {
         assert_eq!(app.launch_when_quiet, None, "started once the run stopped");
         assert!(app.status.starts_with("running"), "{}", app.status);
         assert_eq!(app.launching, Some(code), "still this product's session");
+    }
+
+    #[test]
+    fn a_download_a_launch_paused_is_restarted_when_the_game_exits() {
+        use lightforge_core::preflight::DownloadGuard;
+
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+        app.config.pause_downloads_while_playing = false;
+        let code = app.selected.code.clone();
+        running(&mut app, &code);
+        app.downloads.register(code.clone(), Cancel::new());
+        app.busy = true;
+        app.launching = Some(code.clone());
+
+        // Pre-flight pauses it, and the run reports back as cancelled.
+        let mut guard = app.downloads.clone();
+        assert!(guard.pause(&code).unwrap());
+        let _ = app.update(Message::Downloaded(code.clone(), stopped(true)));
+        assert!(matches!(app.queue[0].stage, Stage::Paused(_)));
+
+        let _ = app.update(Message::Launched(Ok("exited".to_owned())));
+        assert!(
+            !matches!(app.queue[0].stage, Stage::Paused(_)),
+            "queued again, or already running"
+        );
     }
 
     #[test]

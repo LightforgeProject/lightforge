@@ -207,24 +207,25 @@ impl Ledger {
         }
     }
 
-    /// Write atomically, temp file beside it, then rename.
+    /// Write atomically: a temp file of its own beside it, fsynced, then
+    /// renamed. Every product's ledger lives in one directory, so a shared
+    /// temp name let two saves rename each other's contents into place.
     pub fn save(&self, path: &Path) -> Result<(), InstallError> {
+        use std::io::Write;
+
         let dir = path.parent().unwrap_or_else(|| Path::new("."));
-        std::fs::create_dir_all(dir).map_err(|source| InstallError::Io {
-            path: dir.to_path_buf(),
-            source,
-        })?;
+        let io = |p: &Path| {
+            let p = p.to_path_buf();
+            move |source| InstallError::Io { path: p, source }
+        };
+        std::fs::create_dir_all(dir).map_err(io(dir))?;
 
         let json = serde_json::to_vec_pretty(self).expect("ledger serializes");
-        let temp = dir.join(".addons.json.tmp");
-        std::fs::write(&temp, &json).map_err(|source| InstallError::Io {
-            path: temp.clone(),
-            source,
-        })?;
-        std::fs::rename(&temp, path).map_err(|source| InstallError::Io {
-            path: path.to_path_buf(),
-            source,
-        })
+        let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(io(dir))?;
+        temp.write_all(&json).map_err(io(temp.path()))?;
+        temp.as_file().sync_all().map_err(io(temp.path()))?;
+        temp.persist(path).map_err(|e| InstallError::Io { path: path.to_path_buf(), source: e.error })?;
+        Ok(())
     }
 
     pub fn find(&self, provider: &str, id: &str) -> Option<&Record> {
@@ -236,11 +237,29 @@ impl Ledger {
     }
 
     /// Record an install, replacing any previous record of the same addon.
-    pub fn record(&mut self, record: Record) {
+    ///
+    /// A folder belongs to one record. The package just extracted replaced
+    /// these folders on disk, so another record claiming them, the same addon
+    /// from a different provider most often, loses them, and goes once it
+    /// has none left. Two owners meant removing either deleted folders the
+    /// other was still counting on. Returns the names of records dropped.
+    pub fn record(&mut self, record: Record) -> Vec<String> {
         self.addons
             .retain(|r| !(r.id == record.id && r.provider == record.provider));
+        let mut dropped = Vec::new();
+        for other in &mut self.addons {
+            other.folders.retain(|f| !record.folders.contains(f));
+        }
+        self.addons.retain(|r| {
+            let keep = !r.folders.is_empty();
+            if !keep {
+                dropped.push(r.name.clone());
+            }
+            keep
+        });
         self.addons.push(record);
         self.addons.sort_by_key(|r| r.name.to_lowercase());
+        dropped
     }
 
     /// Drop records whose folders have all vanished from disk.
@@ -499,7 +518,14 @@ pub fn remove(
         .forget(provider, id)
         .ok_or_else(|| InstallError::NotTracked(id.to_owned()))?;
 
-    delete_folders(addons_dir, &record.folders)
+    // Never a folder another record still names. `record` keeps that from
+    // arising now, but ledgers written before it can hold one folder twice.
+    let own: Vec<String> = record
+        .folders
+        .into_iter()
+        .filter(|f| !ledger.addons.iter().any(|r| r.folders.contains(f)))
+        .collect();
+    delete_folders(addons_dir, &own)
 }
 
 /// Delete addon folders, and report which were actually there.
@@ -787,6 +813,52 @@ mod tests {
         // The addon we did not install is untouched.
         assert!(dir.join("HandInstalled/thing.toc").is_file());
         assert!(ledger.find("curse", "1").is_none());
+    }
+
+    fn questie(provider: &str, id: &str, folders: &[&str]) -> Record {
+        Record {
+            provider: provider.into(),
+            id: id.into(),
+            name: "Questie".into(),
+            folders: folders.iter().map(|f| (*f).to_owned()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn installing_from_a_second_provider_takes_the_folders_over() {
+        // Seen live: Questie from WoWInterface, then from CurseForge, left
+        // both records claiming `Questie`.
+        let mut ledger = Ledger::default();
+        ledger.record(questie("wowinterface", "24994", &["Questie"]));
+        let dropped = ledger.record(questie("curse", "334372", &["Questie", "QuestieDB"]));
+
+        assert_eq!(dropped, ["Questie"]);
+        assert!(ledger.find("wowinterface", "24994").is_none());
+        assert_eq!(ledger.addons.len(), 1);
+    }
+
+    #[test]
+    fn a_record_keeps_the_folders_nobody_else_took() {
+        let mut ledger = Ledger::default();
+        ledger.record(questie("wowinterface", "1", &["Shared", "OnlyMine"]));
+        ledger.record(questie("curse", "2", &["Shared"]));
+        assert_eq!(ledger.find("wowinterface", "1").unwrap().folders, ["OnlyMine"]);
+    }
+
+    #[test]
+    fn removal_leaves_a_folder_another_record_still_names() {
+        // A ledger written before ownership was enforced.
+        let dir = tmpdir("shared-folder");
+        std::fs::create_dir_all(dir.join("Questie")).unwrap();
+        std::fs::create_dir_all(dir.join("QuestieDB")).unwrap();
+        let mut ledger = Ledger::default();
+        ledger.addons.push(questie("wowinterface", "24994", &["Questie"]));
+        ledger.addons.push(questie("curse", "334372", &["Questie", "QuestieDB"]));
+
+        let removed = remove(&mut ledger, &dir, "wowinterface", "24994").unwrap();
+        assert!(removed.is_empty());
+        assert!(dir.join("Questie").is_dir(), "the CurseForge record still owns it");
     }
 
     #[test]

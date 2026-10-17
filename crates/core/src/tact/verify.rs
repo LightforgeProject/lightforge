@@ -242,7 +242,15 @@ pub fn scan(store: &Storage, mut on_progress: impl FnMut(Progress)) -> Report {
 }
 
 /// Check one header against the index entry that pointed at it.
+///
+/// An entry pointing straight at `BLTE` has no header to check: it is the
+/// headerless alias of a file indexed again 30 bytes earlier, see
+/// [`super::storage`]. Reading those bytes as a header reported every alias
+/// as a key mismatch, and repairing that dropped real entries.
 fn fault_in(header: &[u8], entry: &Entry) -> Option<Fault> {
+    if header.starts_with(b"BLTE") {
+        return None;
+    }
     let parsed = Header::parse(header)?;
     if parsed.key != entry.key {
         return Some(Fault::KeyMismatch);
@@ -596,7 +604,9 @@ pub fn remove_entries(
         let path = data_dir.join(super::idx::file_name(bucket, sequence));
         let mut index = Index::load(&path)?;
         for entry in entries {
-            if index.remove(&entry.key).is_some() {
+            // The entry itself, not the first with its key: a key can be
+            // indexed twice, and the other one may be the healthy copy.
+            if index.remove_entry(&entry) {
                 removed += 1;
             }
         }
@@ -651,6 +661,15 @@ mod tests {
 
     fn open(dir: &tempfile::TempDir) -> Storage {
         Storage::open(dir.path().join("Data")).unwrap()
+    }
+
+    #[test]
+    fn a_headerless_alias_is_not_reported_as_damage() {
+        // The bytes at an alias's offset are its BLTE payload, not a header.
+        let mut bytes = [0u8; CASC_ENTRY_HEADER];
+        bytes[..4].copy_from_slice(b"BLTE");
+        let alias = Entry { key: [5; 9], archive_id: 4, offset: 1030, size: 100 };
+        assert_eq!(fault_in(&bytes, &alias), None);
     }
 
     #[test]

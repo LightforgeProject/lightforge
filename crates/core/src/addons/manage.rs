@@ -91,7 +91,11 @@ pub async fn install_all(
     options: &Options,
     mut on_event: impl FnMut(Event),
 ) -> Result<Report, ManageError> {
+    // Read once to decide what to do. The save at the end reads it again:
+    // a pass takes minutes, and a pin or an ignore set meanwhile must not be
+    // undone by writing this copy back over it.
     let mut ledger = Ledger::load(&options.ledger_path)?;
+    let mut written: Vec<(Record, Option<String>)> = Vec::new();
     let mut report = Report::default();
 
     // Pins only make sense when reproducing an export; otherwise ask for the
@@ -107,7 +111,7 @@ pub async fn install_all(
 
     on_event(Event::Resolving { count: requests.len() });
     let resolved = resolve_everywhere(http, catalog, &requests, &options.flavor).await?;
-    let unavailable = resolved.iter().filter(|r| r.downloadable().is_none()).count();
+    let unavailable = resolved.iter().filter(|(_, r)| r.downloadable().is_none()).count();
     on_event(Event::Resolved {
         ok: resolved.len() - unavailable,
         unavailable,
@@ -119,11 +123,10 @@ pub async fn install_all(
     })?;
 
     let mut backup = options.backup.clone();
-    for entry in &resolved {
-        let asked = requests.iter().find(|r| r.id == entry.id);
-        let provider = asked
-            .map(|r| r.provider.clone())
-            .unwrap_or_else(|| "curse".to_owned());
+    let mut failed = None;
+    for (provider, entry) in &resolved {
+        let asked = requests.iter().find(|r| r.provider == *provider && r.id == entry.id);
+        let provider = provider.clone();
         // A request naming a file is someone reproducing an exact setup, and
         // that is a pin: it has to survive the install, or the next pass
         // moves the addon straight off the version they asked for.
@@ -152,14 +155,25 @@ pub async fn install_all(
         // backup nothing is replaced, which is the point of taking one.
         if ledger.find(&provider, &entry.id).is_some() {
             if let Some(plan) = backup.take() {
-                tokio::task::spawn_blocking(move || plan.create(Reason::AddonUpdate))
+                let made = tokio::task::spawn_blocking(move || plan.create(Reason::AddonUpdate))
                     .await
-                    .map_err(|e| ManageError::Join(e.to_string()))??;
+                    .map_err(|e| ManageError::Join(e.to_string()))
+                    .and_then(|made| made.map_err(ManageError::from));
+                // What was installed before this point is on disk and has to
+                // be recorded, so the pass stops here rather than returning
+                // past the save below.
+                if let Err(e) = made {
+                    failed = Some(e);
+                    break;
+                }
             }
         }
 
-        match fetch_and_install(http, entry, &provider, &name, pin, options, &mut ledger).await {
+        match fetch_and_install(http, entry, &provider, &name, pin.clone(), options, &mut ledger).await {
             Ok(folders) => {
+                if let Some(record) = ledger.find(&provider, &entry.id) {
+                    written.push((record.clone(), pin));
+                }
                 on_event(Event::Installed { name: name.clone(), folders });
                 report.installed.push(name);
             }
@@ -175,8 +189,33 @@ pub async fn install_all(
         }
     }
 
-    ledger.save(&options.ledger_path)?;
-    Ok(report)
+    save_merged(&options.ledger_path, written, options.pinned)?;
+    match failed {
+        Some(e) => Err(e),
+        None => Ok(report),
+    }
+}
+
+/// Write what a pass installed into the ledger as it is *now*, not as it was
+/// when the pass started.
+///
+/// Each record this pass wrote replaces its row, but the choices that are the
+/// user's, channel, ignore, auto-update and pin, are taken from the current
+/// row when there is one: they may have changed while the pass ran.
+fn save_merged(path: &std::path::Path, written: Vec<(Record, Option<String>)>, importing: bool) -> Result<(), ManageError> {
+    let mut ledger = Ledger::load(path)?;
+    for (mut record, asked) in written {
+        if let Some(current) = ledger.find(&record.provider, &record.id) {
+            record.channel = current.channel;
+            record.ignored = current.ignored;
+            record.auto_update = current.auto_update;
+            record.pinned =
+                pin_after_install(asked, importing, current.pinned.clone(), record.file_id.as_deref());
+        }
+        ledger.record(record);
+    }
+    ledger.save(path)?;
+    Ok(())
 }
 
 /// Update everything the ledger tracks.
@@ -198,12 +237,16 @@ pub async fn update_all(
 /// CurseForge goes through the catalog proxy because it needs a key; the rest
 /// are resolved client-side. That split is the point: with no catalog
 /// configured, or with the proxy down, every keyless provider still works.
+///
+/// Each result comes back with the provider of the request it answers: ids
+/// are only unique within a provider, and CurseForge and WoWInterface both
+/// number theirs, so an id alone can match the wrong request.
 pub async fn resolve_everywhere(
     http: &Http,
     catalog: Option<&Catalog>,
     requests: &[Request],
     flavor: &str,
-) -> Result<Vec<Resolved>, ManageError> {
+) -> Result<Vec<(String, Resolved)>, ManageError> {
     use std::collections::BTreeMap;
 
     let mut grouped: BTreeMap<super::Provider, Vec<Request>> = BTreeMap::new();
@@ -216,16 +259,18 @@ pub async fn resolve_everywhere(
 
     let mut resolved = Vec::with_capacity(requests.len());
     for (provider, batch) in grouped {
-        match (&provider, catalog) {
-            (super::Provider::Curse, Some(catalog)) => {
-                resolved.extend(catalog.resolve(http, flavor, &batch).await?)
-            }
-            (super::Provider::Curse, None) => resolved.extend(providers::unsupported(
+        let answers = match (&provider, catalog) {
+            (super::Provider::Curse, Some(catalog)) => catalog.resolve(http, flavor, &batch).await?,
+            (super::Provider::Curse, None) => providers::unsupported(
                 &batch,
                 "no addon catalog is configured, so CurseForge addons cannot be resolved",
-            )),
-            _ => resolved.extend(providers::resolve(http, &provider, &batch, flavor).await),
-        }
+            ),
+            _ => providers::resolve(http, &provider, &batch, flavor).await,
+        };
+        // The provider exactly as the request spelled it, which is what the
+        // ledger keys its records on.
+        let named = batch.first().map(|r| r.provider.clone()).unwrap_or_default();
+        resolved.extend(answers.into_iter().map(|answer| (named.clone(), answer)));
     }
     Ok(resolved)
 }
@@ -245,13 +290,23 @@ async fn fetch_and_install(
 
     verify_md5(&package, entry.md5.as_deref(), name)?;
 
-    // A repair replaces every folder the record names, so one an older build
-    // shipped and this one does not goes too. It happens inside the extract's
-    // swap, so a failure leaves the addon as it was rather than half gone.
-    let retire = match options.reinstall {
-        true => ledger.find(provider, &entry.id).map(|r| r.folders.clone()).unwrap_or_default(),
-        false => Vec::new(),
-    };
+    // An update or a repair replaces every folder the record names, so one an
+    // older build shipped and this one does not goes too, rather than staying
+    // loaded in game with nothing left that owns it. Not a folder another
+    // record also claims. It happens inside the extract's swap, so a failure
+    // leaves the addon as it was rather than half gone.
+    let retire: Vec<String> = ledger
+        .find(provider, &entry.id)
+        .map(|r| r.folders.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|folder| {
+            !ledger
+                .addons
+                .iter()
+                .any(|r| !(r.provider == provider && r.id == entry.id) && r.folders.contains(folder))
+        })
+        .collect();
 
     // Trust what the package contains over what the catalog said it contains:
     // the folders are what removal will delete, so they have to be real.
@@ -447,7 +502,10 @@ pub async fn check_updates(
             // nothing is offered: the row still exists, it just never reads
             // as outdated.
             let found = match record.tracks_updates() {
-                true => resolved.iter().find(|r| r.id == record.id),
+                true => resolved
+                    .iter()
+                    .find(|(provider, r)| *provider == record.provider && r.id == record.id)
+                    .map(|(_, r)| r),
                 false => None,
             };
             UpdateStatus {
@@ -573,7 +631,7 @@ pub async fn adopt(
     // Folders a record already claims. Not just the ones on disk: a record
     // whose folders are missing is still that addon's, and adopting over it
     // would leave two records fighting for one name.
-    let claimed: std::collections::BTreeSet<String> = ledger
+    let mut claimed: std::collections::BTreeSet<String> = ledger
         .addons
         .iter()
         .flat_map(|record| record.folders.iter().cloned())
@@ -615,9 +673,26 @@ pub async fn adopt(
             .filter(|f| on_disk.contains(f.as_str()) && !claimed.contains(*f))
             .cloned()
             .chain(matched)
+            .filter(|f| !claimed.contains(f))
             .collect();
         folders.sort();
         folders.dedup();
+        if folders.is_empty() {
+            continue;
+        }
+        // Taken now, so a second project in the same answer cannot claim it.
+        claimed.extend(folders.iter().cloned());
+
+        // Already managed under this id: a folder an older build left behind,
+        // most likely. It joins that record, which keeps everything the user
+        // chose about the addon; a fresh record would have replaced it.
+        if let Some(existing) = ledger.find_mut("curse", &id) {
+            existing.folders.extend(folders.iter().cloned());
+            existing.folders.sort();
+            existing.folders.dedup();
+            adopted.push(Adopted { name: existing.name.clone(), folders });
+            continue;
+        }
 
         let name = found
             .name
@@ -749,6 +824,38 @@ pub enum ManageError {
 mod tests {
     use super::*;
     use crate::addons::Collection;
+
+    #[test]
+    fn a_pass_saving_keeps_choices_made_while_it_ran() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("addons.json");
+        let record = |file: &str| Record {
+            provider: "curse".into(),
+            id: "1".into(),
+            name: "BigWigs".into(),
+            file_id: Some(file.into()),
+            folders: vec!["BigWigs".into()],
+            ..Default::default()
+        };
+        // The pass read this, then took minutes installing file 101.
+        let mut before = Ledger::default();
+        before.record(record("100"));
+        before.save(&path).unwrap();
+
+        // Meanwhile the user ignored it and pinned it to what is installed.
+        let mut now = before.clone();
+        let row = now.find_mut("curse", "1").unwrap();
+        row.ignored = true;
+        row.pinned = Some("101".into());
+        now.save(&path).unwrap();
+
+        save_merged(&path, vec![(record("101"), None)], false).unwrap();
+        let saved = Ledger::load(&path).unwrap();
+        let row = saved.find("curse", "1").unwrap();
+        assert_eq!(row.file_id.as_deref(), Some("101"), "the install is recorded");
+        assert!(row.ignored, "and the ignore set meanwhile survives");
+        assert_eq!(row.pinned.as_deref(), Some("101"));
+    }
 
     const TOKEN: &str = concat!(
         "eyJjb2xsZWN0aW9uX25hbWUiOiJXb3dVcF9leHBvcnRfMSIsImNsaWVudF90eXBlIjoiUmV0YWlsIiwi",

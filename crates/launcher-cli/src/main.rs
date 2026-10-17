@@ -2125,7 +2125,7 @@ async fn main() -> Result<()> {
                     &options.flavor,
                 )
                 .await?;
-                for entry in &resolved {
+                for (_, entry) in &resolved {
                     let detail = entry.unavailable_reason().unwrap_or_else(|| {
                         format!(
                             "{} {}",
