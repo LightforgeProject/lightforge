@@ -92,7 +92,7 @@ pub struct Reclaim {
 }
 
 /// One build, and where its CDN serves it from.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Build {
     pub product: ProductCode,
     /// The build config's hash, `.build.info`'s `Build Key`.
@@ -183,13 +183,24 @@ pub async fn plan(
 
     let mut store = Storage::open(install)?;
     let mut keep = HashSet::new();
-    for build in builds(install)?.iter().filter(|b| b.product != departing.product) {
+    for build in kept(&builds(install)?, departing) {
         keep.extend(keep_keys(http, install, &mut store, build).await?);
     }
 
     let snapshot = Snapshot::take(store.data_dir())?;
     let gone = |e: &Entry| gone.contains(&e.key) && !keep.contains(&e.key);
     Ok(select(store.files(), gone, store.data_dir(), snapshot))
+}
+
+/// Every build in `all` but `departing` itself.
+///
+/// Matched on the build key as well as the product: the departing build can be
+/// an old one left behind while the same product is installed at a newer build,
+/// and filtering by product alone would count the installed build's files as
+/// gone too.
+fn kept<'a>(all: &'a [Build], departing: &'a Build) -> impl Iterator<Item = &'a Build> {
+    all.iter()
+        .filter(move |b| !(b.product == departing.product && b.build_key == departing.build_key))
 }
 
 /// Work out what dropping every entry no build in [`builds`] uses would
@@ -343,6 +354,34 @@ async fn manifest_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn build(product: ProductCode, key: &str) -> Build {
+        let cdn = Cdn {
+            name: String::new(),
+            path: "tpr/wow".into(),
+            hosts: Vec::new(),
+            servers: Vec::new(),
+            config_path: String::new(),
+        };
+        Build { product, build_key: key.into(), cdn }
+    }
+
+    #[test]
+    fn an_old_build_leaving_keeps_the_installed_build_of_the_same_product() {
+        // `lightforge reclaim --build-key <old>` while retail is installed at
+        // a newer build: everything the two share must stay.
+        let installed = build(ProductCode::Retail, "new");
+        let era = build(ProductCode::ClassicEra, "era");
+        let all = [installed.clone(), era.clone()];
+
+        let departing = build(ProductCode::Retail, "old");
+        let staying: Vec<_> = kept(&all, &departing).collect();
+        assert_eq!(staying, [&installed, &era]);
+
+        // The build itself leaving is still excluded.
+        let staying: Vec<_> = kept(&all, &installed).collect();
+        assert_eq!(staying, [&era]);
+    }
 
     fn entry(key: u8, archive: u16, size: u32) -> Entry {
         let mut k = [0u8; 9];
