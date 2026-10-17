@@ -8,7 +8,7 @@ repository.workspace = true
 homepage.workspace = true
 # Doubles as the .deb/.rpm one-line summary, so it is written for someone
 # reading a package list rather than for a crate index.
-description = "Install, update and play World of Warcraft on Linux"
+description = "Install, update and play World of Warcraft on Linux, and a home for all your other Battle.net games"
 
 [[bin]]
 name = "lightforge-gui"
@@ -92,7 +92,7 @@ assets = [
 [package.metadata.generate-rpm]
 name = "lightforge"
 url = "https://github.com/LightforgeProject/lightforge"
-summary = "Install, update and play World of Warcraft on Linux"
+summary = "Install, update and play World of Warcraft on Linux, and a home for all your other Battle.net games"
 # Stated rather than discovered, for the same reason as the deb's `depends`.
 auto-req = "disabled"
 # There are no scriptlets, so nothing in the package needs a shell.
