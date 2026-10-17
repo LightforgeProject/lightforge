@@ -2034,7 +2034,7 @@ const NEWS_IMAGE_BATCH: usize = 6;
 pub async fn news_background(bytes: &'static [u8]) -> Handle {
     tokio::task::spawn_blocking(move || crate::art::decode_bundled(bytes))
         .await
-        .unwrap_or_else(|_| Handle::from_bytes(bytes))
+        .unwrap_or_else(|_| crate::art::placeholder())
 }
 
 /// Fetch the News page's headlines.

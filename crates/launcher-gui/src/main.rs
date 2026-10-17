@@ -74,11 +74,11 @@ const ACCOUNT_URL: &str = "https://account.battle.net/games";
 /// the UI font has no gear glyph to fall back on.
 const GEAR_ICON: &[u8] = include_bytes!("../assets/gear.png");
 
-/// The cog's one handle. `Handle::from_bytes` mints a fresh id per call, so
+/// The cog's one handle. A decoded handle mints a fresh id per call, so
 /// building it in `view` made every rebuild a cache miss and a PNG decode.
 fn gear_icon() -> image::Handle {
     static GEAR: OnceLock<image::Handle> = OnceLock::new();
-    GEAR.get_or_init(|| image::Handle::from_bytes(GEAR_ICON)).clone()
+    GEAR.get_or_init(|| art::decode_bundled(GEAR_ICON)).clone()
 }
 
 /// The arrow on the band's overflow button. Bundled for the same reasons as
@@ -89,7 +89,7 @@ const CHEVRON_ICON: &[u8] = include_bytes!("../assets/chevron-down.png");
 /// The chevron's one handle; see [`gear_icon`] for why it is cached.
 fn chevron_icon() -> image::Handle {
     static CHEVRON: OnceLock<image::Handle> = OnceLock::new();
-    CHEVRON.get_or_init(|| image::Handle::from_bytes(CHEVRON_ICON)).clone()
+    CHEVRON.get_or_init(|| art::decode_bundled(CHEVRON_ICON)).clone()
 }
 
 /// Manage Addons. A box of parts, which is what an addon set is.
@@ -98,7 +98,7 @@ const PACKAGE_ICON: &[u8] = include_bytes!("../assets/package.png");
 /// The package's one handle; see [`gear_icon`] for why it is cached.
 fn package_icon() -> image::Handle {
     static PACKAGE: OnceLock<image::Handle> = OnceLock::new();
-    PACKAGE.get_or_init(|| image::Handle::from_bytes(PACKAGE_ICON)).clone()
+    PACKAGE.get_or_init(|| art::decode_bundled(PACKAGE_ICON)).clone()
 }
 
 /// Game Optimizations. Sliders rather than the cog: the cog is already the
@@ -109,7 +109,7 @@ const SLIDERS_ICON: &[u8] = include_bytes!("../assets/sliders-horizontal.png");
 /// The sliders' one handle; see [`gear_icon`] for why it is cached.
 fn sliders_icon() -> image::Handle {
     static SLIDERS: OnceLock<image::Handle> = OnceLock::new();
-    SLIDERS.get_or_init(|| image::Handle::from_bytes(SLIDERS_ICON)).clone()
+    SLIDERS.get_or_init(|| art::decode_bundled(SLIDERS_ICON)).clone()
 }
 
 /// Manage Subscription. The bill, not the browser: every one of the three
@@ -120,7 +120,7 @@ const CARD_ICON: &[u8] = include_bytes!("../assets/credit-card.png");
 /// The card's one handle; see [`gear_icon`] for why it is cached.
 fn card_icon() -> image::Handle {
     static CARD: OnceLock<image::Handle> = OnceLock::new();
-    CARD.get_or_init(|| image::Handle::from_bytes(CARD_ICON)).clone()
+    CARD.get_or_init(|| art::decode_bundled(CARD_ICON)).clone()
 }
 
 /// Lightforge's own wordmark, which stands where the app's name used to be
@@ -131,7 +131,7 @@ const WORDMARK: &[u8] = include_bytes!("../assets/wordmark.png");
 /// The wordmark's one handle; see [`gear_icon`] for why it is cached.
 fn wordmark_image() -> image::Handle {
     static WORDMARK_HANDLE: OnceLock<image::Handle> = OnceLock::new();
-    WORDMARK_HANDLE.get_or_init(|| image::Handle::from_bytes(WORDMARK)).clone()
+    WORDMARK_HANDLE.get_or_init(|| art::decode_bundled(WORDMARK)).clone()
 }
 
 /// Add a game. A typed `+` does exist in every font, but it is a *character*:
@@ -143,7 +143,7 @@ const PLUS_ICON: &[u8] = include_bytes!("../assets/plus.png");
 /// The plus's one handle; see [`gear_icon`] for why it is cached.
 fn plus_icon() -> image::Handle {
     static PLUS: OnceLock<image::Handle> = OnceLock::new();
-    PLUS.get_or_init(|| image::Handle::from_bytes(PLUS_ICON)).clone()
+    PLUS.get_or_init(|| art::decode_bundled(PLUS_ICON)).clone()
 }
 
 /// The rest of the bundled marks: the app menu's column, the history arrows
@@ -159,9 +159,7 @@ macro_rules! bundled_icons {
                 static HANDLE: OnceLock<image::Handle> = OnceLock::new();
                 HANDLE
                     .get_or_init(|| {
-                        image::Handle::from_bytes(
-                            include_bytes!(concat!("../assets/", $file)).as_slice(),
-                        )
+                        art::decode_bundled(include_bytes!(concat!("../assets/", $file)))
                     })
                     .clone()
             }
@@ -1556,9 +1554,10 @@ struct Lightforge {
     /// working on it; see [`HINTS_CHORD`].
     hints: bool,
     /// Battle.net's own mark, if the prefix has one, see
-    /// [`Layout::battle_net_icon`]. Held as a path, not a handle: iced keys an
-    /// image by its path, so rebuilding the header does not decode it again.
-    bnet_icon: Option<PathBuf>,
+    /// [`Layout::battle_net_icon`]. Decoded once, here, and held as the one
+    /// handle: iced has no decoder of its own, and a handle rebuilt in `view`
+    /// would be a fresh texture on every frame.
+    bnet_icon: Option<image::Handle>,
     /// The headlines, once the News page has asked for them.
     ///
     /// Fetched when that page is first opened rather than at startup: a
@@ -1837,7 +1836,7 @@ impl Lightforge {
         let config = config;
         // Honours `blizzard_root`, the same way the CLI does.
         let layout = config.layout().unwrap_or_else(|_| Layout::with_root("."));
-        let bnet_icon = layout.battle_net_icon();
+        let bnet_icon = layout.battle_net_icon().and_then(|path| art::try_mark(&path));
 
         let choices: Vec<Choice> = config
             .products
@@ -3941,7 +3940,8 @@ impl Lightforge {
                 // Installing Battle.net is what puts its mark in the prefix,
                 // and setup is the only thing that installs it, so this is the
                 // one moment the answer can have changed.
-                self.bnet_icon = self.layout.battle_net_icon();
+                self.bnet_icon =
+                    self.layout.battle_net_icon().and_then(|path| art::try_mark(&path));
                 self.setup = status;
                 measure
             }
@@ -7736,9 +7736,9 @@ impl Lightforge {
     /// none, and the button is the word alone.
     fn battle_net_button(&self) -> Element<'_, Message> {
         let mut face = row![].spacing(theme::SM).align_y(Alignment::Center);
-        if let Some(path) = &self.bnet_icon {
+        if let Some(icon) = &self.bnet_icon {
             face = face.push(
-                image(image::Handle::from_path(path))
+                image(icon.clone())
                     .content_fit(ContentFit::Contain)
                     .width(Length::Fixed(BNET_GLYPH))
                     .height(Length::Fixed(BNET_GLYPH)),

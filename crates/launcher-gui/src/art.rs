@@ -10,8 +10,13 @@
 //! So the pixels live here instead, as RGBA behind a stable handle. The
 //! renderer still trims its own copy, but rebuilding it from ours is a copy,
 //! not a decode.
+//!
+//! Every picture the GUI draws is decoded here, and only here. iced is built
+//! without image codecs, so a handle holding a path or encoded bytes would not
+//! draw at all; what this module cannot read becomes [`placeholder`] instead.
 
 use std::path::Path;
+use std::sync::OnceLock;
 
 use iced::widget::image::Handle;
 use image::imageops::FilterType;
@@ -38,6 +43,21 @@ const MARK_MAX_WIDTH: u32 = (crate::theme::TILE * 2.0) as u32;
 
 /// Widest a logo is kept. It is drawn at most a couple of hundred pixels tall.
 const LOGO_MAX_WIDTH: u32 = 1024;
+
+/// How many times its width a scaled picture may be tall.
+///
+/// Nothing the GUI draws is portrait past this, and without a bound on height
+/// a 320x60000 file would sail through a width-only cap at full size.
+const MAX_TALL: u32 = 2;
+
+/// What a picture that could not be decoded draws as: one transparent pixel.
+///
+/// One handle for the whole session rather than one per failure, so a feed
+/// with a broken picture in it does not mint a fresh texture on every pass.
+pub fn placeholder() -> Handle {
+    static EMPTY: OnceLock<Handle> = OnceLock::new();
+    EMPTY.get_or_init(|| Handle::from_rgba(1, 1, vec![0, 0, 0, 0])).clone()
+}
 
 /// [`Branding`] with its images ready to draw.
 #[derive(Debug, Clone)]
@@ -87,7 +107,13 @@ impl Art {
 /// 128, so it is worth the sharper filter. The image is tiny and this runs
 /// once per product per session.
 pub fn mark(path: &Path) -> Handle {
-    scale(path, MARK_MAX_WIDTH, FilterType::Lanczos3)
+    try_mark(path).unwrap_or_else(placeholder)
+}
+
+/// [`mark`], or `None` for a file that does not decode, for a caller that
+/// would rather draw nothing at all than an empty box.
+pub fn try_mark(path: &Path) -> Option<Handle> {
+    try_scale(path, MARK_MAX_WIDTH, FilterType::Lanczos3)
 }
 
 /// A headline's picture, at the size the News card draws it.
@@ -110,7 +136,8 @@ pub fn thumbnail(path: &Path) -> Handle {
 /// decoded by the renderer, which keeps the result only while it is drawing
 /// and throws it away at the end of the frame. A 2560px JPEG re-decoded on
 /// every return to the page is exactly the pause this module exists to
-/// remove. Blocking and CPU-bound, call it off the UI thread.
+/// remove. Blocking and CPU-bound: a large picture belongs off the UI thread,
+/// a bundled icon of a few hundred bytes does not.
 pub fn decode_bundled(bytes: &'static [u8]) -> Handle {
     match image::load_from_memory(bytes) {
         Ok(decoded) => {
@@ -119,7 +146,7 @@ pub fn decode_bundled(bytes: &'static [u8]) -> Handle {
         }
         Err(e) => {
             crate::trace::mark(format_args!("bundled image failed to decode: {e}"));
-            Handle::from_bytes(bytes)
+            placeholder()
         }
     }
 }
@@ -147,7 +174,7 @@ fn logo(path: &Path) -> (Handle, f32, f32) {
         Ok(decoded) => decoded,
         Err(e) => {
             crate::trace::mark(format_args!("decode failed for {}: {e}", path.display()));
-            return (Handle::from_path(path), 1.0, 1.0);
+            return (placeholder(), 1.0, 1.0);
         }
     };
 
@@ -229,8 +256,8 @@ fn ink_bounds(rgba: &image::RgbaImage, alpha: u8) -> Option<(u32, u32, u32, u32)
     }
 }
 
-/// Decode and downscale one image. An image this can't read falls back to
-/// its path, leaving iced to fail on it the way it did before.
+/// Decode and downscale one image. An image this can't read is drawn as
+/// [`placeholder`].
 fn load(path: &Path, max_width: u32) -> Handle {
     // Triangle rather than Lanczos: a one-off downscale by less than 2x,
     // where the sharper filter costs several times as long for no difference
@@ -252,7 +279,12 @@ fn load(path: &Path, max_width: u32) -> Handle {
 /// large one arrives in. PNG has no such trick and is decoded whole.
 /// Recognised by its magic bytes rather than its extension: these files are
 /// named by the hash of their URL, and a `.jpg` from a CDN is not always one.
+///
+/// The box is `max_width` wide and [`MAX_TALL`] times that tall. The JPEG
+/// decoder is held to the same 512 MiB allocation limit the generic path
+/// gets from `Reader`, which a decoder built by hand does not inherit.
 fn decode(path: &Path, max_width: u32) -> image::ImageResult<image::DynamicImage> {
+    use image::ImageDecoder;
     use std::io::Read;
 
     let mut file = std::io::BufReader::new(std::fs::File::open(path)?);
@@ -265,33 +297,49 @@ fn decode(path: &Path, max_width: u32) -> image::ImageResult<image::DynamicImage
     }
 
     let mut decoder = image::codecs::jpeg::JpegDecoder::new(file)?;
-    // Height goes along for the ride: the decoder keeps the aspect ratio and
-    // picks one scale for both, so asking for a tall enough box and a narrow
-    // enough one is the same request.
-    let target = u16::try_from(max_width).unwrap_or(u16::MAX);
-    let _ = decoder.scale(target, u16::MAX);
+    // The decoder keeps the aspect ratio and stops at the first scale that
+    // covers *either* side, which is the side the fit below is bound by.
+    let width = u16::try_from(max_width).unwrap_or(u16::MAX);
+    let height = u16::try_from(max_width.saturating_mul(MAX_TALL)).unwrap_or(u16::MAX);
+    let _ = decoder.scale(width, height);
+    // After the scale, so the reservation is for the buffer actually decoded.
+    let mut limits = image::io::Limits::default();
+    limits.reserve(decoder.total_bytes())?;
+    decoder.set_limits(limits)?;
     image::DynamicImage::from_decoder(decoder)
 }
 
 fn scale(path: &Path, max_width: u32, filter: FilterType) -> Handle {
+    try_scale(path, max_width, filter).unwrap_or_else(placeholder)
+}
+
+fn try_scale(path: &Path, max_width: u32, filter: FilterType) -> Option<Handle> {
     let decoded = match decode(path, max_width) {
         Ok(decoded) => decoded,
         Err(e) => {
             crate::trace::mark(format_args!("decode failed for {}: {e}", path.display()));
-            return Handle::from_path(path);
+            return None;
         }
     };
 
-    let decoded = if decoded.width() > max_width {
-        let height = (u64::from(decoded.height()) * u64::from(max_width)
-            / u64::from(decoded.width())) as u32;
-        decoded.resize_exact(max_width, height.max(1), filter)
+    let max_height = max_width.saturating_mul(MAX_TALL);
+    let (w, h) = (decoded.width(), decoded.height());
+    let decoded = if w > max_width || h > max_height {
+        // Bound by whichever side is further over, in integers so a 1px
+        // rounding never pushes the other side past its own limit.
+        let (width, height) = match u64::from(w) * u64::from(max_height)
+            >= u64::from(h) * u64::from(max_width)
+        {
+            true => (max_width, (u64::from(h) * u64::from(max_width) / u64::from(w)) as u32),
+            false => ((u64::from(w) * u64::from(max_height) / u64::from(h)) as u32, max_height),
+        };
+        decoded.resize_exact(width.max(1), height.max(1), filter)
     } else {
         decoded
     };
 
     let rgba = decoded.into_rgba8();
-    Handle::from_rgba(rgba.width(), rgba.height(), rgba.into_raw())
+    Some(Handle::from_rgba(rgba.width(), rgba.height(), rgba.into_raw()))
 }
 
 #[cfg(test)]
@@ -428,14 +476,57 @@ mod tests {
         assert!((ink - 0.25).abs() < 0.01, "{ink}");
     }
 
+    /// iced has no codecs of its own, so a path handed on would draw nothing
+    /// anyway; what comes back is the one shared placeholder.
     #[test]
-    fn unreadable_art_falls_back_to_its_path() {
+    fn unreadable_art_becomes_the_placeholder() {
         let path = std::env::temp_dir().join("lightforge-art-missing.jpg");
-        assert!(matches!(
-            load(&path, BACKGROUND_MAX_WIDTH),
-            Handle::Path(..)
-        ));
-        assert!(matches!(logo(&path), (Handle::Path(..), ..)));
+        let empty = placeholder();
+        assert_eq!(load(&path, BACKGROUND_MAX_WIDTH).id(), empty.id());
+        assert_eq!(logo(&path).0.id(), empty.id());
+        assert!(try_mark(&path).is_none());
+
+        let garbage = std::env::temp_dir()
+            .join(format!("lightforge-art-{}-garbage.png", std::process::id()));
+        std::fs::write(&garbage, b"\x89PNG not really").unwrap();
+        let handle = thumbnail(&garbage);
+        let _ = std::fs::remove_file(&garbage);
+        assert_eq!(handle.id(), empty.id());
+    }
+
+    /// A tall JPEG is bounded by its height, in the decoder and in the fit.
+    #[test]
+    fn a_tall_jpeg_is_capped_by_its_height() {
+        let path = write_jpeg("tall", 320, 8000);
+        let decoded = decode(&path, 320).unwrap();
+        let handle = scale(&path, 320, FilterType::Triangle);
+        let _ = std::fs::remove_file(&path);
+        assert!(decoded.height() < 8000, "decoded at full height ({})", decoded.height());
+        assert_eq!(rgba_size(&handle), Some((25, 640)));
+    }
+
+    /// The generic path's allocation limit holds on the JPEG path too.
+    #[test]
+    fn a_jpeg_over_the_allocation_limit_is_refused() {
+        // 40000x40000 RGB is 4.8 GB; even at an eighth it is 75 MB, so ask
+        // for the full size and let only the limit stand in the way.
+        let path = write_jpeg("huge-header", 8, 8);
+        let mut bytes = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        // Rewrite the frame header's height and width (SOF0, big-endian).
+        let sof = bytes.windows(2).position(|w| w == [0xFF, 0xC0]).unwrap();
+        bytes[sof + 5..sof + 7].copy_from_slice(&40000_u16.to_be_bytes());
+        bytes[sof + 7..sof + 9].copy_from_slice(&40000_u16.to_be_bytes());
+        let path = std::env::temp_dir()
+            .join(format!("lightforge-art-{}-huge.jpg", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+        let result = decode(&path, u32::from(u16::MAX));
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            matches!(result, Err(image::ImageError::Limits(_))),
+            "{:?}",
+            result.map(|d| (d.width(), d.height())),
+        );
     }
 }
 
@@ -478,7 +569,7 @@ pub fn load_shot(path: &Path) -> Result<Shot, String> {
     let decoded = image::open(path).map_err(|e| format!("not an image: {e}"))?;
     let original = decoded.into_rgb8();
 
-    let mut best: Option<(Vec<u8>, (u32, u32))> = None;
+    let mut best: Option<(Vec<u8>, image::RgbImage)> = None;
     for (edge, quality) in SHOT_STEPS {
         let longest = original.width().max(original.height());
         let scaled = match longest > edge {
@@ -490,28 +581,32 @@ pub fn load_shot(path: &Path) -> Result<Shot, String> {
             }
             false => original.clone(),
         };
-        let size = (scaled.width(), scaled.height());
 
         // JPEG throughout: alpha is meaningless in a screenshot, and PNG of a
         // photographed monitor is several times the size for no gain.
         let mut out = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::ImageRgb8(scaled)
-            .write_to(&mut out, image::ImageOutputFormat::Jpeg(quality))
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality)
+            .encode_image(&scaled)
             .map_err(|e| format!("could not encode it: {e}"))?;
         let bytes = out.into_inner();
 
         let fits = bytes.len() <= SHOT_MAX_BYTES;
-        best = Some((bytes, size));
+        best = Some((bytes, scaled));
         if fits {
             break;
         }
     }
 
-    let (bytes, size) = best.expect("SHOT_STEPS is not empty");
+    let (bytes, scaled) = best.expect("SHOT_STEPS is not empty");
+    let size = (scaled.width(), scaled.height());
+    // From the pixels already in hand rather than the JPEG: iced has no
+    // decoder of its own, and these are the same pixels the encoder was given.
+    let rgba = image::DynamicImage::ImageRgb8(scaled).into_rgba8();
+    let preview = Handle::from_rgba(rgba.width(), rgba.height(), rgba.into_raw());
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "screenshot".to_owned());
 
-    Ok(Shot { name, preview: Handle::from_bytes(bytes.clone()), bytes, media_type: "image/jpeg", size })
+    Ok(Shot { name, preview, bytes, media_type: "image/jpeg", size })
 }
