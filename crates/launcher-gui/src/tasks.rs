@@ -771,7 +771,7 @@ pub async fn preflight(
             .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
             .unwrap_or_default();
         let started = Instant::now();
-        let report = Preflight::new(Config::default().prefix_user)
+        let report = Preflight::new(config.prefix_user.clone())
             .with_managed(config.managed_products())
             .run(&runner, &layout, Some(&code), &mut guard)
             .map_err(|e| chain(&e))?;

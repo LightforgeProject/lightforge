@@ -299,6 +299,15 @@ fn shutdown_timed(
         return Ok(Vec::new());
     }
 
+    // `wineserver -k` below takes every process in the prefix with it, and a
+    // running game is in the prefix too. The GUI never gets here mid-session,
+    // but the CLI's `play` and Battle.net launch would end a raid without a
+    // logout or a SavedVariables write.
+    let games = games_running(layout);
+    if !games.is_empty() {
+        return Err(PreflightError::GameRunning(games));
+    }
+
     // Idempotent and near-instant on a prefix with no server running.
     runner.wineserver_kill()?;
     stamp(timings, "wineserver -k -w");
@@ -757,6 +766,12 @@ pub enum PreflightError {
         .0.iter().map(|p| format!("{} (pid {})", p.name, p.pid)).collect::<Vec<_>>().join(", ")
     )]
     StillRunning(Vec<PrefixProcess>),
+
+    #[error(
+        "a game is running in the prefix ({}); close it first, cleaning the prefix would end it",
+        .0.iter().map(|g| format!("{} (pid {})", g.name, g.pid)).collect::<Vec<_>>().join(", ")
+    )]
+    GameRunning(Vec<GameProcess>),
 
     #[error("a download for `{0}` is writing to CASC storage and could not be paused")]
     DownloadBusy(ProductCode),

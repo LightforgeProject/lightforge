@@ -1020,7 +1020,7 @@ async fn main() -> Result<()> {
             let mut downloads = NoDownloads;
             let mut download_paused = false;
             if !skip_preflight {
-                let report = Preflight::new(Config::default().prefix_user).with_managed(managed_products())
+                let report = Preflight::new(config.prefix_user.clone()).with_managed(managed_products())
                     .run(&runner, &layout, code.as_ref(), &mut downloads)
                     .context("pre-flight cleanup")?;
                 print_preflight(&report);
@@ -1119,7 +1119,7 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let report = Preflight::new(Config::default().prefix_user).with_managed(managed_products())
+            let report = Preflight::new(config.prefix_user.clone()).with_managed(managed_products())
                 .run(&runner, &layout, Some(&code), &mut NoDownloads)
                 .context("pre-flight cleanup")?;
             print_preflight(&report);
@@ -1149,7 +1149,6 @@ async fn main() -> Result<()> {
             }
         }
         Command::Preflight { proton, product, dry_run, grace } => {
-            use lightforge_core::config::Config;
             use lightforge_core::preflight::{self, NoDownloads, Preflight};
 
             let code: Option<ProductCode> =
@@ -1174,7 +1173,7 @@ async fn main() -> Result<()> {
             let (runner, build) = proton_runner(&layout, proton.as_deref())?;
             println!("using {} ({})", build.version, build.path.display());
 
-            let report = Preflight::new(Config::default().prefix_user).with_managed(managed_products())
+            let report = Preflight::new(config.prefix_user.clone()).with_managed(managed_products())
                 .with_grace(std::time::Duration::from_secs(grace))
                 .run(&runner, &layout, code.as_ref(), &mut NoDownloads)
                 .context("pre-flight cleanup")?;
