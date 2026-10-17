@@ -10,7 +10,7 @@ pkgrel=1
 # See the note in the `lightforge` PKGBUILD for why the version loses its
 # hyphen here.
 _tag=v1.0.0-beta.4
-pkgdesc='Native Linux launcher for World of Warcraft, with Battle.net managed for you'
+pkgdesc='Install, update and play World of Warcraft on Linux, and a home for all your other Battle.net games'
 arch=('x86_64')
 url='https://github.com/LightforgeProject/lightforge'
 license=('GPL-3.0-or-later')

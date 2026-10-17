@@ -177,6 +177,7 @@ bundled_icons! {
     exit_icon => "power.png",
     ellipsis_icon => "ellipsis.png",
     close_icon => "close.png",
+    download_icon => "download.png",
     discord_icon => "discord.png",
     x_icon => "x.png",
     kofi_icon => "kofi.png",
@@ -7179,14 +7180,20 @@ impl Lightforge {
             bar = bar.push(self.ring(
                 focus::Target::Downloads,
                 Some(Message::ToggleManager),
+                // A drawn mark, like the back and forward arrows beside it; a
+                // typed arrow sat on the text baseline at the font's weight
+                // and read as a stray character.
                 button(
-                    text(match count {
-                        1 => "↓ 1".to_owned(),
-                        n => format!("↓ {n}"),
-                    })
-                    .size(TAB_LABEL),
+                    row![
+                        image(download_icon())
+                            .width(Length::Fixed(BAND_GLYPH * 0.85))
+                            .height(Length::Fixed(BAND_GLYPH * 0.85)),
+                        text(count.to_string()).size(TAB_LABEL),
+                    ]
+                    .spacing(theme::XS)
+                    .align_y(Alignment::Center),
                 )
-                .padding([theme::SM, theme::SM])
+                .padding(theme::tap([theme::XS, theme::SM]))
                 .style(match self.manager_open {
                     true => theme::selected,
                     false => theme::ghost,

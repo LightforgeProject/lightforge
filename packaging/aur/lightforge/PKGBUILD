@@ -9,7 +9,7 @@ pkgrel=1
 # becomes `1.0.0beta.4` here — which `vercmp` orders *before* `1.0.0`, so the
 # eventual stable release upgrades cleanly and needs no `epoch`.
 _tag=v1.0.0-beta.4
-pkgdesc='Native Linux launcher for World of Warcraft, with Battle.net managed for you'
+pkgdesc='Install, update and play World of Warcraft on Linux, and a home for all your other Battle.net games'
 arch=('x86_64')
 url='https://github.com/LightforgeProject/lightforge'
 license=('GPL-3.0-or-later')
