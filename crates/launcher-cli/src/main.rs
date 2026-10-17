@@ -656,16 +656,19 @@ async fn main() -> Result<()> {
     restore_sigpipe();
     let cli = Cli::parse();
 
+    // A config that exists but cannot be read stops every command, the way
+    // the GUI stops. Falling back to the defaults would point the command at
+    // `~/Games/Blizzard` whatever the file said, and the helpers further down
+    // that read the config again rely on this having parsed.
+    let dirs = AppDirs::discover().context("resolving XDG directories")?;
+    let config = Config::load_or_default(&dirs.config_file())
+        .with_context(|| format!("reading {}", dirs.config_file().display()))?;
+
     // `--root` overrides everything; otherwise the config decides, and only
     // then the default. The GUI resolves it through the same function.
     let layout = match &cli.root {
         Some(root) => Layout::with_root(root),
-        None => AppDirs::discover()
-            .ok()
-            .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
-            .unwrap_or_default()
-            .layout()
-            .context("resolving the Blizzard root")?,
+        None => config.layout().context("resolving the Blizzard root")?,
     };
 
     match cli.command {
