@@ -112,6 +112,14 @@ pub struct Tweaks {
     /// Which monitor the game should treat as its primary, by connector name
     /// (`DP-1`). Only honoured on the Wayland backend.
     pub wayland_monitor: Option<String>,
+    /// Turn the client's controller support on (`GamePadEnable 1`).
+    ///
+    /// Off in the client by default, and reachable otherwise only through
+    /// `/console`, which is a lot to ask of someone holding a controller.
+    /// Offered on WoW Forever, where a couch and a Steam Deck are the point;
+    /// no preset touches it, it is a question of what is in your hands rather
+    /// than frames against scenery.
+    pub controller: bool,
     /// Give the driver's shader cache room to hold a whole expansion.
     ///
     /// Mesa's default ceiling is small enough that a long session evicts
@@ -178,6 +186,7 @@ const MANAGED: &[&str] = &[
     "clipcursor",
     "mouseAcceleration",
     "MouseHiddenInRelativeMode",
+    "GamePadEnable",
 ];
 
 /// Names Lightforge used to write and no longer does.
@@ -266,6 +275,9 @@ impl Tweaks {
         }
         if self.show_cursor_in_relative_mode {
             set.push(("MouseHiddenInRelativeMode", "0".to_owned()));
+        }
+        if self.controller {
+            set.push(("GamePadEnable", "1".to_owned()));
         }
         if self.max_draw_distance {
             // The client clamps these to whatever its own ceiling is, so the
@@ -754,6 +766,7 @@ mod tests {
             clip_cursor: true,
             no_mouse_acceleration: true,
             show_cursor_in_relative_mode: true,
+            controller: true,
             max_draw_distance: true,
             wayland: true,
             hdr: true,
@@ -764,6 +777,19 @@ mod tests {
         let set = all.cvars();
         for (name, _) in &set {
             assert!(MANAGED.contains(name), "{name} is written but not managed");
+        }
+    }
+
+    /// The client's own switch, checked against `WowB.exe`'s string table
+    /// on 2026-10-18, and left out of every preset.
+    #[test]
+    fn controller_support_is_the_clients_gamepad_switch_and_no_presets() {
+        let tweaks = Tweaks { controller: true, ..Tweaks::default() };
+        assert_eq!(tweaks.cvars(), vec![("GamePadEnable", "1".to_owned())]);
+        for preset in Preset::ALL {
+            let mut probe = tweaks.clone();
+            preset.apply(&mut probe);
+            assert!(probe.controller, "{} turned the controller off", preset.label());
         }
     }
 

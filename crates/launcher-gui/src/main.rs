@@ -1159,6 +1159,7 @@ enum Tweak {
     ClipCursor,
     NoMouseAcceleration,
     ShowCursorInRelativeMode,
+    Controller,
     Wayland,
     Hdr,
     BigShaderCache,
@@ -5669,6 +5670,7 @@ impl Lightforge {
                     Tweak::ShowCursorInRelativeMode => {
                         tweaks.show_cursor_in_relative_mode = on
                     }
+                    Tweak::Controller => tweaks.controller = on,
                     Tweak::Wayland => tweaks.wayland = on,
                     Tweak::Hdr => tweaks.hdr = on,
                     Tweak::BigShaderCache => tweaks.big_shader_cache = on,
@@ -9694,6 +9696,21 @@ impl Lightforge {
             )
             .map(Element::from),
         );
+        // Forever only, for now: the line played from a couch or a Deck.
+        if self.catalog.line_of(&self.selected.code) == ProductLine::Forever {
+            content = content.push(self.tweak_check(Scope::Product,
+                "Controller support",
+                Tweak::Controller,
+                tweaks.controller,
+            ));
+            content = content.extend(
+                self.hint(
+                    "Turns on the game's own gamepad mode, which is otherwise only reachable \
+                     from the console. Bindings and the on-screen layout are set in-game.",
+                )
+                .map(Element::from),
+            );
+        }
 
         content = content.push(Space::new().height(Length::Fill));
         self.tweak_card("Input and feel", "Nothing here changes how fast it runs.", content)
