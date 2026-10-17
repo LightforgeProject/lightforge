@@ -7330,7 +7330,7 @@ impl Lightforge {
         use lightforge_core::product::CatalogEntry;
 
         let tracked = |code: &ProductCode| self.choices.iter().any(|c| &c.code == code);
-        let mut rows = column![text("Add a game").size(theme::HEADING)]
+        let mut rows = column![text("All Games").size(theme::HEADING)]
             .spacing(theme::SM)
             .width(Length::Fixed(400.0));
 
@@ -7366,22 +7366,23 @@ impl Lightforge {
                     .into(),
                 None => Space::new().width(Length::Fixed(BROWSE_MARK)).into(),
             };
-            // The game itself opens its page, tracked or not; Add and Remove
-            // stay the only things that change the band.
+            // The whole row opens the game's page, tracked or not; Add and
+            // Remove inside it take their own clicks first and stay the only
+            // things that change the band.
             let open = Message::OpenProduct(entry.code.clone());
-            let game = tappable(
+            tappable(
                 format!("open {}", entry.code.as_str()),
                 Some(open.clone()),
-                button(row![mark, facts.width(Length::Fill)].spacing(theme::MD).align_y(Alignment::Center))
-                    .width(Length::Fill)
-                    .padding(0)
-                    .style(theme::ghost)
-                    .on_press(open),
-            );
-            container(row![game, action].spacing(theme::MD).align_y(Alignment::Center))
+                button(
+                    row![mark, facts.width(Length::Fill), action]
+                        .spacing(theme::MD)
+                        .align_y(Alignment::Center),
+                )
+                .width(Length::Fill)
                 .padding(theme::SM)
-                .style(theme::row)
-                .into()
+                .style(theme::row_button)
+                .on_press(open),
+            )
         };
 
         // Only line heads: a line's other branches are reached from the
@@ -7748,7 +7749,7 @@ impl Lightforge {
                             .height(Length::Fixed(BAND_GLYPH)),
                         Message::ToggleBrowse,
                         self.browse_open,
-                        "Add a game".to_owned(),
+                        "All Games".to_owned(),
                     ),
                 ),
                 // The popover absorbs clicks inside the panel itself, so no

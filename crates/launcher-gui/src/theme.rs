@@ -488,6 +488,38 @@ pub fn row(_theme: &Theme) -> container::Style {
     }
 }
 
+/// [`row`] as a button, for a row that is itself the click target, the
+/// games in All Games. The hover lights the whole row, for the reason
+/// [`card_button`] gives: a highlight inside a static row says only part of
+/// it is pressable. Buttons inside it still take their own clicks first.
+pub fn row_button(_theme: &Theme, status: button::Status) -> button::Style {
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    // A twentieth of the way to the text colour: the same small lift as
+    // `ghost`'s hover wash, mixed in because a row is opaque.
+    let lift = |c: f32, t: f32| c + (t - c) * 0.05;
+    button::Style {
+        background: Some(Background::Color(match hovered {
+            true => Color {
+                r: lift(RAISED.r, TEXT.r),
+                g: lift(RAISED.g, TEXT.g),
+                b: lift(RAISED.b, TEXT.b),
+                a: RAISED.a,
+            },
+            false => RAISED,
+        })),
+        text_color: TEXT,
+        border: Border {
+            color: match hovered {
+                true => Color { a: 0.24, ..TEXT },
+                false => BORDER,
+            },
+            width: 1.0,
+            radius: RADIUS_SM.into(),
+        },
+        ..button::Style::default()
+    }
+}
+
 /// The shape of a scrollbar: narrow, and embedded rather than floating.
 ///
 /// iced's default is 10pt wide and drawn *over* the content, which on a list
