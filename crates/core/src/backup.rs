@@ -170,9 +170,9 @@ impl Plan {
         Ok(backups)
     }
 
-    /// Take a backup unless the newest one on this build already holds
-    /// exactly this. `None` means there was nothing to do: no `Account`
-    /// folder yet, or no change.
+    /// Take a backup unless one on this build already holds exactly this.
+    /// `None` means there was nothing to do: no `Account` folder yet, or no
+    /// change.
     pub fn create(&self, reason: Reason) -> Result<Option<Backup>, BackupError> {
         let backup = self.snapshot(reason)?;
         if backup.is_some() {
@@ -241,11 +241,14 @@ impl Plan {
         let files = walk(&self.account_dir)?;
         let fingerprint = fingerprint(&files);
 
+        // Any backup on this build, not only the newest: after a restore the
+        // newest is the safety copy of what was replaced, and the restored
+        // folder is the older one. Matching only the newest wrote it again,
+        // and rotation then took out a real backup to make room.
         let unchanged = self
             .list()?
             .into_iter()
-            .find(|b| b.build == self.build)
-            .is_some_and(|b| b.fingerprint == fingerprint);
+            .any(|b| b.build == self.build && b.fingerprint == fingerprint);
         if unchanged {
             return Ok(None);
         }
@@ -345,7 +348,9 @@ fn walk(root: &Path) -> Result<Vec<File>, BackupError> {
                     .modified()
                     .ok()
                     .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map_or(0, |d| d.as_nanos());
+                    // Whole seconds, what a tar header keeps: at nanoseconds
+                    // a restored folder never matched the backup it came from.
+                    .map_or(0, |d| u128::from(d.as_secs()));
                 files.push(File { rel, len: meta.len(), mtime });
             }
         }
@@ -357,8 +362,11 @@ fn walk(root: &Path) -> Result<Vec<File>, BackupError> {
 /// What the folder looks like, without reading it: names, sizes and
 /// modification times. The client rewrites a SavedVariables file whenever it
 /// saves one, so a change that leaves all three alone is not a change that
-/// happened. Restoring keeps modification times, so a restored folder
-/// fingerprints the same as the backup it came from.
+/// happened. Restoring keeps modification times to the second, and that is
+/// the resolution kept here, so a restored folder fingerprints the same as
+/// the backup it came from. The cost is that two writes of one file within a
+/// second, at the same size, look like one; the client writes SavedVariables
+/// once, on exit, so that is not a case a real session produces.
 fn fingerprint(files: &[File]) -> String {
     let mut hash = Sha256::new();
     for file in files {
@@ -535,6 +543,24 @@ mod tests {
         // And the restore is itself undoable.
         plan.restore(&safety).unwrap();
         assert_eq!(fs::read_to_string(&saved).unwrap(), "X = 2, migrated");
+    }
+
+    #[test]
+    fn a_restored_folder_is_not_backed_up_again() {
+        let root = tempfile::tempdir().unwrap();
+        let plan = plan(root.path());
+        let saved = plan.account_dir.join("A/SavedVariables/X.lua");
+        write(&saved, "X = 1");
+        let before = plan.create(Reason::Manual).unwrap().unwrap();
+        // A different size: within the same second, size is all that tells
+        // two versions apart, see `fingerprint`.
+        write(&saved, "X = 22");
+        plan.restore(&before).unwrap();
+
+        // The pass after every start would otherwise write a copy of
+        // `before`, and with `keep` reached, rotate a real backup out for it.
+        assert_eq!(plan.create(Reason::AddonUpdate).unwrap(), None);
+        assert_eq!(plan.list().unwrap().len(), 2);
     }
 
     #[test]

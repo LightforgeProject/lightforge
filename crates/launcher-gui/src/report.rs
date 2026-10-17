@@ -52,6 +52,16 @@ pub enum Kind {
 
 static CLIENT: OnceLock<Option<Arc<sentry::Client>>> = OnceLock::new();
 
+/// Feedback goes out without what the `contexts` integration adds to every
+/// event, OS, kernel, device, runtime: [`Kind::Feedback`] promises no
+/// diagnostics, and the card never shows them.
+fn without_machine_details(mut event: sentry::protocol::Event<'static>) -> Option<sentry::protocol::Event<'static>> {
+    if event.tags.get("type").map(String::as_str) == Some("feedback") {
+        event.contexts.clear();
+    }
+    Some(event)
+}
+
 /// One report at a time.
 ///
 /// [`Ours`] records the outcome of the send it just made so that `flush` can
@@ -163,6 +173,8 @@ fn client(http: Option<Http>, runtime: tokio::runtime::Handle) -> Option<Arc<sen
             // `send_default_pii` before doing it. A desktop hostname is
             // usually somebody's name.
             options.server_name = Some("redacted".into());
+            // After the integrations, so it sees what they added.
+            options.before_send = Some(Arc::new(without_machine_details));
 
             // Parsed rather than handed to `from_config` as a string, which
             // panics on a malformed DSN. A typo in the constant should cost a
@@ -433,6 +445,20 @@ mod tests {
         let body = String::from_utf8_lossy(&body);
         assert!(body.contains("\"type\":\"event\""), "not an event envelope: {body}");
         assert!(body.contains("a report"), "the message did not travel: {body}");
+    }
+
+    #[test]
+    fn feedback_leaves_the_machine_details_behind() {
+        let context = || sentry::protocol::Context::Os(Box::default());
+        let mut feedback = sentry::protocol::Event::default();
+        feedback.tags.insert("type".to_owned(), "feedback".to_owned());
+        feedback.contexts.insert("os".to_owned(), context());
+        assert!(without_machine_details(feedback).unwrap().contexts.is_empty());
+
+        // A bug report keeps them: its card shows the same facts.
+        let mut bug = sentry::protocol::Event::default();
+        bug.contexts.insert("os".to_owned(), context());
+        assert_eq!(without_machine_details(bug).unwrap().contexts.len(), 1);
     }
 
     #[test]

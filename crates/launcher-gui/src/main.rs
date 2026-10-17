@@ -930,6 +930,11 @@ struct ReportDialog {
     /// feedback, which sends none of it. Already scrubbed of the account
     /// name: every rendered bundle is.
     debug: String,
+    /// The recent status lines shown in `debug`, scrubbed, as they were when
+    /// the dialog opened. What is sent, so the report carries exactly what
+    /// the card showed and nothing logged while it was being written. Empty
+    /// for feedback, like the bundle.
+    history: Vec<String>,
     stage: ReportStage,
 }
 
@@ -5319,6 +5324,12 @@ impl Lightforge {
                 // `DebugInfo::gather` needs are in scope, and gathered once:
                 // the card shows exactly the text that gets sent, not a
                 // second rendering of it.
+                let shown: Vec<String> = match kind {
+                    ReportKind::Bug => {
+                        self.history.iter().map(|line| lightforge_core::debug::scrub(line)).collect()
+                    }
+                    ReportKind::Feedback => Vec::new(),
+                };
                 let (debug, tags) = match kind {
                     ReportKind::Bug => {
                         let action = self.action();
@@ -5343,10 +5354,10 @@ impl Lightforge {
                         // scrubbed like everything else, since a failure
                         // message can carry a path.
                         let mut text = info.render();
-                        if !self.history.is_empty() {
+                        if !shown.is_empty() {
                             text.push_str("\n--- recent activity ---\n");
-                            for line in &self.history {
-                                text.push_str(&lightforge_core::debug::scrub(line));
+                            for line in &shown {
+                                text.push_str(line);
                                 text.push('\n');
                             }
                         }
@@ -5363,6 +5374,7 @@ impl Lightforge {
                     // should not have to type it again to answer a follow-up.
                     contact: self.config.contact.clone().unwrap_or_default(),
                     debug,
+                    history: shown,
                     stage: ReportStage::Writing,
                 });
                 Task::none()
@@ -5483,7 +5495,9 @@ impl Lightforge {
                     return Task::none();
                 };
                 let note = dialog.note.text();
-                if dialog.stage != ReportStage::Writing || note.trim().is_empty() {
+                // From a failed send too: that is the "Try again" button.
+                let ready = matches!(dialog.stage, ReportStage::Writing | ReportStage::Failed);
+                if !ready || note.trim().is_empty() {
                     return Task::none();
                 }
                 // The same words twice in five minutes is the Send button
@@ -5511,13 +5525,8 @@ impl Lightforge {
                         bytes: shot.bytes.clone(),
                         media_type: shot.media_type,
                     }),
-                    history: self
-                        .history
-                        .iter()
-                        .map(|line| lightforge_core::debug::scrub(line))
-                        .collect(),
+                    history: dialog.history.clone(),
                 };
-                self.last_report = Some((note, Instant::now()));
                 Task::perform(report::send(report, self.http.clone()), Message::ReportSent)
             }
 
@@ -5527,6 +5536,11 @@ impl Lightforge {
                         true => ReportStage::Sent,
                         false => ReportStage::Failed,
                     };
+                    // Only a report that arrived counts against the cooldown:
+                    // one that failed has to be sendable again at once.
+                    if arrived {
+                        self.last_report = Some((dialog.note.text(), Instant::now()));
+                    }
                 }
                 self.status = match arrived {
                     true => "report sent".to_owned(),

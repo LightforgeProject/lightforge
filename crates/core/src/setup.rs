@@ -133,15 +133,18 @@ pub async fn run(
     proton_version: Option<&str>,
     mut on_event: impl FnMut(Event),
 ) -> Result<Status, SetupError> {
+    let http = Http::new()?;
+    let mut status = Status::inspect(layout, dirs, config);
+
     // Before anything is downloaded. Battle.net's installer is 32-bit, and it
     // is the only 32-bit thing in this sequence, so a machine with no 32-bit
     // userspace sails through Proton and prefix creation and dies on the last
     // step. Checking here costs one `stat` and saves a 400 MB download the
-    // user could not have used.
-    runtime::check_loader()?;
-
-    let http = Http::new()?;
-    let mut status = Status::inspect(layout, dirs, config);
+    // user could not have used. Only when Battle.net is still to come: WoW
+    // alone is 64-bit, and a setup that declined Battle.net needs none of it.
+    if !status.battle_net && status.battle_net_wanted {
+        runtime::check_loader()?;
+    }
 
     // 1. Proton. Everything else runs *through* a Proton build, so this is
     //    first whether the user cares about it or not.

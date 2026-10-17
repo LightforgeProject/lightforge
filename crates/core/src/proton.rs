@@ -1034,34 +1034,39 @@ pub async fn install_release(
         .download(&tarball.browser_download_url, &archive, on_progress)
         .await?;
 
-    // GE publishes a checksum file for every release; treat its absence as a
-    // reason to stop rather than a reason to trust the download.
-    let expected = match release.checksum_for(tarball) {
-        Some(asset) => parse_sha512sum(&http.get_text(&asset.browser_download_url).await?)
-            .ok_or_else(|| ProtonError::MalformedChecksum(asset.name.clone()))?,
-        None => return Err(ProtonError::NoChecksum(release.tag_name.clone())),
-    };
+    // Whatever happens from here, the tarball goes: it is ~400 MB, and a
+    // failed checksum fetch, a missing checksum or a bad unpack used to leave
+    // it in the cache for good.
+    let installed: Result<ProtonRelease, ProtonError> = async {
+        // GE publishes a checksum file for every release; treat its absence
+        // as a reason to stop rather than a reason to trust the download.
+        let expected = match release.checksum_for(tarball) {
+            Some(asset) => parse_sha512sum(&http.get_text(&asset.browser_download_url).await?)
+                .ok_or_else(|| ProtonError::MalformedChecksum(asset.name.clone()))?,
+            None => return Err(ProtonError::NoChecksum(release.tag_name.clone())),
+        };
 
-    if !digest.eq_ignore_ascii_case(&expected) {
-        let _ = std::fs::remove_file(&archive);
-        return Err(ProtonError::ChecksumMismatch {
-            version: release.tag_name.clone(),
-            expected,
-            actual: digest,
-        });
+        if !digest.eq_ignore_ascii_case(&expected) {
+            return Err(ProtonError::ChecksumMismatch {
+                version: release.tag_name.clone(),
+                expected,
+                actual: digest,
+            });
+        }
+
+        let dest_root = dest_root.to_path_buf();
+        let archive_for_task = archive.clone();
+        // Decompression is CPU-bound and blocking; keep it off the async runtime.
+        let unpacked = tokio::task::spawn_blocking(move || unpack(&archive_for_task, &dest_root))
+            .await
+            .map_err(|e| ProtonError::Join(e.to_string()))??;
+
+        ProtonRelease::read_from_dir(&unpacked, ProtonSource::Managed)
+            .ok_or(ProtonError::NotAProtonBuild(unpacked))
     }
-
-    let dest_root = dest_root.to_path_buf();
-    let archive_for_task = archive.clone();
-    // Decompression is CPU-bound and blocking; keep it off the async runtime.
-    let unpacked = tokio::task::spawn_blocking(move || unpack(&archive_for_task, &dest_root))
-        .await
-        .map_err(|e| ProtonError::Join(e.to_string()))??;
-
+    .await;
     let _ = std::fs::remove_file(&archive);
-
-    ProtonRelease::read_from_dir(&unpacked, ProtonSource::Managed)
-        .ok_or(ProtonError::NotAProtonBuild(unpacked))
+    installed
 }
 
 /// Extract a `.tar.gz` into `dest_root`, returning the build's directory.
