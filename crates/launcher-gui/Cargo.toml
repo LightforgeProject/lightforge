@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 lightforge-core.workspace = true
 futures-util.workspace = true
+gilrs.workspace = true
 anyhow.workspace = true
 iced.workspace = true
 image.workspace = true
@@ -63,7 +64,7 @@ Addons, per-game Proton pinning and graphics tuning are built in."""
 # assembled on a rolling-release machine from binaries built in a Debian 12
 # container. The floor is stated instead, and `make check-glibc` is what
 # proves the binaries honour it.
-depends = "libc6 (>= 2.36), libgcc-s1"
+depends = "libc6 (>= 2.36), libgcc-s1, libudev1"
 # Battle.net's installer is the one 32-bit binary in the sequence. WoW itself
 # never needs this, so it is a suggestion rather than a dependency.
 suggests = "wine32"
@@ -120,3 +121,5 @@ assets = [
 
 [package.metadata.generate-rpm.requires]
 glibc = ">= 2.36"
+# libudev.so.1, for gamepads.
+systemd-libs = "*"

@@ -20,6 +20,7 @@
 mod addonwork;
 mod art;
 mod focus;
+mod pad;
 mod popover;
 mod provision;
 mod report;
@@ -506,6 +507,13 @@ enum Message {
     TileDragged(f32),
     /// The held tile was let go.
     TileDropped,
+    /// An arrow key, Enter or Escape, or the same from a gamepad: sorted
+    /// into the three below once the two cannot be doubling each other.
+    Nav(NavFrom, pad::Input),
+    /// The window gained or lost the desktop's focus. A gamepad is read
+    /// whatever window is in front, so this is what keeps it from steering
+    /// the launcher behind a running game.
+    WindowFocused(bool),
     /// An arrow key: move the selection ring; see [`focus`].
     FocusStep(focus::Step),
     /// Enter: press the control with the ring on it.
@@ -515,6 +523,8 @@ enum Message {
     /// A frame has passed since a key press opened or closed something; see
     /// [`Lightforge::focus_entering`].
     FocusSettle,
+    /// Enter in a field on a console: typing is done; see `focus`.
+    TypingDone(focus::Target),
     /// Open or close a picker's list, by its key.
     TogglePicker(String),
     /// An entry was chosen from a picker's list: close it, then this.
@@ -851,6 +861,18 @@ enum DialogStage {
 }
 
 /// Which of the two report dialogs is open.
+/// Where a press that moves the ring came from; see [`Message::Nav`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NavFrom {
+    Keys,
+    Pad,
+}
+
+/// A press from the other source this soon after one from the first is the
+/// same press arriving twice. Longer than both a key's repeat and the pad's,
+/// so a held direction stays with whichever source started it.
+const NAV_DOUBLED: Duration = Duration::from_millis(150);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReportKind {
     /// Something is broken, so the diagnostic bundle goes with it.
@@ -1464,6 +1486,10 @@ struct Lightforge {
     /// The control that opened the menu the ring is in, to land on again
     /// when the menu closes.
     focus_return: Option<focus::Target>,
+    /// Where the ring was when the mouse moved and took it away, for the
+    /// next key to bring it back to. Steam's keyboard moves the pointer
+    /// when it closes, and the ring then started over at the logo.
+    focus_resume: Option<focus::Target>,
     /// Where the last control pressed by Enter was, and on which page, in
     /// case pressing it made it go away: Keep after Remove, Install inside a
     /// dialog.
@@ -1474,6 +1500,12 @@ struct Lightforge {
     /// A region the ring moves into once it is drawn: the page beside the
     /// Settings list, after Enter on one of its tabs.
     focus_into: Option<&'static str>,
+    /// Whether the window has the desktop's focus; see
+    /// [`Message::WindowFocused`].
+    window_focused: bool,
+    /// Which source moved the ring last, and when, so a pad that Steam is
+    /// also turning into keys moves it once and not twice.
+    nav_last: Option<(NavFrom, Instant)>,
     /// The picker whose list is open, by its key; see [`Lightforge::picker`].
     picker_open: Option<String>,
     /// Running on SteamOS, which is what puts the Deck-or-desktop question
@@ -1806,10 +1838,13 @@ impl Lightforge {
             tile_drag: None,
             focus: None,
             focus_return: None,
+            focus_resume: None,
             focus_pressed_at: None,
             focus_entering: 0,
             picker_open: None,
             focus_into: None,
+            window_focused: true,
+            nav_last: None,
             steamos: lightforge_core::runtime::OsRelease::read().is_steamos(),
             steam_shortcut: None,
             app_menu_open: false,
@@ -5385,6 +5420,74 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::Nav(from, input) => {
+                let now = Instant::now();
+                trace::pad(format_args!("nav {from:?} {input:?} focused={}", self.window_focused));
+                if from == NavFrom::Pad && !self.window_focused {
+                    return Task::none();
+                }
+                // Steam can deliver one press both ways: as keys from its
+                // layout, and raw from a pad it did not name as translated.
+                // Whichever arrives first keeps the floor while presses keep
+                // coming, so neither a tap nor a held repeat counts twice.
+                if let Some((last, at)) = self.nav_last {
+                    if last != from && now.duration_since(at) < NAV_DOUBLED {
+                        trace::pad("  dropped: doubled");
+                        return Task::none();
+                    }
+                }
+                self.nav_last = Some((from, now));
+                // A field with the cursor in it takes a pad's buttons the way
+                // it takes the keys: arrows in a field are the field's, and
+                // only Escape gets past it. So B leaves the field and stays
+                // on it, A asks for the keyboard again, and an arrow leaves
+                // and goes on from there.
+                if from == NavFrom::Pad && !self.keys_belong_elsewhere() {
+                    if let Some(field) = focus::typing_in() {
+                        // The ring can be somewhere else by now, moved off
+                        // the field while it kept the cursor: A is then for
+                        // what the ring is on.
+                        let on_field = self.focus.as_ref().is_none_or(|f| *f == field);
+                        match input {
+                            pad::Input::Back => {
+                                self.focus = Some(field.clone());
+                                focus::leave(field);
+                                self.steam_keyboard_closed();
+                                return Task::none();
+                            }
+                            pad::Input::Press if on_field => {
+                                self.focus = Some(field.clone());
+                                self.steam_keyboard(&field);
+                                return Task::none();
+                            }
+                            pad::Input::Press => focus::leave(field),
+                            pad::Input::Step(_) => {
+                                if on_field {
+                                    self.focus = Some(field.clone());
+                                }
+                                focus::leave(field);
+                            }
+                        }
+                    }
+                }
+                self.update(match input {
+                    pad::Input::Step(step) => Message::FocusStep(step),
+                    pad::Input::Press => Message::FocusPress,
+                    pad::Input::Back => Message::FocusBack,
+                })
+            }
+
+            Message::TypingDone(field) => {
+                self.focus = Some(field);
+                self.steam_keyboard_closed();
+                Task::none()
+            }
+
+            Message::WindowFocused(focused) => {
+                self.window_focused = focused;
+                Task::none()
+            }
+
             Message::FocusStep(step) => {
                 if self.keys_belong_elsewhere() {
                     return Task::none();
@@ -5432,10 +5535,8 @@ impl Lightforge {
                     Some(focus::Press::Click) => {
                         // A controller has no keys to type with. Steam has a
                         // keyboard of its own, and this is how to ask for it.
-                        if self.console() && focus::spot(&current).is_some_and(|spot| spot.field) {
-                            if let Err(e) = tasks::open_url(STEAM_KEYBOARD) {
-                                self.error = Some(e);
-                            }
+                        if focus::spot(&current).is_some_and(|spot| spot.field) {
+                            self.steam_keyboard(&current);
                         }
                         focus::click(current);
                         Task::none()
@@ -5539,7 +5640,9 @@ impl Lightforge {
             }
 
             Message::FocusHidden => {
-                self.focus = None;
+                if let Some(was) = self.focus.take() {
+                    self.focus_resume = Some(was);
+                }
                 self.focus_return = None;
                 self.focus_entering = 0;
                 Task::none()
@@ -6254,21 +6357,25 @@ impl Lightforge {
             if hints_chord(key, modifiers) {
                 return Some(Message::ToggleHints);
             }
-            match key.as_ref() {
-                iced::keyboard::Key::Named(Named::ArrowUp) => Some(Message::FocusStep(focus::Step::Up)),
-                iced::keyboard::Key::Named(Named::ArrowDown) => {
-                    Some(Message::FocusStep(focus::Step::Down))
-                }
-                iced::keyboard::Key::Named(Named::ArrowLeft) => {
-                    Some(Message::FocusStep(focus::Step::Left))
-                }
-                iced::keyboard::Key::Named(Named::ArrowRight) => {
-                    Some(Message::FocusStep(focus::Step::Right))
-                }
-                iced::keyboard::Key::Named(Named::Enter) => Some(Message::FocusPress),
-                iced::keyboard::Key::Named(Named::Escape) => Some(Message::FocusBack),
-                _ => None,
-            }
+            let input = match key.as_ref() {
+                iced::keyboard::Key::Named(Named::ArrowUp) => pad::Input::Step(focus::Step::Up),
+                iced::keyboard::Key::Named(Named::ArrowDown) => pad::Input::Step(focus::Step::Down),
+                iced::keyboard::Key::Named(Named::ArrowLeft) => pad::Input::Step(focus::Step::Left),
+                iced::keyboard::Key::Named(Named::ArrowRight) => pad::Input::Step(focus::Step::Right),
+                iced::keyboard::Key::Named(Named::Enter) => pad::Input::Press,
+                iced::keyboard::Key::Named(Named::Escape) => pad::Input::Back,
+                _ => return None,
+            };
+            Some(Message::Nav(NavFrom::Keys, input))
+        });
+
+        // Gamepads, for when Steam hands us a pad rather than keys. Read on a
+        // thread of their own for the whole run; see [`pad`].
+        let pads = Subscription::run(pad::inputs).map(|input| Message::Nav(NavFrom::Pad, input));
+        let window_focus = iced::event::listen_with(|event, _, _| match event {
+            iced::Event::Window(iced::window::Event::Focused) => Some(Message::WindowFocused(true)),
+            iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::WindowFocused(false)),
+            _ => None,
         });
 
         // While the ring is up, the mouse moving takes it away, the way a
@@ -6318,12 +6425,14 @@ impl Lightforge {
             true => Subscription::batch([
                 closing,
                 hints,
+                pads,
+                window_focus,
                 resizes,
                 dragging,
                 pointing,
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),
             ]),
-            false => Subscription::batch([closing, hints, resizes, dragging, pointing]),
+            false => Subscription::batch([closing, hints, pads, window_focus, resizes, dragging, pointing]),
         }
     }
 
@@ -7460,6 +7569,43 @@ impl Lightforge {
     /// Back on the control that opened the menu just closed, then PLAY, the
     /// thing a controller user came for, then wherever reading starts, which
     /// in a menu is its first entry.
+    /// Ask Steam for its on-screen keyboard for `field`, on a console that
+    /// Steam started. Where the field is goes with it, the way SDL asks, so
+    /// Steam can keep the keyboard off it.
+    fn steam_keyboard(&mut self, field: &focus::Target) {
+        if !self.console() || !launched_by_steam() {
+            return;
+        }
+        let url = match focus::spot(field) {
+            Some(spot) => {
+                let at = spot.screen();
+                format!(
+                    "{STEAM_KEYBOARD}?XPosition={}&YPosition={}&Width={}&Height={}&Mode={}",
+                    at.x.round() as i32,
+                    at.y.round() as i32,
+                    at.width.round() as i32,
+                    at.height.round() as i32,
+                    // Steam's floating keyboard modes: 0 one line, 1 several.
+                    u8::from(spot.lines),
+                )
+            }
+            None => STEAM_KEYBOARD.to_owned(),
+        };
+        if let Err(e) = tasks::open_url(&url) {
+            self.error = Some(e);
+        }
+    }
+
+    /// Put Steam's keyboard away, typing being done.
+    fn steam_keyboard_closed(&mut self) {
+        if !self.console() || !launched_by_steam() {
+            return;
+        }
+        if let Err(e) = tasks::open_url(STEAM_KEYBOARD_CLOSE) {
+            self.error = Some(e);
+        }
+    }
+
     fn focus_start(&mut self, spots: &[focus::Place]) -> Option<focus::Target> {
         let drawn = |target: &focus::Target| spots.iter().any(|p| &p.target == target);
         // Kept until it can be gone back to: a button that vanishes inside
@@ -7468,6 +7614,9 @@ impl Lightforge {
         if let Some(back) = self.focus_return.clone().filter(|t| drawn(t)) {
             self.focus_return = None;
             return Some(back);
+        }
+        if let Some(resume) = self.focus_resume.take().filter(|t| drawn(t)) {
+            return Some(resume);
         }
         if drawn(&focus::Target::Primary) {
             return Some(focus::Target::Primary);
@@ -9223,8 +9372,9 @@ impl Lightforge {
             Scope::Product => self.env_open,
             Scope::BattleNet => self.bnet_env_open,
         };
-        let summary = row![clickable(
+        let summary = row![tappable(
             "environment",
+            Some(Message::TweakEnvToggle(scope)),
             button(
                 text(match open {
                     true => "Hide",
@@ -9232,7 +9382,6 @@ impl Lightforge {
                 })
                 .size(theme::LABEL)
             )
-            .on_press(Message::TweakEnvToggle(scope))
             .style(theme::ghost)
             .padding(theme::tap([theme::XS, theme::SM])),
         )];
@@ -9253,10 +9402,10 @@ impl Lightforge {
                     container(
                         row![
                             mono(format!("{key}={value}")).width(Length::Fill),
-                            clickable(
+                            tappable(
                                 format!("remove variable {key}"),
+                                Some(Message::TweakEnvRemove(scope, key.clone())),
                                 button(text("Remove").size(theme::LABEL))
-                                    .on_press(Message::TweakEnvRemove(scope, key.clone()))
                                     .style(theme::ghost)
                                     .padding(theme::tap([theme::XS, theme::SM])),
                             ),
@@ -11512,8 +11661,9 @@ impl Lightforge {
             }
 
             let usable = target.state != library::State::Missing;
-            drives = drives.push(clickable(
+            drives = drives.push(tappable(
                 format!("install target {index}"),
+                usable.then_some(Message::InstallTarget(index)),
                 button(
                     // The left column takes what the right one does not, so
                     // the path is the only thing that ever wraps.
@@ -11526,8 +11676,7 @@ impl Lightforge {
                 .style(match chosen {
                     true => theme::selected,
                     false => theme::card_button,
-                })
-                .on_press_maybe(usable.then_some(Message::InstallTarget(index))),
+                }),
             ));
         }
         let location: Element<Message> = column![drives]
@@ -11625,12 +11774,11 @@ impl Lightforge {
         };
         let actions = row![
             Space::new().width(Length::Fill),
-            clickable("cancel", choice("Cancel").style(theme::outlined).on_press(Message::InstallCancel)),
-            clickable(
+            tappable("cancel", Some(Message::InstallCancel), choice("Cancel").style(theme::outlined)),
+            tappable(
                 "start install",
-                choice("Start install")
-                    .style(theme::filled(theme::INSTALL))
-                    .on_press_maybe(ready.then_some(Message::InstallStart)),
+                ready.then_some(Message::InstallStart),
+                choice("Start install").style(theme::filled(theme::INSTALL)),
             ),
         ]
         .spacing(theme::SM)
@@ -11693,15 +11841,15 @@ impl Lightforge {
         };
         let actions = row![
             Space::new().width(Length::Fill),
-            clickable(
+            tappable(
                 "cancel",
-                choice("Cancel".to_owned()).style(theme::outlined).on_press(Message::DowngradeCancel),
+                Some(Message::DowngradeCancel),
+                choice("Cancel".to_owned()).style(theme::outlined),
             ),
-            clickable(
+            tappable(
                 "launch anyway",
-                choice("Launch anyway".to_owned())
-                    .style(theme::filled(theme::UPDATE))
-                    .on_press(Message::DowngradeConfirm),
+                Some(Message::DowngradeConfirm),
+                choice("Launch anyway".to_owned()).style(theme::filled(theme::UPDATE)),
             ),
         ]
         .spacing(theme::SM)
@@ -12042,12 +12190,8 @@ impl Lightforge {
                 .style(match selected {
                     true => theme::selected,
                     false => theme::ghost,
-                })
-                .on_press_maybe(match available && !selected {
-                    true => Some(Message::AddonDetailTab(which)),
-                    false => None,
                 });
-            clickable(key, tab)
+            tappable(key, (available && !selected).then_some(Message::AddonDetailTab(which)), tab)
         };
 
         let changelog_label = match &loaded.changelog_build {
@@ -12284,12 +12428,11 @@ impl Lightforge {
         };
         let actions = row![
             Space::new().width(Length::Fill),
-            clickable("keep", choice(keep).style(theme::outlined).on_press(Message::CancelDownloadDismiss)),
-            clickable(
+            tappable("keep", Some(Message::CancelDownloadDismiss), choice(keep).style(theme::outlined)),
+            tappable(
                 "give up",
-                choice(give_up)
-                    .style(theme::filled(theme::ERROR))
-                    .on_press(Message::CancelDownloadConfirm { delete: !updating }),
+                Some(Message::CancelDownloadConfirm { delete: !updating }),
+                choice(give_up).style(theme::filled(theme::ERROR)),
             ),
         ]
         .spacing(theme::SM)
@@ -12384,17 +12527,16 @@ impl Lightforge {
         };
         let actions = row![
             Space::new().width(Length::Fill),
-            clickable(
+            tappable(
                 "cancel",
-                choice("Cancel")
-                    .style(theme::outlined)
-                    .on_press_maybe((!dialog.working).then_some(Message::UninstallCancel)),
+                (!dialog.working).then_some(Message::UninstallCancel),
+                choice("Cancel").style(theme::outlined),
             ),
-            clickable(
+            tappable(
                 "uninstall",
+                (ready && !dialog.working).then_some(Message::UninstallConfirm),
                 choice(if dialog.working { "Uninstalling…" } else { "Uninstall" })
-                    .style(theme::filled(theme::ERROR))
-                    .on_press_maybe((ready && !dialog.working).then_some(Message::UninstallConfirm)),
+                    .style(theme::filled(theme::ERROR)),
             ),
         ]
         .spacing(theme::SM)
@@ -12512,9 +12654,10 @@ impl Lightforge {
         let actions = match dialog.stage {
             ReportStage::Sent => row![
                 Space::new().width(Length::Fill),
-                clickable(
+                tappable(
                     "close",
-                    choice("Close").style(theme::filled(theme::ACCENT)).on_press(Message::ReportCancel),
+                    Some(Message::ReportCancel),
+                    choice("Close").style(theme::filled(theme::ACCENT)),
                 ),
             ],
             _ => row![
@@ -12523,31 +12666,33 @@ impl Lightforge {
                 // in it, the clipboard carries text, which the Discord
                 // route solves on its own, since an image is pasted there.
                 match dialog.stage {
-                    ReportStage::Failed => clickable(
+                    ReportStage::Failed => tappable(
                         "copy report",
-                        choice("Copy report").style(theme::outlined).on_press(Message::ReportCopy),
+                        Some(Message::ReportCopy),
+                        choice("Copy report").style(theme::outlined),
                     ),
                     _ => Element::from(Space::new().width(Length::Shrink)),
                 },
-                clickable("cancel", choice("Cancel").style(theme::outlined).on_press(Message::ReportCancel)),
-                clickable("send", choice(match dialog.stage {
-                    ReportStage::Sending => "Sending…",
-                    ReportStage::Failed => "Try again",
-                    ReportStage::TooSoon => "Just sent",
-                    _ => match dialog.kind {
-                        ReportKind::Bug => "Send Bug Report",
-                        ReportKind::Feedback => "Send Feedback",
-                    },
-                })
-                .style(theme::filled(theme::ACCENT))
-                // Nothing is sent without a description: an empty report is
-                // one more issue nobody can act on.
-                .on_press_maybe(
+                tappable("cancel", Some(Message::ReportCancel), choice("Cancel").style(theme::outlined)),
+                tappable(
+                    "send",
+                    // Nothing is sent without a description: an empty report
+                    // is one more issue nobody can act on.
                     (writing
                         && dialog.stage != ReportStage::TooSoon
                         && !dialog.note.text().trim().is_empty())
-                    .then_some(Message::ReportSend)
-                )),
+                    .then_some(Message::ReportSend),
+                    choice(match dialog.stage {
+                        ReportStage::Sending => "Sending…",
+                        ReportStage::Failed => "Try again",
+                        ReportStage::TooSoon => "Just sent",
+                        _ => match dialog.kind {
+                            ReportKind::Bug => "Send Bug Report",
+                            ReportKind::Feedback => "Send Feedback",
+                        },
+                    })
+                    .style(theme::filled(theme::ACCENT)),
+                ),
             ],
         }
         .spacing(theme::SM)
@@ -12567,12 +12712,12 @@ impl Lightforge {
     /// only one that works when the launcher is sandboxed.
     fn shot_row<'a>(&self, dialog: &'a ReportDialog) -> Element<'a, Message> {
         let choose = |label: &'static str| {
-            clickable(
+            tappable(
                 "screenshot",
+                Some(Message::ReportShotPick),
                 button(text(label).size(theme::LABEL))
                     .padding(theme::tap([theme::XS, theme::SM]))
-                    .style(theme::outlined)
-                    .on_press(Message::ReportShotPick),
+                    .style(theme::outlined),
             )
         };
 
@@ -12602,12 +12747,12 @@ impl Lightforge {
             .spacing(theme::XS)
             .width(Length::Fill),
             choose("Replace…"),
-            clickable(
+            tappable(
                 "remove screenshot",
+                Some(Message::ReportShotCleared),
                 button(text("Remove").size(theme::LABEL))
                     .padding(theme::tap([theme::XS, theme::SM]))
-                    .style(theme::outlined)
-                    .on_press(Message::ReportShotCleared),
+                    .style(theme::outlined),
             ),
         ]
         .spacing(theme::SM)
@@ -13229,6 +13374,18 @@ const SHOP_URL: &str = "https://shop.battle.net";
 
 /// Asks a running Steam to show its on-screen keyboard.
 const STEAM_KEYBOARD: &str = "steam://open/keyboard";
+/// And to put it away: the pair SDL uses, found in Steam's own libSDL3.
+const STEAM_KEYBOARD_CLOSE: &str = "steam://close/keyboard";
+
+/// Whether Steam started this launcher, which it says by setting
+/// `SteamGameId` for everything it launches, a non-Steam shortcut included.
+/// Only then is there a Steam to ask for its keyboard: anywhere else
+/// [`STEAM_KEYBOARD`] is just a URL, and opening it starts Steam. Measured
+/// 2026-10-17, A on a text field in a launcher started from the desktop
+/// brought up the real Steam client with every library on the machine.
+fn launched_by_steam() -> bool {
+    std::env::var_os("SteamGameId").is_some_and(|id| !id.is_empty())
+}
 
 /// The A and B on the console's button hints.
 const HINT_GLYPH: f32 = 22.0;
@@ -13704,6 +13861,25 @@ fn tick<'a>(on: bool) -> iced::widget::Checkbox<'a, Message> {
 /// the way the pointer reads it. `key` has to be unique on the page.
 fn clickable<'a>(key: impl Into<String>, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     focus::ring(focus::Target::Key(key.into()), focus::Press::Click, content)
+}
+
+/// A button inside a [`clickable`]-style ring, drawn on the button's edge.
+///
+/// A button's ring sends its message itself rather than click it: iced's
+/// button ignores a press once the event carrying it is captured, and the
+/// made-up click rides whatever event comes next, which on a page with text
+/// fields often is. Measured 2026-10-17: the bug report's Cancel and Send
+/// and the environment variables' Remove never pressed.
+fn tappable<'a>(
+    key: impl Into<String>,
+    on_press: Option<Message>,
+    button: iced::widget::Button<'a, Message>,
+) -> Element<'a, Message> {
+    let press = match on_press.clone() {
+        Some(message) => focus::Press::Send(message),
+        None => focus::Press::Off,
+    };
+    focus::ring(focus::Target::Key(key.into()), press, button.on_press_maybe(on_press))
 }
 
 /// A separator between inline facts.
@@ -14335,6 +14511,34 @@ mod tests {
         let _ = app.update(Message::TileGrabbed(era.clone()));
         let _ = app.update(Message::TileDropped);
         assert_eq!(app.catalog.line_of(&app.selected.code), era);
+    }
+
+    /// The mouse moving takes the ring away, and the next key brings it back
+    /// where it was rather than to the start of the page: Steam's keyboard
+    /// moves the pointer as it closes, and the ring went to the logo.
+    #[test]
+    fn the_ring_comes_back_where_the_mouse_took_it() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.splash = None;
+        let at = |x, y| iced::Rectangle { x, y, width: 80.0, height: 30.0 };
+        let key = |name: &str| focus::Target::Key(name.to_owned());
+        focus::reset();
+        focus::put(focus::Target::AppMenu, at(10.0, 10.0), focus::Press::Send(Message::MenuClick), 0);
+        focus::put(key("frame cap"), at(400.0, 600.0), focus::Press::Click, 0);
+        app.focus = Some(key("frame cap"));
+
+        let _ = app.update(Message::FocusHidden);
+        assert_eq!(app.focus, None);
+        let _ = app.update(Message::FocusStep(focus::Step::Down));
+        assert_eq!(app.focus, Some(key("frame cap")));
+
+        // Gone from the page by then: the start of the page, as before.
+        let _ = app.update(Message::FocusHidden);
+        focus::reset();
+        focus::put(focus::Target::AppMenu, at(10.0, 10.0), focus::Press::Send(Message::MenuClick), 0);
+        let _ = app.update(Message::FocusStep(focus::Step::Down));
+        assert_eq!(app.focus, Some(focus::Target::AppMenu));
     }
 
     /// The Deck's controls arrive as keys: the D-pad as arrows, A as Enter,

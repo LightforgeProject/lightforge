@@ -466,8 +466,8 @@ quietly picks up the host's libc looks fine locally and fails on a Steam Deck.
 Measured here — a host build wanted glibc 2.44, which SteamOS (~2.37) and
 Bazzite (~2.40) are both older than.
 
-The binary links `libc`, `libm` and `libgcc_s` and nothing else; Vulkan,
-Wayland and X11 are all opened at runtime.
+The binary links `libc`, `libm`, `libgcc_s` and `libudev` (gamepads, through
+gilrs) and nothing else; Vulkan, Wayland and X11 are all opened at runtime.
 
 ## Deliberate non-goals
 

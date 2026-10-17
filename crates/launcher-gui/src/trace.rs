@@ -15,6 +15,7 @@ use std::time::Instant;
 static START: OnceLock<Instant> = OnceLock::new();
 static ON: OnceLock<bool> = OnceLock::new();
 static FRAMES: OnceLock<bool> = OnceLock::new();
+static PAD: OnceLock<bool> = OnceLock::new();
 /// Microseconds since [`begin`] at the end of the previous view build.
 static LAST_FRAME: AtomicU64 = AtomicU64::new(0);
 
@@ -25,6 +26,7 @@ pub fn begin() {
     let _ = ON.set(std::env::var_os("LIGHTFORGE_TRACE").is_some());
     // Per-frame timing is noisy enough to want asking for by name.
     let _ = FRAMES.set(value.split(',').any(|v| v.trim() == "frames"));
+    let _ = PAD.set(value.split(',').any(|v| v.trim() == "pad"));
     mark("process start");
 }
 
@@ -49,6 +51,15 @@ pub fn mark(what: impl std::fmt::Display) {
 pub fn once(slot: &'static std::sync::atomic::AtomicBool, what: impl std::fmt::Display) {
     use std::sync::atomic::Ordering;
     if !slot.swap(true, Ordering::Relaxed) {
+        mark(what);
+    }
+}
+
+/// Stamp one controller event, raw or as it reached the ring, under
+/// `LIGHTFORGE_TRACE=pad`: which device a press came from is the question
+/// when one press moves the ring twice.
+pub fn pad(what: impl std::fmt::Display) {
+    if PAD.get().copied().unwrap_or(false) {
         mark(what);
     }
 }

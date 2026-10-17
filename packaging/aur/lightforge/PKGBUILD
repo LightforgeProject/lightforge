@@ -14,9 +14,9 @@ arch=('x86_64')
 url='https://github.com/LightforgeProject/lightforge'
 license=('GPL-3.0-or-later')
 # The launcher opens Vulkan, Wayland and X11 at run time rather than linking
-# them, so there is nothing to depend on but libc — and it falls back to
-# software rendering by itself when there is no GPU it can use.
-depends=('glibc' 'gcc-libs' 'fontconfig')
+# them, so there is nothing to depend on but libc and libudev (gamepads) — and
+# it falls back to software rendering by itself when there is no GPU it can use.
+depends=('glibc' 'gcc-libs' 'fontconfig' 'systemd-libs')
 makedepends=('cargo')
 optdepends=(
   'wine: 32-bit runtime for the Battle.net installer (needs multilib)'

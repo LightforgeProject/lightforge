@@ -1,7 +1,8 @@
 //! Moving through the launcher without a mouse.
 //!
-//! A Steam Deck's controls reach us as keys: Steam Input turns the D-pad into
-//! the arrow keys, A into Enter and B into Escape. iced has no focus for
+//! A controller reaches us as keys or as a gamepad, depending on the Steam
+//! Input layout: the D-pad is the arrows, A is Enter and B is Escape either
+//! way, the gamepad half read by [`crate::pad`]. iced has no focus for
 //! buttons, so the launcher keeps its own: one selected control at a time,
 //! drawn with a ring, moved by the arrows and pressed by Enter.
 //!
@@ -119,6 +120,8 @@ pub struct Spot {
     pub press: Press,
     /// Whether it is a text field, which on a console wants a keyboard.
     pub field: bool,
+    /// Whether that field takes several lines, the bug report's.
+    pub lines: bool,
     /// The scrolled region it is in, if any.
     pub region: Option<&'static str>,
     /// The innermost group or region it is in, if any.
@@ -145,8 +148,11 @@ struct Record {
     groups: Vec<String>,
     /// The control with the ring, as the app last said.
     current: Option<Target>,
+    /// The control whose field has the cursor in it, as last drawn.
+    typing: Option<Target>,
     /// Waiting to be done by the widget concerned, on the next frame.
     click: Option<Target>,
+    leave: Option<Target>,
     scroll: Option<(&'static str, f32)>,
 }
 
@@ -222,6 +228,24 @@ pub fn click(target: Target) {
     with(|r| r.click = Some(target));
 }
 
+impl Spot {
+    /// Where it is in the window.
+    pub fn screen(&self) -> Rectangle {
+        self.screen
+    }
+}
+
+/// The control whose text field has the cursor in it, if one does.
+pub fn typing_in() -> Option<Target> {
+    with(|r| r.typing.clone())
+}
+
+/// Take the cursor out of `target`'s field on the next frame, the way
+/// Escape in it does.
+pub fn leave(target: Target) {
+    with(|r| r.leave = Some(target));
+}
+
 /// Scroll `region` by `dy` points on the next frame, down for positive.
 pub fn scroll(region: &'static str, dy: f32) {
     with(|r| r.scroll = Some((region, dy)));
@@ -239,6 +263,7 @@ pub fn put(target: Target, bounds: Rectangle, press: Press, depth: u32) {
             viewport: bounds,
             press,
             field: false,
+            lines: false,
             region: None,
             group: None,
             pane: None,
@@ -469,15 +494,20 @@ const RING_GAP_Y: f32 = 5.0;
 const RING_GAP_X: f32 = 10.0;
 
 type Field = iced::widget::text_input::State<<iced::Renderer as iced::advanced::text::Renderer>::Paragraph>;
+/// A box of several lines, the bug report's.
+type Editor = iced::widget::text_editor::State<iced::advanced::text::highlighter::PlainText>;
 
-/// Whether `tree` is a text field's.
+/// Whether `tree` is a text field's, of one line or several.
 fn field(tree: &Tree) -> bool {
-    tree.tag == tree::Tag::of::<Field>()
+    tree.tag == tree::Tag::of::<Field>() || tree.tag == tree::Tag::of::<Editor>()
 }
 
 /// Whether `tree` is a text field with the cursor in it.
 fn typing(tree: &Tree) -> bool {
-    field(tree) && tree.state.downcast_ref::<Field>().is_focused()
+    if tree.tag == tree::Tag::of::<Field>() {
+        return tree.state.downcast_ref::<Field>().is_focused();
+    }
+    tree.tag == tree::Tag::of::<Editor>() && tree.state.downcast_ref::<Editor>().is_focused()
 }
 
 /// Hand a made-up mouse event to `content`, as if the pointer were at `at`.
@@ -508,9 +538,24 @@ fn pretend(
 }
 
 /// Everything a wrapper hands straight to the one widget it wraps, except
-/// `draw` and `update`, which are what each wrapper is for.
+/// `draw` and `update`, which are what each wrapper is for. `but overlay`
+/// leaves out `overlay` too, for the ring, which adds the typing bar.
 macro_rules! delegate {
     () => {
+        delegate!(but overlay);
+
+        fn overlay<'b>(
+            &'b mut self,
+            tree: &'b mut Tree,
+            layout: Layout<'b>,
+            renderer: &iced::Renderer,
+            viewport: &Rectangle,
+            translation: Vector,
+        ) -> Option<overlay::Element<'b, Message, iced::Theme, iced::Renderer>> {
+            self.content.as_widget_mut().overlay(tree, layout, renderer, viewport, translation)
+        }
+    };
+    (but overlay) => {
         fn tag(&self) -> tree::Tag {
             self.content.as_widget().tag()
         }
@@ -565,16 +610,6 @@ macro_rules! delegate {
             self.content.as_widget_mut().operate(tree, layout, renderer, operation);
         }
 
-        fn overlay<'b>(
-            &'b mut self,
-            tree: &'b mut Tree,
-            layout: Layout<'b>,
-            renderer: &iced::Renderer,
-            viewport: &Rectangle,
-            translation: Vector,
-        ) -> Option<overlay::Element<'b, Message, iced::Theme, iced::Renderer>> {
-            self.content.as_widget_mut().overlay(tree, layout, renderer, viewport, translation)
-        }
     };
 }
 
@@ -600,7 +635,33 @@ macro_rules! pass_update {
 }
 
 impl Widget<Message, iced::Theme, iced::Renderer> for Ring<'_> {
-    delegate!();
+    delegate!(but overlay);
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut Tree,
+        layout: Layout<'b>,
+        renderer: &iced::Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, Message, iced::Theme, iced::Renderer>> {
+        // Only while typing on a console, where Steam's keyboard covers the
+        // bottom of the screen and a field down there would be typed into
+        // blind. The field is drawn a second time, its own tree and all, so
+        // the bar shows the words and the cursor exactly as the field has
+        // them, whichever field it is.
+        if !(crate::theme::console() && typing(tree)) {
+            return self.content.as_widget_mut().overlay(tree, layout, renderer, viewport, translation);
+        }
+        let bar = overlay::Element::new(Box::new(TypingBar {
+            content: &self.content,
+            tree,
+            field: layout,
+            screen: layout.bounds() + translation,
+            shown: false,
+        }));
+        Some(bar)
+    }
 
     fn update(
         &mut self,
@@ -615,18 +676,52 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Ring<'_> {
     ) {
         // Escape in a field that has the typing leaves the field and goes
         // no further. A text box lets it through once it lets go, by design,
-        // and the same key then closed the dialog and the words with it.
-        if let Event::Keyboard(iced::keyboard::Event::KeyPressed {
-            key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
-            ..
-        }) = event
-        {
+        // and the same key then closed the dialog and the words with it. B
+        // on a gamepad is no key, so it asks for the same through [`leave`].
+        // Enter in a field, on a console, is done typing: the field is left,
+        // with the ring on it, and the app closes Steam's keyboard. A field
+        // that submits still does, first. Several lines take Enter here too,
+        // since Steam's keyboard has no other key that means done.
+        let enter = matches!(
+            event,
+            Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter),
+                ..
+            })
+        );
+        if enter && crate::theme::console() && typing(tree) {
+            if tree.tag != tree::Tag::of::<Editor>() {
+                self.content
+                    .as_widget_mut()
+                    .update(tree, event, layout, cursor, renderer, clipboard, shell, viewport);
+            }
+            self.content.as_widget_mut().operate(tree, layout, renderer, &mut Leave(false));
+            shell.publish(Message::TypingDone(self.target.clone()));
+            shell.capture_event();
+            shell.request_redraw();
+            return;
+        }
+
+        let asked = with(|r| match r.leave.as_ref() == Some(&self.target) {
+            true => r.leave.take().is_some(),
+            false => false,
+        });
+        let escape = matches!(
+            event,
+            Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                ..
+            })
+        );
+        if asked || escape {
             let mut leave = Leave(false);
             self.content.as_widget_mut().operate(tree, layout, renderer, &mut leave);
             if leave.0 {
-                shell.capture_event();
                 shell.request_redraw();
-                return;
+                if escape {
+                    shell.capture_event();
+                    return;
+                }
             }
         }
 
@@ -695,6 +790,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Ring<'_> {
                 viewport: *viewport,
                 press: self.press.clone(),
                 field: field(tree),
+                lines: tree.tag == tree::Tag::of::<Editor>(),
                 region: r.within.last().copied(),
                 group: r.groups.last().cloned(),
                 pane: r.panes.last().copied(),
@@ -702,6 +798,9 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Ring<'_> {
                 live,
             };
             r.spots.insert(self.target.clone(), spot);
+            if typing(tree) {
+                r.typing = Some(self.target.clone());
+            }
             r.current.as_ref() == Some(&self.target)
         });
 
@@ -739,6 +838,118 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Ring<'_> {
                     iced::Color::TRANSPARENT,
                 );
             });
+        }
+    }
+}
+
+/// How far down the window Steam's keyboard starts, as a share of its
+/// height. Measured 2026-10-17 at 1280x838: the keyboard took the bottom
+/// 250 points, so from about 0.7; a field ending below half is taken as
+/// covered, with room to spare for a taller one.
+const KEYBOARD_TOP: f32 = 0.5;
+
+/// A copy of the field being typed in, across the top of the window.
+struct TypingBar<'a, 'b> {
+    content: &'b Element<'a, Message>,
+    tree: &'b Tree,
+    field: Layout<'b>,
+    /// Where the field is in the window.
+    screen: Rectangle,
+    /// Whether the field is low enough for the keyboard to cover it. One
+    /// higher up is already in sight, and a copy of it read as two fields.
+    shown: bool,
+}
+
+impl TypingBar<'_, '_> {
+    /// Where the field is drawn inside `bar`: centred, and at least the
+    /// field's own size, so a field as wide as a dialog keeps its width.
+    fn spot(&self, bar: Rectangle) -> Point {
+        let field = self.field.bounds();
+        let x = (bar.x + (bar.width - field.width) / 2.0).max(bar.x + crate::theme::MD);
+        Point::new(x, bar.y + crate::theme::SM)
+    }
+}
+
+impl overlay::Overlay<Message, iced::Theme, iced::Renderer> for TypingBar<'_, '_> {
+    fn layout(&mut self, _renderer: &iced::Renderer, bounds: Size) -> layout::Node {
+        self.shown = self.screen.y + self.screen.height > bounds.height * KEYBOARD_TOP;
+        if !self.shown {
+            return layout::Node::new(Size::ZERO);
+        }
+        let height = self.field.bounds().height + crate::theme::SM * 2.0;
+        layout::Node::new(Size::new(bounds.width, height))
+    }
+
+    fn draw(
+        &self,
+        renderer: &mut iced::Renderer,
+        theme: &iced::Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+    ) {
+        use iced::advanced::Renderer as _;
+
+        if !self.shown {
+            return;
+        }
+        let bar = layout.bounds();
+        let field = self.field.bounds();
+        let at = self.spot(bar);
+        renderer.with_layer(bar, |renderer| {
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds: bar,
+                    border: Border {
+                        color: crate::theme::BORDER,
+                        width: 1.0,
+                        radius: 0.0.into(),
+                    },
+                    ..renderer::Quad::default()
+                },
+                crate::theme::SURFACE,
+            );
+            renderer.with_translation(Vector::new(at.x - field.x, at.y - field.y), |renderer| {
+                self.content.as_widget().draw(
+                    self.tree,
+                    renderer,
+                    theme,
+                    style,
+                    self.field,
+                    mouse::Cursor::Unavailable,
+                    &field,
+                );
+            });
+        });
+    }
+
+    fn update(
+        &mut self,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        _renderer: &iced::Renderer,
+        _clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+    ) {
+        // A picture of the field, not the field: a touch on it reaches
+        // nothing, and certainly not the header it covers.
+        if matches!(event, Event::Mouse(_) | Event::Touch(_)) && cursor.is_over(layout.bounds()) {
+            shell.capture_event();
+        }
+    }
+
+    fn mouse_interaction(
+        &self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        _renderer: &iced::Renderer,
+    ) -> mouse::Interaction {
+        // `Idle` rather than `None`, which would leave what is under the bar
+        // live; see the popover's note on the same thing.
+        match cursor.is_over(layout.bounds()) {
+            true => mouse::Interaction::Idle,
+            false => mouse::Interaction::None,
         }
     }
 }
@@ -879,6 +1090,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Root<'_> {
         with(|r| {
             r.spots.clear();
             r.regions.clear();
+            r.typing = None;
             r.top = 0;
             r.depth = 0;
             r.within.clear();

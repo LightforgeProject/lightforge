@@ -14,7 +14,7 @@ pkgdesc='Native Linux launcher for World of Warcraft, with Battle.net managed fo
 arch=('x86_64')
 url='https://github.com/LightforgeProject/lightforge'
 license=('GPL-3.0-or-later')
-depends=('glibc' 'gcc-libs' 'fontconfig')
+depends=('glibc' 'gcc-libs' 'fontconfig' 'systemd-libs')
 optdepends=(
   'wine: 32-bit runtime for the Battle.net installer (needs multilib)'
   'mangohud: the in-game overlay Lightforge can enable per game'

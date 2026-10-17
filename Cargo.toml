@@ -22,6 +22,14 @@ clap = { version = "4", features = ["derive"] }
 directories = "5"
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# Gamepads, read straight from the kernel. Steam Input only turns a pad into
+# keys under a keyboard layout; under its usual gamepad one a non-Steam game
+# gets a virtual Xbox pad and nothing else. Default features stay on: `wgi`
+# only pulls anything in for Windows, and turning it off is a compile error
+# on every target. On Linux this links libudev.so.1, the one library the
+# release adds to libc and libgcc_s; every systemd distro ships it, SteamOS
+# included.
+gilrs = "0.11"
 # `sysinfo` is for `iced::system::information`: the renderer's own adapter
 # and backend, which a bug report about a game that will not draw needs and
 # which nothing outside the renderer can answer.
