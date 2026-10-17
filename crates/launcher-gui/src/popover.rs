@@ -47,7 +47,7 @@ pub fn popover<'a, Message, Theme, Renderer>(
 where
     Renderer: iced::advanced::Renderer,
 {
-    Popover { anchor: anchor.into(), panel, edge: Edge::Right }
+    Popover { anchor: anchor.into(), panel, edge: Edge::Right, below: false }
 }
 
 pub struct Popover<'a, Message, Theme, Renderer> {
@@ -55,12 +55,21 @@ pub struct Popover<'a, Message, Theme, Renderer> {
     /// `None` when nothing is showing, which costs no overlay at all.
     panel: Option<Element<'a, Message, Theme, Renderer>>,
     edge: Edge,
+    /// Hang under the anchor rather than over it.
+    below: bool,
 }
 
 impl<'a, Message, Theme, Renderer> Popover<'a, Message, Theme, Renderer> {
     /// Line the panel up by its left edge instead of its right.
     pub fn align_left(mut self) -> Self {
         self.edge = Edge::Left;
+        self
+    }
+
+    /// Open downwards, the way a menu reads, rather than above the anchor.
+    /// Still flips when there is no room on the preferred side.
+    pub fn below(mut self) -> Self {
+        self.below = true;
         self
     }
 }
@@ -195,6 +204,7 @@ where
             tree: &mut panel_tree[0],
             anchor: layout.bounds() + translation,
             edge: self.edge,
+            below: self.below,
         }));
 
         Some(match beneath {
@@ -210,6 +220,7 @@ struct Pinned<'a, 'b, Message, Theme, Renderer> {
     tree: &'b mut Tree,
     anchor: Rectangle,
     edge: Edge,
+    below: bool,
 }
 
 impl<Message, Theme, Renderer> overlay::Overlay<Message, Theme, Renderer>
@@ -233,13 +244,16 @@ where
             Edge::Right => self.anchor.x + self.anchor.width - size.width,
             Edge::Left => self.anchor.x,
         };
-        let y = self.anchor.y - size.height - GAP;
+        let above = self.anchor.y - size.height - GAP;
+        let under = self.anchor.y + self.anchor.height + GAP;
 
-        // Never off the top: if there is no room above, the panel drops below
-        // the anchor instead of being cut in half.
-        let y = match y < 0.0 {
-            true => self.anchor.y + self.anchor.height + GAP,
-            false => y,
+        // Never off the window: with no room on the preferred side, the panel
+        // takes the other one instead of being cut in half.
+        let y = match self.below {
+            true if under + size.height > bounds.height && above >= 0.0 => above,
+            true => under,
+            false if above < 0.0 => under,
+            false => above,
         };
 
         // Never off either side. A panel wider than the window keeps its left

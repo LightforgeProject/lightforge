@@ -16,6 +16,7 @@ comes from the manifest at runtime.
 | `message-square-quote.png` | Lucide `message-square-quote`, same treatment | ISC |
 | `power.png` | Lucide `power`, same treatment | ISC |
 | `ellipsis.png` | Lucide `ellipsis`, same treatment | ISC |
+| `close.png` | Lucide `x`, same treatment. Named `close` because `x.png` is the X brand mark below | ISC |
 | `discord.png` | [Simple Icons](https://simpleicons.org) `discord`, filled white, 64x64 | CC0 |
 | `x.png` | Simple Icons `x`, same treatment | CC0 |
 | `kofi.png` | Simple Icons `kofi`, same treatment | CC0 |

@@ -176,6 +176,7 @@ bundled_icons! {
     feedback_icon => "message-square-quote.png",
     exit_icon => "power.png",
     ellipsis_icon => "ellipsis.png",
+    close_icon => "close.png",
     discord_icon => "discord.png",
     x_icon => "x.png",
     kofi_icon => "kofi.png",
@@ -501,6 +502,11 @@ enum Message {
     /// A tile was pressed: a click or the start of a drag, which the release
     /// decides.
     TileGrabbed(ProductLine),
+    /// A tile was right-clicked: open its menu, or close it if it was open.
+    TileMenu(ProductLine),
+    /// A game in Add a game was clicked: show its page without adding it to
+    /// the band. It joins the band when it is installed or played.
+    OpenProduct(ProductCode),
     /// The cursor moved while a tile was held, in window coordinates.
     TileDragged(f32),
     /// The held tile was let go.
@@ -567,8 +573,10 @@ enum Message {
     ReportShotCleared,
     /// Put the whole report on the clipboard, for when sending it failed.
     ReportCopy,
-    /// Where they can be reached, if they want to be.
+    /// Where they can be reached. Required on a bug report.
     ReportContact(String),
+    /// What the report is about, which also decides what a bug carries.
+    ReportCategory(report::Category),
     ReportSend,
     /// Whether it actually left the machine.
     ReportSent(bool),
@@ -915,8 +923,12 @@ struct ReportDialog {
     /// "what were you doing" is a paragraph, and a one-line box that scrolls
     /// sideways invites a one-line answer.
     note: iced::widget::text_editor::Content,
-    /// An address or a Discord name, so there is a way to answer. Optional,
-    /// and the only personal thing either report carries.
+    /// Picked before Send is offered; `None` until then.
+    category: Option<report::Category>,
+    /// An address or a Discord name, so there is a way to answer. Required
+    /// on a bug report, since one nobody can be asked about usually stalls at
+    /// the first question; optional on feedback. The only personal thing
+    /// either report carries.
     contact: String,
     /// Facts worth filtering issues by, taken off the same bundle the card
     /// shows. Empty for feedback, which carries no diagnostics.
@@ -927,6 +939,9 @@ struct ReportDialog {
     /// four things [`DebugInfo::gather`] needs are in scope. Empty for
     /// feedback, which sends none of it. Already scrubbed of the account
     /// name: every rendered bundle is.
+    base: String,
+    /// `base` plus what the category attaches: what the card shows and what
+    /// is sent, rebuilt whenever the category changes.
     debug: String,
     /// The recent status lines shown in `debug`, scrubbed, as they were when
     /// the dialog opened. What is sent, so the report carries exactly what
@@ -934,6 +949,18 @@ struct ReportDialog {
     /// for feedback, like the bundle.
     history: Vec<String>,
     stage: ReportStage,
+}
+
+impl ReportDialog {
+    /// Everything Send needs from what was typed and picked. The stage is the
+    /// caller's to check: this is about the content, not the moment.
+    fn can_send(&self) -> bool {
+        let contact = match self.kind {
+            ReportKind::Bug => !self.contact.trim().is_empty(),
+            ReportKind::Feedback => true,
+        };
+        self.category.is_some() && contact && !self.note.text().trim().is_empty()
+    }
 }
 
 /// The confirmation before a game is deleted.
@@ -1499,6 +1526,8 @@ struct Lightforge {
     browse_open: bool,
     /// The band's overflow menu, only ever reachable when something is in it.
     strip_open: bool,
+    /// The tile whose right-click menu is open.
+    tile_menu: Option<ProductLine>,
     /// The tile under the cursor, if any.
     tile_hover: Option<ProductLine>,
     /// The tile held down, while it is.
@@ -1875,6 +1904,7 @@ impl Lightforge {
             manager_open: false,
             browse_open: false,
             strip_open: false,
+            tile_menu: None,
             tile_hover: None,
             tile_drag: None,
             focus: None,
@@ -3084,42 +3114,46 @@ impl Lightforge {
                 Task::none()
             }
 
-            Message::Primary => match self.action() {
-                // A first install asks first; an update or a retry already
-                // has its answers.
-                ActionState::Install => self.open_install(),
-                ActionState::Update { .. } | ActionState::Error { .. } => self.enqueue(),
-                ActionState::Downloading(_) => {
-                    // Pause: trip the token. The loop stops between chunks and
-                    // the store keeps everything already written.
-                    self.pause(&self.selected.code.clone());
-                    Task::none()
-                }
-                ActionState::Paused(_) => self.enqueue(),
-                // Leaving the queue is pausing: nothing has started, so there
-                // is nothing to stop, but the intent is the same.
-                ActionState::Queued => {
-                    self.pause(&self.selected.code.clone());
-                    Task::none()
-                }
-                ActionState::Play => self.preflight(Launch::Game),
-                ActionState::Unknown => Task::none(),
-                // Nothing to download and nothing to repair: look for the
-                // drive again, and reload the product if it came back.
-                ActionState::Offline { .. } => {
-                    self.refresh_drives();
-                    match self.offline_drive(&self.selected.code) {
-                        Some(drive) => {
-                            self.status = format!("{drive} is still not mounted");
-                            Task::none()
-                        }
-                        None => {
-                            self.error = None;
-                            self.reload(self.selected.code.clone())
+            Message::Primary => {
+                // Pressed on a game only being looked at: it joins the band.
+                self.track_selected();
+                match self.action() {
+                    // A first install asks first; an update or a retry already
+                    // has its answers.
+                    ActionState::Install => self.open_install(),
+                    ActionState::Update { .. } | ActionState::Error { .. } => self.enqueue(),
+                    ActionState::Downloading(_) => {
+                        // Pause: trip the token. The loop stops between chunks and
+                        // the store keeps everything already written.
+                        self.pause(&self.selected.code.clone());
+                        Task::none()
+                    }
+                    ActionState::Paused(_) => self.enqueue(),
+                    // Leaving the queue is pausing: nothing has started, so there
+                    // is nothing to stop, but the intent is the same.
+                    ActionState::Queued => {
+                        self.pause(&self.selected.code.clone());
+                        Task::none()
+                    }
+                    ActionState::Play => self.preflight(Launch::Game),
+                    ActionState::Unknown => Task::none(),
+                    // Nothing to download and nothing to repair: look for the
+                    // drive again, and reload the product if it came back.
+                    ActionState::Offline { .. } => {
+                        self.refresh_drives();
+                        match self.offline_drive(&self.selected.code) {
+                            Some(drive) => {
+                                self.status = format!("{drive} is still not mounted");
+                                Task::none()
+                            }
+                            None => {
+                                self.error = None;
+                                self.reload(self.selected.code.clone())
+                            }
                         }
                     }
                 }
-            },
+            }
 
             Message::Tick => {
                 if let Some(rx) = &self.setup_rx {
@@ -3378,11 +3412,20 @@ impl Lightforge {
                 }
             }
 
-            Message::BattleNet => self.preflight(Launch::BattleNet),
+            Message::BattleNet => {
+                self.track_selected();
+                self.preflight(Launch::BattleNet)
+            }
 
-            Message::InstallViaBattleNet => self.preflight(Launch::Install),
+            Message::InstallViaBattleNet => {
+                self.track_selected();
+                self.preflight(Launch::Install)
+            }
 
-            Message::OpenBattleNet => self.preflight(Launch::Client),
+            Message::OpenBattleNet => {
+                self.track_selected();
+                self.preflight(Launch::Client)
+            }
 
             Message::ToggleManager => {
                 self.manager_open = !self.manager_open;
@@ -3404,6 +3447,27 @@ impl Lightforge {
                     self.browse_open = false;
                     self.manager_open = false;
                 }
+                Task::none()
+            }
+
+            Message::OpenProduct(code) => {
+                self.close_panels();
+                self.go_to(Screen::Dashboard);
+                let choice = self.choices.iter().find(|c| c.code == code).cloned().unwrap_or_else(|| {
+                    let label = self
+                        .catalog
+                        .get(&code)
+                        .map(|e| e.label.clone())
+                        .unwrap_or_else(|| code.as_str().to_owned());
+                    Choice { code, label }
+                });
+                self.select(choice)
+            }
+
+            Message::TileMenu(line) => {
+                let open = self.tile_menu.as_ref() != Some(&line);
+                self.close_panels();
+                self.tile_menu = open.then_some(line);
                 Task::none()
             }
 
@@ -3545,6 +3609,7 @@ impl Lightforge {
                 self.config.products.retain(|p| !going.contains(&p.code));
                 self.save_config();
                 self.choices.retain(|c| !going.contains(&c.code));
+                self.tile_menu = None;
                 self.last_branch.remove(&line);
 
                 match going.contains(&self.selected.code) {
@@ -5368,11 +5433,13 @@ impl Lightforge {
                 self.report_dialog = Some(ReportDialog {
                     kind,
                     note: iced::widget::text_editor::Content::new(),
+                    category: None,
                     tags,
                     shot: None,
                     // Remembered between reports: someone who gave it once
                     // should not have to type it again to answer a follow-up.
                     contact: self.config.contact.clone().unwrap_or_default(),
+                    base: debug.clone(),
                     debug,
                     history: shown,
                     stage: ReportStage::Writing,
@@ -5490,6 +5557,26 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::ReportCategory(category) => {
+                // Gathered before the dialog is borrowed: the attachment reads
+                // the addon folder, the queue and the config off `self`.
+                let attached = match self.report_dialog.as_ref().map(|d| d.kind) {
+                    Some(ReportKind::Bug) => self.report_attachment(category),
+                    _ => String::new(),
+                };
+                if let Some(dialog) = self
+                    .report_dialog
+                    .as_mut()
+                    .filter(|d| !matches!(d.stage, ReportStage::Sending | ReportStage::Sent))
+                {
+                    dialog.category = Some(category);
+                    if dialog.kind == ReportKind::Bug {
+                        dialog.debug = format!("{}{attached}", dialog.base);
+                    }
+                }
+                Task::none()
+            }
+
             Message::ReportSend => {
                 let Some(dialog) = self.report_dialog.as_mut() else {
                     return Task::none();
@@ -5497,9 +5584,9 @@ impl Lightforge {
                 let note = dialog.note.text();
                 // From a failed send too: that is the "Try again" button.
                 let ready = matches!(dialog.stage, ReportStage::Writing | ReportStage::Failed);
-                if !ready || note.trim().is_empty() {
+                let Some(category) = dialog.category.filter(|_| ready && dialog.can_send()) else {
                     return Task::none();
-                }
+                };
                 // The same words twice in five minutes is the Send button
                 // being pressed again, not a second problem.
                 let repeat = self
@@ -5517,6 +5604,7 @@ impl Lightforge {
                         ReportKind::Bug => report::Kind::Bug(dialog.debug.clone()),
                         ReportKind::Feedback => report::Kind::Feedback,
                     },
+                    category,
                     note: note.clone(),
                     contact: dialog.contact.clone(),
                     tags: dialog.tags.clone(),
@@ -6474,11 +6562,31 @@ impl Lightforge {
             .iter()
             .map(|p| Choice { code: p.code.clone(), label: p.display_name.clone() })
             .collect();
-        if !self.choices.iter().any(|c| c.code == self.selected.code) {
+        // A game opened from Add a game is shown without being in the band;
+        // it stays shown until something else is picked.
+        let previewing = self.catalog.get(&self.selected.code).is_some();
+        if !previewing && !self.choices.iter().any(|c| c.code == self.selected.code) {
             if let Some(first) = self.choices.first().cloned() {
                 self.selected = first;
             }
         }
+    }
+
+    /// Put the game on screen into the band, if it was only being looked at.
+    ///
+    /// Called by every action that starts something for it: a download or a
+    /// game running for a product the band does not show would have nowhere
+    /// to report to, and nowhere to be found again.
+    fn track_selected(&mut self) {
+        if self.choices.iter().any(|c| c.code == self.selected.code) {
+            return;
+        }
+        let choice = self.selected.clone();
+        if self.config.product(&choice.code).is_none() {
+            self.config.products.push(Product::new(choice.code.clone(), choice.label.clone()));
+            self.save_config();
+        }
+        self.choices.push(choice);
     }
 
     fn rebuild_layout(&mut self) {
@@ -7258,14 +7366,22 @@ impl Lightforge {
                     .into(),
                 None => Space::new().width(Length::Fixed(BROWSE_MARK)).into(),
             };
-            container(
-                row![mark, facts.width(Length::Fill), action]
-                    .spacing(theme::MD)
-                    .align_y(Alignment::Center),
-            )
-            .padding(theme::SM)
-            .style(theme::row)
-            .into()
+            // The game itself opens its page, tracked or not; Add and Remove
+            // stay the only things that change the band.
+            let open = Message::OpenProduct(entry.code.clone());
+            let game = tappable(
+                format!("open {}", entry.code.as_str()),
+                Some(open.clone()),
+                button(row![mark, facts.width(Length::Fill)].spacing(theme::MD).align_y(Alignment::Center))
+                    .width(Length::Fill)
+                    .padding(0)
+                    .style(theme::ghost)
+                    .on_press(open),
+            );
+            container(row![game, action].spacing(theme::MD).align_y(Alignment::Center))
+                .padding(theme::SM)
+                .style(theme::row)
+                .into()
         };
 
         // Only line heads: a line's other branches are reached from the
@@ -7490,6 +7606,7 @@ impl Lightforge {
         );
         let tile = mouse_area(tile)
             .on_press(Message::TileGrabbed(line.clone()))
+            .on_right_press(Message::TileMenu(line.clone()))
             .on_enter(Message::TileEntered(line.clone()))
             .on_exit(Message::TileLeft(line.clone()))
             .interaction(match dragging {
@@ -7497,6 +7614,11 @@ impl Lightforge {
                 false => iced::mouse::Interaction::Pointer,
             });
 
+        // The menu hangs under the tile, where the tooltip would, so the
+        // tooltip gives way while it is open rather than being drawn over it.
+        if self.tile_menu.as_ref() == Some(line) {
+            return popover::popover(tile, Some(self.tile_menu_panel(line))).align_left().below().into();
+        }
         tooltip(
             tile,
             container(text(self.name_of(line)).size(theme::LABEL))
@@ -7505,6 +7627,32 @@ impl Lightforge {
             tooltip::Position::Bottom,
         )
         .into()
+    }
+
+    /// A tile's right-click menu.
+    ///
+    /// Remove takes the tile out of the band and nothing else: the game stays
+    /// installed and can be added back from Add a game. Held when it is the
+    /// last tile, for the reason [`Message::RemoveProduct`] refuses it.
+    fn tile_menu_panel(&self, line: &ProductLine) -> Element<'_, Message> {
+        let elsewhere = self.lines().iter().any(|other| other != line);
+        let face = row![
+            image(close_icon())
+                .width(Length::Fixed(MENU_GLYPH))
+                .height(Length::Fixed(MENU_GLYPH))
+                .opacity(if elsewhere { 1.0_f32 } else { 0.4_f32 }),
+            text("Remove from list").size(theme::BODY).color_maybe((!elsewhere).then_some(theme::MUTED)),
+        ]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center);
+        let entry = button(face.width(Length::Fill))
+            .padding(theme::tap([theme::XS, theme::SM]))
+            .style(theme::ghost)
+            .on_press_maybe(elsewhere.then(|| Message::RemoveProduct(line.head())));
+        container(column![entry].width(Length::Fixed(200.0)))
+            .padding(theme::SM)
+            .style(theme::menu)
+            .into()
     }
 
     /// How wide a tile will be.
@@ -8022,6 +8170,7 @@ impl Lightforge {
             || self.strip_open
             || self.app_menu_open
             || self.addon_menu_open.is_some()
+            || self.tile_menu.is_some()
     }
 
     /// Ask for the open Game Settings popup's backups.
@@ -8048,6 +8197,7 @@ impl Lightforge {
         self.strip_open = false;
         self.app_menu_open = false;
         self.addon_menu_open = None;
+        self.tile_menu = None;
     }
 
     /// The menu under the wordmark: the app's own business, as opposed to the
@@ -12913,6 +13063,131 @@ impl Lightforge {
         .into()
     }
 
+    /// What a bug report in this category carries beyond the base bundle.
+    ///
+    /// Only what answers that category's first question: the addon list for
+    /// an addon problem, the queue and the drives for a download problem, the
+    /// settings for a settings problem. Read when the category is picked, so
+    /// the card shows it before anything is sent, and scrubbed like the rest.
+    fn report_attachment(&self, category: report::Category) -> String {
+        use std::fmt::Write as _;
+        use report::Category;
+
+        let code = &self.selected.code;
+        let mut out = String::new();
+        match category {
+            Category::Addons => {
+                let dir = self.layout.addons_dir(code);
+                let _ = writeln!(out, "\n--- addons: {} ---", dir.display());
+                let _ = writeln!(out, "{:<16}{}", "flavor", lightforge_core::addons::flavor_of(code));
+                let installed = match lightforge_core::addons::scan(&dir) {
+                    Ok(installed) => installed,
+                    Err(e) => {
+                        let _ = writeln!(out, "the folder could not be read: {}", chain(&e));
+                        Vec::new()
+                    }
+                };
+                // Read-only: the Addons page prunes the ledger as it lists, a
+                // report must not change what it is reporting on.
+                let ledger = AppDirs::discover()
+                    .ok()
+                    .map(|dirs| manage::ledger_path(dirs.data_dir(), &dir, code))
+                    .map(|path| lightforge_core::addons::Ledger::load(&path));
+                let ledger = match ledger {
+                    Some(Ok(ledger)) => ledger,
+                    Some(Err(e)) => {
+                        let _ = writeln!(out, "the ledger could not be read: {}", chain(&e));
+                        lightforge_core::addons::Ledger::default()
+                    }
+                    None => lightforge_core::addons::Ledger::default(),
+                };
+                let rows = addonwork::rows_from(&installed, &ledger);
+                let managed = rows.iter().filter(|r| r.managed.is_some() && r.child_of.is_none()).count();
+                let _ = writeln!(out, "{:<16}{} folders, {managed} managed", "installed", rows.len());
+                for row in rows.iter().filter(|r| r.child_of.is_none()) {
+                    let owner = match &row.managed {
+                        Some(m) => {
+                            let mut owner = format!("{}:{}", m.provider, m.id);
+                            if let Some(file) = &m.file_id {
+                                let _ = write!(owner, " file {file}");
+                            }
+                            if let Some(channel) = m.channel {
+                                let _ = write!(owner, " {}", channel.as_str());
+                            }
+                            if m.pinned.is_some() {
+                                owner.push_str(" pinned");
+                            }
+                            if m.ignored {
+                                owner.push_str(" ignored");
+                            }
+                            owner
+                        }
+                        None => "not managed".to_owned(),
+                    };
+                    let children = rows
+                        .iter()
+                        .filter(|r| r.child_of.as_deref() == Some(row.folder.as_str()))
+                        .count();
+                    let children = match children {
+                        0 => String::new(),
+                        n => format!(" (+{n} folders)"),
+                    };
+                    let _ = writeln!(out, "{}{children}  {}  {owner}", row.folder, row.version);
+                }
+            }
+            Category::Downloader => {
+                let _ = writeln!(out, "\n--- downloads ---");
+                if self.queue.is_empty() {
+                    let _ = writeln!(out, "nothing queued");
+                }
+                for download in &self.queue {
+                    let stage = match &download.stage {
+                        Stage::Queued => "queued".to_owned(),
+                        Stage::Running { .. } => "running".to_owned(),
+                        Stage::Paused(p) => {
+                            format!("paused at {} of {}", size_of(p.downloaded_bytes), size_of(p.total_bytes))
+                        }
+                    };
+                    let planned = download.job.total.map_or("not planned yet".to_owned(), size_of);
+                    let _ = writeln!(out, "{} ({})  {stage}  job {planned}", download.label, download.code.as_str());
+                }
+                let _ = writeln!(out, "\n--- libraries ---");
+                for library in &self.config.libraries {
+                    let disk = library.disk().map_or("size unavailable".to_owned(), |d| {
+                        format!("{} free of {}", size_of(d.free), size_of(d.total))
+                    });
+                    let _ = writeln!(
+                        out,
+                        "{} {}  {}  {:?}  {disk}",
+                        library.id,
+                        library.label,
+                        library.games().display(),
+                        library.state()
+                    );
+                }
+            }
+            Category::Settings => {
+                // The contact is in the report already, where it belongs;
+                // nothing else in the config is personal.
+                let mut config = self.config.clone();
+                config.contact = None;
+                let _ = writeln!(out, "\n--- config.toml ---");
+                match config.to_toml() {
+                    Ok(toml) => out.push_str(&toml),
+                    Err(e) => {
+                        let _ = writeln!(out, "could not be rendered: {}", chain(&e));
+                    }
+                }
+            }
+            // The base bundle is already the game's own: build, Proton, DXVK,
+            // the newest client log. Battle.net's log names the account, so
+            // it stays on the machine; the launcher's own state is in the
+            // recent activity.
+            Category::Game | Category::BattleNet | Category::Launcher | Category::General => {}
+        }
+        lightforge_core::debug::scrub(&out)
+    }
+
     /// The bug report and the feedback dialog, which are one card.
     // (`report_tags` sits below the impl, since it needs nothing from `self`.)
     ///
@@ -12932,6 +13207,15 @@ impl Lightforge {
         let writing = !matches!(dialog.stage, ReportStage::Sending | ReportStage::Sent);
 
         let mut body = column![
+            self.picker(
+                "report category".to_owned(),
+                report::Category::ALL.to_vec(),
+                dialog.category,
+                "What is it about?",
+                Message::ReportCategory,
+                Length::Fill,
+                theme::BODY,
+            ),
             // Five lines: enough that a paragraph looks invited rather than
             // tolerated, and the card still fits a laptop screen.
             // Pressing a field puts the typing in it: Steam's own keyboard
@@ -12947,12 +13231,20 @@ impl Lightforge {
                     .size(theme::BODY)
                     .padding(theme::SM),
             ),
-            // Optional, and said so: a report with no way back is still worth
-            // sending, and someone who would rather stay anonymous should not
-            // have to wonder whether leaving it blank breaks anything.
+            // Required on a bug, and said so in the box itself: a bug nobody
+            // can be asked about usually cannot be reproduced. Feedback can
+            // stay anonymous, it rarely needs a reply.
             clickable(
                 "report contact",
-                text_input("Email or Discord name, so I can reach you (optional)", &dialog.contact)
+                text_input(
+                    match dialog.kind {
+                        ReportKind::Bug => "Email or Discord name, so I can reach you (required)",
+                        ReportKind::Feedback => {
+                            "Email or Discord name, so I can reach you (optional)"
+                        }
+                    },
+                    &dialog.contact,
+                )
                     .on_input_maybe(writing.then_some(Message::ReportContact))
                     .style(theme::field)
                     .size(theme::BODY)
@@ -13037,12 +13329,11 @@ impl Lightforge {
                 tappable("cancel", Some(Message::ReportCancel), choice("Cancel").style(theme::outlined)),
                 tappable(
                     "send",
-                    // Nothing is sent without a description: an empty report
-                    // is one more issue nobody can act on.
-                    (writing
-                        && dialog.stage != ReportStage::TooSoon
-                        && !dialog.note.text().trim().is_empty())
-                    .then_some(Message::ReportSend),
+                    // Nothing is sent without a description, a category, and
+                    // for a bug a way back: each one missing is an issue
+                    // nobody can act on.
+                    (writing && dialog.stage != ReportStage::TooSoon && dialog.can_send())
+                        .then_some(Message::ReportSend),
                     choice(match dialog.stage {
                         ReportStage::Sending => "Sending…",
                         ReportStage::Failed => "Try again",
@@ -15162,6 +15453,92 @@ mod tests {
 
         assert_eq!(app.choices.len(), 2, "the only line was removed");
         assert_eq!(app.error.as_deref(), Some("that is the only game left — add another first"));
+    }
+
+    /// A game opened from Add a game is shown, not tracked, and survives the
+    /// band being rebuilt; the first action on it puts it in the band.
+    #[test]
+    fn a_game_opened_from_add_a_game_joins_the_band_only_when_acted_on() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+
+        let retail = Choice { code: ProductCode::Retail, label: "Retail".to_owned() };
+        app.choices = vec![retail.clone()];
+        app.config.products = vec![Product::new(ProductCode::Retail, "Retail")];
+        app.selected = retail;
+
+        let _ = app.update(Message::OpenProduct(ProductCode::ClassicEra));
+        assert_eq!(app.selected.code, ProductCode::ClassicEra);
+        assert_eq!(app.choices.len(), 1, "looking at a game added it to the band");
+        assert!(app.config.product(&ProductCode::ClassicEra).is_none());
+
+        // Adoption and the wizard rebuild the band; the page stays put.
+        app.sync_choices();
+        assert_eq!(app.selected.code, ProductCode::ClassicEra, "the preview was dropped");
+
+        app.track_selected();
+        assert!(app.choices.iter().any(|c| c.code == ProductCode::ClassicEra));
+        assert!(app.config.product(&ProductCode::ClassicEra).is_some());
+        app.track_selected();
+        assert_eq!(app.choices.len(), 2, "tracked twice");
+    }
+
+    /// Remove from a tile's menu takes the line out of the band and closes
+    /// the menu; on the last tile it is held.
+    #[test]
+    fn a_tiles_menu_removes_its_line_and_closes() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.queue.clear();
+
+        let retail = Choice { code: ProductCode::Retail, label: "Retail".to_owned() };
+        app.choices = vec![
+            retail.clone(),
+            Choice { code: ProductCode::ClassicEra, label: "Classic Era".to_owned() },
+        ];
+        app.config.products = app
+            .choices
+            .iter()
+            .map(|c| Product::new(c.code.clone(), c.label.clone()))
+            .collect();
+        app.selected = retail;
+
+        let _ = app.update(Message::TileMenu(ProductLine::ClassicEra));
+        assert_eq!(app.tile_menu, Some(ProductLine::ClassicEra));
+        assert!(app.panel_open());
+        // A second right-click on the same tile closes it again.
+        let _ = app.update(Message::TileMenu(ProductLine::ClassicEra));
+        assert!(app.tile_menu.is_none());
+
+        let _ = app.update(Message::TileMenu(ProductLine::ClassicEra));
+        let _ = app.update(Message::RemoveProduct(ProductLine::ClassicEra.head()));
+        assert_eq!(app.choices.len(), 1);
+        assert!(app.tile_menu.is_none(), "the menu outlived its tile");
+    }
+
+    /// A bug report goes nowhere without a category and a way back; feedback
+    /// only needs the category.
+    #[test]
+    fn a_bug_report_needs_a_category_and_a_contact() {
+        let dialog = |kind, category, contact: &str| ReportDialog {
+            kind,
+            note: iced::widget::text_editor::Content::with_text("it broke"),
+            category,
+            contact: contact.to_owned(),
+            tags: Vec::new(),
+            shot: None,
+            base: String::new(),
+            debug: String::new(),
+            history: Vec::new(),
+            stage: ReportStage::Writing,
+        };
+        let addons = Some(report::Category::Addons);
+        assert!(!dialog(ReportKind::Bug, None, "me@example.org").can_send());
+        assert!(!dialog(ReportKind::Bug, addons, "  ").can_send());
+        assert!(dialog(ReportKind::Bug, addons, "someone#1234").can_send());
+        assert!(dialog(ReportKind::Feedback, addons, "").can_send());
+        assert!(!dialog(ReportKind::Feedback, None, "").can_send());
     }
 
     /// The popup opens once per version and then not again, and every way of
