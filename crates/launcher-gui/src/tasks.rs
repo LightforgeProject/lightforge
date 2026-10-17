@@ -934,17 +934,22 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Strin
 
         let (tweaks, tools) = tweaks_for(&code);
 
-        // Re-asserted here, not when the toggle was flipped: the client
+        // Reconciled here, not when the toggle was flipped: the client
         // rewrites Config.wtf from memory every time it exits, so a value
-        // written once is a value the next session may well have thrown away.
-        // This runs behind the pre-flight gate, with the client closed.
+        // written once may be gone, or changed by the player in the game's own
+        // options, which then stays theirs. Behind the pre-flight gate, with
+        // the client closed.
         let cvars = layout.wtf_dir(&code).join("Config.wtf");
-        let (set, unset) = tweaks.cvars();
-        if let Err(e) = lightforge_core::cvars::apply(&cvars, &set, &unset) {
+        match lightforge_core::cvars::reconcile(&cvars, &tweaks.cvars(), lightforge_core::tweaks::RETIRED) {
+            Ok(done) if !done.yielded.is_empty() => crate::trace::mark(format!(
+                "launch: left as set in the game: {}",
+                done.yielded.join(", ")
+            )),
+            Ok(_) => {}
             // Not fatal. A settings file Lightforge could not write is a
             // worse game, not an unplayable one, and refusing to launch over
             // it would be the wrong trade.
-            eprintln!("lightforge: could not apply client settings: {e}");
+            Err(e) => eprintln!("lightforge: could not apply client settings: {e}"),
         }
 
         let runner = runner_for(&layout, &code, Runs::Game)?;

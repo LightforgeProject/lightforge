@@ -1126,14 +1126,19 @@ async fn main() -> Result<()> {
 
             // After pre-flight, with the client closed: it rewrites Config.wtf
             // from memory on exit, so anything set once is not still set.
-            let (set, unset) = tweaks.cvars();
-            match lightforge_core::cvars::apply(
+            match lightforge_core::cvars::reconcile(
                 &layout.wtf_dir(&code).join("Config.wtf"),
-                &set,
-                &unset,
+                &tweaks.cvars(),
+                lightforge_core::tweaks::RETIRED,
             ) {
-                Ok(0) => {}
-                Ok(n) => println!("applied {n} client setting(s)"),
+                Ok(done) => {
+                    if done.changed > 0 {
+                        println!("applied {} client setting(s)", done.changed);
+                    }
+                    if !done.yielded.is_empty() {
+                        println!("left as set in the game: {}", done.yielded.join(", "));
+                    }
+                }
                 Err(e) => eprintln!("could not apply client settings: {e}"),
             }
 

@@ -153,8 +153,10 @@ impl GraphicsApi {
 
 /// Every CVar any toggle in [`Tweaks`] can write.
 ///
-/// Used to unset what is no longer enabled: a toggle switched off has to take
-/// its values out of `Config.wtf`, or "off" would still be enforcing them.
+/// A declaration checked by a test rather than something acted on: what is
+/// taken back out of `Config.wtf` is decided by the record of what was
+/// actually written, see [`crate::cvars::reconcile`].
+#[cfg(test)]
 const MANAGED: &[&str] = &[
     "gxApi",
     "maxFPS",
@@ -180,11 +182,10 @@ const MANAGED: &[&str] = &[
 
 /// Names Lightforge used to write and no longer does.
 ///
-/// They stay here because [`Tweaks::cvars`] is the complete description of
-/// this product's settings: a name that is neither set nor offered for removal
-/// is a value left behind in `Config.wtf` forever. Both of these were written
-/// by earlier versions, and both were mistakes found by checking the client's
-/// own string table rather than a wiki:
+/// Earlier versions wrote them with no record, so they are removed outright
+/// rather than through [`crate::cvars::reconcile`]'s record. Both were
+/// mistakes found by checking the client's own string table rather than a
+/// wiki, so no player sets them on purpose:
 ///
 /// - `addonProfilerEnabled` is not a console variable at all, in any casing.
 ///   `scriptProfile` is the real one and is still set.
@@ -192,7 +193,7 @@ const MANAGED: &[&str] = &[
 ///   account-synced `WTF/Account/<id>/config-cache.wtf`, not in `Config.wtf`.
 ///   Writing it here was writing to the wrong file, so the control was
 ///   dropped rather than left looking like it worked.
-const RETIRED: &[&str] = &["addonProfilerEnabled", "SpellQueueWindow"];
+pub const RETIRED: &[&str] = &["addonProfilerEnabled", "SpellQueueWindow"];
 
 /// The lowest frame cap the client accepts, from its own help text: "Set FPS
 /// limit. Min 8". A smaller number is clamped rather than refused, the panel
@@ -212,12 +213,11 @@ impl Tweaks {
         self == &Self::default()
     }
 
-    /// The CVars to write, and the ones to take back out.
-    ///
-    /// Both halves come from [`MANAGED`], so the result is a complete
-    /// description of this product's client settings as Lightforge sees them,
-    /// which is what makes re-asserting it before every launch safe.
-    pub fn cvars(&self) -> (Vec<(&'static str, String)>, Vec<&'static str>) {
+    /// The CVars the enabled toggles ask for. What is no longer asked for is
+    /// worked out against the record of what was written, by
+    /// [`crate::cvars::reconcile`], never by unsetting every name a toggle
+    /// could write: that also removed the player's own choices.
+    pub fn cvars(&self) -> Vec<(&'static str, String)> {
         let mut set: Vec<(&'static str, String)> = Vec::new();
 
         if let Some(api) = self.graphics_api {
@@ -275,13 +275,7 @@ impl Tweaks {
             set.push(("groundEffectDist", "500".to_owned()));
         }
 
-        let unset = MANAGED
-            .iter()
-            .chain(RETIRED.iter())
-            .copied()
-            .filter(|name| !set.iter().any(|(n, _)| n == name))
-            .collect();
-        (set, unset)
+        set
     }
 
     /// Environment variables for the launch, in the order they are applied.
@@ -723,25 +717,20 @@ mod tests {
     }
 
     #[test]
-    fn a_default_profile_writes_nothing_and_unsets_everything() {
-        let (set, unset) = Tweaks::default().cvars();
-        assert!(set.is_empty());
-        // Every managed name is offered for removal, so turning the last
-        // toggle off actually cleans the file.
-        assert_eq!(unset.len(), MANAGED.len() + RETIRED.len());
+    fn a_default_profile_asks_for_nothing() {
+        // And so takes nothing out of `Config.wtf` it did not put there.
+        assert!(Tweaks::default().cvars().is_empty());
     }
 
     #[test]
     fn an_enabled_toggle_is_not_also_unset() {
         let tweaks = Tweaks { skip_addon_profiling: true, ..Tweaks::default() };
-        let (set, unset) = tweaks.cvars();
+        let set = tweaks.cvars();
         assert!(set.contains(&("scriptProfile", "0".to_owned())));
         // `addonProfilerEnabled` is not a console variable in any casing;
-        // see [`RETIRED`]. It is offered for removal, never written.
-        assert!(!set.iter().any(|(n, _)| *n == "addonProfilerEnabled"));
-        assert!(unset.contains(&"addonProfilerEnabled"));
-        assert!(!unset.contains(&"scriptProfile"));
-        assert!(unset.contains(&"ffxGlow"));
+        // see [`RETIRED`]. It is removed, never written.
+        assert!(!set.iter().any(|(n, _)| RETIRED.contains(n)));
+        assert!(!set.iter().any(|(n, _)| *n == "ffxGlow"));
     }
 
     #[test]
@@ -772,10 +761,7 @@ mod tests {
             big_shader_cache: true,
             env: Default::default(),
         };
-        let (set, unset) = all.cvars();
-        // Only the retired names are left, because nothing sets them any
-        // more, and they must still be cleaned out of `Config.wtf`.
-        assert_eq!(unset, RETIRED, "only the retired names are left to unset");
+        let set = all.cvars();
         for (name, _) in &set {
             assert!(MANAGED.contains(name), "{name} is written but not managed");
         }
@@ -784,7 +770,7 @@ mod tests {
     #[test]
     fn the_frame_cap_uses_the_clients_own_variable() {
         let tweaks = Tweaks { fps_cap: Some(120), ..Tweaks::default() };
-        let (set, _) = tweaks.cvars();
+        let set = tweaks.cvars();
         assert!(set.contains(&("maxFPS", "120".to_owned())));
     }
 
@@ -908,7 +894,7 @@ DXVK_HUD = "fps"
     #[test]
     fn a_frame_cap_below_the_clients_floor_is_raised_to_it() {
         let tweaks = Tweaks { fps_cap: Some(3), fps_cap_background: Some(1), ..Tweaks::default() };
-        let (set, _) = tweaks.cvars();
+        let set = tweaks.cvars();
         assert!(set.contains(&("maxFPS", "8".to_owned())));
         assert!(set.contains(&("maxFPSBk", "8".to_owned())));
     }
@@ -917,22 +903,19 @@ DXVK_HUD = "fps"
     // earlier version did, and it is why the cap never took effect.
     #[test]
     fn a_frame_cap_writes_its_enable_flag_too() {
-        let (set, unset) = Tweaks { fps_cap: Some(120), ..Tweaks::default() }.cvars();
+        let set = Tweaks { fps_cap: Some(120), ..Tweaks::default() }.cvars();
         assert!(set.contains(&("maxFPS", "120".to_owned())));
         assert!(set.contains(&("useMaxFPS", "1".to_owned())));
-        // The background pair is untouched and therefore cleaned out.
-        assert!(unset.contains(&"maxFPSBk"));
-        assert!(unset.contains(&"useMaxFPSBk"));
+        // The background pair is not asked for.
+        assert!(!set.iter().any(|(n, _)| *n == "maxFPSBk" || *n == "useMaxFPSBk"));
     }
 
     #[test]
     fn the_background_cap_is_independent_of_the_foreground_one() {
-        let (set, unset) =
-            Tweaks { fps_cap_background: Some(30), ..Tweaks::default() }.cvars();
+        let set = Tweaks { fps_cap_background: Some(30), ..Tweaks::default() }.cvars();
         assert!(set.contains(&("maxFPSBk", "30".to_owned())));
         assert!(set.contains(&("useMaxFPSBk", "1".to_owned())));
-        assert!(unset.contains(&"maxFPS"));
-        assert!(unset.contains(&"useMaxFPS"));
+        assert!(!set.iter().any(|(n, _)| *n == "maxFPS" || *n == "useMaxFPS"));
     }
 
     // Verified against the client's own string table: `HardwareCursor`
@@ -946,7 +929,7 @@ DXVK_HUD = "fps"
             show_cursor_in_relative_mode: true,
             ..Tweaks::default()
         };
-        let (set, _) = tweaks.cvars();
+        let set = tweaks.cvars();
         assert!(set.contains(&("HardwareCursor", "0".to_owned())));
         assert!(set.contains(&("clipcursor", "1".to_owned())));
         assert!(set.contains(&("mouseAcceleration", "0".to_owned())));
@@ -1023,7 +1006,7 @@ DXVK_HUD = "fps"
             wayland_monitor: Some("DP-1".to_owned()),
             ..Tweaks::default()
         };
-        let (set, _) = tweaks.cvars();
+        let set = tweaks.cvars();
         assert!(set.is_empty());
     }
 
@@ -1062,7 +1045,7 @@ DXVK_HUD = "fps"
         let tools = HostTools { wayland: true, ..HostTools::default() };
         assert!(tweaks.environment(&tools).is_empty());
         // And they are not silently dropped. They are simply the other half.
-        assert!(!tweaks.cvars().0.is_empty());
+        assert!(!tweaks.cvars().is_empty());
     }
 
     #[test]
