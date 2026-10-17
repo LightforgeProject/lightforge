@@ -10023,16 +10023,6 @@ impl Lightforge {
         focus::layer(mouse_area(menu).on_press(Message::MenuClick))
     }
 
-    /// A page that is just the chrome and some content.
-    ///
-    /// The dashboard does not use this: its header sits *inside* a `stack`, so
-    /// the product art shows behind it, which is what lets the top row go
-    /// without a backdrop. Everything else stacks nothing and wants the header
-    /// simply above its content.
-    fn framed<'a>(&'a self, content: Element<'a, Message>) -> Element<'a, Message> {
-        column![self.header(), content].into()
-    }
-
     /// One headline as a card that is entirely a link.
     ///
     /// The whole card presses rather than a "read more" inside it: there is
@@ -10217,11 +10207,7 @@ impl Lightforge {
         let version = env!("CARGO_PKG_VERSION");
         let releases = lightforge_core::releases::all();
 
-        let mut body = column![
-            text("Lightforge Updates").size(theme::DISPLAY),
-            muted(format!("You are running {version}."), theme::BODY),
-        ]
-        .spacing(theme::SM);
+        let mut body = column![].spacing(theme::LG);
 
         if releases.is_empty() {
             // Only reachable in a build whose notes file was emptied; a test
@@ -10237,9 +10223,9 @@ impl Lightforge {
             body = body.push(
                 container(
                     column![text(heading).size(theme::TITLE), release_notes(release)]
-                        .spacing(theme::SM),
+                        .spacing(theme::MD),
                 )
-                .padding(theme::MD)
+                .padding(theme::LG)
                 .width(Length::Fill)
                 .style(theme::row),
             );
@@ -10249,17 +10235,21 @@ impl Lightforge {
         // is what makes "never show this again" a safe thing to tick.
         body = body.extend(
             self.hint(
-                "These are the notes the launcher shows after an update. Settings › General                  decides whether that popup appears.",
+                "These are the notes the launcher shows after an update. Settings › General \
+                 decides whether that popup appears.",
             )
             .map(Element::from),
         );
 
-        self.framed(focus::region(
-            "updates",
-            scrollable(body.spacing(theme::MD))
-                .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
-                .style(theme::scrollbar),
-        ))
+        // Through `page` like every other page, which is what gives it the
+        // same margins and title; built on its own it sat flush against the
+        // window's edges.
+        self.page(
+            "Lightforge Updates",
+            Some(format!("You are running {version}.")),
+            None,
+            body.into(),
+        )
     }
 
     /// The splash: the wordmark, what is being fetched, and a bar that says
@@ -14703,15 +14693,18 @@ impl canvas::Program<Message> for Spinner {
 /// drift. The bullet is a character rather than a drawn mark: these are lines
 /// of prose, not controls.
 fn release_notes(release: &lightforge_core::releases::Release) -> Element<'static, Message> {
+    // Prose, so a little more leading than a label gets: a note that wraps
+    // should not read as two notes run together.
+    let leading = iced::widget::text::LineHeight::Relative(1.45);
     column(release.notes.iter().map(|note| {
         row![
-            text("·").size(theme::BODY).color(theme::MUTED),
-            text(note.clone()).size(theme::BODY).width(Length::Fill),
+            text("·").size(theme::BODY).color(theme::MUTED).line_height(leading),
+            text(note.clone()).size(theme::BODY).line_height(leading).width(Length::Fill),
         ]
         .spacing(theme::SM)
         .into()
     }))
-    .spacing(theme::XS)
+    .spacing(theme::SM)
     .into()
 }
 
