@@ -49,19 +49,33 @@ impl Plan {
 
 /// Decide what removing `code` from `install` would delete. Touches nothing.
 pub fn plan(install: &Path, code: &ProductCode) -> Result<Plan, UninstallError> {
-    let info = BuildInfo::load(install.join(".build.info")).ok();
+    // A file that is there but cannot be read says nothing about which
+    // products remain, and guessing "none" would delete the shared store.
+    // Only a file that does not exist at all means no product finished.
+    let info_path = install.join(".build.info");
+    let info = match BuildInfo::load(&info_path) {
+        Ok(info) => Some(info),
+        Err(_) if !info_path.exists() => None,
+        Err(e) => return Err(UninstallError::Unreadable(Box::new(e))),
+    };
     let remaining: Vec<ProductCode> = info
         .as_ref()
         .map(|info| info.products().filter(|p| p != code).collect())
         .unwrap_or_default();
 
     let flavor = install.join(&*code.install_dir());
+    if !is_plain_child(install, &flavor) {
+        return Err(UninstallError::Outside(flavor));
+    }
     let flavor_dir = flavor.is_dir().then_some(flavor);
     let store = install.join("Data");
 
     // The store only goes when nothing is left to read it. A second product
-    // sharing these archives would be destroyed by deleting them.
-    let store = (remaining.is_empty() && store.is_dir()).then_some(store);
+    // sharing these archives would be destroyed by deleting them. Without a
+    // `.build.info`, another product's flavor folder is the only sign one is
+    // still there, a first install that has not finished yet for example.
+    let others_on_disk = info.is_none() && has_other_flavor(install, flavor_dir.as_deref());
+    let store = (remaining.is_empty() && !others_on_disk && store.is_dir()).then_some(store);
 
     let bytes = flavor_dir.iter().chain(store.iter()).map(|p| dir_size(p)).sum();
 
@@ -101,7 +115,7 @@ pub fn execute(
     let mut removed = Removed { bytes: plan.bytes, ..Removed::default() };
 
     for path in plan.flavor_dir.iter().chain(plan.store.iter()) {
-        if !path.starts_with(install) {
+        if !is_plain_child(install, path) {
             return Err(UninstallError::Outside(path.clone()));
         }
         std::fs::remove_dir_all(path).map_err(|source| UninstallError::Io {
@@ -164,6 +178,33 @@ pub fn execute(
     Ok(removed)
 }
 
+/// Whether `path` is `install` plus one ordinary folder name, never a path
+/// that climbs out of it through `..`. `starts_with` alone is textual and
+/// would accept `install/../elsewhere`.
+fn is_plain_child(install: &Path, path: &Path) -> bool {
+    path.strip_prefix(install).is_ok_and(|rest| {
+        let mut parts = rest.components();
+        matches!(parts.next(), Some(std::path::Component::Normal(_))) && parts.next().is_none()
+    })
+}
+
+/// Whether a flavor folder other than `own` sits in the install, `_retail_`,
+/// `_classic_era_` and the like.
+fn has_other_flavor(install: &Path, own: Option<&Path>) -> bool {
+    let Ok(entries) = std::fs::read_dir(install) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        name.len() > 2
+            && name.starts_with('_')
+            && name.ends_with('_')
+            && entry.file_type().is_ok_and(|t| t.is_dir())
+            && own != Some(entry.path().as_path())
+    })
+}
+
 /// Recursive size of a directory, ignoring anything unreadable.
 fn dir_size(path: &Path) -> u64 {
     let Ok(entries) = std::fs::read_dir(path) else {
@@ -186,6 +227,11 @@ pub enum UninstallError {
 
     #[error(transparent)]
     BuildInfo(#[from] crate::buildinfo::BuildInfoError),
+
+    /// Refused rather than guessed: which products share the store is
+    /// written nowhere else.
+    #[error("refusing to plan an uninstall: .build.info cannot be read, so it is unknown which products still use the shared game data")]
+    Unreadable(#[source] Box<crate::buildinfo::BuildInfoError>),
 
     #[error(transparent)]
     ProductDb(#[from] productdb::ProductDbError),
@@ -271,6 +317,61 @@ mod tests {
         // Retail is still there, so the store stays regardless.
         assert!(plan.store.is_none());
         assert!(plan.is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_build_info_refuses_instead_of_taking_the_store() {
+        // A ragged row used to read as "no other products", and the plan
+        // then deleted the store Retail was still using.
+        let dir = install_with("ragged", &[("wow", "_retail_"), ("wow_classic_era", "_classic_era_")]);
+        std::fs::write(
+            dir.join(".build.info"),
+            "Branch!STRING:0|Active!DEC:1|Product!STRING:0\neu|1|wow\neu|1\n",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            plan(&dir, &ProductCode::ClassicEra),
+            Err(UninstallError::Unreadable(_))
+        ));
+        assert!(dir.join("Data/data/data.000").is_file());
+    }
+
+    #[test]
+    fn without_a_build_info_another_flavor_keeps_the_store() {
+        // Two first installs into one store, neither finished: discarding
+        // one must not take the archives the other is writing.
+        let dir = install_with("unfinished", &[("wow", "_retail_"), ("wow_classic_era", "_classic_era_")]);
+        std::fs::remove_file(dir.join(".build.info")).unwrap();
+
+        let plan = plan(&dir, &ProductCode::ClassicEra).unwrap();
+        assert!(plan.store.is_none(), "_retail_ is still there");
+        assert!(plan.flavor_dir.is_some());
+    }
+
+    #[test]
+    fn without_a_build_info_a_lone_first_install_still_goes_whole() {
+        let dir = install_with("lone", &[("wow_classic_era", "_classic_era_")]);
+        std::fs::remove_file(dir.join(".build.info")).unwrap();
+
+        assert!(plan(&dir, &ProductCode::ClassicEra).unwrap().is_whole_install());
+    }
+
+    #[test]
+    fn a_climbing_path_is_refused_even_though_it_starts_with_the_install() {
+        let dir = install_with("climb", &[("wow", "_retail_")]);
+        let escaped = Plan {
+            flavor_dir: Some(dir.join("..").join("lightforge-uninstall-climb-victim")),
+            store: None,
+            has_row: false,
+            remove_build_info: false,
+            remaining: vec![ProductCode::Retail],
+            bytes: 0,
+        };
+        assert!(matches!(
+            execute(&dir, &ProductCode::Retail, &escaped, crate::paths::WINDOWS_WOW_PATH),
+            Err(UninstallError::Outside(_))
+        ));
     }
 
     #[test]

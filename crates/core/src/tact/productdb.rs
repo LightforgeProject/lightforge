@@ -541,6 +541,27 @@ pub fn write(install_root: &Path, installs: &[ProductInstall]) -> Result<PathBuf
     Ok(path)
 }
 
+/// Put `installs` into an install root's `.product.db`, keeping every other
+/// product's record already there.
+///
+/// Products share one install root, so [`write`] with only the product just
+/// installed would drop its siblings, and Battle.net's Locate then no longer
+/// finds them. A file that does not decode as records is replaced, as there
+/// is nothing in it to keep.
+pub fn upsert(install_root: &Path, installs: &[ProductInstall]) -> Result<PathBuf, ProductDbError> {
+    let path = install_root.join(".product.db");
+    let Ok(existing) = std::fs::read(&path) else {
+        return write(install_root, installs);
+    };
+    match splice(&existing, installs) {
+        Some(merged) => {
+            replace(&path, &existing, &merged)?;
+            Ok(path)
+        }
+        None => write(install_root, installs),
+    }
+}
+
 /// Agent's tag expression for a region, locale and account.
 ///
 /// Both halves are identical but for the trailing `speech?` / `text?`.
@@ -1071,6 +1092,19 @@ mod read_tests {
         assert_eq!(read[0].version.as_deref(), Some(install.version.as_str()));
         assert_eq!(read[0].build_key.as_deref(), Some(install.build_key.as_str()));
         assert_eq!(read[0].family, install.family);
+    }
+
+    #[test]
+    fn upserting_one_product_keeps_its_siblings() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), &[install("wow", "12.0.0.1"), install("wow_classic_era", "1.15.0.1")]).unwrap();
+
+        upsert(dir.path(), &[install("wow_classic_era", "1.15.0.2")]).unwrap();
+
+        let read = super::read(&dir.path().join(".product.db")).unwrap();
+        let versions: Vec<_> =
+            read.iter().map(|r| (r.product.as_str(), r.version.as_deref())).collect();
+        assert_eq!(versions, [("wow", Some("12.0.0.1")), ("wow_classic_era", Some("1.15.0.2"))]);
     }
 
     fn install(product: &str, version: &str) -> ProductInstall {

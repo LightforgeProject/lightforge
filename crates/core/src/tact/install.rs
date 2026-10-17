@@ -688,7 +688,14 @@ pub async fn execute(
 
     let version = if complete {
         let info_path = dest.join(".build.info");
-        let mut info = BuildInfo::load(&info_path).unwrap_or_else(|_| BuildInfo::with_default_schema());
+        // Only a missing file starts fresh. One that is there but will not
+        // parse holds the other products' rows, and replacing it would drop
+        // them from every launcher that reads it.
+        let mut info = match BuildInfo::load(&info_path) {
+            Ok(info) => info,
+            Err(_) if !info_path.exists() => BuildInfo::with_default_schema(),
+            Err(source) => return Err(InstallError::Metadata { what: ".build.info", source }),
+        };
         info.set_product(
             code,
             &[
@@ -720,7 +727,7 @@ pub async fn execute(
                 windows_path,
             )?
             .with_countries(&options.account_country, &options.geo_country);
-            let path = crate::tact::productdb::write(dest, std::slice::from_ref(&record))?;
+            let path = crate::tact::productdb::upsert(dest, std::slice::from_ref(&record))?;
             on_event(Event::ProductDb { path });
 
             // And into Agent's own registry, which is the list the client
@@ -811,7 +818,7 @@ pub enum InstallError {
         source: std::io::Error,
     },
 
-    #[error("the download finished but {what} could not be written")]
+    #[error("the download finished but {what} could not be updated")]
     Metadata {
         what: &'static str,
         #[source]
