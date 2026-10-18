@@ -4,3 +4,4 @@ SPEC.md
 /Logs
 # LIGHTFORGE_TRACE=frames writes this next to the binary you ran.
 frames.log
+packaging/aur/*/*.tar.gz
