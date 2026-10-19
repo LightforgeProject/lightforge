@@ -106,10 +106,10 @@ package Battle.net's installer needs, and how to remove Lightforge again.
 | Arch Linux | 🟢 | PKGBUILD, Tested on hardware |
 | EndeavourOS | 🟠 | Not tested yet but PKGBUILD should work |
 | Manjaro | 🟠 | Same as EndeavourOS |
-| Fedora | 🟢 | Tested on Fedora 44. Battle.net needs `wine.i686`. |
+| Fedora | 🟢 | COPR repo / RPM install, Tested on hardware |
 | Bazzite | 🟢 | install-script, Desktop and ROG Ally X, reported by players. |
 | SteamOS | 🟠 | install-script, Tested in a VM; a real Steam Deck is next. |
-| Nobara | 🟠 | |
+| Nobara | 🟢 | COPR repo / RPM install, Tested on hardware |
 | Debian | 🟢 | deb file, Tested in a VM. |
 | Ubuntu | 🟠 | not tested yet but should work with deb file |
 | Linux Mint | 🟠 | same as ubuntu |
