@@ -102,20 +102,20 @@ package Battle.net's installer needs, and how to remove Lightforge again.
 
 | Distro | Status | Notes |
 | --- | :---: | --- |
-| CachyOS | 🟢 | Where Lightforge is developed. |
-| Arch Linux | 🟠 | |
-| EndeavourOS | 🟠 | |
-| Manjaro | 🟠 | |
+| CachyOS | 🟢 | PKGBUILD, Lightforge was developed on CachyOS |
+| Arch Linux | 🟢 | PKGBUILD, Tested on hardware |
+| EndeavourOS | 🟠 | Not tested yet but PKGBUILD should work |
+| Manjaro | 🟠 | Same as EndeavourOS |
 | Fedora | 🟢 | Tested on Fedora 44. Battle.net needs `wine.i686`. |
-| Bazzite | 🟢 | Desktop and ROG Ally X, reported by players. |
-| SteamOS | 🟠 | Tested in a VM; a real Steam Deck is next. |
+| Bazzite | 🟢 | install-script, Desktop and ROG Ally X, reported by players. |
+| SteamOS | 🟠 | install-script, Tested in a VM; a real Steam Deck is next. |
 | Nobara | 🟠 | |
-| Debian | 🟢 | Tested in a VM. |
-| Ubuntu | 🟠 | |
-| Linux Mint | 🟠 | |
-| Pop!_OS | 🟠 | |
-| openSUSE Tumbleweed | 🟠 | |
-| NixOS | 🟠 | |
+| Debian | 🟢 | deb file, Tested in a VM. |
+| Ubuntu | 🟠 | not tested yet but should work with deb file |
+| Linux Mint | 🟠 | same as ubuntu |
+| Pop!_OS | 🟠 | same as ubuntu |
+| openSUSE Tumbleweed | 🟠 | not tested yet |
+| NixOS | 🟠 | not tested yet |
 
 Running it on something else, or on one of the orange ones? Tell me how it
 went in [Discord](https://discord.gg/vtTgmUV9Bq) or through the in-app
