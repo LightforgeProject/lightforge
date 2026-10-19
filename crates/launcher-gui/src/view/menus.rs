@@ -312,7 +312,12 @@ impl Lightforge {
         let face = focus::ring(focus::Target::Key(format!("picker {key}")), focus::Press::Send(toggle), face);
 
         let menu = (self.picker_open.as_ref() == Some(&key)).then(|| {
-            let mut rows = column![].spacing(theme::XS).width(Length::Fixed(240.0));
+            // As wide as the button it opens from, where that has a width.
+            let menu_width = match width {
+                Length::Fixed(button) => (button - 2.0 * theme::XS).max(240.0),
+                _ => 240.0,
+            };
+            let mut rows = column![].spacing(theme::XS).width(Length::Fixed(menu_width));
             for option in options {
                 let chosen = Message::Picked(Box::new(on_pick(option.clone())));
                 let name = option.to_string();

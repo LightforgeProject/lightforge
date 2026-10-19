@@ -1060,11 +1060,12 @@ impl Lightforge {
         if let Some(open) = &self.wizard {
             let card = wizard::view(self, open);
             // An open dropdown closes on a click anywhere else, as it does
-            // on every other page.
-            let card = match self.panel_open() {
-                true => Element::from(mouse_area(card).on_press(Message::Dismiss)),
+            // on every other page. Wrapped either way: see below.
+            let card = mouse_area(card);
+            let card = Element::from(match self.panel_open() {
+                true => card.on_press(Message::Dismiss),
                 false => card,
-            };
+            });
             return focus::root(self.with_hints(
                 container(card).width(Length::Fill).height(Length::Fill).style(theme::backdrop).into(),
             ));
@@ -1164,10 +1165,16 @@ impl Lightforge {
         // hands the event to its child first and only fires when the child
         // ignored it, so a button still does its own job rather than being
         // swallowed by the dismissal.
-        let screen = match self.panel_open() {
-            true => Element::from(mouse_area(screen).on_press(Message::Dismiss)),
+        //
+        // Wrapped whether or not anything is open, and only the press comes
+        // and goes. Adding the wrapper when a dropdown opened changed the
+        // widget tree above the page, iced dropped the page's scroll state,
+        // and Settings jumped back to the top.
+        let screen = mouse_area(screen);
+        let screen = Element::from(match self.panel_open() {
+            true => screen.on_press(Message::Dismiss),
             false => screen,
-        };
+        });
 
         // The lit corner goes behind everything, last, so every screen gets it
         // and nothing has to opt in. Where a page lays key art over the whole

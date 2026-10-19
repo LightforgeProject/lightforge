@@ -785,8 +785,10 @@ impl Lightforge {
                     Some(ChannelChoice(self.config.addon_channel)),
                     "",
                     Message::AddonChannelDefault,
-                    Length::Shrink,
-                    theme::LABEL,
+                    // The Proton pickers' size, so every dropdown on the page
+                    // is one width and one text size.
+                    Length::Fixed(260.0),
+                    theme::BODY,
                 ),
             ),
             setting(
