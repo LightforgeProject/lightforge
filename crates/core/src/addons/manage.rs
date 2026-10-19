@@ -64,6 +64,9 @@ pub struct Unavailable {
     /// The project page. For an opt-out this is the *only* way to get the
     /// addon, so a UI should offer to open it rather than just explaining.
     pub website_url: Option<String>,
+    /// `owner/repo` of the author's own GitHub releases, for an opt-out whose
+    /// project names one. See [`Resolved::github_repo`].
+    pub github: Option<String>,
 }
 
 /// What a run achieved.
@@ -139,6 +142,7 @@ pub async fn install_all(
                 name,
                 reason,
                 website_url: entry.website_url.clone(),
+                github: entry.github_repo(),
             });
             continue;
         }
@@ -184,6 +188,7 @@ pub async fn install_all(
                     name,
                     reason,
                     website_url: entry.website_url.clone(),
+                    github: None,
                 });
             }
         }
@@ -1327,6 +1332,7 @@ mod tests {
             name: "EXCore".into(),
             reason: "opted out".into(),
             website_url: Some("https://curseforge.com/x".into()),
+            github: None,
         });
         assert!(!report.is_complete());
     }

@@ -50,6 +50,41 @@ pub struct Listing {
     pub downloads: u64,
     #[serde(default)]
     pub website_url: Option<String>,
+    /// The author turned third-party downloads off, so Install cannot work.
+    /// Known ahead of time only for CurseForge, and only from a proxy new
+    /// enough to say.
+    #[serde(default)]
+    pub opted_out: bool,
+    /// `owner/repo` of the author's own GitHub releases, for an opt-out.
+    /// See [`crate::addons::Resolved::github_repo`].
+    #[serde(default)]
+    pub github: Option<String>,
+}
+
+impl Listing {
+    fn from_project(p: crate::addons::catalog::Project) -> Self {
+        let github = p.opted_out.then(|| p.source_url.as_deref().and_then(github_repo_of)).flatten();
+        Listing {
+            provider: Provider::Curse,
+            id: p.id,
+            name: p.name,
+            author: p.authors.first().cloned(),
+            version: None,
+            downloads: p.download_count,
+            website_url: p.website_url,
+            opted_out: p.opted_out,
+            github,
+        }
+    }
+}
+
+/// `owner/repo` when `url` is a GitHub repository, the only kind of source
+/// link the GitHub provider can install from.
+pub fn github_repo_of(url: &str) -> Option<String> {
+    match query_from_url(url)? {
+        (Provider::GitHub, repo) => Some(repo),
+        _ => None,
+    }
 }
 
 /// A WoWInterface catalogue entry.
@@ -133,15 +168,7 @@ pub async fn search(
     }
     if let Some(catalog) = catalog {
         match catalog.search(http, flavor, query, limit).await {
-            Ok(projects) => results.extend(projects.into_iter().map(|p| Listing {
-                provider: Provider::Curse,
-                id: p.id,
-                name: p.name,
-                author: p.authors.first().cloned(),
-                version: None,
-                downloads: p.download_count,
-                website_url: p.website_url,
-            })),
+            Ok(projects) => results.extend(projects.into_iter().map(Listing::from_project)),
             Err(e) => problems.push(format!("CurseForge: {e}")),
         }
     }
@@ -189,15 +216,7 @@ pub async fn popular(
     }
     if let Some(catalog) = catalog {
         if let Ok(projects) = catalog.search(http, flavor, "", limit).await {
-            results.extend(projects.into_iter().map(|p| Listing {
-                provider: Provider::Curse,
-                id: p.id,
-                name: p.name,
-                author: p.authors.first().cloned(),
-                version: None,
-                downloads: p.download_count,
-                website_url: p.website_url,
-            }));
+            results.extend(projects.into_iter().map(Listing::from_project));
         }
     }
 
@@ -228,6 +247,8 @@ fn top_wowi(entries: &[WowiEntry], flavor: &str, limit: usize) -> Vec<Listing> {
             version: e.version.clone(),
             downloads: e.downloads,
             website_url: e.file_info_uri.clone(),
+            opted_out: false,
+            github: None,
         })
         .collect()
 }
@@ -300,6 +321,8 @@ fn search_wowi(entries: &[WowiEntry], query: &str, flavor: &str) -> Vec<Listing>
             version: e.version.clone(),
             downloads: e.downloads,
             website_url: e.file_info_uri.clone(),
+            opted_out: false,
+            github: None,
         })
         .collect()
 }
@@ -318,6 +341,8 @@ fn search_tukui(entries: &[TukuiEntry], query: &str) -> Vec<Listing> {
             version: e.version.clone(),
             downloads: 0,
             website_url: e.web_url.clone(),
+            opted_out: false,
+            github: None,
         })
         .collect()
 }
@@ -401,6 +426,8 @@ fn github_direct(query: &str) -> Option<Listing> {
         version: None,
         downloads: 0,
         website_url: Some(format!("https://github.com/{query}")),
+        opted_out: false,
+        github: None,
     })
 }
 

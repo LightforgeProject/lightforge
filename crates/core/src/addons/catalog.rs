@@ -137,6 +137,20 @@ impl Resolved {
             Status::NotFound => Some("this project no longer exists".to_owned()),
         }
     }
+
+    /// The author's own GitHub repository, `owner/repo`, for an opt-out.
+    ///
+    /// Offered as a button the user presses, never followed on their behalf:
+    /// the opt-out is the author saying no to downloads through someone
+    /// else's catalogue, and quietly switching sources because of it would
+    /// be ignoring that. A release the author published themselves, fetched
+    /// because the user asked for it, is the author's own channel.
+    pub fn github_repo(&self) -> Option<String> {
+        if self.status != Status::OptOut {
+            return None;
+        }
+        super::browse::github_repo_of(self.source_url.as_deref()?)
+    }
 }
 
 /// One addon to resolve.
@@ -202,6 +216,10 @@ pub struct Project {
     /// [`crate::addons::browse`].
     #[serde(default)]
     pub download_count: u64,
+    /// The author turned third-party downloads off. Absent on an older proxy,
+    /// which leaves it to resolve to find out.
+    #[serde(default)]
+    pub opted_out: bool,
 }
 
 /// A project the catalog recognised from a folder's fingerprint.
@@ -540,6 +558,25 @@ mod tests {
         assert!(reason.contains("project page"), "{reason}");
         // The website is what makes it actionable.
         assert!(entry.website_url.is_some());
+    }
+
+    #[test]
+    fn only_an_opt_out_offers_the_authors_github() {
+        let dbm = "https://github.com/DeadlyBossMods/DeadlyBossMods";
+        let mut entry = resolved(Status::OptOut, None);
+        entry.source_url = Some(dbm.into());
+        assert_eq!(entry.github_repo().as_deref(), Some("DeadlyBossMods/DeadlyBossMods"));
+
+        // Anything that downloads already has no business with a second source.
+        let mut ok = resolved(Status::Ok, Some("https://edge.forgecdn.net/x.zip"));
+        ok.source_url = Some(dbm.into());
+        assert_eq!(ok.github_repo(), None);
+
+        // A repository somewhere else is not something the GitHub provider reads.
+        entry.source_url = Some("https://gitlab.com/someone/addon".into());
+        assert_eq!(entry.github_repo(), None);
+        entry.source_url = None;
+        assert_eq!(entry.github_repo(), None);
     }
 
     #[test]

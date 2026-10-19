@@ -767,6 +767,9 @@ enum Message {
     OpenAddonsDir,
     AddonRemoved(Result<Vec<String>, String>),
     OpenUrl(String),
+    /// Drop one "could not install" row. It is a report, not a record:
+    /// nothing was installed, so there is nothing to remove but the line.
+    DismissUnavailable(String),
 
     AddonTab(AddonTab),
     /// The channel every addon follows unless it has one of its own.
@@ -3836,6 +3839,13 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::DismissUnavailable(name) => {
+                if let Some(report) = &mut self.addon_report {
+                    report.unavailable.retain(|item| item.name != name);
+                }
+                Task::none()
+            }
+
             Message::DismissUpdate => {
                 if let Some(available) = self.update_notice.take() {
                     self.config.update_seen = Some(available.latest);
@@ -5555,6 +5565,7 @@ impl Lightforge {
                 self.addon_rx = Some(rx);
                 self.addons_busy = true;
                 self.addon_report = None;
+                self.addon_report_tab = self.addon_tab;
                 self.error = None;
 
                 Task::perform(
@@ -10797,27 +10808,7 @@ impl Lightforge {
             body = body.push(muted(note.clone(), theme::CAPTION));
         }
 
-        if let Some(report) =
-            self.addon_report.as_ref().filter(|_| self.addon_report_tab == AddonTab::Mine)
-        {
-            for item in &report.unavailable {
-                let mut line = row![column![
-                    text(item.name.clone()).size(theme::BODY),
-                    muted(item.reason.clone(), theme::CAPTION),
-                ]
-                .spacing(theme::XS)]
-                .spacing(theme::SM)
-                .align_y(Alignment::Center);
-
-                line = line.push(Space::new().width(Length::Fill));
-                if let Some(url) = &item.website_url {
-                    line = line.push(
-                        secondary("Open page", Message::OpenUrl(url.clone())).enabled(true),
-                    );
-                }
-                body = body.push(container(line).padding(theme::MD).style(theme::row));
-            }
-        }
+        body = body.extend(self.unavailable_rows(AddonTab::Mine));
 
         if self.addons.rows.is_empty() {
             body = body.push(empty(
@@ -11150,27 +11141,7 @@ impl Lightforge {
 
         // What an import could not resolve belongs with the import that could
         // not resolve it, not scattered through the installed list.
-        if let Some(report) =
-            self.addon_report.as_ref().filter(|_| self.addon_report_tab == AddonTab::Import)
-        {
-            for item in &report.unavailable {
-                let mut line = row![column![
-                    text(item.name.clone()).size(theme::BODY),
-                    muted(item.reason.clone(), theme::CAPTION),
-                ]
-                .spacing(theme::XS)]
-                .spacing(theme::SM)
-                .align_y(Alignment::Center);
-
-                line = line.push(Space::new().width(Length::Fill));
-                if let Some(url) = &item.website_url {
-                    line = line.push(
-                        secondary("Open page", Message::OpenUrl(url.clone())).enabled(true),
-                    );
-                }
-                body = body.push(container(line).padding(theme::MD).style(theme::row));
-            }
-        }
+        body = body.extend(self.unavailable_rows(AddonTab::Import));
 
         body.into()
     }
@@ -11239,6 +11210,48 @@ impl Lightforge {
         column![box_].spacing(theme::SM).into()
     }
 
+    /// What the last addon run could not install, shown on the tab it was
+    /// started from: a refusal from Browse belongs beside the search that
+    /// produced it, not on a page of addons it never became.
+    fn unavailable_rows(&self, tab: AddonTab) -> Vec<Element<'_, Message>> {
+        let Some(report) = self.addon_report.as_ref().filter(|_| self.addon_report_tab == tab) else {
+            return Vec::new();
+        };
+        report
+            .unavailable
+            .iter()
+            .map(|item| {
+                let mut line = row![column![
+                    text(item.name.clone()).size(theme::BODY),
+                    muted(item.reason.clone(), theme::CAPTION),
+                ]
+                .spacing(theme::XS)]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center);
+
+                line = line.push(Space::new().width(Length::Fill));
+                if let Some(repo) = &item.github {
+                    line = line.push(
+                        secondary(
+                            "Get it from GitHub",
+                            Message::InstallAddon("github".to_owned(), repo.clone()),
+                        )
+                        .enabled(!self.addons_locked()),
+                    );
+                }
+                if let Some(url) = &item.website_url {
+                    line = line.push(
+                        secondary("Open page", Message::OpenUrl(url.clone())).enabled(true),
+                    );
+                }
+                line = line.push(
+                    secondary("Dismiss", Message::DismissUnavailable(item.name.clone())).enabled(true),
+                );
+                container(line).padding(theme::MD).style(theme::row).into()
+            })
+            .collect()
+    }
+
     fn addons_browse(&self) -> Element<'_, Message> {
         let search = container(
             column![
@@ -11276,6 +11289,7 @@ impl Lightforge {
         for problem in &self.search.problems {
             body = body.push(text(format!("⚠ {problem}")).size(theme::CAPTION).color(theme::UPDATE));
         }
+        body = body.extend(self.unavailable_rows(AddonTab::Browse));
 
         if self.searching {
             body = body.push(muted("searching…".to_owned(), theme::BODY));
@@ -11310,11 +11324,16 @@ impl Lightforge {
 
         for listing in &self.search.listings {
             let provider = listing.provider.as_str().to_owned();
-            let already = installed_ids
-                .iter()
-                .any(|(p, id)| *p == provider && *id == listing.id);
+            // An opted-out project taken from its GitHub instead is installed
+            // under that provider, and is just as installed.
+            let already = installed_ids.iter().any(|(p, id)| {
+                (*p == provider && *id == listing.id)
+                    || listing.github.as_deref().is_some_and(|repo| {
+                        p.eq_ignore_ascii_case("github") && id.eq_ignore_ascii_case(repo)
+                    })
+            });
 
-            let mut line = row![column![
+            let mut info = column![
                 row![
                     text(listing.name.clone()).size(theme::BODY),
                     pill(provider.clone(), theme::ACCENT),
@@ -11333,9 +11352,14 @@ impl Lightforge {
                     theme::CAPTION,
                 ),
             ]
-            .spacing(theme::XS)]
-            .spacing(theme::SM)
-            .align_y(Alignment::Center);
+            .spacing(theme::XS);
+            if listing.opted_out {
+                info = info.push(opted_out_note(match listing.github {
+                    Some(_) => "the author has disabled third-party downloads, but publishes it on GitHub",
+                    None => "the author has disabled third-party downloads",
+                }));
+            }
+            let mut line = row![info].spacing(theme::SM).align_y(Alignment::Center);
 
             line = line.push(Space::new().width(Length::Fill));
             // "Details" where there is something to show and "Page" where
@@ -11358,9 +11382,16 @@ impl Lightforge {
                     }
                 }
             }
-            line = line.push(match already {
-                true => tag("Installed".to_owned(), theme::OK),
-                false => action_button(
+            line = line.push(match (already, listing.opted_out, &listing.github) {
+                (true, ..) => tag("Installed".to_owned(), theme::OK),
+                (false, true, Some(repo)) => action_button(
+                    "Get it from GitHub",
+                    theme::INSTALL,
+                    Message::InstallAddon("github".to_owned(), repo.clone()),
+                )
+                .enabled(!self.addons_locked()),
+                (false, true, None) => tag("Page only".to_owned(), theme::MUTED),
+                (false, false, _) => action_button(
                     "Install",
                     theme::INSTALL,
                     Message::InstallAddon(provider.clone(), listing.id.clone()),
@@ -13091,14 +13122,47 @@ impl Lightforge {
             footer =
                 footer.push(secondary("Support the author", Message::OpenUrl(url)).enabled(true));
         }
+        let project = detail.loaded.as_ref().map(|d| &d.project);
+        let opted_out = project.is_some_and(|p| p.opted_out);
+        let github = project
+            .filter(|p| p.opted_out)
+            .and_then(|p| p.source_url.as_deref())
+            .and_then(lightforge_core::addons::browse::github_repo_of);
+        if opted_out {
+            body = body.push(
+                text(match github {
+                    Some(_) => "The author has disabled third-party downloads from CurseForge. \
+                                They publish it on GitHub too, which is where Lightforge can get it.",
+                    None => "The author has disabled third-party downloads. It can only be \
+                             installed from the project page.",
+                })
+                .size(theme::LABEL)
+                .color(theme::UPDATE),
+            );
+        }
         if !installed {
-            let install: Element<'static, Message> = action_button(
-                "Install",
-                theme::INSTALL,
-                Message::InstallAddon(detail.provider.clone(), detail.id.clone()),
-            )
-            .enabled(!self.addons_locked());
-            footer = footer.push(install);
+            let install: Option<Element<'static, Message>> = match (opted_out, github) {
+                (false, _) => Some(
+                    action_button(
+                        "Install",
+                        theme::INSTALL,
+                        Message::InstallAddon(detail.provider.clone(), detail.id.clone()),
+                    )
+                    .enabled(!self.addons_locked()),
+                ),
+                (true, Some(repo)) => Some(
+                    action_button(
+                        "Get it from GitHub",
+                        theme::INSTALL,
+                        Message::InstallAddon("github".to_owned(), repo),
+                    )
+                    .enabled(!self.addons_locked()),
+                ),
+                (true, None) => None,
+            };
+            if let Some(install) = install {
+                footer = footer.push(install);
+            }
         }
         footer = footer.push(secondary("Close", Message::CloseAddonDetail).enabled(true));
         body = body.push(footer);
@@ -14862,6 +14926,11 @@ fn action_button(label: &str, color: iced::Color, message: Message) -> Action<'s
             .padding(theme::tap([theme::SM, theme::MD])),
         message,
     }
+}
+
+/// The line under a Browse hit whose author turned third-party downloads off.
+fn opted_out_note(words: &'static str) -> Element<'static, Message> {
+    text(words).size(theme::CAPTION).color(theme::UPDATE).into()
 }
 
 /// The quieter button: same size as [`action_button`], different colour.
