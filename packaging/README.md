@@ -12,6 +12,7 @@ packaging/
 ├── installer/
 │   ├── lightforge-installer.desktop      the double-click installer
 │   └── install.sh                        what it runs, fetched from main
+├── rpm/lightforge.spec                   the Fedora COPR package, from source
 └── aur/
     ├── lightforge/PKGBUILD               builds from the tagged source
     └── lightforge-bin/PKGBUILD           installs the released binaries
@@ -159,6 +160,53 @@ tag exists, because the sums are of files GitHub has not generated yet:
   to anything produced locally. `updpkgsums` fetches it and fills it in.
 - `lightforge-bin` hashes the tarball `make packages` just built, so its sum
   is already in `target/dist/SHA256SUMS`.
+
+Last, trigger the COPR build (see below). It fetches the tag from GitHub, so
+it has to come after the push to `github`.
+
+## Fedora COPR
+
+`packaging/rpm/lightforge.spec` builds from the tag's source archive on
+GitHub, so COPR compiles it against each Fedora release's own libraries. The
+glibc floor that the deb and the rpm in `target/dist` need does not apply to it.
+`.copr/Makefile` is COPR's entry point: it downloads that archive and packs the
+source RPM.
+
+Users install it with:
+
+```bash
+sudo dnf copr enable <copr-user>/lightforge
+sudo dnf install lightforge
+```
+
+**The project, set up once** at copr.fedorainfracloud.org:
+
+- New Project `lightforge`, chroots `fedora-*-x86_64` (x86_64 only, because
+  Proton is), and **"Enable internet access during builds"** ticked. Cargo
+  fetches the crates against the tag's `Cargo.lock`, and without network the
+  build dies at the first one.
+- Packages → New Package → **SCM**: clone URL
+  `https://github.com/LightforgeProject/lightforge`, committish `main`,
+  build method **make_srpm**. Leave the spec field empty: `.copr/Makefile`
+  names it.
+
+**Each release:**
+
+1. Before tagging, set `%global upstream_version` in the spec to the new
+   version and add a `%changelog` entry. `make packages` refuses to run
+   (`check-spec`) while the spec and `Cargo.toml` disagree.
+2. After the tag is on GitHub and `main` has been pushed there, go to
+   Packages → lightforge → **Rebuild** (or run `copr-cli buildscm`). The
+   spec on `main` names the tag, so building from `dev` would fetch a tag
+   that might not exist yet.
+
+Verified locally the way COPR runs it, with the spec and `.copr/` copied into
+a `fedora:43` container:
+
+```bash
+make -f .copr/Makefile srpm outdir=/out spec=packaging/rpm/lightforge.spec
+dnf builddep /out/*.src.rpm && rpmbuild --rebuild /out/*.src.rpm
+```
 
 ## The AUR, when it will have us
 

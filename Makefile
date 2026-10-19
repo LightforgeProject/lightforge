@@ -30,7 +30,7 @@ BINARIES := lightforge lightforge-gui
 
 .PHONY: release image check-glibc clean-release cli-doc check-cli-doc \
 	packages deb rpm tarball installer checksums github-names check-binaries \
-	clean-packages install uninstall
+	check-spec clean-packages install uninstall
 
 ## Build release binaries against an old glibc, and verify they are portable.
 release: image
@@ -126,7 +126,7 @@ uninstall:
 ## rebuilding 27 MB of GUI three times to produce three files from the same
 ## two binaries is a minute nobody needs to spend. Run `make release` first —
 ## each target checks the binaries are there.
-packages: tarball deb rpm installer checksums
+packages: check-spec tarball deb rpm installer checksums
 	@echo
 	@echo "Release artifacts in $(DIST):"
 	@ls -lh $(DIST) | awk 'NR>1 {print "  " $$9 "  " $$5}'
@@ -213,6 +213,13 @@ check-binaries:
 	  [ "$$got" = "$$want" ] || { echo "$$bin reports '$$got', expected '$$want' — run \`make release\`"; exit 1; }; \
 	done
 	@echo "ok   binaries are $(VERSION)"
+
+## The COPR spec carries its version by hand, because COPR builds it from git
+## and never sees this Makefile. Caught here so a release cannot forget it.
+check-spec:
+	@got=$$(sed -n 's/^%global upstream_version //p' packaging/rpm/lightforge.spec); \
+	[ "$$got" = "$(VERSION)" ] || { echo "packaging/rpm/lightforge.spec is $$got, Cargo.toml is $(VERSION)"; exit 1; }
+	@echo "ok   spec is $(VERSION)"
 
 clean-packages:
 	rm -rf $(DIST) target/tarball target/debian target/container/generate-rpm
