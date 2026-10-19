@@ -1455,6 +1455,26 @@ pub async fn installed_versions(layout: Layout) -> HashMap<String, String> {
     .unwrap_or_default()
 }
 
+/// When Agent's registry last changed, and, when asked, whether the
+/// Battle.net client is up. Polled while [`RegistryWatch`] runs: a stat is
+/// nothing, the process scan is ~60 ms, so the caller asks for it rarely.
+///
+/// [`RegistryWatch`]: crate::RegistryWatch
+pub async fn registry_probe(
+    layout: Layout,
+    check_client: bool,
+) -> (Option<std::time::SystemTime>, Option<bool>) {
+    tokio::task::spawn_blocking(move || {
+        let stamp = std::fs::metadata(layout.agent_dir().join("product.db"))
+            .and_then(|m| m.modified())
+            .ok();
+        let running = check_client.then(|| lightforge_core::preflight::client_running(&layout));
+        (stamp, running)
+    })
+    .await
+    .unwrap_or((None, None))
+}
+
 /// Open Battle.net with no product: the way to reach everything outside the
 /// WoW family.
 ///

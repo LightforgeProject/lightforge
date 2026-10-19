@@ -452,6 +452,11 @@ enum Message {
     ToggleHints,
     /// What Battle.net reports as installed, for the catalog's labels.
     InstalledVersions(HashMap<String, String>),
+    /// Time to look at Agent's registry again; see [`RegistryWatch`].
+    RegistryPoll,
+    /// When the registry last changed, and whether the client is up, when
+    /// that was asked.
+    RegistryPolled(Option<std::time::SystemTime>, Option<bool>),
     /// The product codes Battle.net's own config uses.
     KnownCodes(Vec<String>),
     /// Tick or untick "never show this again" on the release-notes popup.
@@ -1231,6 +1236,40 @@ enum AddonTab {
     Export,
 }
 
+/// Agent's registry, watched while Battle.net may be writing to it.
+///
+/// The registry is what turns "Install via Battle.net" into "Play via
+/// Battle.net", and Battle.net writes it whenever it likes: a game installed
+/// before Lightforge only lands there once the client has run and found it,
+/// seconds after "Open Battle.net" has already returned. Read only at launch
+/// boundaries, that took a restart to show. So while the client may be up the
+/// file's timestamp is checked every [`REGISTRY_POLL`], and the registry is
+/// read again only when it moved.
+///
+/// Stops once the client has been seen and is gone, or after
+/// [`REGISTRY_GRACE`] without it ever appearing, so an idle dashboard goes
+/// back to waking for nothing.
+#[derive(Debug, Clone)]
+struct RegistryWatch {
+    since: Instant,
+    stamp: Option<std::time::SystemTime>,
+    seen_client: bool,
+    polls: u32,
+}
+
+/// How often the registry's timestamp is checked while it is watched.
+const REGISTRY_POLL: Duration = Duration::from_secs(2);
+/// Every how many polls the process table is scanned for the client.
+const REGISTRY_CLIENT_EVERY: u32 = 5;
+/// How long a watch waits for a client that never shows up.
+const REGISTRY_GRACE: Duration = Duration::from_secs(120);
+
+impl RegistryWatch {
+    fn new() -> Self {
+        Self { since: Instant::now(), stamp: None, seen_client: false, polls: 0 }
+    }
+}
+
 /// Which screen is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Screen {
@@ -1787,6 +1826,8 @@ struct Lightforge {
     repairing: Option<ProductCode>,
     /// Versions Battle.net reports installed, read when the catalog opens.
     installed_versions: HashMap<String, String>,
+    /// Agent's registry is being watched for Battle.net writing to it.
+    registry_watch: Option<RegistryWatch>,
     /// Product codes Battle.net itself uses, folded into the catalog.
     known_codes: Vec<String>,
     /// Transfers paused for a play session, to be put back afterwards.
@@ -2109,6 +2150,10 @@ impl Lightforge {
             scan_for: None,
             repairing: None,
             installed_versions: HashMap::new(),
+            // From the start: a client left running from before, or the
+            // first one after an install that predates Lightforge, writes
+            // the registry with nobody having pressed anything here.
+            registry_watch: Some(RegistryWatch::new()),
             known_codes: Vec::new(),
             resume_after_play: Vec::new(),
             saved_queue: transfers::Queue::default(),
@@ -2596,6 +2641,10 @@ impl Lightforge {
     /// Start what a finished pre-flight cleared the way for.
     fn start_launch(&mut self, what: Launch) -> Task<Message> {
         let code = self.launching.clone().unwrap_or_else(|| self.selected.code.clone());
+        if what != Launch::Game {
+            // Kept if one is running: its timestamp is still the last read.
+            self.registry_watch.get_or_insert_with(RegistryWatch::new).since = Instant::now();
+        }
 
         // The long wait starts here, so say what it actually is. The
         // old code left "pre-flight…" on screen for the whole session
@@ -3757,6 +3806,47 @@ impl Lightforge {
             Message::InstalledVersions(found) => {
                 self.installed_versions = found;
                 Task::none()
+            }
+
+            Message::RegistryPoll => {
+                let Some(watch) = &mut self.registry_watch else { return Task::none() };
+                watch.polls += 1;
+                let check_client = watch.polls % REGISTRY_CLIENT_EVERY == 0;
+                Task::perform(tasks::registry_probe(self.layout.clone(), check_client), |(stamp, running)| {
+                    Message::RegistryPolled(stamp, running)
+                })
+            }
+
+            Message::RegistryPolled(stamp, running) => {
+                let Some(watch) = &mut self.registry_watch else { return Task::none() };
+                let changed = watch.stamp != stamp;
+                watch.stamp = stamp;
+                match running {
+                    Some(true) => watch.seen_client = true,
+                    Some(false) if watch.seen_client || watch.since.elapsed() > REGISTRY_GRACE => {
+                        self.registry_watch = None;
+                    }
+                    _ => {}
+                }
+                match changed {
+                    // The game families come from the client's cached
+                    // catalogue, which the same session fills.
+                    true => Task::batch([
+                        Task::perform(
+                            tasks::installed_versions(self.layout.clone()),
+                            Message::InstalledVersions,
+                        ),
+                        Task::perform(
+                            tasks::game_families(
+                                self.layout.clone(),
+                                self.config.prefix_user.clone(),
+                                self.config.region,
+                            ),
+                            |families| Message::FamiliesRead(Box::new(families)),
+                        ),
+                    ]),
+                    false => Task::none(),
+                }
             }
 
             Message::KnownCodes(codes) => {
@@ -7200,6 +7290,11 @@ impl Lightforge {
             false => Subscription::none(),
         };
 
+        let registry = match self.registry_watch.is_some() {
+            true => iced::time::every(REGISTRY_POLL).map(|_| Message::RegistryPoll),
+            false => Subscription::none(),
+        };
+
         // The splash's bar sweeps off the clock, so it needs the tick as much
         // as a live transfer does.
         match self.splash.is_some()
@@ -7218,9 +7313,12 @@ impl Lightforge {
                 resizes,
                 dragging,
                 pointing,
+                registry,
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),
             ]),
-            false => Subscription::batch([closing, hints, pads, window_focus, resizes, dragging, pointing]),
+            false => Subscription::batch([
+                closing, hints, pads, window_focus, resizes, dragging, pointing, registry,
+            ]),
         }
     }
 
@@ -15715,6 +15813,35 @@ mod tests {
         };
         let p = job_progress(Job::default(), &sample, 0);
         assert_eq!((p.downloaded_bytes, p.total_bytes), (500, 1000));
+    }
+
+    /// A game installed before Lightforge reached Battle.net's registry only
+    /// once the client had run, and the tile kept saying Install until a
+    /// restart. The watch re-reads on a changed timestamp, and stands down
+    /// once the client it saw has gone.
+    #[test]
+    fn the_registry_is_read_again_when_battle_net_changes_it() {
+        let (mut app, _) = Lightforge::new();
+        assert!(app.registry_watch.is_some(), "watched from the start");
+        let t0 = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        let t1 = t0 + Duration::from_secs(5);
+
+        let _ = app.update(Message::RegistryPolled(Some(t0), Some(true)));
+        assert_eq!(app.registry_watch.as_ref().unwrap().stamp, Some(t0));
+        assert!(app.registry_watch.as_ref().unwrap().seen_client);
+
+        // Battle.net wrote the file: the stamp moves, the watch keeps going.
+        let _ = app.update(Message::RegistryPolled(Some(t1), None));
+        assert_eq!(app.registry_watch.as_ref().unwrap().stamp, Some(t1));
+
+        // The client it saw has closed: nothing left to watch for.
+        let _ = app.update(Message::RegistryPolled(Some(t1), Some(false)));
+        assert!(app.registry_watch.is_none());
+
+        // A client not up *yet* is not a reason to stop: Wine takes seconds.
+        app.registry_watch = Some(RegistryWatch::new());
+        let _ = app.update(Message::RegistryPolled(None, Some(false)));
+        assert!(app.registry_watch.is_some());
     }
 
     /// A game whose drive is away is held, whatever the last refresh thought
