@@ -129,6 +129,14 @@ fn executable_name(argv: &[std::ffi::OsString], fallback: &str) -> String {
         .to_owned()
 }
 
+/// `C:\...` or anything ending `.exe`: what Wine puts in `argv[0]`.
+fn is_windows_exe(argv0: &std::ffi::OsString) -> bool {
+    let argv0 = argv0.to_string_lossy();
+    let bytes = argv0.as_bytes();
+    let drive = bytes.len() > 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    drive || argv0.to_ascii_lowercase().ends_with(".exe")
+}
+
 fn is_cef_child_arg(arg: &std::ffi::OsString) -> bool {
     arg.to_string_lossy().starts_with("--type=")
 }
@@ -582,7 +590,13 @@ const HANDOFF_POLL: Duration = Duration::from_millis(500);
 /// the hand-off starts, but Wine spawns services on demand too, and a
 /// `winedevice.exe` that appears two seconds after the click would otherwise
 /// be reported as the game and "played" for a quarter of a second.
-const WINE_SERVICES: [&str; 12] = [
+///
+/// The last three are Proton's rather than Wine's: `steam.exe` is the shim
+/// every `proton run` goes through, `xalia.exe` is the accessibility helper
+/// GE-Proton starts beside it, and `lsass.exe` is started on demand by a
+/// login. All three outlive the game, and counted as one they kept the prefix
+/// "busy" for good: every later Play was refused as a game still running.
+const WINE_SERVICES: [&str; 15] = [
     "services",
     "winedevice",
     "plugplay",
@@ -595,6 +609,9 @@ const WINE_SERVICES: [&str; 12] = [
     "winemenubuilder",
     "tabtip",
     "msiexec",
+    "steam",
+    "xalia",
+    "lsass",
 ];
 
 /// A process in the prefix that is neither Battle.net's nor Wine's own.
@@ -653,6 +670,12 @@ fn names_a_game(argv: &[std::ffi::OsString], fallback: &str) -> Option<String> {
     // Anything Battle.net's is accounted for elsewhere; what is left is
     // either Wine's own or the game.
     if ProcKind::classify(argv, fallback).is_some() {
+        return None;
+    }
+    // Proton's own `python3`, and any wrapper such as `gamemoderun`, carries
+    // the prefix in its environment too, but a game under Wine always has a
+    // Windows executable as `argv[0]`.
+    if argv.first().is_some_and(|a| !a.is_empty() && !is_windows_exe(a)) {
         return None;
     }
     let name = executable_name(argv, fallback);
@@ -793,6 +816,19 @@ mod tests {
                 None,
                 "{service} is Wine's, not a game"
             );
+        }
+
+        // What a GE-Proton launch leaves behind after the game has gone,
+        // from a real report: none of it is a game, and all of it counted as
+        // one refused every Play after the first.
+        for (exe, comm) in [
+            (r"C:\windows\system32\steam.exe", "steam.exe"),
+            (r"C:\windows\system32\xalia.exe", "xalia.exe"),
+            (r"C:\windows\system32\lsass.exe", "lsass.exe"),
+            ("python3", "python3"),
+            ("/usr/bin/gamemoderun", "gamemoderun"),
+        ] {
+            assert_eq!(names_a_game(&argv(&[exe, "run"]), comm), None, "{exe} is not a game");
         }
 
         // A browser child of the game is not a second game.
