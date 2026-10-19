@@ -19,6 +19,7 @@
 
 mod addonwork;
 mod art;
+mod fit;
 mod focus;
 mod pad;
 mod popover;
@@ -343,6 +344,7 @@ fn main() -> iced::Result {
         return Ok(());
     }
     tune_allocator();
+    fit::take_over_scale();
     trace::begin();
     // 0.14 takes the boot function where 0.13 took the title, and runs it
     // from `run` rather than `run_with`.
@@ -360,6 +362,9 @@ fn main() -> iced::Result {
     // Annotated: without the type the closure is inferred for one
     // lifetime, and 0.14's `theme` wants it for any.
     .theme(|_state: &Lightforge| theme::base())
+    // 1 everywhere but gamescope, where winit's own guess is pinned off and
+    // this is the whole scale; see [`fit`].
+    .scale_factor(|state: &Lightforge| state.ui_scale)
     // What the surface is cleared to, which is the other half of the splash
     // being a small window. `transparent: true` only gives the surface an
     // alpha channel, iced still clears it to the theme's background, so
@@ -519,6 +524,11 @@ enum Message {
     /// whatever window is in front, so this is what keeps it from steering
     /// the launcher behind a running game.
     WindowFocused(bool),
+    /// The window changed size, under gamescope only; see [`fit`].
+    WindowResized,
+    /// The window's height in points, and the [`Lightforge::ui_scale_gen`]
+    /// it was asked under.
+    WindowHeight(u64, f32),
     /// An arrow key: move the selection ring; see [`focus`].
     FocusStep(focus::Step),
     /// Enter: press the control with the ring on it.
@@ -1823,6 +1833,11 @@ struct Lightforge {
     /// The small window the app opens in. `None` once it has grown into the
     /// launcher, which happens exactly once per run.
     splash: Option<Splash>,
+    /// The UI scale under gamescope, from the window's height; 1 elsewhere.
+    ui_scale: f32,
+    /// Bumped on every change to `ui_scale`, so a height read under the old
+    /// one is recognised and asked for again.
+    ui_scale_gen: u64,
     /// Live setup progress, sampled off the same tick as a download.
     setup_rx: Option<tokio::sync::watch::Receiver<provision::Progress>>,
     setup_sample: provision::Progress,
@@ -2110,6 +2125,8 @@ impl Lightforge {
             wizard: None,
             patch_notes: None,
             splash: None,
+            ui_scale: 1.0,
+            ui_scale_gen: 0,
             setup_rx: None,
             setup_sample: provision::Progress::default(),
             setup_running: false,
@@ -6115,6 +6132,38 @@ impl Lightforge {
                 Task::none()
             }
 
+            // Sizes arrive in points, converted with whatever scale iced had
+            // applied by then, and a reading taken across a scale change
+            // carries the old one (measured: 1080 px read back as 1458 and a
+            // scale of 1.8). So each reading is tagged with the generation it
+            // was asked under, a stale one is asked for again, and a fresh
+            // one, a moment after the change has been applied, times
+            // `ui_scale` is the pixels.
+            Message::WindowResized => {
+                let generation = self.ui_scale_gen;
+                Task::perform(
+                    async { tokio::time::sleep(std::time::Duration::from_millis(50)).await },
+                    |()| (),
+                )
+                .then(|()| iced::window::oldest())
+                .and_then(iced::window::size)
+                .map(move |size| Message::WindowHeight(generation, size.height))
+            }
+
+            Message::WindowHeight(generation, _) if generation != self.ui_scale_gen => {
+                Task::done(Message::WindowResized)
+            }
+
+            Message::WindowHeight(_, points) => {
+                let scale = fit::scale_for(points * self.ui_scale);
+                if scale != self.ui_scale {
+                    crate::trace::mark(format!("gamescope: ui scale {} -> {scale}", self.ui_scale));
+                    self.ui_scale = scale;
+                    self.ui_scale_gen += 1;
+                }
+                Task::none()
+            }
+
             Message::WindowFocused(focused) => {
                 self.window_focused = focused;
                 Task::none()
@@ -7109,6 +7158,9 @@ impl Lightforge {
         let window_focus = iced::event::listen_with(|event, _, _| match event {
             iced::Event::Window(iced::window::Event::Focused) => Some(Message::WindowFocused(true)),
             iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::WindowFocused(false)),
+            iced::Event::Window(iced::window::Event::Resized(_)) if fit::owned() => {
+                Some(Message::WindowResized)
+            }
             _ => None,
         });
 
