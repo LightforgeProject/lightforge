@@ -78,6 +78,18 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.0.0-beta.6" date="2026-10-20">
+      <description>
+        <p>
+          A stability release built from bug reports: Battle.net and Scan &amp;
+          Repair no longer refuse to start because of leftover Proton
+          processes, the display fits handhelds in Game Mode, Faugus installs
+          are found, addons with third-party downloads disabled offer their
+          GitHub release, and Settings has a cleaner look.
+        </p>
+      </description>
+      <url>https://github.com/LightforgeProject/lightforge/blob/main/RELEASES.md</url>
+    </release>
     <release version="1.0.0-beta.5" date="2026-10-18">
       <description>
         <p>
