@@ -1,6 +1,37 @@
 # Lightforge release notes
 
 
+## 1.0.0-beta.6
+
+Lightforge 1.0.0-beta.6 is a stability release, built almost entirely from
+your bug reports. Thank you to everyone who sent one.
+
+- Fixed Battle.net and Play refusing to start because "a game is running in
+  the prefix" when no game was running. Helper processes Proton leaves behind
+  after a game closes no longer count as a game.
+- Fixed Scan & Repair refusing to run with "close wineserver first". It now
+  shuts the prefix down by itself, and only asks you to close a running game
+  or Battle.net.
+- Fixed the display scale on handhelds in Game Mode (ROG Ally, Steam Deck and
+  others running through gamescope). Lightforge now fits the screen instead of
+  being drawn several times too large.
+- Games installed before Lightforge, like Diablo IV, now switch from
+  "Install via Battle.net" to "Play via Battle.net" as soon as Battle.net
+  finds them, without restarting Lightforge.
+- Setup now finds WoW installs made with Faugus.
+- The addon manager now marks addons whose authors have disabled third-party
+  downloads, and offers the author's own GitHub release instead where there
+  is one. Addons that could not be installed can now be dismissed.
+- Lightforge is now available from Fedora COPR, so Fedora users can install
+  and update it with dnf.
+- The Settings page has a new, cleaner look: every option has a short
+  description, switches instead of checkboxes, and related options grouped
+  together. Opening a dropdown no longer jumps back to the top, and the list
+  on the left follows you to the last section.
+- Under the hood, the code is now split into smaller files, to make future
+  changes easier and safer.
+
+
 ## 1.0.0-beta.5
 
 Lightforge 1.0.0-beta.5 is a big one: full controller support for the Steam
