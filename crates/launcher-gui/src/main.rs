@@ -1138,23 +1138,42 @@ impl SettingsLayout {
 
     /// The section someone looking at `viewport` is reading, given that the
     /// index marks `marked`.
-    ///
-    /// The first one with more than a sliver still on screen. Except at the
-    /// very bottom of the page, where the last few sections can never reach
-    /// the top at all: there one the index already marks, About after a
-    /// click, keeps its mark for as long as its heading is on screen, instead
-    /// of handing it to whichever longer section ends just above it.
     fn reading(&self, viewport: &scrollable::Viewport, marked: SettingsTab) -> Option<SettingsTab> {
-        let y = viewport.absolute_offset().y;
-        let shown = viewport.bounds().height;
-        let at_end = y + shown >= viewport.content_bounds().height - 1.0;
-        if at_end && self.offset(marked).is_some_and(|top| top >= y && top < y + shown) {
+        self.reading_at(
+            viewport.absolute_offset().y,
+            viewport.bounds().height,
+            viewport.content_bounds().height,
+            marked,
+        )
+    }
+
+    /// [`SettingsLayout::reading`] for a page scrolled to `y`, showing
+    /// `shown` of `height`.
+    ///
+    /// The section under a reading line near the top of the view. Over the
+    /// last screenful of the page that line slides down to the bottom of the
+    /// view, because the last few sections are too short to ever reach the
+    /// top: a fixed line left the mark on Storage with Setup and About in
+    /// full view. Sliding, each later heading takes the mark as it passes,
+    /// and the very bottom marks the last section.
+    ///
+    /// At the very bottom a section the index already marks, Setup after a
+    /// click, keeps its mark while its heading is on screen.
+    fn reading_at(&self, y: f32, shown: f32, height: f32, marked: SettingsTab) -> Option<SettingsTab> {
+        let max = (height - shown).max(0.0);
+        if y >= max - 1.0 && self.offset(marked).is_some_and(|top| top >= y && top < y + shown) {
             return Some(marked);
         }
+        let near_end = match shown > 0.0 {
+            true => (1.0 - (max - y) / shown).clamp(0.0, 1.0),
+            false => 0.0,
+        };
+        let line = y + theme::LG + near_end * (shown - 2.0 * theme::LG).max(0.0);
         self.sections
             .iter()
-            .find(|(_, bounds)| bounds.y - self.top + bounds.height > y + theme::LG)
-            .or(self.sections.last())
+            .rev()
+            .find(|(_, bounds)| bounds.y - self.top <= line)
+            .or(self.sections.first())
             .map(|(tab, _)| *tab)
     }
 }
@@ -11656,37 +11675,50 @@ impl Lightforge {
         // a setting; see `relocate`. Once the prefix is built, the Wine
         // prefix step below says where it is, so nothing is lost by hiding it.
         if self.library_empty && !in_wizard {
-            body = body.push(field_row(
-                "Install to".to_owned(),
-                row![
-                    clickable(
-                        "install location",
-                        text_input("~/Games/Blizzard", &self.location_input)
-                            .on_input(Message::LocationChanged)
-                            .on_submit(Message::UseLocation)
-                            .style(theme::field)
-                            .size(theme::BODY)
-                            .padding(theme::SM),
-                    ),
-                    secondary("Use this location", Message::UseLocation).enabled(true),
-                    secondary("Open folder", Message::OpenLibrary).enabled(true),
-                ]
-                .spacing(theme::SM)
-                .align_y(Alignment::Center)
-                .into(),
-            ));
+            body = body.push(setting_group([
+                setting(
+                    "Install location",
+                    "Battle.net and the Wine prefix go here. Games can go on any drive.",
+                    None,
+                    row![
+                        clickable(
+                            "install location",
+                            text_input("~/Games/Blizzard", &self.location_input)
+                                .on_input(Message::LocationChanged)
+                                .on_submit(Message::UseLocation)
+                                .style(theme::field)
+                                .size(theme::BODY)
+                                .padding(theme::SM)
+                                .width(Length::Fixed(300.0)),
+                        ),
+                        secondary("Use", Message::UseLocation).enabled(true),
+                        secondary("Open folder", Message::OpenLibrary).enabled(true),
+                    ]
+                    .spacing(theme::SM)
+                    .align_y(Alignment::Center),
+                ),
+            ]));
             body = body.extend(self.hint(
                 "Battle.net and the Wine prefix are installed here, and stay here whatever \
                  drives you add later. Games can go on any drive — see Storage.",
             ).map(Element::from));
         }
 
-        let step = |done: bool, label: &'static str, detail: String| {
+        // On the Settings page the steps share one card like every other
+        // group there; the wizard keeps a row apiece.
+        let framed = |row: Element<'static, Message>| -> Element<'static, Message> {
+            match in_wizard {
+                true => container(row).width(Length::Fill).padding(theme::MD).style(theme::row).into(),
+                false => container(row).width(Length::Fill).padding(theme::MD).into(),
+            }
+        };
+        let mut steps: Vec<Element<'_, Message>> = Vec::new();
+        let step = |done: bool, label: &'static str, detail: String| -> Element<'static, Message> {
             let color = match done {
                 true => theme::OK,
                 false => theme::MUTED,
             };
-            container(
+            framed(
                 row![
                     container(
                         container(Space::new().width(Length::Fixed(8.0)).height(Length::Fixed(8.0)))
@@ -11694,14 +11726,12 @@ impl Lightforge {
                     )
                     .padding(theme::SM)
                     .style(theme::badge(color)),
-                    column![text(label).size(theme::BODY), mono(detail)].spacing(theme::XS),
+                    column![text(label).size(theme::BODY), muted(detail, theme::LABEL)].spacing(theme::XS),
                 ]
                 .spacing(theme::MD)
-                .align_y(Alignment::Center),
+                .align_y(Alignment::Center)
+                .into(),
             )
-            .width(Length::Fill)
-            .padding(theme::MD)
-            .style(theme::row)
         };
 
         match &self.setup {
@@ -11714,7 +11744,7 @@ impl Lightforge {
                 if !status.thirty_two_bit {
                     body = body.push(Self::runtime_row());
                 }
-                body = body.push(step(
+                steps.push(step(
                     status.proton.is_some(),
                     "Proton-GE",
                     match &status.proton {
@@ -11726,11 +11756,11 @@ impl Lightforge {
                         None => "not installed".to_owned(),
                     },
                 ));
-                body = body.push(step(
+                steps.push(step(
                     status.prefix.is_ready(),
                     "Wine prefix",
                     match status.prefix.is_ready() {
-                        true => status.prefix.prefix.display().to_string(),
+                        true => tilde(&status.prefix.prefix),
                         false => "not built, or the game link is missing".to_owned(),
                     },
                 ));
@@ -11738,8 +11768,8 @@ impl Lightforge {
                 // told what it costs and said no, so the row offers it rather
                 // than reporting it as unfinished.
                 if !status.battle_net && !status.battle_net_wanted && !in_wizard {
-                    body = body.push(
-                        container(
+                    steps.push(
+                        framed(
                             row![
                                 column![
                                     text("Battle.net").size(theme::BODY),
@@ -11755,18 +11785,16 @@ impl Lightforge {
                                 .enabled(!self.setup_running),
                             ]
                             .spacing(theme::MD)
-                            .align_y(Alignment::Center),
-                        )
-                        .width(Length::Fill)
-                        .padding(theme::MD)
-                        .style(theme::row),
+                            .align_y(Alignment::Center)
+                            .into(),
+                        ),
                     );
                 } else {
-                    body = body.push(step(
+                    steps.push(step(
                         status.battle_net,
                         "Battle.net",
                         match (status.battle_net, status.battle_net_wanted) {
-                            (true, _) => self.layout.battle_net_dir().display().to_string(),
+                            (true, _) => tilde(&self.layout.battle_net_dir()),
                             (false, true) => "not installed in the prefix".to_owned(),
                             (false, false) => "skipped — World of Warcraft only".to_owned(),
                         },
@@ -11774,6 +11802,12 @@ impl Lightforge {
                 }
             }
         }
+
+        body = match in_wizard {
+            true => body.extend(steps),
+            false if steps.is_empty() => body,
+            false => body.push(setting_group(steps)),
+        };
 
         if self.setup_running {
             let mut log = column![].spacing(theme::XS);
@@ -12009,13 +12043,7 @@ impl Lightforge {
                 SettingsTab::Storage => self.storage_section(),
                 SettingsTab::About => self.about_section(),
             };
-            // Storage and Proton name each of their own groups, Drives and
-            // Add a drive; Games and their Proton, and Builds, so an outer
-            // heading above the first of them is a title for a title.
-            let body = match tab {
-                SettingsTab::Storage | SettingsTab::Proton => body,
-                _ => section(tab.label(), body),
-            };
+            let body = section(tab.label(), body);
             content = content.push(container(body).id(tab.anchor()).width(Length::Fill));
         }
         // Room to scroll the last section's heading up to where the others
@@ -12132,26 +12160,24 @@ impl Lightforge {
             )
         };
 
-        // A row of this card: the name takes the slack, then any signs, then
-        // the control. Not [`field_row`], whose 160 pt label column left
-        // about a hundred points for a tag and so allowed exactly one. The
-        // name is the shortest thing on the line and the picker a fixed
-        // width, so giving the *name* the slack is what frees the middle.
+        // A row: the name and what starts it take the slack, then any signs,
+        // then the picker, a fixed width so every row's control lines up.
         fn line<'a>(
             label: String,
+            about: &'static str,
             tags: Vec<Element<'a, Message>>,
             control: Element<'a, Message>,
         ) -> Element<'a, Message> {
-            row![text(label).size(theme::BODY).width(Length::Fill)]
-                .extend(tags)
-                .push(control)
-                .spacing(theme::SM)
-                .align_y(Alignment::Center)
-                .into()
+            setting(
+                label,
+                about,
+                None,
+                row![].extend(tags).push(control).spacing(theme::SM).align_y(Alignment::Center),
+            )
         }
 
         let games = self.installed_products();
-        let mut pins = column![].spacing(theme::SM);
+        let mut pins: Vec<Element<'_, Message>> = Vec::new();
 
         // One row per installed game, in the order the config lists them,
         // the same order as the Play page's tiles, so the two read alike.
@@ -12184,8 +12210,12 @@ impl Lightforge {
                 tags.push(tag("Older than this prefix".to_owned(), theme::UPDATE));
             }
 
-            pins = pins.push(line(
+            pins.push(line(
                 label.clone(),
+                match Kind::of(code) {
+                    Kind::Managed => "Started by Lightforge",
+                    Kind::HandOff => "Started by Battle.net",
+                },
                 tags,
                 picker(
                     format!("proton {}", code.as_str()),
@@ -12199,24 +12229,18 @@ impl Lightforge {
             ));
         }
 
-        // Nothing installed is worth saying: an empty gap above the rule
-        // looks like a page that failed to load.
+        // Nothing installed is worth saying: an empty card looks like a page
+        // that failed to load.
         if games.is_empty() {
-            pins = pins.push(muted(
-                "Games appear here once they are installed.".to_owned(),
-                theme::LABEL,
-            ));
+            pins.push(setting("No games yet", "Games appear here once they are installed.", None, Space::new()));
         }
 
-        // Under a rule, because they are not games. Everything above is a
-        // thing you launch; these two are what the things above fall back to.
-        pins = pins.push(
-            container(Space::new().height(Length::Fixed(1.0)))
-                .width(Length::Fill)
-                .style(theme::divider),
-        );
-        pins = pins.push(line(
+        // A group of their own, because they are not games. The rows above
+        // are things you launch; these two are what they fall back to.
+        let mut fallbacks: Vec<Element<'_, Message>> = Vec::new();
+        fallbacks.push(line(
             "Default".to_owned(),
+            "Every game Lightforge starts without a pin of its own.",
             Vec::new(),
             picker(
                 "proton default".to_owned(),
@@ -12225,8 +12249,9 @@ impl Lightforge {
                 Box::new(Message::PinDefaultProton),
             ),
         ));
-        pins = pins.push(line(
+        fallbacks.push(line(
             "Battle.net".to_owned(),
+            "Battle.net, Agent, and the games it starts without a pin.",
             // The prefix's own build, beside the pin that will next open it.
             // The one fact that makes the signs above legible.
             vec![match self.setup.as_ref().and_then(|s| s.prefix.built_by.as_deref()) {
@@ -12256,7 +12281,8 @@ impl Lightforge {
             .map(|(_, label)| label.clone())
             .collect();
 
-        let pins = pins
+        let notes = column![]
+            .spacing(theme::SM)
             .extend(self.hint(
                 "A game with no pin of its own follows the default. Battle.net and Agent \
                  are a different workload from the game, so they pin separately — a game \
@@ -12297,41 +12323,18 @@ impl Lightforge {
                 .map(Element::from),
             );
 
-        // A card each, because the page is two questions: which Proton does
-        // each game run, and which Protons are on this machine. They used to
-        // be one list with the second half tacked under the first.
-        fn card<'a>(
-            title: &'static str,
-            header: Option<Element<'a, Message>>,
-            body: Element<'a, Message>,
-        ) -> Element<'a, Message> {
-            let mut heading = row![text(title).size(theme::HEADING)]
-                .spacing(theme::SM)
-                .align_y(Alignment::Center);
-            if let Some(control) = header {
-                heading = heading.push(Space::new().width(Length::Fill)).push(control);
-            }
-            container(
-                column![
-                    heading,
-                    container(Space::new().height(Length::Fixed(1.0)))
-                        .width(Length::Fill)
-                        .style(theme::divider),
-                    body,
-                ]
-                .spacing(theme::MD),
-            )
-            .padding(theme::LG)
-            .width(Length::Fill)
-            .style(theme::card)
-            .into()
-        }
-
+        // Two questions: which Proton each game runs, and which Protons are
+        // on this machine.
         column![
-            card("Games and their Proton", None, pins.into()),
-            card("Builds", Some(self.proton_install()), self.proton_builds()),
+            group_label("Games", None),
+            setting_group(pins),
+            group_label("When a game has no pin", None),
+            setting_group(fallbacks),
+            notes,
+            group_label("Installed builds", Some(self.proton_install())),
+            setting_card(self.proton_builds()),
         ]
-        .spacing(theme::MD)
+        .spacing(theme::SM)
         .into()
     }
 
@@ -12340,128 +12343,114 @@ impl Lightforge {
     fn addons_section(&self) -> Element<'_, Message> {
         let choices: Vec<ChannelChoice> = Channel::ALL.map(ChannelChoice).to_vec();
 
-        column![field_row(
-            "Default addon channel".to_owned(),
-            self.picker(
-                "addon channel".to_owned(),
-                choices,
-                Some(ChannelChoice(self.config.addon_channel)),
-                "",
-                Message::AddonChannelDefault,
-                Length::Shrink,
-                theme::LABEL,
+        setting_group([
+            setting(
+                "Update channel",
+                "The newest kind of build an addon may update to. An addon can choose its own.",
+                self.hint(
+                    "A channel is a floor, not a filter: allowing alpha builds still installs \
+                     the newest release when that is newer. Only CurseForge and GitHub publish \
+                     pre-release builds; other sources have one build, so the setting is \
+                     inert there.",
+                ),
+                self.picker(
+                    "addon channel".to_owned(),
+                    choices,
+                    Some(ChannelChoice(self.config.addon_channel)),
+                    "",
+                    Message::AddonChannelDefault,
+                    Length::Shrink,
+                    theme::LABEL,
+                ),
             ),
-        )]
-        .extend(
-            self.hint(
-                "A channel is a floor, not a filter: allowing alpha builds still installs \
-                 the newest release when that is newer. Only CurseForge and GitHub publish \
-                 pre-release builds — other sources have one build, so the setting is \
-                 inert there. An addon given its own channel on the Addons page keeps it.",
-            )
-            .map(Element::from),
-        )
-        .push(clickable(
-            "addon auto update",
-            tick(self.config.addon_auto_update)
-                .label("Keep addons up to date automatically")
-                .on_toggle(Message::AddonAutoUpdateDefault)
-                .text_size(theme::tap_text(theme::BODY)),
-        ))
-        .extend(
-            self.hint(
-                "Runs once per game per session — when Lightforge starts, and again the \
-                 first time you switch to another game — so addons are current before you \
-                 play. A launch waits for it rather than writing into the AddOns folder \
-                 the client is reading. An addon can opt out on its own, and an ignored \
-                 addon never moves either way.",
-            )
-            .map(Element::from),
-        )
-        .spacing(theme::SM)
-        .into()
+            setting(
+                "Keep addons up to date",
+                "Once per game per session, before you play.",
+                self.hint(
+                    "When Lightforge starts, and again the first time you switch to another \
+                     game. A launch waits for it rather than writing into the AddOns folder the \
+                     client is reading. An addon can opt out on its own, and an ignored addon \
+                     never moves either way.",
+                ),
+                switch("addon auto update", self.config.addon_auto_update, Message::AddonAutoUpdateDefault),
+            ),
+        ])
     }
 
     /// What the launcher does around a launch: the settings that are about
     /// the app itself rather than about a product, a transfer or a prefix.
     fn general_section(&self) -> Element<'_, Message> {
-        let toggle = |on: bool, label: &'static str, msg: fn(bool) -> Message| {
-            clickable(label, tick(on).label(label).on_toggle(msg).text_size(theme::tap_text(theme::BODY)))
-        };
+        let shortcut: Option<Element<'_, Message>> = self.steam_shortcut.as_ref().map(|outcome| match outcome {
+            Ok(done) => muted(done.clone(), theme::LABEL).into(),
+            Err(e) => text(e.clone()).size(theme::LABEL).color(theme::ERROR).into(),
+        });
 
-        column![toggle(
-            self.config.minimize_on_launch,
-            "Minimize Lightforge when a game starts",
-            Message::MinimizeOnLaunch,
-        )]
-        .extend(self.hint(
-            "It stays minimized after the game exits — the window is in the taskbar, and a \
-             launcher that raises itself over whatever you did next is worse than one that \
-             waits.",
-        ).map(Element::from))
-        .push(toggle(
-            self.config.battle_net_minimized,
-            "Start Battle.net minimized when launching a game via Battle.net",
-            Message::BattleNetMinimized,
-        ))
-        .extend(self.hint(
-            "Only where Battle.net can sign itself in: without that it comes up as a normal \
-             window whatever this says, because a sign-in nobody can see is a launch that \
-             never happens. Opening Battle.net from the game panel always shows its window.",
-        ).map(Element::from))
-        .push(toggle(
-            self.config.news_on_play,
-            "Show News on the Play page",
-            Message::NewsOnPlay,
-        ))
-        .extend(self.hint(
-            "A News panel beside the key art, carrying the newest articles about whichever \
-             game you are looking at. Only the World of Warcraft family has a news source \
-             — the games Battle.net launches never show one.",
-        ).map(Element::from))
-        .push(toggle(
-            !self.config.patch_notes_muted,
-            "Show what's new after an update",
-            Message::ShowReleaseNotes,
-        ))
-        .extend(self.hint(
-            "Once per version, and only after an update. The notes are always on the \
-             Lightforge Updates page whether or not this is on.",
-        ).map(Element::from))
-        .push(toggle(
-            self.config.check_for_updates,
-            "Tell me when a new Lightforge is released",
-            Message::CheckLauncherUpdates,
-        ))
-        .extend(self.hint(
-            "Asks GitHub once when the launcher starts, and says so if there is a newer \
-             release than the one you are running. Nothing is downloaded or installed: \
-             your package manager owns the program, and the notice is a link to the \
-             releases page. DISCLAIMER.md lists this along with everything else \
-             Lightforge contacts.",
-        ).map(Element::from))
-        .push(toggle(
-            self.console(),
-            "Use the optimized controller and touch experience",
-            Message::ControllerLook,
-        ))
-        .extend(self.hint(
-            "For a Steam Deck, a Steam Machine or a television: fullscreen, larger \
-             controls, and a bar along the bottom saying what A and B do. Setup asks \
-             on SteamOS; this changes the answer.",
-        ).map(Element::from))
-        .push(secondary("Add Lightforge to Steam", Message::AddToSteam).enabled(true))
-        .extend(self.steam_shortcut.as_ref().map(|outcome| -> Element<'_, Message> {
-            match outcome {
-                Ok(done) => muted(done.clone(), theme::CAPTION).into(),
-                Err(e) => text(e.clone()).size(theme::CAPTION).color(theme::ERROR).into(),
-            }
-        }))
-        .extend(self.hint(
-            "A shortcut in the Steam library, with Lightforge's own artwork, so it \
-             starts from Game Mode like any game. Setup adds it on a Steam Deck.",
-        ).map(Element::from))
-        .spacing(theme::SM)
+        column![
+            setting_group([
+                setting(
+                    "Minimize when a game starts",
+                    "The window waits in the taskbar until you bring it back.",
+                    self.hint(
+                        "It stays minimized after the game exits: a launcher that raises \
+                         itself over whatever you did next is worse than one that waits.",
+                    ),
+                    switch("minimize on launch", self.config.minimize_on_launch, Message::MinimizeOnLaunch),
+                ),
+                setting(
+                    "Start Battle.net minimized",
+                    "When it launches a game for you and can sign in by itself.",
+                    self.hint(
+                        "Without a saved sign-in it comes up as a normal window whatever \
+                         this says, because a sign-in nobody can see is a launch that never \
+                         happens. Opening Battle.net from the game panel always shows it.",
+                    ),
+                    switch("battle.net minimized", self.config.battle_net_minimized, Message::BattleNetMinimized),
+                ),
+            ]),
+            setting_group([
+                setting(
+                    "News on the Play page",
+                    "The newest articles beside the key art, for World of Warcraft.",
+                    self.hint(
+                        "Only the World of Warcraft family has a news source; the games \
+                         Battle.net launches never show one.",
+                    ),
+                    switch("news on play", self.config.news_on_play, Message::NewsOnPlay),
+                ),
+                setting(
+                    "What's new after an update",
+                    "Once per version. The notes are always under Lightforge Updates.",
+                    None,
+                    switch("release notes", !self.config.patch_notes_muted, Message::ShowReleaseNotes),
+                ),
+                setting(
+                    "Tell me about new releases",
+                    "Asks GitHub once at startup. Nothing is downloaded.",
+                    self.hint(
+                        "Your package manager owns the program, so the notice is a link to \
+                         the releases page. DISCLAIMER.md lists this along with everything \
+                         else Lightforge contacts.",
+                    ),
+                    switch("update check", self.config.check_for_updates, Message::CheckLauncherUpdates),
+                ),
+            ]),
+            setting_group([
+                setting(
+                    "Controller and touch",
+                    "Fullscreen, larger controls and button hints, for a Steam Deck or a TV.",
+                    self.hint("Setup asks on SteamOS; this changes the answer."),
+                    switch("controller look", self.console(), Message::ControllerLook),
+                ),
+                setting(
+                    "Steam library",
+                    "A shortcut with Lightforge's artwork, so it starts from Game Mode.",
+                    self.hint("Setup adds it on a Steam Deck."),
+                    secondary("Add to Steam", Message::AddToSteam).enabled(true),
+                ),
+            ]),
+        ]
+        .extend(shortcut)
+        .spacing(theme::MD)
         .into()
     }
 
@@ -12482,54 +12471,79 @@ impl Lightforge {
     fn battle_net_section(&self) -> Element<'_, Message> {
         let tweaks = self.tweaks_of(Scope::BattleNet);
         let scope = Scope::BattleNet;
+        let flip = |key: &'static str, which: Tweak, on: bool| -> Element<'_, Message> {
+            clickable(
+                key,
+                iced::widget::toggler(on)
+                    .on_toggle(move |on| Message::Tweak(scope, which, on))
+                    .size(theme::tap_text(20.0))
+                    .style(theme::switch),
+            )
+        };
 
-        // No heading of its own: `section()` puts "Battle.net" above this,
-        // the way it does for General and Downloads. Storage and Proton name
-        // their own groups and opt out of that; one group does not need to.
-        let mut body = column![]
-            .spacing(theme::SM)
-            .extend(
-                self.hint(
-                    "These apply to the Battle.net client and therefore to every game it \
-                     launches — Diablo, Hearthstone, Overwatch. They cannot be set per game, \
-                     because Lightforge only gets to choose the environment when it starts \
-                     the client itself: a client that is already open is handed the launch \
-                     over its own message queue.",
-                )
-                .map(Element::from),
-            );
-
+        let mut rows: Vec<Element<'_, Message>> = Vec::new();
         if self.tools.game_performance.is_some() {
-            body = body.push(self.tweak_check(
-                scope,
-                "Hold the CPU on its performance profile",
-                Tweak::GamePerformance,
-                tweaks.wants_game_performance(),
+            rows.push(setting(
+                "CPU performance profile",
+                "Holds the CPU on its performance profile while a game runs.",
+                None,
+                flip("bnet game performance", Tweak::GamePerformance, tweaks.wants_game_performance()),
             ));
         }
         if self.tools.gamemode.is_some() {
-            body = body.push(self.tweak_check(
-                scope,
-                "Launch through GameMode",
-                Tweak::GameMode,
-                tweaks.gamemode,
+            rows.push(setting(
+                "GameMode",
+                "Starts games through Feral's GameMode.",
+                None,
+                flip("bnet gamemode", Tweak::GameMode, tweaks.gamemode),
             ));
         }
         if self.tools.mangohud.is_some() {
-            body = body.push(self.tweak_check(
-                scope,
-                "Show the MangoHud overlay",
-                Tweak::MangoHud,
-                tweaks.mangohud,
+            rows.push(setting(
+                "MangoHud overlay",
+                "Frame rate and frame times drawn over the game.",
+                None,
+                flip("bnet mangohud", Tweak::MangoHud, tweaks.mangohud),
             ));
         }
-        body = body.push(self.tweak_check(
-            scope,
-            "Give the shader cache room",
-            Tweak::BigShaderCache,
-            tweaks.big_shader_cache,
+        rows.push(setting(
+            "Larger shader cache",
+            "Keeps more compiled shaders, so games stutter less after a while.",
+            None,
+            flip("bnet shader cache", Tweak::BigShaderCache, tweaks.big_shader_cache),
         ));
-        body = body.extend(self.runtime_rows(scope, &tweaks));
+        if self.tools.wayland {
+            rows.push(setting(
+                "Wayland backend",
+                "Runs on Proton's Wayland backend instead of XWayland.",
+                self.hint(
+                    "Newer and less travelled than the X11 path, so it is off until asked for.",
+                ),
+                flip("bnet wayland", Tweak::Wayland, tweaks.wayland),
+            ));
+            if tweaks.wayland {
+                rows.push(setting(
+                    "HDR output",
+                    "Asks the compositor for HDR.",
+                    None,
+                    flip("bnet hdr", Tweak::Hdr, tweaks.hdr),
+                ));
+                rows.push(setting(
+                    "Monitor",
+                    "A connector name such as DP-1. Empty lets Proton pick.",
+                    None,
+                    clickable(
+                        "bnet monitor",
+                        text_input("whichever Proton picks", &self.bnet_monitor_input)
+                            .on_input(move |v| Message::TweakWaylandMonitor(scope, v))
+                            .style(theme::field)
+                            .size(theme::BODY)
+                            .padding(theme::SM)
+                            .width(Length::Fixed(220.0)),
+                    ),
+                ));
+            }
+        }
 
         let missing: Vec<&str> = [
             self.tools.game_performance.is_none().then_some("game-performance"),
@@ -12539,22 +12553,36 @@ impl Lightforge {
         .into_iter()
         .flatten()
         .collect();
-        if !missing.is_empty() {
-            body = body.push(muted(
+
+        column![muted(
+            "These apply to Battle.net and every game it starts.".to_owned(),
+            theme::LABEL,
+        )]
+        .extend(
+            self.hint(
+                "They cannot be set per game, because Lightforge only gets to choose the \
+                 environment when it starts the client itself: a client that is already \
+                 open is handed the launch over its own message queue.",
+            )
+            .map(Element::from),
+        )
+        .push(setting_group(rows))
+        .extend((!missing.is_empty()).then(|| {
+            Element::from(muted(
                 format!("{} is not installed, so it is not offered.", missing.join(", ")),
                 theme::CAPTION,
-            ));
-        }
-
+            ))
+        }))
         // The only way to tune a hand-off game beyond the switches above: it
         // has no client settings for Lightforge to write, so anything else
         // has to arrive as an environment variable.
-        body = body.push(self.env_card(scope, &tweaks));
-        body.spacing(theme::SM).into()
+        .push(self.env_card(scope, &tweaks))
+        .spacing(theme::SM)
+        .into()
     }
 
     fn downloads_section(&self) -> Element<'_, Message> {
-        let speed = |input: &str, placeholder: &str, on_input: fn(String) -> Message| {
+        let speed = |input: &str, placeholder: &str, on_input: fn(String) -> Message| -> Element<'_, Message> {
             row![
                 clickable(
                     format!("speed {placeholder}"),
@@ -12572,33 +12600,35 @@ impl Lightforge {
             .into()
         };
 
-        column![field_row(
-            "Speed limit".to_owned(),
-            speed(&self.limit_input, "unlimited", Message::DownloadLimitChanged),
-        )]
-        .extend(
-            self.hint("Applies to game downloads. Proton builds and addons are not capped.").map(Element::from))
-        .push(field_row(
-            "Battle.net's limit".to_owned(),
-            speed(&self.bnet_limit_input, "none", Message::BattleNetLimitChanged),
-        ))
-        .extend(self.hint(
-            "Battle.net's own cap, for what it downloads. Read from its config and written \
-             back; clearing the field removes the setting and restores its default.",
-        ).map(Element::from))
-        .push(clickable(
-            "pause while playing",
-            tick(self.config.pause_downloads_while_playing)
-                .label("Pause downloads while a game is running")
-                .on_toggle(Message::PauseWhilePlaying)
-                .text_size(theme::tap_text(theme::BODY)),
-        ))
-        .extend(self.hint(
-            "The game you launch always pauses its own download — it and the launcher \
-             would be sharing one storage file. This covers the rest of the queue.",
-        ).map(Element::from))
-        .spacing(theme::SM)
-        .into()
+        setting_group([
+            setting(
+                "Download speed limit",
+                "For game downloads. Proton builds and addons are not capped.",
+                None,
+                speed(&self.limit_input, "unlimited", Message::DownloadLimitChanged),
+            ),
+            setting(
+                "Battle.net's speed limit",
+                "Battle.net's own cap, for what it downloads.",
+                self.hint(
+                    "Read from its config and written back; clearing the field removes the \
+                     setting and restores its default.",
+                ),
+                speed(&self.bnet_limit_input, "none", Message::BattleNetLimitChanged),
+            ),
+            setting(
+                "Pause downloads while playing",
+                "The game you launch always pauses its own; this pauses the rest of the queue.",
+                self.hint(
+                    "The game and the launcher would otherwise be sharing one storage file.",
+                ),
+                switch(
+                    "pause while playing",
+                    self.config.pause_downloads_while_playing,
+                    Message::PauseWhilePlaying,
+                ),
+            ),
+        ])
     }
 
     /// All the app shows when `config.toml` did not load.
@@ -14090,6 +14120,7 @@ impl Lightforge {
                 for library in &report.libraries {
                     drives = drives.push(self.drive_card(library));
                 }
+                drives = drives.spacing(theme::SM);
                 drives = drives.extend(self.hint("The default drive is where a game goes unless you pick another one, and \
                      the folder Battle.net proposes for its own titles. It is only that: \
                      Battle.net itself and the Wine prefix stay where they were installed, \
@@ -14099,74 +14130,48 @@ impl Lightforge {
         }
 
         // ---- Partitions that could become one.
-        let mut add = column![].spacing(theme::SM);
         let offered: Vec<(usize, &library::Partition)> = self
             .partitions
             .iter()
             .enumerate()
             .filter(|(_, partition)| !partition.in_use)
             .collect();
-        match offered.is_empty() {
-            true => {
-                add = add.push(muted(
-                    "No other mounted partition Lightforge could write to.".to_owned(),
-                    theme::LABEL,
-                ))
-            }
-            false => {
-                for (index, partition) in offered {
-                    let free = match partition.disk {
-                        Some(disk) => format!(
-                            "{} free of {}",
-                            size_of(disk.free),
-                            size_of(disk.total)
-                        ),
-                        None => "size unknown".to_owned(),
-                    };
-                    add = add.push(
-                        row![
-                            container(
-                                column![
-                                    row![
-                                        text(partition.label.clone()).size(theme::BODY),
-                                        muted(partition.fstype.clone(), theme::CAPTION),
-                                    ]
-                                    .spacing(theme::SM)
-                                    .align_y(Alignment::Center),
-                                    muted(
-                                        format!(
-                                            "{} at {}",
-                                            partition.device.display(),
-                                            partition.point.display()
-                                        ),
-                                        theme::CAPTION,
-                                    ),
-                                ]
-                                .spacing(2)
-                            )
-                            .width(Length::Fill),
-                            muted(free, theme::LABEL),
-                            container(secondary("Add", Message::AddDrive(index)).enabled(true))
-                                .width(Length::Fixed(ACTION_COLUMN))
-                                .align_x(Alignment::End),
-                        ]
-                        .spacing(theme::MD)
-                        .align_y(Alignment::Center),
-                    );
-                }
-            }
-        }
-        add = add.push(
-            row![
-                Space::new().width(Length::Fill),
-                secondary("Rescan drives", Message::RefreshDrives).enabled(true),
-            ]
-            .align_y(Alignment::Center),
-        );
-        add = add.extend(self.hint("Lightforge creates a \"Lightforge\" folder on the partition and installs \
-             games under it. Only mounted partitions you can write to are listed — mount the \
+        let add: Element<'_, Message> = match offered.is_empty() {
+            true => setting_group([setting(
+                "Nothing to add",
+                "No other mounted partition Lightforge could write to.",
+                None,
+                Space::new(),
+            )]),
+            false => setting_group(offered.into_iter().map(|(index, partition)| {
+                let free = match partition.disk {
+                    Some(disk) => format!("{} free of {}", size_of(disk.free), size_of(disk.total)),
+                    None => "size unknown".to_owned(),
+                };
+                setting(
+                    partition.label.clone(),
+                    format!(
+                        "{} · {} at {}",
+                        partition.fstype,
+                        partition.device.display(),
+                        partition.point.display()
+                    ),
+                    None,
+                    row![
+                        muted(free, theme::LABEL),
+                        secondary("Add", Message::AddDrive(index)).enabled(true),
+                    ]
+                    .spacing(theme::MD)
+                    .align_y(Alignment::Center),
+                )
+            })),
+        };
+        let add_hint = self.hint(
+            "Lightforge creates a \"Lightforge\" folder on the partition and installs \
+             games under it. Only mounted partitions you can write to are listed: mount the \
              drive the way you normally do and rescan. A partition is added, not a disk: a \
-             drive with two partitions can hold two drives here.").map(Element::from));
+             drive with two partitions can hold two drives here.",
+        );
 
         // ---- Lightforge's own directories, which follow XDG rather than the
         // drives, so they are listed apart rather than attributed to one.
@@ -14174,25 +14179,29 @@ impl Lightforge {
         match report {
             None => usage = usage.push(muted("measuring…".to_owned(), theme::LABEL)),
             Some(report) => {
-                for item in &report.app {
-                    let clearing = self.cache_notice.as_deref() == Some("clearing…");
+                let clearing = self.cache_notice.as_deref() == Some("clearing…");
+                usage = usage.push(setting_group(report.app.iter().map(|item| {
                     let action = item.clearable.then(|| {
-                        secondary("Clear", Message::ClearCache)
-                            .enabled(item.bytes > 0 && !clearing)
+                        secondary("Clear", Message::ClearCache).enabled(item.bytes > 0 && !clearing)
                     });
-                    usage = usage.push(usage_row(
-                        column![
-                            text(item.label.clone()).size(theme::BODY),
-                            muted(item.path.display().to_string(), theme::CAPTION),
+                    setting(
+                        item.label.clone(),
+                        tilde(&item.path),
+                        None,
+                        // The button's slot is kept on every row, so the
+                        // sizes line up whether or not there is one.
+                        row![
+                            text(size_of(item.bytes)).size(theme::BODY).font(theme::MONO),
+                            container(action.unwrap_or_else(|| Space::new().into()))
+                                .width(Length::Fixed(ACTION_COLUMN))
+                                .align_x(Alignment::End),
                         ]
-                        .spacing(2)
-                        .into(),
-                        item.bytes,
-                        action,
-                    ));
-                }
+                        .spacing(theme::MD)
+                        .align_y(Alignment::Center),
+                    )
+                })));
                 usage = usage.extend(self.hint("Clearing the cache removes downloaded art, installers and lists; each is \
-                     fetched again when needed. Shader caches are kept — rebuilding them is \
+                     fetched again when needed. Shader caches are kept: rebuilding them is \
                      what makes a game stutter.").map(Element::from));
                 if let Some(notice) = &self.cache_notice {
                     usage = usage.push(muted(notice.clone(), theme::LABEL));
@@ -14204,12 +14213,17 @@ impl Lightforge {
         }
 
         column![
-            section("Drives", drives.into()),
-            Space::new().height(Length::Fixed(theme::MD)),
-            section("Add a drive", add.into()),
-            Space::new().height(Length::Fixed(theme::MD)),
-            section("Lightforge's own files", usage.into()),
+            group_label("Drives", None),
+            drives,
+            group_label(
+                "Add a drive",
+                Some(secondary("Rescan drives", Message::RefreshDrives).enabled(true)),
+            ),
+            add,
         ]
+        .extend(add_hint.map(Element::from))
+        .push(group_label("Lightforge's own files", None))
+        .push(usage)
         .spacing(theme::SM)
         .into()
     }
@@ -14244,7 +14258,7 @@ impl Lightforge {
             library.letters.1.to_uppercase(),
         )));
         card = card.push(title);
-        card = card.push(muted(library.path.display().to_string(), theme::CAPTION));
+        card = card.push(muted(tilde(&library.path), theme::LABEL));
 
         match library.disk {
             Some(disk) => {
@@ -14341,7 +14355,7 @@ impl Lightforge {
         );
         card = card.push(actions);
 
-        container(card).padding(theme::MD).width(Length::Fill).style(theme::row).into()
+        setting_card(card)
     }
 
     /// A drive card's "Unused game data" row and the line under it.
@@ -14394,18 +14408,21 @@ impl Lightforge {
 
     /// The version, and where its configuration lives.
     fn about_section(&self) -> Element<'_, Message> {
-        let mut body = column![field_row(
-            "Version".to_owned(),
-            mono(env!("CARGO_PKG_VERSION").to_owned()).into(),
-        )]
-        .spacing(theme::SM);
+        let mut rows = vec![setting(
+            "Version",
+            "",
+            None,
+            text(env!("CARGO_PKG_VERSION")).size(theme::BODY).font(theme::MONO),
+        )];
         if let Some(dirs) = &self.dirs {
-            body = body.push(field_row(
-                "Config file".to_owned(),
-                mono(dirs.config_file().display().to_string()).into(),
+            rows.push(setting(
+                "Settings file",
+                tilde(&dirs.config_file()),
+                None,
+                secondary("Open folder", Message::OpenConfigFolder).enabled(true),
             ));
         }
-        body.into()
+        setting_group(rows)
     }
 }
 
@@ -15122,15 +15139,9 @@ fn problem(problem: &Problem) -> Element<'_, Message> {
 
 /// A heading over a hairline, then its body, Settings' unit of grouping.
 fn section<'a>(title: impl Into<String>, body: Element<'a, Message>) -> Element<'a, Message> {
-    column![
-        text(title.into()).size(theme::HEADING),
-        container(Space::new().height(Length::Fixed(1.0)))
-            .width(Length::Fill)
-            .style(theme::divider),
-        body,
-    ]
-    .spacing(theme::MD)
-    .into()
+    column![text(title.into()).size(theme::HEADING + 2.0), body]
+        .spacing(theme::MD)
+        .into()
 }
 
 /// A fixed-width label beside its control, so every control in a section
@@ -15236,6 +15247,83 @@ fn field_row<'a>(label: String, control: Element<'a, Message>) -> Element<'a, Me
         .spacing(theme::MD)
         .align_y(Alignment::Center)
         .into()
+}
+
+/// One setting: its name, a line on what it does, and its control at the
+/// right edge. The same shape for a switch, a field or a button, so a page
+/// of them reads down one column of names and one column of controls.
+///
+/// `more` is the longer explanation, shown only while hints are on.
+fn setting<'a>(
+    title: impl Into<String>,
+    about: impl Into<String>,
+    more: Option<iced::widget::Text<'a>>,
+    control: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    let about = about.into();
+    let words = column![text(title.into()).size(theme::tap_text(theme::BODY))]
+        .extend((!about.is_empty()).then(|| Element::from(muted(about, theme::LABEL))))
+        .extend(more.map(Element::from))
+    .spacing(theme::XS)
+    .width(Length::Fill);
+    row![words, control.into()]
+        .spacing(theme::LG)
+        .align_y(Alignment::Center)
+        .padding(theme::tap([theme::MD, theme::MD]))
+        .into()
+}
+
+/// Settings that belong together, in one card with hairlines between them.
+fn setting_group<'a>(rows: impl IntoIterator<Item = Element<'a, Message>>) -> Element<'a, Message> {
+    let mut group = column![];
+    for (at, row) in rows.into_iter().enumerate() {
+        if at > 0 {
+            group = group.push(
+                container(Space::new().height(Length::Fixed(1.0)))
+                    .width(Length::Fill)
+                    .style(theme::divider),
+            );
+        }
+        group = group.push(row);
+    }
+    container(group).width(Length::Fill).style(theme::card).into()
+}
+
+/// A group's name above its card, quieter than the section's, with room for
+/// a control that acts on the whole group at the right.
+fn group_label<'a>(title: impl Into<String>, control: Option<Element<'a, Message>>) -> Element<'a, Message> {
+    row![muted(title.into(), theme::LABEL).width(Length::Fill)]
+        .extend(control)
+        .spacing(theme::SM)
+        .align_y(Alignment::Center)
+        .padding([0.0, theme::XS])
+        .into()
+}
+
+/// Free-form content in the same card a [`setting_group`] is drawn in.
+fn setting_card<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    container(content).padding(theme::MD).width(Length::Fill).style(theme::card).into()
+}
+
+/// A path as people say it: under the home directory it starts with `~`.
+fn tilde(path: &std::path::Path) -> String {
+    match std::env::var_os("HOME").map(PathBuf::from) {
+        Some(home) if path.starts_with(&home) && home.as_os_str().len() > 1 => {
+            format!("~/{}", path.strip_prefix(&home).unwrap_or(path).display())
+        }
+        _ => path.display().to_string(),
+    }
+}
+
+/// An on/off switch for [`setting`], reachable by the selection ring.
+fn switch<'a>(key: &'static str, on: bool, message: fn(bool) -> Message) -> Element<'a, Message> {
+    clickable(
+        key,
+        iced::widget::toggler(on)
+            .on_toggle(message)
+            .size(theme::tap_text(20.0))
+            .style(theme::switch),
+    )
 }
 
 /// A checkbox, with a bigger box and a little more air beside it on a
@@ -15813,6 +15901,31 @@ mod tests {
         };
         let p = job_progress(Job::default(), &sample, 0);
         assert_eq!((p.downloaded_bytes, p.total_bytes), (500, 1000));
+    }
+
+    /// Scrolled to the end, the index followed whichever section reached
+    /// the top last, Storage, with Setup and About on screen below it.
+    #[test]
+    fn the_index_follows_the_page_to_its_last_section() {
+        let at = |y: f32, h: f32| iced::Rectangle { x: 0.0, y, width: 800.0, height: h };
+        let layout = SettingsLayout {
+            top: 0.0,
+            sections: vec![
+                (SettingsTab::General, at(0.0, 600.0)),
+                (SettingsTab::Storage, at(600.0, 900.0)),
+                (SettingsTab::Setup, at(1500.0, 300.0)),
+                (SettingsTab::About, at(1800.0, 100.0)),
+            ],
+        };
+        // 1900 tall, 700 shown: the page ends at 1200.
+        let read = |y| layout.reading_at(y, 700.0, 1900.0, SettingsTab::General);
+        assert_eq!(read(0.0), Some(SettingsTab::General));
+        assert_eq!(read(650.0), Some(SettingsTab::Storage));
+        assert_eq!(read(1200.0), Some(SettingsTab::About), "the bottom marks the last section");
+        // On the way there Setup has its turn.
+        assert!((1000..1200).any(|y| read(y as f32) == Some(SettingsTab::Setup)));
+        // A click on Setup lands at the bottom and keeps its mark.
+        assert_eq!(layout.reading_at(1200.0, 700.0, 1900.0, SettingsTab::Setup), Some(SettingsTab::Setup));
     }
 
     /// A game installed before Lightforge reached Battle.net's registry only

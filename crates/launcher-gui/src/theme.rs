@@ -471,6 +471,39 @@ pub fn ribbon_edge(_theme: &Theme) -> container::Style {
     }
 }
 
+/// An on/off switch, for a setting that takes effect the moment it is
+/// flipped. Accent when on, a quiet track when off, the knob always light.
+pub fn switch(_theme: &Theme, status: iced::widget::toggler::Status) -> iced::widget::toggler::Style {
+    use iced::widget::toggler::Status;
+
+    let (on, hovered, disabled) = match status {
+        Status::Active { is_toggled } => (is_toggled, false, false),
+        Status::Hovered { is_toggled } => (is_toggled, true, false),
+        Status::Disabled { is_toggled } => (is_toggled, false, true),
+    };
+    let track = match (on, hovered) {
+        (true, false) => ACCENT,
+        (true, true) => Color { a: 0.85, ..ACCENT },
+        (false, false) => Color::from_rgba(1.0, 1.0, 1.0, 0.14),
+        (false, true) => Color::from_rgba(1.0, 1.0, 1.0, 0.22),
+    };
+    let fade = |c: Color| match disabled {
+        true => Color { a: c.a * 0.4, ..c },
+        false => c,
+    };
+    iced::widget::toggler::Style {
+        background: Background::Color(fade(track)),
+        background_border_width: 0.0,
+        background_border_color: Color::TRANSPARENT,
+        foreground: Background::Color(fade(TEXT)),
+        foreground_border_width: 0.0,
+        foreground_border_color: Color::TRANSPARENT,
+        text_color: None,
+        border_radius: None,
+        padding_ratio: 0.12,
+    }
+}
+
 /// A hairline between sections, and between Settings' list and its page.
 pub fn divider(_theme: &Theme) -> container::Style {
     container::Style {
