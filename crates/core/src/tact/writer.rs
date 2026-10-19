@@ -71,20 +71,12 @@ pub struct StoreWriter {
 impl StoreWriter {
     /// Start writing into `data_dir`, which is created if absent.
     ///
-    /// Existing archives are not appended to. A fresh set is started after the
-    /// highest `data.NNN` already present, so an interrupted run leaves the
-    /// previous archives untouched rather than half-rewritten.
-    ///
-    /// **Any index already in `data_dir` is loaded first.** A store's index is
-    /// the union of everything ever written to its archives, and this writer
-    /// replaces a bucket's index wholesale when it writes one, so starting
-    /// from empty would publish an index that knows only about this run and
-    /// strand every file written before it. A resumed Classic Era download did
-    /// exactly that, cutting a 146,662-file store down to 131,129 with the
-    /// remainder still on disk but unreachable.
-    ///
-    /// Loading them also makes [`StoreWriter::contains`] answer for the whole
-    /// store, so a resumed run does not rewrite bytes it already has.
+    /// A fresh archive set starts after the highest `data.NNN` present, so an
+    /// interrupted run leaves earlier archives untouched. **Existing indices
+    /// are loaded first**: a bucket's index is replaced wholesale on write, and
+    /// starting empty once cut a resumed Classic Era store from 146,662
+    /// reachable files to 131,129. It also lets [`StoreWriter::contains`]
+    /// answer for the whole store, so a resume skips what it has.
     pub fn create(data_dir: impl Into<PathBuf>) -> Result<Self, WriteError> {
         let data_dir = data_dir.into();
         std::fs::create_dir_all(&data_dir)

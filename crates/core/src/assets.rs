@@ -28,22 +28,13 @@ use sha2::{Digest, Sha256};
 use crate::net::{ETagCache, Http, NetError};
 use crate::product::{Branch, Catalog, CatalogEntry, ProductCode};
 
-/// Manifest schema this build understands.
+/// Manifest schema this build understands. A newer one is refused: the last
+/// good cached art beats half-understood theming.
 ///
-/// A manifest declaring a newer schema is refused rather than parsed
-/// optimistically: the cached art from the last good fetch is a better answer
-/// than half-understood theming.
-///
-/// **2** made `logo` and `background` optional, so a product can be themed
-/// with nothing but its square mark. Battle.net hand-offs, Diablo,
-/// Hearthstone, StarCraft, are never drawn with a logo or a background by
-/// this launcher, but they do want a mark in the product bar and the browse
-/// list, and under schema 1 that was unreachable without inventing a wordmark
-/// and a background for each of them.
-///
-/// The bump is deliberate and not merely additive: a schema-1 client reading
-/// a manifest whose entries omit `logo` fails to parse the *whole* document,
-/// so it must be told to keep its cached copy instead.
+/// **2** made `logo` and `background` optional, so a Battle.net hand-off can
+/// be themed with just its square mark. Not merely additive: a schema-1 client
+/// fails to parse the whole document when an entry omits `logo`, so it must
+/// be told to keep its cache.
 pub const SCHEMA_VERSION: u32 = 2;
 
 /// File name of the manifest within its base URL or fixture directory.
@@ -176,18 +167,11 @@ impl Manifest {
 
     /// The theme of this product's *line*: Classic's for Classic PTR.
     ///
-    /// The step between a product's own entry and `default`. A PTR is the
-    /// same game as the branch it tracks, so when the manifest does not name
-    /// it, the game it belongs to is a far better answer than whatever
-    /// `default` happens to be: without this, Era PTR and Classic PTR both
-    /// wore retail's logo and backdrop, because retail is what `default`
-    /// points at.
-    ///
-    /// For the head itself, or a head the manifest does not name, the first
-    /// other branch that has a theme. Forever's head is `wowf`, and a
-    /// manifest naming `wowf` would make 1.0.0-beta.3 and older install it
-    /// into a literal `wowf/` (they do not know the code), so its art stays
-    /// on `wow_classic_beta` and the live product borrows it from there.
+    /// Between a product's own entry and `default`; without it both PTRs wore
+    /// retail's art. For a head the manifest does not name, the first other
+    /// branch with a theme: Forever's head is `wowf`, and naming `wowf` in the
+    /// manifest would make 1.0.0-beta.3 and older install into a literal
+    /// `wowf/`, so its art stays on `wow_classic_beta`.
     fn head_theme(&self, code: &ProductCode) -> Option<&Theme> {
         let line = code.line();
         let head = line.head();
@@ -355,22 +339,12 @@ impl Store {
 
     /// Delete cached art that `keep` does not name.
     ///
-    /// Published art is content-addressed upstream, the filename carries the
-    /// first bytes of its sha256, so every image that changes arrives under
-    /// a *new* URL, and the cache file for the old one is never written to
-    /// again. Without this, a few megabytes are stranded on disk per art
-    /// revision, forever.
-    ///
-    /// Deliberately narrow about what it will remove: only direct children,
-    /// only names that look like something [`Store::cache_name`] produced,
-    /// and never the manifest. A cache directory is still someone's disk, and
-    /// a prune that mis-fires there is far worse than the leak it fixes.
-    ///
-    /// **Each kept file keeps its `.etag` sidecar too.** Missing that was a
-    /// real bug: every pass deleted every validator, so the next revalidation
-    /// had nothing to send, re-downloaded art it already had, and the UI
-    /// swapped pictures that had not changed, which looks like the page
-    /// flickering a second after each product switch.
+    /// Art is content-addressed upstream, so every revision arrives under a new
+    /// URL and the old cache file would be stranded forever. Narrow on
+    /// purpose: direct children only, names [`Store::cache_name`] could have
+    /// produced, never the manifest. **Each kept file keeps its `.etag`
+    /// sidecar**: deleting those once made every revalidation re-download and
+    /// swap unchanged pictures, a flicker after each product switch.
     pub fn prune(&self, keep: &[String]) -> usize {
         let mut wanted: std::collections::HashSet<String> =
             std::collections::HashSet::with_capacity(keep.len() * 2);
@@ -544,18 +518,10 @@ impl Pipeline {
 
     /// Resolve branding from what is already on disk, touching no network.
     ///
-    /// A warm cache holds the exact bytes the UI is about to draw, so making
-    /// it wait on a revalidation round trip before painting buys nothing but
-    /// a few hundred milliseconds of unthemed dashboard. This hands back the
-    /// last good art at once; [`Pipeline::resolve_with`] follows behind and
-    /// swaps in whatever actually changed.
-    ///
-    /// `None` whenever the cache cannot fully answer, a missing manifest, an
-    /// unthemed product, an image not fetched yet, or one that no longer
-    /// matches its checksum. Partial branding is not a thing the UI can draw,
-    /// so a half-warm cache simply waits for the network like a cold one.
-    ///
-    /// Blocking file IO: call it off the thread that is drawing.
+    /// The warm cache paints at once; [`Pipeline::resolve_with`] follows and
+    /// swaps in whatever changed. `None` unless the cache can answer fully
+    /// (manifest, theme, every image present and matching its checksum):
+    /// partial branding cannot be drawn. Blocking IO: call it off the UI thread.
     pub fn cached(&self, code: &ProductCode) -> Option<Branding> {
         let manifest = self.cached_manifest()?;
         let theme = manifest.theme(code)?;

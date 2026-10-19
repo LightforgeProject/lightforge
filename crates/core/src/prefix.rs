@@ -399,23 +399,17 @@ pub fn provision(runner: &ProtonRunner, layout: &Layout) -> Result<PrefixStatus,
     Ok(PrefixStatus::inspect(layout))
 }
 
-/// Give every library that is actually here its place inside the prefix.
+/// Give every library that is here its place inside the prefix:
 ///
-/// Three links per library, and each for its own reason:
+/// * the `games/` drive letter, so Battle.net can install a title into it;
+/// * the WoW drive letter, which the in-game shop needs (see
+///   [`Layout::wow_drive`]);
+/// * for the default library, the `C:\Program Files (x86)` symlink, the path
+///   already-adopted installs have recorded.
 ///
-/// * the `games/` drive letter, so Battle.net has a Windows directory it can
-///   install a title *into*: this is what `DefaultInstallPath` names;
-/// * the WoW drive letter, because the in-game shop's browser only starts when
-///   the install is a drive *root* (see [`Layout::wow_drive`]);
-/// * for the default library only, the `C:\Program Files (x86)` symlink, which is
-///   the path an install Battle.net has already adopted has recorded on disk.
-///
-/// A library that is [`library::State::Missing`] is skipped entirely, links and
-/// all. This is the whole reason the function exists rather than being three
-/// lines in [`provision`]: `ensure_link` creates its target, so relinking an
-/// unmounted drive would conjure an empty games directory on whatever
-/// filesystem holds the mount point, and an empty install is what makes the
-/// client offer a repair and Battle.net offer a reinstall.
+/// A [`library::State::Missing`] library is skipped entirely: `ensure_link`
+/// creates its target, so relinking an unmounted drive would conjure an empty
+/// games directory, and an empty install makes the client offer a repair.
 pub fn link_libraries(layout: &Layout) -> Result<(), PrefixError> {
     for library in layout.libraries().all() {
         // A library that has never been set up is set up here, which is what

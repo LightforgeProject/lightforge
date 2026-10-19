@@ -108,17 +108,11 @@ pub struct Config {
     pub battle_net_minimized: bool,
     /// How Battle.net and every game it launches are started.
     ///
-    /// **Shared, not per-game, and that is the mechanism rather than a
-    /// simplification.** Lightforge only ever sets the environment of a
-    /// Battle.net client it starts *cold*; a client that is already up takes
-    /// the launch over its own IPC queue, where there is no new process to
-    /// give an environment to. Two games started from one client session
-    /// therefore cannot have different environments, so offering a per-game
-    /// control would be a lie; see `SPEC.md`, "Per-product pinning".
-    ///
-    /// Only the host and runtime half of [`crate::tweaks::Tweaks`] is read
-    /// here. A hand-off game has no `Config.wtf`, so
-    /// [`crate::tweaks::Tweaks::cvars`] is never called on this value.
+    /// Shared, not per game: Lightforge only sets the environment of a client
+    /// it starts cold, and a running client takes launches over IPC, so two
+    /// games from one session cannot differ (`SPEC.md`, "Per-product
+    /// pinning"). A hand-off game has no `Config.wtf`, so only the host and
+    /// runtime half of [`crate::tweaks::Tweaks`] is read.
     #[serde(default)]
     pub battle_net_tweaks: crate::tweaks::Tweaks,
     /// Which of Blizzard's regions products are downloaded from.

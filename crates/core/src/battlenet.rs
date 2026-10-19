@@ -538,24 +538,17 @@ pub const AUTOSTART_MINIMIZED_KEY: &str = "User.Client.AutoStartMinimized";
 
 /// Start the client minimized, or normally.
 ///
-/// Two keys, because the client decides this for itself and neither one is
-/// enough alone. It logs the whole decision on every start:
+/// The client logs its decision on every start:
 ///
 /// ```text
 /// [Frontend] {Main} Attempting to show main window. isMinimizedOnStartup=false
 /// shouldMainWindowShowMinimizedAtAutoStartup=false varAutoStarted=false …
-/// needToMinimize=false …
 /// ```
 ///
-/// `isMinimizedOnStartup` is the Qt window state below, what the client wrote
-/// out of its own window when it last exited. `shouldMainWindowShow…` is the
-/// preference above, and it is only consulted when `varAutoStarted` is set,
-/// which is what [`Launch::Autostart`] is for. Setting the preference without
-/// that flag changes nothing, which is why the window kept appearing.
-///
-/// Both have to be re-applied before each start, because the client writes the
-/// window state back from its live window every time it exits, the same reason
-/// the game's CVars are reconciled per launch rather than set once.
+/// `isMinimizedOnStartup` is the Qt window state below; the preference above
+/// is only read when `varAutoStarted` is set, which is what
+/// [`Launch::Autostart`] is for. Both are re-applied before each start because
+/// the client writes its window state back on every exit.
 pub fn window_state_tweaks(minimized: bool) -> Vec<Tweak> {
     vec![
         Tweak::new(
@@ -637,20 +630,15 @@ const READY_POLL: Duration = Duration::from_millis(250);
 
 /// Wait until the client says it is signed in.
 ///
-/// Watches the newest log in [`Layout::battle_net_logs`] that the client
-/// wrote *after* `since`, so a previous session's log cannot answer for this
-/// one. Reading a log file is the whole mechanism. Nothing is injected,
-/// nothing is scraped out of the client's memory, and the marker is a line
-/// the client prints for its own benefit:
+/// Reads the newest log in [`Layout::battle_net_logs`] written after `since`
+/// (so an old session cannot answer) for the client's own marker. Nothing is
+/// injected or read from its memory.
 ///
 /// ```text
-/// I [GSStateTracker] State changed to: Ready
-/// I [AccountManager] Account manager state has changed to: Ready
 /// I [BNLogin] Logged into Battle.net successfully. |bnet=…
 /// ```
 ///
-/// Measured on a cold start under Proton: about five and a half seconds from
-/// the process appearing to the sign-in line.
+/// About 5.5 s from process start on a cold Proton start.
 pub fn wait_until_ready(
     layout: &Layout,
     user: &str,
@@ -1016,19 +1004,10 @@ pub enum Launch {
     /// `repair` and `modify` in its binary against the descriptions "Start a
     /// package installation" and "Game registration/installation uid".
     InstallFlow { uid: String },
-    /// A `battlenet://` link, handed to the client the way the system would.
-    ///
-    /// The form Wine registered for the protocol at install time:
-    ///
-    /// ```text
-    /// [Software\Classes\battlenet\shell\open\command]
-    /// @="\"C:\Program Files (x86)\Battle.net\Battle.net.exe\" --uri=\"%1\""
-    /// ```
-    ///
-    /// This is how Blizzard's own web buttons drive the client, which makes
-    /// it the one documented way to say "show me this game", and unlike a
-    /// tile selection it is a command the client acts on rather than view
-    /// state its own startup can overwrite.
+    /// A `battlenet://` link, handed over the way Wine registered the protocol
+    /// (`Battle.net.exe --uri="%1"`). It is how Blizzard's own web buttons
+    /// drive the client, and a command the client acts on rather than view
+    /// state its startup can overwrite.
     Uri(String),
 }
 
@@ -1094,13 +1073,10 @@ pub fn game_uri(family: &str) -> String {
     format!("battlenet://{family}")
 }
 
-/// Battle.net's own identifier for a game, as used by `--exec="launch <uid>"`.
+/// Battle.net's id for a game's tile, as `--exec="launch <uid>"` wants it.
 ///
-/// **This is not the TACT product code.** The client works in *game family*
-/// ids, one per tile in its library, and the flavor within a tile comes from
-/// its version dropdown. Read out of the client's own log, where each selection
-/// is recorded (`Selecting game family by id: …` followed by
-/// `Active product set to: …`):
+/// **Not the TACT product code.** The client works in game families, one per
+/// tile, read out of its log (`Selecting game family by id: …`):
 ///
 /// ```text
 /// WoW  -> WoWX12_retail
@@ -1109,18 +1085,10 @@ pub fn game_uri(family: &str) -> String {
 /// W3   -> W3_retail
 /// ```
 ///
-/// Passing a TACT code here is not a no-op. It is worse. The client fails to
-/// resolve it and **falls back to the first family it knows, which is
-/// Warcraft III**, so the user lands on a game they may not even own. That was
-/// a real bug: `launch wow_classic_era` put Gabriel on the W3 page every time.
-/// The family for a product, preferring what is compiled in and falling back
-/// to the client's own catalogue.
-///
-/// That order, not the other way round: the WoW families were read out of a
-/// real log and carry decisions the catalogue cannot express, a PTR and a
-/// beta live in the retail tile's version list, and Forever is a tile of its
-/// own. Everything else comes from [`crate::families`], which knows every
-/// title Blizzard publishes rather than the two that were observed.
+/// A TACT code here makes the client fall back to its first family, Warcraft
+/// III, which is where `launch wow_classic_era` used to land. The compiled-in
+/// WoW families come first (a PTR and a beta live in the retail tile, Forever
+/// has its own); everything else comes from [`crate::families`].
 pub fn resolve_game_uid(code: &ProductCode, families: &crate::families::Families) -> Option<String> {
     game_uid(code).or_else(|| families.family_of(code.as_str()).map(str::to_owned))
 }

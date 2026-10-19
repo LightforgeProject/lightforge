@@ -95,25 +95,18 @@ pub fn of_file(path: &Path) -> Option<u32> {
 
 /// The fingerprint of an addon folder, as CurseForge computes it.
 ///
-/// Reverse-engineered against 34 folders from two unrelated addons whose
-/// published fingerprints the catalog states, and it reproduces all 34. The
-/// parts that are not guessable from the outside, in the order they bite:
+/// Reverse-engineered against 34 folders from two addons; reproduces all 34.
+/// The parts that cannot be guessed:
 ///
-/// 1. **Not every file counts.** The set is the folder's `.toc` files, the
-///    paths those tocs *load*, and the files the client loads implicitly.
-///    Only unconditionally, though: a line carrying a `[...]` clause,
-///    `BossPrototype.lua [ExcludeLoadGameType vanilla]`: is out, and so is
-///    a file nothing references. BigWigs has 338 files on disk and a
-///    fingerprint over 19.
-/// 2. **Each file is hashed, then the hashes are hashed.** Per file it is
-///    [`of_bytes`]; the folder is those numbers written out as decimal,
-///    concatenated, and hashed again.
-/// 3. **Sorted by value, not by name.** Ascending numeric order of the file
-///    hashes themselves, which is why no filename ordering ever matched.
+/// 1. **Not every file counts.** Only the `.toc` files, the paths they load
+///    unconditionally (a line with a `[...]` clause is out) and the files the
+///    client loads implicitly. BigWigs: 338 files on disk, 19 hashed.
+/// 2. **Hash of hashes.** Each file is [`of_bytes`]; the folder hashes those
+///    numbers written as decimal and concatenated.
+/// 3. **Sorted by value**, not by name.
 ///
-/// `None` when the folder declares nothing, no toc, or a toc that loads
-/// nothing that exists. An addon with no fingerprint cannot be adopted,
-/// which is the honest outcome rather than hashing an arbitrary subset.
+/// `None` when the folder loads nothing that exists; such an addon cannot be
+/// adopted, rather than hashing an arbitrary subset.
 pub fn of_folder(dir: &Path) -> Option<u32> {
     let mut hashes: Vec<u32> = declared(dir)
         .iter()

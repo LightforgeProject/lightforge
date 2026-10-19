@@ -138,22 +138,12 @@ static SENDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The launcher's own HTTP client, wearing sentry's transport trait.
 ///
-/// sentry's own transport is a `reqwest` of a different major version than
-/// the workspace's, which drags in a second HTTP client, `tower-http`, a
-/// platform certificate verifier and, through feature unification on the
-/// shared `rustls`: **a second crypto provider**, `aws-lc-sys`, built from C
-/// for a client we already have. This is the whole of what that bought:
-/// serialize the envelope, post it with the auth header, say whether it
-/// worked.
-///
-/// The send is synchronous because the only caller is already on a blocking
-/// thread (see [`send`]), and that is what makes `flush` able to answer
-/// truthfully with nothing queued.
-///
-/// What it deliberately does not do: honour `x-sentry-rate-limits` or retry.
-/// Nothing here sends by itself, a report exists because somebody filled in
-/// a dialog and pressed Send, and the dialog already refuses the same report
-/// twice in five minutes.
+/// sentry's transport brings a second `reqwest` major version and, through
+/// the shared `rustls`, a second crypto provider (`aws-lc-sys`, built from C).
+/// All it was needed for: serialise the envelope, post it, say whether it
+/// worked. Synchronous because the only caller is already on a blocking
+/// thread (see [`send`]). No rate-limit handling or retries: a report only
+/// exists because someone pressed Send, and the dialog refuses repeats.
 struct Ours {
     http: Http,
     runtime: tokio::runtime::Handle,

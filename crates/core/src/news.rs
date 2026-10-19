@@ -46,21 +46,11 @@ pub struct Item {
 impl Item {
     /// Which WoW line this article is about, as far as its category says.
     ///
-    /// `None` is the common and correct answer for about a third of the feed:
-    /// BlizzCon coverage, site news and Blizzard-wide announcements belong to
-    /// no one line, and filing them under whichever game happens to be
-    /// selected would be a lie. Measured against a real 99-item fetch:
-    /// `Live` 27, `Forever` 28, `Classic` 8, `PTR` 4, and 32 with no line.
-    ///
-    /// **Classic and Classic Era are not separable from this data.** Wowhead
-    /// tags both `Classic`, so both lines see the same articles. That is a
-    /// limit of the source, not a bug here, the alternative is guessing, and
-    /// a wrong headline under a game is worse than a shared one.
-    ///
-    /// Nothing maps to a non-WoW game, because nothing in the feed is about
-    /// one: every source the proxy merges is Wowhead. A hand-off title asking
-    /// this will always get `None`, which is why the caller shows it nothing
-    /// rather than an empty list.
+    /// `None` for about a third of the feed (BlizzCon, site news): filing it
+    /// under the selected game would be a lie. Measured on 99 items: Live 27,
+    /// Forever 28, Classic 8, PTR 4, none 32. Classic and Classic Era are not
+    /// separable (Wowhead tags both `Classic`). Nothing maps to a non-WoW game,
+    /// since every source is Wowhead.
     pub fn line(&self) -> Option<ProductLine> {
         let category = self.category.as_deref()?.trim();
         // Case-insensitively, because the tag is whatever an author typed.

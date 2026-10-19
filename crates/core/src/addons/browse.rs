@@ -186,22 +186,12 @@ pub async fn search(
 }
 
 /// The most-downloaded addons for a flavor, for a search box nobody has typed
-/// in yet.
+/// in yet: ranked by popularity alone, from WoWInterface's catalogue already
+/// on disk, so Browse has rows before the first keystroke.
 ///
-/// A different question from [`search`], not a search with no words: there is
-/// nothing to match, so nothing to rank by match, and the whole order is
-/// popularity. WoWInterface answers it out of the catalogue already on disk,
-/// so the Browse tab has rows before the first keystroke and at no cost.
-///
-/// Tukui is deliberately absent. It publishes no download counts at all, so
-/// its two addons would either sit at the bottom of a popularity list as
-/// zeroes or have to be given a rank they did not earn, and ElvUI belongs
-/// nowhere near the bottom. It is one search away.
-///
-/// A provider that cannot answer is dropped rather than reported, unlike in
-/// [`search`]: this list is the default view of a tab, not the answer to a
-/// question somebody asked, and a standing warning over a page nobody asked
-/// to load is noise. A search says so properly.
+/// Tukui is left out: it publishes no download counts, and ElvUI does not
+/// belong at the bottom. A provider that cannot answer is dropped silently,
+/// unlike in [`search`]: this is a tab's default view, not a question asked.
 pub async fn popular(
     http: &Http,
     catalog: Option<&Catalog>,

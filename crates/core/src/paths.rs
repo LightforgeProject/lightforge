@@ -128,17 +128,11 @@ impl Layout {
 
     /// The WoW install's own Windows drive letter, as a `dosdevices` entry.
     ///
-    /// Not cosmetic, and not interchangeable with [`Layout::wow_symlink`]: the
-    /// game's embedded browser, `Utils/BlizzardBrowser.exe`, the CEF that
-    /// draws the in-game shop, fails to start its GPU child unless the
-    /// install is a drive of its own. Reached through `C:` or through the
-    /// catch-all `Z:`, that child dies three times and Chromium gives up,
-    /// which is the grey box the shop had instead of a page. Measured
-    /// 2026-10-02 against `Logs/BlizzardBrowser/CEF-*.log`.
-    ///
-    /// One per library, which is what keeps the shop working for a game on a
-    /// second drive. The letter is recorded in the library and never moves: a
-    /// letter that moves is a recorded install path that stops resolving.
+    /// Not interchangeable with [`Layout::wow_symlink`]: the in-game shop's
+    /// browser (`Utils/BlizzardBrowser.exe`) only starts its GPU child when the
+    /// install is a drive of its own; through `C:` or `Z:` it dies and the shop
+    /// is a grey box (measured 2026-10-02, `Logs/BlizzardBrowser/CEF-*.log`).
+    /// One per library, recorded and never moved, or recorded paths break.
     pub fn wow_drive(&self, library: &Library) -> PathBuf {
         self.dosdevices().join(&library.wow_letter)
     }
@@ -234,17 +228,11 @@ impl Layout {
 
     /// The Battle.net mark, as Wine left it in the prefix.
     ///
-    /// When `winemenubuilder` writes a program's `.desktop` file it also
-    /// rasterises that program's icon into `drive_c/proton_shortcuts/icons/`,
-    /// one directory per size. The client's own mark is therefore already on
-    /// disk in a format we can draw, which is the only reason Lightforge shows
-    /// it at all: nothing of Blizzard's is bundled or redistributed, and the
-    /// mark always matches the client that is actually installed.
-    ///
-    /// Wine names the file after a hash of its own, so the directory is
-    /// searched rather than the name built. `None` before Battle.net is
-    /// installed, which is also the answer on a prefix Wine has not yet built
-    /// a menu for.
+    /// `winemenubuilder` rasterises each program's icon into
+    /// `drive_c/proton_shortcuts/icons/`, so the client's mark is already on
+    /// disk and nothing of Blizzard's is bundled. The file name is Wine's own
+    /// hash, so the directory is searched. `None` before Battle.net is
+    /// installed or before Wine built a menu for it.
     pub fn battle_net_icon(&self) -> Option<PathBuf> {
         let icons = self.drive_c().join("proton_shortcuts").join("icons");
         // Largest first: the button draws small, and downscaling a 256 is
@@ -571,21 +559,12 @@ pub enum PathError {
 
 /// Prove `dir` will take a new file, repairing the one case we own.
 ///
-/// `create_dir_all` is not the question: the directory can exist, can be read,
-/// can have a writable `Data/` inside it, and still refuse a file of its own.
-/// An install root carried over from another tool, another machine or a
-/// restored backup is where that happens, and it is invisible until the thing
-/// written into the root is written: `.product.db` when the install is
-/// adopted, `.build.info` at the very end of a download. Both are the last
-/// step of a long operation, which is the worst possible moment to find out.
-///
-/// When the refusal is a missing owner-write bit on a directory this user owns,
-/// it is added and the probe retried: that is a directory we are entitled to
-/// write into, and the alternative is telling someone to run `chmod` on their
-/// own install. Anything else, another owner, a read-only mount, a full disk,
-/// is reported with its cause intact, because those are not ours to change.
-///
-/// Returns whether the mode had to be repaired, so the caller can say so.
+/// A directory can exist and be readable and still refuse a file of its own
+/// (a root carried over from another tool or a backup), which only shows when
+/// `.product.db` or `.build.info` is written, at the end of a long operation.
+/// A missing owner-write bit on a directory this user owns is added and the
+/// probe retried; anything else (another owner, read-only mount, full disk) is
+/// reported with its cause. Returns whether the mode had to be repaired.
 pub fn ensure_writable(dir: &Path) -> Result<Repaired, std::io::Error> {
     std::fs::create_dir_all(dir)?;
     match probe(dir) {

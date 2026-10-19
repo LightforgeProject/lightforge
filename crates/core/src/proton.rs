@@ -15,18 +15,12 @@ use serde::{Deserialize, Serialize};
 /// GitHub repository Proton-GE releases are polled from.
 pub const GE_RELEASES_REPO: &str = "GloriousEggroll/proton-ge-custom";
 
-/// The build the in-game shop is known to work under.
+/// The build WoW's in-game shop is known to work under.
 ///
-/// Not a general "best build": it is specifically the one WoW's embedded
-/// browser, `Utils/BlizzardBrowser.exe`, the CEF that draws the shop and the
-/// support pages, renders under. Newer GE builds start the browser and lose
-/// its GPU child, which is the grey box the shop had instead of a page. Half
-/// of that fix is the install having a Wine drive of its own
-/// ([`crate::paths::Layout::wow_drive`]); this is the other half. Measured
-/// 2026-10-02 against `Logs/BlizzardBrowser/CEF-*.log`.
-///
-/// A recommendation and nothing more, the picker offers every installed
-/// build, and a product pinned elsewhere launches and plays perfectly well
+/// Newer GE builds start the shop's browser (`Utils/BlizzardBrowser.exe`) but
+/// lose its GPU child, the grey box instead of a page. The other half of the
+/// fix is the install's own drive ([`crate::paths::Layout::wow_drive`]).
+/// Measured 2026-10-02. A recommendation only: other builds play fine
 /// without a shop.
 pub const SHOP_BUILD: &str = "GE-Proton11-7";
 
@@ -962,17 +956,10 @@ pub fn check_for_update(installed: &str, releases: &[UpstreamRelease]) -> Option
 
 /// Delete a Proton build Lightforge installed.
 ///
-/// Refuses two things outright, because both are someone else's files:
-///
-/// - a build outside `proton_dir`, which means a Steam install or a
-///   hand-placed `compatibilitytools.d` entry;
-/// - a build something is still pinned to, named in the error so the caller
-///   can say what to unpin rather than just "no".
-///
-/// Unpinning first is deliberate rather than doing it here. A pin is a
-/// decision the user made about how a game launches, and quietly rewriting it
-/// as a side effect of freeing disk space is the kind of helpfulness that
-/// loses a working configuration.
+/// Refuses builds outside `proton_dir` (Steam's or hand-placed) and builds
+/// something is pinned to, naming the pins. It does not unpin them itself: a
+/// pin is the user's decision about how a game launches, and freeing disk
+/// space should not quietly rewrite it.
 pub fn remove_build(
     build: &ProtonRelease,
     proton_dir: &Path,

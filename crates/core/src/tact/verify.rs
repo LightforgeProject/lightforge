@@ -266,16 +266,10 @@ fn fault_in(header: &[u8], entry: &Entry) -> Option<Fault> {
 
 /// Verify every file in the store at `path` down to its last byte.
 ///
-/// Everything [`scan`] checks, plus the payload: the chunk table against the
-/// encoding key and every chunk against the table (see the module docs for
-/// why that needs no decoding). Read-only, so it is safe beside a running
-/// client; see [`VerifyError::StoreChanged`] for what happens when something
-/// else writes meanwhile.
-///
-/// Archives are spread over worker threads, each read front to back. Hashing,
-/// not the disk, is the ceiling on one thread, about 730 MB/s on a current
-/// desktop, so a handful of threads is what reaches the drive's speed.
-///
+/// [`scan`] plus the payload, chunk table against encoding key and every chunk
+/// against the table, with no decoding (see the module docs). Read-only, so
+/// safe beside a running client (see [`VerifyError::StoreChanged`]). Archives
+/// are spread over threads: hashing caps one thread at about 730 MB/s.
 /// `on_progress` runs on the calling thread a few times a second.
 pub fn deep_scan(
     path: impl AsRef<Path>,

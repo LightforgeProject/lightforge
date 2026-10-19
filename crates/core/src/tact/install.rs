@@ -364,18 +364,10 @@ pub struct Offerings {
 
 /// Resolve a build and read its download manifest. Nothing else.
 ///
-/// Deliberately much cheaper than [`prepare`]: no encoding manifest, no
-/// install manifest, and none of the ~1400 archive indices. That is the
-/// difference between a button someone presses to see what is new and one
-/// that downloads a hundred megabytes to answer.
-///
-/// Optional content is the reason this exists at all. Which extras a build
-/// offers is knowable only from its download manifest, so without a call like
-/// this the settings panel has nothing to list until a download has run.
-///
-/// With a `store`, the base and optional sizes leave out what it already
-/// holds, the files another WoW version sharing the folder stored, by the
-/// same test a real plan applies. The local indices are all it reads.
+/// Much cheaper than [`prepare`] (no encoding or install manifest, none of the
+/// ~1400 archive indices), and the only way to know which optional content a
+/// build offers before downloading. With a `store`, sizes leave out what it
+/// already holds, by the same test a real plan applies.
 pub async fn offerings(
     http: &Http,
     code: &ProductCode,

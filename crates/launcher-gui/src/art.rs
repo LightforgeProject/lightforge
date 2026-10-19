@@ -153,20 +153,11 @@ pub fn decode_bundled(bytes: &'static [u8]) -> Handle {
 
 /// A product wordmark, cropped to the pixels that are actually drawn.
 ///
-/// Blizzard publishes every logo on the same 704x440 canvas, but what sits on
-/// that canvas is not the same size from one game to the next: StarCraft's
-/// wordmark is 127px tall inside it, retail WoW's is the full 440. Fitting
-/// the *canvas* into a box therefore makes them all the same rectangle of
-/// mostly-nothing and leaves the visible marks at wildly different sizes,
-/// which is what the dashboard did, and what a per-product height hint in the
-/// manifest was being hand-tuned to paper over.
-///
-/// So the transparent border comes off here, before the UI ever sees the
-/// image. What reaches [`crate::theme::LOGO_BOX`] is the mark itself, and
-/// fitting *that* is what makes two logos read as one size.
-///
-/// A logo with no transparent border is returned unchanged; one that is
-/// entirely transparent is left alone rather than cropped to nothing.
+/// Blizzard puts every logo on the same 704x440 canvas, but the marks inside
+/// it differ wildly (StarCraft's is 127px tall, Retail's 440). Fitting the
+/// canvas left them at different sizes; fitting the cropped mark makes them
+/// read as one size. A logo with no transparent border, or one that is all
+/// transparent, comes back unchanged.
 ///
 /// Returns the image, its aspect, and its [`Art::logo_ink`] fraction.
 fn logo(path: &Path) -> (Handle, f32, f32) {
@@ -267,22 +258,13 @@ fn load(path: &Path, max_width: u32) -> Handle {
 
 /// Decode a file, asking a JPEG to come out no larger than it needs to be.
 ///
-/// The ordinary path decodes at full size and resizes afterwards, which for a
-/// 3840x2160 headline picture means a 33 MB buffer to produce a 320px
-/// thumbnail, 665 MB of decoding across one news feed, for 22 MB of pictures.
-/// JPEG can do better: the format is built on 8x8 blocks, so a decoder can
-/// emit at 1/2, 1/4 or 1/8 scale almost free, and `scale` asks for the
-/// smallest of those that still covers the width wanted. The resize below
-/// then takes it the rest of the way, so the result is the same picture.
-///
-/// Only JPEG, 88 of the 97 images in a real news cache, and the format every
-/// large one arrives in. PNG has no such trick and is decoded whole.
-/// Recognised by its magic bytes rather than its extension: these files are
-/// named by the hash of their URL, and a `.jpg` from a CDN is not always one.
-///
-/// The box is `max_width` wide and [`MAX_TALL`] times that tall. The JPEG
-/// decoder is held to the same 512 MiB allocation limit the generic path
-/// gets from `Reader`, which a decoder built by hand does not inherit.
+/// Decoding at full size first cost 665 MB across one news feed for 22 MB of
+/// thumbnails. JPEG can emit at 1/2, 1/4 or 1/8 scale almost free, so `scale`
+/// asks for the smallest that still covers `max_width` and the resize below
+/// finishes the job. JPEG is recognised by its magic bytes (cache files are
+/// named by URL hash); PNG has no such trick and is decoded whole. The box is
+/// `max_width` by [`MAX_TALL`] times that, under the same 512 MiB allocation
+/// limit `Reader` gives the generic path.
 fn decode(path: &Path, max_width: u32) -> image::ImageResult<image::DynamicImage> {
     use image::ImageDecoder;
     use std::io::Read;

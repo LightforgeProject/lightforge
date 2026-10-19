@@ -221,20 +221,11 @@ pub fn encode(installs: &[ProductInstall]) -> Vec<u8> {
 /// Merge `installs` into an existing `product.db`, leaving every other record
 /// exactly as it was found.
 ///
-/// **Why splicing rather than decode-and-re-encode.** Agent's registry holds
-/// products Lightforge has nothing to do with, the client itself, Agent, a
-/// Hearthstone somebody installed through Battle.net, and [`decode`] reads
-/// four fields out of a record that has dozens. Rebuilding the file from what
-/// we understood would quietly drop the rest, and a Battle.net that has
-/// forgotten an install is a far worse outcome than a tile that says Install.
-///
-/// So each existing record is kept as the raw bytes it arrived as. Only a
-/// record whose product code matches one of `installs` is replaced, and codes
-/// not already present are appended.
-///
-/// Bytes that are not a readable record sequence are left alone entirely: the
-/// result is `None`, and the caller writes nothing rather than overwriting a
-/// file it did not understand.
+/// Splicing, not decode-and-re-encode: the registry holds products Lightforge
+/// has nothing to do with, and [`decode`] reads four of their dozens of
+/// fields, so rebuilding would drop the rest. Records are kept as raw bytes;
+/// matching codes are replaced, new ones appended. Unreadable input gives
+/// `None` and the caller writes nothing.
 pub fn splice(existing: &[u8], installs: &[ProductInstall]) -> Option<Vec<u8>> {
     rewrite(existing, installs, None)
 }

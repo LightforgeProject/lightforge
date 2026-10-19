@@ -285,18 +285,12 @@ pub fn reset() {
 
 /// Where `step` goes from `current`, among `places`.
 ///
-/// Up and down first stay inside the group the ring is in: down a card is
-/// the next switch in that card, not the one in the card beside it that
-/// happens to sit a little higher. Leaving a group, they go to what is
-/// straight above or below. Outside any group, the header and the game band,
-/// they go to the next row in that direction and then to the control in it
-/// nearest sideways, so down from the header lands on the first row under it
-/// wherever that row sits. Boxes that overlap sideways are no distance apart,
-/// so up from any of the first few games is the wordmark that spans them.
-///
-/// Left and right stay on the line when there is anything on it, and only
-/// then, outside any group, reach for the nearest control off it. Nothing in
-/// that direction leaves the ring where it is.
+/// Up/Down stay inside the ring's group first (down a card is the next switch
+/// in that card), then go straight above or below. Outside any group (header,
+/// game band) they take the next row, then the nearest control sideways;
+/// boxes that overlap sideways count as no distance apart. Left/Right stay on
+/// the line, reaching off it only outside a group. Nothing in that direction
+/// leaves the ring where it is.
 pub fn step(places: &[Place], current: &Target, step: Step) -> Option<Target> {
     let here = places.iter().find(|p| &p.target == current)?;
     let from = here.bounds;

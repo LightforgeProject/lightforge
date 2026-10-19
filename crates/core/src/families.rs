@@ -243,18 +243,12 @@ fn fragments(cache: &Path) -> Vec<std::path::PathBuf> {
 
 /// The fragments Battle.net would show right now, by hash.
 ///
-/// The cache is content-addressed and never pruned, so it holds every
-/// revision of every fragment the client ever fetched: six of
-/// `world_of_warcraft` on a real prefix, one still calling the Forever beta
-/// "Mists of Pandaria Beta". The root fragment lists the current hash of each,
-/// so the newest root is the answer. Empty when there is no root.
-///
-/// A fragment listed with a condition is kept only when the condition can be
-/// decided here and holds. Most cannot: licences, feature flags, account
-/// country are the account's business, and guessing them is how the Forever
-/// beta came to read "Available November 4" (that fragment is for accounts
-/// that do not own Forever). Leaving one out costs a caption; taking a wrong
-/// one in tells somebody their game is not open.
+/// The cache keeps every revision ever fetched (six of `world_of_warcraft` on
+/// a real prefix), so the newest root fragment says which are current. A
+/// conditional fragment is kept only when the condition can be decided here
+/// and holds; account conditions cannot, and guessing one is how the Forever
+/// beta once read "Available November 4". Missing a caption is cheaper than
+/// telling someone their game is not open.
 fn current(fragments: &[(std::path::PathBuf, Fragment)], region: Region) -> std::collections::HashSet<String> {
     let modified = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
     let Some((root_path, root)) = fragments

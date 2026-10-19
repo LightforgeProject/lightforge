@@ -420,21 +420,13 @@ pub struct Adopted {
 /// Carry out a [`Plan`]: rename if it must, claim the library, and tell
 /// Battle.net where the install now is.
 ///
-/// Returns the library to add to the config. The caller assigns the products to
-/// it, saves, and relinks the prefix, the same three steps adding a drive
-/// takes, because that is what this is.
-///
-/// Battle.net is told twice, as it is after a download: `.product.db` in the
-/// install root, which is what its Locate flow reads, and Agent's own registry,
-/// which is the list the client builds its library from. Both are rewritten
-/// from the install's own `.build.info`, so neither can disagree with it.
-///
-/// **Neither is fatal.** Adoption is a marker file, a config entry and a drive
-/// letter; those are what make the install Lightforge's, and they are already
-/// done by the time Battle.net is told anything. An install root that will not
-/// take a `.product.db` used to abort the whole adoption and leave a 100 GB
-/// game reading `Install`, when what was actually lost was Battle.net's
-/// ability to see it. The reason comes back instead, for the caller to show.
+/// Returns the library to add; the caller assigns products, saves and
+/// relinks, as for adding a drive. Battle.net is told through `.product.db`
+/// (what Locate reads) and Agent's registry (what the library is built
+/// from), both rewritten from the install's `.build.info`. **Neither is
+/// fatal**: the marker, config entry and drive letter already make the
+/// install Lightforge's, and a root that refused `.product.db` once left a
+/// 100 GB game reading Install. The reason comes back for the caller to show.
 pub fn adopt(plan: &Plan, layout: &Layout) -> Result<Adopted, AdoptError> {
     let mut library = plan.library.clone();
     if let Some(target) = &plan.rename {
@@ -482,19 +474,14 @@ fn drive(letter: &str) -> String {
     letter.trim_end_matches(':').to_uppercase() + ":"
 }
 
-/// Make a game Battle.net installed elsewhere visible to the Battle.net in
-/// Lightforge's prefix, without moving it.
+/// Make a game Battle.net installed elsewhere visible to Lightforge's
+/// Battle.net, without moving it.
 ///
-/// The game folder is symlinked into the default library's `games/` directory,
-/// which the prefix already maps as a drive, so the install gets a Windows
-/// path (`E:\Hearthstone`) with no new drive letter and no copying. Then its
-/// record is lifted out of the other prefix's registry **as raw bytes**, with
-/// only the install path rewritten, and grafted into ours: Agent wants a build
-/// key, a tag expression and a dozen fields nothing here understands, and the
-/// record it wrote itself has all of them right.
-///
-/// Returns `false` when there was no record to lift, which is the signal to
-/// tell the user Battle.net will want to find this one itself.
+/// The folder is symlinked into the default library's `games/` (already a
+/// drive, so it gets `E:\Hearthstone`), and its registry record is copied
+/// from the other prefix **as raw bytes** with only the path rewritten:
+/// Agent's record has dozens of fields nothing here understands. `false` when
+/// there was no record, meaning Battle.net will have to find it itself.
 pub fn link_hand_off(
     game: &HandOff,
     foreign: &Path,

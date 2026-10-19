@@ -189,19 +189,14 @@ const MANAGED: &[&str] = &[
     "GamePadEnable",
 ];
 
-/// Names Lightforge used to write and no longer does.
+/// Names earlier versions wrote by mistake, removed outright (they were never
+/// recorded for [`crate::cvars::reconcile`]). Both were checked against the
+/// client's own string table:
 ///
-/// Earlier versions wrote them with no record, so they are removed outright
-/// rather than through [`crate::cvars::reconcile`]'s record. Both were
-/// mistakes found by checking the client's own string table rather than a
-/// wiki, so no player sets them on purpose:
-///
-/// - `addonProfilerEnabled` is not a console variable at all, in any casing.
-///   `scriptProfile` is the real one and is still set.
-/// - `SpellQueueWindow` is real, but the client keeps it in the
-///   account-synced `WTF/Account/<id>/config-cache.wtf`, not in `Config.wtf`.
-///   Writing it here was writing to the wrong file, so the control was
-///   dropped rather than left looking like it worked.
+/// - `addonProfilerEnabled` is not a console variable at all; `scriptProfile`
+///   is, and is still set.
+/// - `SpellQueueWindow` lives in the account-synced `config-cache.wtf`, not in
+///   `Config.wtf`, so the control was dropped.
 pub const RETIRED: &[&str] = &["addonProfilerEnabled", "SpellQueueWindow"];
 
 /// The lowest frame cap the client accepts, from its own help text: "Set FPS
@@ -435,28 +430,14 @@ pub fn wrapped(cmd: Command, wrappers: &[PathBuf]) -> Command {
     out
 }
 
-/// A starting point for the frames-versus-scenery trade.
+/// A starting point for the frames-versus-scenery trade: one press sets the
+/// switches on that axis, each still reachable afterwards.
 ///
-/// The panel is a list of independent switches, which is honest but gives no
-/// answer to "just make it fast". A preset is that answer: one press sets the
-/// switches that sit on this axis, and every one of them stays individually
-/// reachable afterwards.
-///
-/// **What a preset governs is deliberately narrow**: only the switches that
-/// trade frames against scenery. It never touches the cursor and mouse
-/// settings (personal feel, or a Wine workaround, not speed), nor
-/// [`Tweaks::graphics_api`], the two frame caps, [`Tweaks::mangohud`] or
-/// [`Tweaks::env`] (a genuine fork, two ceilings, an overlay and an escape
-/// hatch, none of them a point on this axis). It leaves the runtime switches
-/// alone for the same reason: which graphics backend Proton uses is not a
-/// position on the frames-versus-scenery axis either. A preset that silently
-/// cleared somebody's environment variables would be a data-loss bug wearing
-/// the clothes of a convenience.
-///
-/// [`Tweaks::game_performance`] is left alone too, for a different reason: its
-/// default already means *on wherever the tool exists*, no preset has a reason
-/// to give that up, and overwriting it would turn "follow the default" into an
-/// explicit value behind the user's back.
+/// Deliberately narrow. It never touches the cursor and mouse settings, the
+/// graphics API, the frame caps, MangoHud, the environment or the runtime
+/// switches, none of which sit on this axis (clearing someone's environment
+/// variables would be data loss). [`Tweaks::game_performance`] is left alone
+/// too: its default already means "on wherever the tool exists".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Preset {
     /// Everything that wins frames, nothing that spends them.
@@ -523,22 +504,13 @@ impl Preset {
 }
 
 impl Tweaks {
-    /// Clear every switch a [`Preset`] governs.
+    /// Clear every switch a [`Preset`] governs: the panel's "Custom" button.
     ///
-    /// What the panel's "Custom" button does. Custom is not a fourth preset,
-    /// it is the *absence* of one, which is why it cannot be a [`Preset`]
-    /// variant: pressing it empties the managed switches, and setting any of
-    /// them afterwards still matches no preset, so the panel stays on Custom
-    /// rather than jumping off it the moment you tick a box.
-    ///
-    /// Ungoverned settings are left alone here for the same reason
-    /// [`Preset::apply`] leaves them: clearing somebody's environment
-    /// variables is data loss, not a reset.
-    /// Every switch it clears is one that *writes* something when set, so a
-    /// cleared profile is also a silent one: nothing in `Config.wtf`, no
-    /// wrapper, nothing. That equivalence is why no switch on this panel may
-    /// be drawn inverted, a box whose empty state wrote a cvar would make
-    /// "Custom" change the game while claiming to set nothing.
+    /// Custom is the absence of a preset, not a fourth one, so setting any
+    /// switch afterwards still matches none. Ungoverned settings are left
+    /// alone, as in [`Preset::apply`]. Every cleared switch is one that writes
+    /// something when set, so a cleared profile writes nothing at all, which is
+    /// why no switch on the panel may be drawn inverted.
     pub fn clear_managed(&mut self) {
         self.gamemode = false;
         self.skip_addon_profiling = false;

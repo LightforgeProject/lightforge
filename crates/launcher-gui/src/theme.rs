@@ -100,24 +100,12 @@ pub const BODY: f32 = 14.0;
 pub const LABEL: f32 = 12.0;
 pub const CAPTION: f32 = 11.0;
 
-/// The box a product's wordmark is drawn in, on the dashboard under the app
-/// title.
+/// The box a product's wordmark is drawn in, under the app title.
 ///
-/// This is a *limit*, not the size anything is drawn at, [`logo_size`] does
-/// the sizing, and in the present catalogue nothing reaches either edge. The
-/// box is here for the mark this catalogue does not contain yet: art so
-/// extreme in shape that giving it the same area as everything else would run
-/// it off the page.
-///
-/// The width is deliberately narrower than equal area alone would ask for.
-/// The two StarCraft marks are so much wider than they are tall that the same
-/// area makes them span the page, StarCraft's would be 601pt across against
-/// 349 for Retail, and however equal the two are by the arithmetic, the long
-/// one reads as the louder. The box cuts those two back and reaches nothing
-/// else; the next widest, Classic Era's, comes to 407.
-///
-/// The height reaches nothing at all: the tallest mark in the catalogue,
-/// Retail's with its halo, is 270.
+/// A limit, not a size: [`logo_size`] sizes the mark, and only the two
+/// StarCraft marks reach this width (equal area would make StarCraft 601pt
+/// against Retail's 349, which reads as louder). Nothing reaches the height;
+/// Retail's, the tallest, is 270.
 pub const LOGO_BOX_WIDTH: f32 = 450.0;
 pub const LOGO_BOX_HEIGHT: f32 = 280.0;
 
@@ -147,19 +135,11 @@ pub const LOGO_INSET: f32 = XL;
 
 /// How much of the page one product wordmark covers, in square points.
 ///
-/// *Area*, because area is what the eye reads as size and a bounding box is
-/// not. The marks are trimmed to their own ink, so their shapes have nothing
-/// in common: StarCraft's is five and a half times wider than it is tall,
-/// Forever's barely wider than tall. Fitted into a shared rectangle, the
-/// strip spends the whole width and the square one spends only the height,
-/// and the second looks half the size of the first although both "fit". Given
-/// the same area instead, a wide mark is long and low, a square one is
-/// shorter and deep, and the two carry the same weight on the page, which is
-/// what "the same size" means for logos that are not the same shape.
-///
-/// The number is the largest that keeps every mark in the catalogue inside
-/// [`LOGO_BOX_WIDTH`] by [`LOGO_BOX_HEIGHT`], StarCraft's being the one that
-/// sets it.
+/// Area, because that is what the eye reads as size: the marks are trimmed
+/// to their ink and range from five times wider than tall to nearly square,
+/// so one bounding box made the square ones look half the size. The number
+/// is the largest that keeps every mark inside [`LOGO_BOX_WIDTH`] by
+/// [`LOGO_BOX_HEIGHT`]; StarCraft's sets it.
 const LOGO_AREA: f32 = 56_000.0;
 
 /// The least of a logo [`logo_size`] will believe is the mark rather than its
@@ -345,19 +325,10 @@ const fn mix(a: Color, b: Color, amount: f32) -> Color {
     }
 }
 
-/// The window's own background: [`BG`] with a wash of [`ACCENT`] in the bottom
-/// right corner.
-///
-/// Light falling on the app rather than decoration on it, which is why it is
-/// the accent and not the wordmark's gold. The far corner is the one spot with
-/// nothing standing in it: the wordmark and the navigation own the top, the
-/// action panel the lower left, so a glow anywhere else would be lighting
-/// something that already has its own weight. The whole thing is gone by a
-/// third of the way back, leaving the page the flat dark the rest of the
-/// palette was picked against.
-///
-/// Linear, not radial: iced has no radial gradient, and a diagonal fade from
-/// the corner reads as the same thing at this strength.
+/// The window's own background: [`BG`] with a wash of [`ACCENT`] in the
+/// bottom right, the one corner nothing else stands in. It fades out a third
+/// of the way across. Linear because iced has no radial gradient, and a
+/// diagonal fade reads the same at this strength.
 pub fn backdrop(_theme: &Theme) -> container::Style {
     const LIT: Color = mix(ACCENT, BG, 0.09);
     container::Style {

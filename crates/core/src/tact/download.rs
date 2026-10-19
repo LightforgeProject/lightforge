@@ -414,19 +414,13 @@ impl Downloader {
     }
 }
 
-/// The downloads this process has running, keyed by product.
+/// The downloads this process has running, keyed by product: the real
+/// [`crate::preflight::DownloadGuard`].
 ///
-/// The real [`crate::preflight::DownloadGuard`], replacing `NoDownloads`. The
-/// hazard it exists for is concrete: Agent and Lightforge both writing the
-/// same `data.NNN` and `.idx` files is corruption, not a race to win, so a
-/// launch pauses any download first and the store is left valid before
-/// Battle.net is allowed to start.
-///
-/// "Resume" here does not restart a transfer. There is no suspended socket to
-/// revive. A cancelled download checkpointed its store on the way out, so
-/// resuming is re-planning against it, which needs the network and the
-/// manifests and therefore belongs to the caller. [`Downloads::resume`]
-/// reports *that* a product needs restarting; acting on it is the app's job.
+/// Agent and Lightforge writing the same `data.NNN` and `.idx` files is
+/// corruption, so a launch pauses any download first. "Resume" re-plans
+/// against the checkpointed store, which needs the network, so
+/// [`Downloads::resume`] only reports *that* a product needs restarting.
 #[derive(Debug, Clone, Default)]
 pub struct Downloads {
     running: std::collections::HashMap<crate::ProductCode, Cancel>,
@@ -513,17 +507,11 @@ impl InstallReport {
 
 /// Write the install manifest's files into the flavor directory.
 ///
-/// These are the files that exist as real files rather than as CASC content,
-/// `Wow.exe`, `wow_loader.dll`, CEF and its `.pak` resources, and without
-/// them there is nothing to launch. They are **not** written into the store:
-/// measured against a real install, only 12 of the 36 are in Agent's store,
-/// and those 12 are there because the download manifest lists them
-/// independently, not because they came from here.
-///
-/// `dest` is the flavor directory (`<install>/_retail_`), since manifest paths
-/// are relative to it. Each file is verified against its content key before it
-/// lands, and written via a temporary file so a failure cannot leave a
-/// half-written `Wow.exe` behind.
+/// These exist as real files, not CASC content (`Wow.exe`, `wow_loader.dll`,
+/// CEF and its `.pak`s), and are not written into the store: only 12 of the
+/// 36 are in Agent's store, because the download manifest lists them too.
+/// `dest` is the flavor directory (`<install>/_retail_`). Each file is
+/// verified against its content key and written through a temporary file.
 pub async fn extract_install(
     source: Source<'_>,
     entries: &[&super::manifest::InstallEntry],
@@ -629,21 +617,12 @@ pub fn write_flavor_info(
 
 /// Join `relative` onto `root`, reusing directories that differ only by case.
 ///
-/// The install manifest is internally inconsistent about case, `Utils\cef.pak`
-/// sits beside `UTILS\LOCALES\EN-US.PAK` in the same file, and Agent lands
-/// both in one `Utils` directory because Windows filesystems are
-/// case-insensitive. On Linux they are not, so joining the paths verbatim
-/// creates `Utils/` **and** `UTILS/`, splitting the directory in two.
-///
-/// That is not cosmetic: a real install has `Utils/LIBCEF.DLL`, while the
-/// split put `LIBCEF.DLL` in `UTILS/` and left `Utils/` without it. Wine
-/// resolves one of the two and the client can fail to find CEF at all.
-///
-/// So each component reuses an existing entry that matches ignoring ASCII
-/// case, and otherwise keeps the spelling the manifest used, which is what
-/// Windows gives Agent for free, first writer deciding the case. File name
-/// case is preserved either way: the real install really does hold
-/// `LIBCEF.DLL` next to `cef.pak`.
+/// The install manifest mixes `Utils\cef.pak` with `UTILS\LOCALES\EN-US.PAK`;
+/// Windows lands both in one directory, Linux would make two, and a real
+/// install then had `LIBCEF.DLL` in `UTILS/` where Wine could miss it. So a
+/// component reuses an existing case-insensitive match and otherwise keeps the
+/// manifest's spelling (first writer decides, as on Windows). File-name case
+/// is kept either way.
 fn resolve_windows_path(root: &std::path::Path, relative: &std::path::Path) -> std::path::PathBuf {
     let mut at = root.to_path_buf();
 
@@ -762,23 +741,13 @@ fn verify(encoded: &[u8], ckey: Option<&CKey>, keys: Option<&KeyService>) -> Ver
     }
 }
 
-/// Whether any chunk of a BLTE payload is encrypted.
-///
-/// Read directly out of the chunk table rather than inferred from a decode
-/// error, because neither of `blte` 0.4's failure modes is trustworthy here:
-///
-/// - With no key service it returns an untyped
-///   `DecompressionFailed("Key service required for encrypted blocks")`.
-/// - With one, it cannot parse the block at all. Its encrypted-block reader
-///   takes the key-name size as a little-endian **u64** where the format
-///   stores a single byte, so it consumes the size plus seven bytes of the key
-///   name and reports nonsense: "Invalid key name size: 9560733477763426568".
-///   That value is `0829466e718cae84` little-endian, low byte `0x08`, the
-///   real size. Verified against two different real files.
-///
-/// Unreleased content ships encrypted with the key withheld until it goes
-/// live, and Agent stores it regardless, so these files are stored unverified.
-/// Refusing them cost a real Classic Era download 7 files.
+/// Whether any chunk of a BLTE payload is encrypted, read from the chunk
+/// table rather than from a decode error: `blte` 0.4 either fails untyped
+/// without a key service, or misreads the key-name size as a u64 where the
+/// format has one byte ("Invalid key name size: 9560733477763426568", low byte
+/// `0x08`, the real size). Unreleased content ships encrypted and Agent
+/// stores it anyway, so these files are stored unverified; refusing them cost
+/// a real Classic Era download 7 files.
 ///
 /// ```text
 /// "BLTE"            4 bytes

@@ -87,19 +87,11 @@ impl BuildConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CdnConfig {
     pub archives: Vec<String>,
-    /// The `archives-index-size` list, **which is not positionally aligned
-    /// with `archives` and so cannot be used to check an index**.
-    ///
-    /// Kept because it is in the config, not because it is usable. Measured
-    /// against three real CDN configs (1406, 1362 and 1363 archives): every
-    /// `archives` list is sorted lexicographically, every size list is a
-    /// permutation of the true sizes, and pairing them by position matches
-    /// only 2-4%, about what coincidence gives, since sizes repeat. The CDN
-    /// serves exactly the bytes the local files hold, so the sizes are right
-    /// and only their order is lost.
-    ///
-    /// An index is therefore checked by its own geometry at parse time, where
-    /// blocks, TOC and footer must account for every byte.
+    /// The `archives-index-size` list, **not positionally aligned with
+    /// `archives`**, so it cannot check an index. Measured on three real CDN
+    /// configs: each size list is a permutation of the true sizes, and pairing
+    /// by position matches 2-4%, about chance. Indices are checked by their own
+    /// geometry at parse time instead.
     pub archives_index_size: Vec<u64>,
     /// Present in the config but **not fetchable**: the CDN answers 403.
     /// Agent builds it locally from the per-archive indices, which is why a

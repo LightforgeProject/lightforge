@@ -320,17 +320,11 @@ pub struct Extracted {
 
 /// Extract an addon package into `addons_dir`.
 ///
-/// Replaces the folders it contains: an update must not leave a removed file
-/// from the previous version behind, since a stale `.lua` can break an addon
-/// far more confusingly than a missing one. `retire` names more folders to
-/// take away in the same step, the ones a repair replaces that this build no
-/// longer ships.
-///
-/// Nothing installed is touched until the whole package is on disk. It is
-/// written to a staging folder beside `AddOns`, on the same filesystem, and
-/// only then swapped in folder by folder with renames. A full disk or an I/O
-/// error while writing leaves the old addon exactly as it was, and a failed
-/// rename puts back every folder already swapped.
+/// Replaces whole folders, since a stale `.lua` left from the last version
+/// breaks an addon more confusingly than a missing one; `retire` names extra
+/// folders to remove in the same step. The package is written to a staging
+/// folder beside `AddOns` first, then swapped in by rename, so a full disk
+/// leaves the old addon intact and a failed rename puts back what it swapped.
 pub fn extract(package: &[u8], addons_dir: &Path, retire: &[String]) -> Result<Extracted, InstallError> {
     extract_within(package, addons_dir, retire, MAX_UNCOMPRESSED)
 }

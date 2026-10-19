@@ -44,19 +44,13 @@ pub const DRIVE_FOLDER: &str = "Lightforge";
 /// The `games/` directory inside a library root.
 const GAMES_DIR: &str = "games";
 
-/// Id of the first library, the one derived from the Blizzard root rather
-/// than added by the user. Also where Battle.net and the prefix live, which is
-/// why it is the one library that cannot be forgotten.
+/// Id of the default library: the one derived from the Blizzard root, where
+/// Battle.net and the prefix live.
 ///
-/// Fixed rather than generated, and that is the whole point: this library is
-/// seeded from the config on every start, so a random id would be a different
-/// id each time, and the marker written on the first run would read as another
-/// library's on the second. A constant means the seed needs no save to be
-/// stable. Added drives keep random ids, so the two can never collide.
-/// The value stays the literal `"main"` even though the concept is now called
-/// "default": it is already written into the marker file of every library set
-/// up before the rename, and an id that no longer matches its marker reads as
-/// another library's.
+/// Fixed, because it is re-seeded from the config on every start and a random
+/// id would not match its own marker the next time. Still `"main"` although
+/// the concept is now called "default": that string is already in the marker
+/// of every library set up before the rename.
 pub const DEFAULT_ID: &str = "main";
 
 /// Drive letter the first library's WoW install has always had. Pinned rather

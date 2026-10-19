@@ -610,17 +610,11 @@ pub struct Adopted {
 
 /// Recognise hand-installed addons and take them into the ledger.
 ///
-/// An addon Lightforge did not install has no provider and no id, so it can
-/// be listed and nothing else, no update, no channel, no removal. Hashing
-/// each unmanaged folder the way CurseForge does (see
-/// [`crate::addons::fingerprint`]) and asking the catalog whose it is turns
-/// it into an ordinary managed addon.
-///
-/// Conservative in both directions. A folder already owned by a record is
-/// left alone, so this cannot take an addon away from the entry that
-/// installed it. And a match is only written for folders that are *actually
-/// present*: the catalog answers with the whole package, and recording a
-/// folder that is not there would have removal promise to delete it.
+/// An unmanaged folder can only be listed; fingerprinting it the way
+/// CurseForge does (see [`crate::addons::fingerprint`]) and asking the catalog
+/// makes it an ordinary managed addon. A folder another record owns is left
+/// alone, and only folders actually present are recorded, so a later removal
+/// never promises to delete one that is not there.
 pub async fn adopt(
     http: &Http,
     catalog: Option<&Catalog>,
