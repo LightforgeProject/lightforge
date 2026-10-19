@@ -166,9 +166,10 @@ pub struct Scanned {
 
 /// Verify the store's entries against their own headers, and drop the bad ones.
 ///
-/// Repair rewrites the indices a running client memory-maps, so this refuses
-/// to run while anything is alive in the prefix, the same gate a launch and a
-/// download go through.
+/// Repair rewrites the indices a running client memory-maps, so the prefix
+/// has to be quiet first. A game or an open Battle.net is the user's to
+/// close; anything else, a `wineserver` waiting out its timeout or a launch's
+/// leftovers, is put to rest here exactly as a launch's pre-flight would.
 pub async fn scan_and_repair(
     layout: Layout,
     code: ProductCode,
@@ -178,12 +179,18 @@ pub async fn scan_and_repair(
         use lightforge_core::tact::storage::Storage;
         use lightforge_core::tact::verify;
 
-        let alive = lightforge_core::preflight::scan(&layout);
-        if let Some(process) = alive.first() {
-            return Err(format!(
-                "close {} first — the store is in use",
-                process.name
-            ));
+        use lightforge_core::preflight;
+
+        if let Some(game) = preflight::games_running(&layout).first() {
+            return Err(format!("close {} first — the store is in use", game.name));
+        }
+        if preflight::client_running(&layout) {
+            return Err("close Battle.net first — the store is in use".to_owned());
+        }
+        if !preflight::scan(&layout).is_empty() {
+            let runner = runner_for(&layout, &code, Runs::Game)?;
+            preflight::shutdown(&runner, &layout, preflight::DEFAULT_GRACE)
+                .map_err(|e| chain(&e))?;
         }
 
         let install = layout.wow_install(&code);

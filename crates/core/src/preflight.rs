@@ -591,12 +591,12 @@ const HANDOFF_POLL: Duration = Duration::from_millis(500);
 /// `winedevice.exe` that appears two seconds after the click would otherwise
 /// be reported as the game and "played" for a quarter of a second.
 ///
-/// The last three are Proton's rather than Wine's: `steam.exe` is the shim
-/// every `proton run` goes through, `xalia.exe` is the accessibility helper
-/// GE-Proton starts beside it, and `lsass.exe` is started on demand by a
-/// login. All three outlive the game, and counted as one they kept the prefix
-/// "busy" for good: every later Play was refused as a game still running.
-const WINE_SERVICES: [&str; 15] = [
+/// The last four outlive the game: `steam.exe` is the shim every `proton run`
+/// goes through, `xalia.exe` the accessibility helper GE-Proton starts beside
+/// it, `lsass.exe` is started on demand by a login and `rundll32.exe` by the
+/// shell. Counted as a game they kept the prefix "busy" for good: every later
+/// Play was refused as a game still running.
+const WINE_SERVICES: [&str; 16] = [
     "services",
     "winedevice",
     "plugplay",
@@ -612,6 +612,7 @@ const WINE_SERVICES: [&str; 15] = [
     "steam",
     "xalia",
     "lsass",
+    "rundll32",
 ];
 
 /// A process in the prefix that is neither Battle.net's nor Wine's own.
@@ -825,6 +826,7 @@ mod tests {
             (r"C:\windows\system32\steam.exe", "steam.exe"),
             (r"C:\windows\system32\xalia.exe", "xalia.exe"),
             (r"C:\windows\system32\lsass.exe", "lsass.exe"),
+            (r"C:\windows\system32\rundll32.exe", "rundll32.exe"),
             ("python3", "python3"),
             ("/usr/bin/gamemoderun", "gamemoderun"),
         ] {
