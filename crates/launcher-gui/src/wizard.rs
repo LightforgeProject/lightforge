@@ -1005,7 +1005,7 @@ fn found<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
         body = body.extend(
             app.hint(
                 "Only where a Battle.net prefix is normally kept — Lutris, Bottles, Heroic, \
-                 Steam and ~/.wine. Nothing leaves this machine.",
+                 Faugus, Steam and ~/.wine. Nothing leaves this machine.",
             )
             .map(Element::from),
         );

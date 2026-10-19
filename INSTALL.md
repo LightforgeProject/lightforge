@@ -237,7 +237,7 @@ The launcher walks you through a short setup the first time:
 2. **Region and language**, so you're not downloading English from Europe
    when you wanted neither.
 3. **A scan for Blizzard games already on this machine.** If you've played
-   through Lutris, Bottles, Heroic or a hand-made prefix, your installs are
+   through Lutris, Bottles, Heroic, Faugus or a hand-made prefix, your installs are
    found and adopted **where they already are** — nothing is moved and
    nothing is re-downloaded. This reads Battle.net's own registry rather than
    crawling your disks.

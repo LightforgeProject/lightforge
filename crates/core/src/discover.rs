@@ -39,6 +39,7 @@ pub enum Origin {
     Lutris,
     Bottles,
     Heroic,
+    Faugus,
     Steam,
     /// A prefix made by hand, `~/.wine` and friends.
     Wine,
@@ -52,6 +53,7 @@ impl Origin {
             Self::Lutris => "Lutris",
             Self::Bottles => "Bottles",
             Self::Heroic => "Heroic",
+            Self::Faugus => "Faugus",
             Self::Steam => "Steam",
             Self::Wine => "Wine",
             Self::Pointed => "the folder you picked",
@@ -136,6 +138,9 @@ pub fn hints(home: &Path) -> Vec<(PathBuf, Origin)> {
             flatpak.join("com.heroicgameslauncher.hgl").join("config").join("heroic").join("Prefixes"),
             Origin::Heroic,
         ),
+        // Faugus, the launcher Bazzite suggests, puts each prefix straight
+        // under `~/Faugus/<name>`, flatpak or not.
+        (home.join("Faugus"), Origin::Faugus),
         (home.join(".wine"), Origin::Wine),
         (home.join(".local").join("share").join("wineprefixes"), Origin::Wine),
     ];
@@ -871,5 +876,6 @@ mod tests {
         assert!(origins.contains(&Origin::Wine));
         assert!(origins.contains(&Origin::Bottles));
         assert!(origins.contains(&Origin::Heroic));
+        assert!(origins.contains(&Origin::Faugus));
     }
 }
