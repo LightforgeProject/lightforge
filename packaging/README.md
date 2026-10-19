@@ -175,7 +175,7 @@ source RPM.
 Users install it with:
 
 ```bash
-sudo dnf copr enable <copr-user>/lightforge
+sudo dnf copr enable simplykenny/lightforge
 sudo dnf install lightforge
 ```
 

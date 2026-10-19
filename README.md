@@ -130,13 +130,33 @@ method.
 
 ## Install
 
-Grab a package from the
+### Debian based (Debian, Ubuntu, Pop!_OS, Mint…)
+
+Download the `.deb` from the
 [releases page](https://github.com/LightforgeProject/lightforge/releases):
 
 ```bash
-sudo apt install ./lightforge_1.0.0.beta.5-1_amd64.deb     # Debian, Ubuntu
-sudo dnf install ./lightforge-1.0.0.beta.5-1.x86_64.rpm    # Fedora, openSUSE
+sudo apt install ./lightforge_1.0.0.beta.5-1_amd64.deb
 ```
+
+### Fedora
+
+From the [COPR repository](https://copr.fedorainfracloud.org/coprs/simplykenny/lightforge/),
+which keeps it updated with the rest of your system:
+
+```bash
+sudo dnf copr enable simplykenny/lightforge
+sudo dnf install lightforge
+```
+
+Or download the `.rpm` from the releases page and install it directly (this
+also works on openSUSE with `zypper install`):
+
+```bash
+sudo dnf install ./lightforge-1.0.0.beta.5-1.x86_64.rpm
+```
+
+### Everything else
 
 On SteamOS, Bazzite and other systems, download `lightforge-installer.desktop`
 from the same page and double-click it, or run it from a terminal:

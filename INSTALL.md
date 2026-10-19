@@ -1,12 +1,12 @@
 # Installing Lightforge
 
-There's a package for Debian/Ubuntu, one for Fedora, a PKGBUILD for Arch, and
+There's a package for Debian/Ubuntu, a COPR repository and a package for Fedora, a PKGBUILD for Arch, and
 an installer for SteamOS, Bazzite and everything else. Failing that, Lightforge is a Rust program with almost no dependencies, so
 building it is three commands and a couple of minutes of your CPU fan.
 
 Everything below installs the same two binaries, the menu entry and the icons.
 
-## Debian, Ubuntu, Mint
+## Debian based (Debian, Ubuntu, Pop!_OS, Mint…)
 
 Download `lightforge_<version>_amd64.deb` from the
 [releases page](https://github.com/LightforgeProject/lightforge/releases).
@@ -26,13 +26,31 @@ themselves only import 2.34 and 2.35, so the [installer](#steamos-bazzite-and-ot
 below works there — the `.deb` states the container's own 2.36 because that is
 the version it can actually promise for every future build.
 
-## Fedora, RHEL, openSUSE
+## Fedora
 
-Download `lightforge-<version>.x86_64.rpm` from the same place:
+### From COPR (recommended)
+
+Lightforge has its own [COPR repository](https://copr.fedorainfracloud.org/coprs/simplykenny/lightforge/),
+built from source for every current Fedora release. Add it once and
+`dnf upgrade` brings each new version along with the rest of your system:
 
 ```bash
-sudo dnf install ./lightforge-1.0.0.beta.5-1.x86_64.rpm   # or zypper install
+sudo dnf copr enable simplykenny/lightforge
+sudo dnf install lightforge
 ```
+
+### The .rpm directly
+
+Without the repository, download `lightforge-<version>.x86_64.rpm` from the
+[releases page](https://github.com/LightforgeProject/lightforge/releases)
+and install it by hand. Updates are then up to you, one download per release:
+
+```bash
+sudo dnf install ./lightforge-1.0.0.beta.5-1.x86_64.rpm
+```
+
+The same file installs on openSUSE with `sudo zypper install`. It needs
+glibc 2.36 or newer, like the `.deb`.
 
 ## Arch, CachyOS, EndeavourOS
 
@@ -230,8 +248,9 @@ Then you're on the Play page and it's one button.
 
 ## Updating
 
-With a package, however your system updates everything else — install the new
-`.deb` or `.rpm` over the old one, or `makepkg -si` again on Arch. With the
+From the Fedora COPR, `sudo dnf upgrade` and that's it. With a downloaded
+package, install the new `.deb` or `.rpm` over the old one, or `makepkg -si`
+again on Arch. With the
 installer, run it again. From a source tree:
 
 ```bash
