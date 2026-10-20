@@ -84,6 +84,16 @@ terminal:
 curl -fsSL https://raw.githubusercontent.com/LightforgeProject/lightforge/main/packaging/installer/install.sh | bash
 ```
 
+Bazzite/Fedora Atomic specific:
+
+```bash
+sudo dnf5 copr enable simplykenny/lightforge
+sudo rpm-ostree install lightforge
+sudo systemctl reboot
+```
+
+##
+
 ### From source
 
 ```bash
