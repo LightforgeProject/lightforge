@@ -18,6 +18,7 @@ mod settings;
 mod navigation;
 mod news;
 mod report;
+mod upgrade;
 mod app;
 
 /// What one area does with a message: a task when it is one of its own,
@@ -26,7 +27,7 @@ type Area = fn(&mut Lightforge, Message) -> Result<Task<Message>, Message>;
 
 impl Lightforge {
     pub(crate) fn handle(&mut self, message: Message) -> Task<Message> {
-        const AREAS: [Area; 12] = [
+        const AREAS: [Area; 13] = [
             Lightforge::update_products,
             Lightforge::update_launch,
             Lightforge::update_downloads,
@@ -38,6 +39,7 @@ impl Lightforge {
             Lightforge::update_navigation,
             Lightforge::update_news,
             Lightforge::update_report,
+            Lightforge::update_upgrade,
             Lightforge::update_app,
         ];
         let mut message = message;
@@ -67,6 +69,7 @@ mod tests {
         ("navigation", include_str!("navigation.rs")),
         ("news", include_str!("news.rs")),
         ("report", include_str!("report.rs")),
+        ("upgrade", include_str!("upgrade.rs")),
         ("app", include_str!("app.rs")),
     ];
 

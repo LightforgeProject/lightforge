@@ -8,3 +8,4 @@ mod menus;
 mod news;
 mod optimizations;
 mod settings;
+mod upgrade;

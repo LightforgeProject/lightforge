@@ -83,9 +83,9 @@ because somebody filled in a form.
 Two requests do go out when the launcher starts, and neither says anything
 about you beyond the IP address any request reveals: it fetches the game
 artwork it shows you, and it asks GitHub whether a newer Lightforge has been
-released. The second one is a public release listing, nothing is downloaded or
-installed from it, and Settings › General turns it off. Both are in the table
-below.
+released. The second one is a public release listing, and Settings › General
+turns it off. Nothing is downloaded from it unless you press Update on the
+notice it shows. Both are in the table below.
 
 The longer version, because "we respect your privacy" is what everyone says
 and a list is more useful:
@@ -98,6 +98,7 @@ and a list is more useful:
 | `wow.zamimg.com` | news headlines with pictures | your IP address, by Wowhead's CDN |
 | `api.github.com` | checking for new Proton-GE builds | a public release listing |
 | `api.github.com` | once at startup, checking whether a newer Lightforge was released | a public release listing |
+| `github.com`, `raw.githubusercontent.com` | **only when you press Update** on that notice: the new release, its checksums, or the Arch PKGBUILD | your IP address |
 | `bugs.k3nny.tech` | **only when you press Send** | exactly the report shown to you first |
 
 About that last row, since it's the only one that carries anything personal:

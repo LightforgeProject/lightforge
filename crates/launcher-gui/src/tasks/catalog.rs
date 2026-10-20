@@ -99,7 +99,9 @@ pub async fn check_for_update(
     use lightforge_core::net::ETagCache;
     use lightforge_core::update;
 
-    if !enabled {
+    // A development build is ahead of every release or about to be, and
+    // its own checkout is how it updates.
+    if !enabled || cfg!(debug_assertions) {
         return None;
     }
     let http = http?;
@@ -108,7 +110,13 @@ pub async fn check_for_update(
     // check, so the ETag is what keeps a start from costing two of it.
     let cache = ETagCache::new(dirs.asset_cache_dir().join("lightforge-releases.json"));
     let releases = update::fetch(&http, &cache).await.ok()?;
-    let found = update::newer_than(env!("CARGO_PKG_VERSION"), &releases);
+    // `LIGHTFORGE_PRETEND_VERSION` is for development, like
+    // `LIGHTFORGE_OS_RELEASE`: a build that calls itself older is offered
+    // the real newest release, which is the only way to walk an update
+    // through before the next one exists.
+    let running = std::env::var("LIGHTFORGE_PRETEND_VERSION")
+        .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_owned());
+    let found = update::newer_than(&running, &releases);
     crate::trace::mark(match &found {
         Some(available) => format!("update: {} is out", available.latest),
         None => "update: this is the newest build".to_owned(),

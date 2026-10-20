@@ -40,6 +40,7 @@ pub mod tact;
 pub mod transfers;
 pub mod tweaks;
 pub mod update;
+pub mod upgrade;
 
 pub use error::{CoreError, Result};
 pub use paths::Layout;

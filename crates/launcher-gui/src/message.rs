@@ -41,6 +41,14 @@ pub(crate) enum Message {
     DismissUpdate,
     /// Open the releases page in a browser.
     OpenReleases,
+    /// "Update" on the update notice: the route this copy was installed by.
+    UpgradeStart,
+    /// The update's work is done, as far as Lightforge can take it.
+    UpgradeReady(Result<crate::tasks::Prepared, Problem>),
+    /// While a terminal runs the update: has the binary been replaced yet?
+    UpgradeWatch,
+    /// Start the new version and close this one.
+    UpgradeRestart,
     /// Turn the start-up check for a new Lightforge on or off, from Settings.
     /// Distinct from `CheckForUpdates`, which asks Blizzard about the game.
     CheckLauncherUpdates(bool),

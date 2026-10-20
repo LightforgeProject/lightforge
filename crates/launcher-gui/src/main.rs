@@ -456,8 +456,16 @@ struct Lightforge {
     uninstall_dialog: Option<UninstallDialog>,
     cancel_dialog: Option<CancelDialog>,
     /// A newer Lightforge on GitHub, found at start-up. Shown once per
-    /// release and never installed; see `core::update`.
+    /// release; see `core::update`, and `core::upgrade` for installing it.
     update_notice: Option<lightforge_core::update::Available>,
+    /// How this copy was installed, which decides what the notice offers.
+    /// Read at start, like `exe`: a package manager replacing the binary
+    /// leaves this process's own path reading `(deleted)`.
+    origin: lightforge_core::upgrade::Origin,
+    /// The binary this process started from, for a restart.
+    exe: Option<std::path::PathBuf>,
+    /// The update of Lightforge itself, once "Update" was pressed.
+    upgrade: Option<Upgrade>,
     /// A cancelled transfer whose files go once the run has wound down.
     ///
     /// Deferred rather than done on the click: the downloader may still have
@@ -740,6 +748,9 @@ impl Lightforge {
             uninstall_dialog: None,
             cancel_dialog: None,
             update_notice: None,
+            origin: lightforge_core::upgrade::Origin::detect(),
+            exe: std::env::current_exe().ok(),
+            upgrade: None,
             delete_after_cancel: Vec::new(),
             discarding: None,
             launching: None,
@@ -1006,6 +1017,7 @@ impl Lightforge {
             true => iced::time::every(REGISTRY_POLL).map(|_| Message::RegistryPoll),
             false => Subscription::none(),
         };
+        let upgrade = self.upgrade_watch();
 
         // The splash's bar sweeps off the clock, so it needs the tick as much
         // as a live transfer does.
@@ -1014,6 +1026,7 @@ impl Lightforge {
             || self.setup_running
             || self.addons_busy
             || self.scanning
+            || self.upgrading()
             || self.uninstall_dialog.as_ref().is_some_and(|d| d.working)
             || self.unused.values().any(|u| matches!(u, UnusedData::Freeing { .. }))
         {
@@ -1026,10 +1039,11 @@ impl Lightforge {
                 dragging,
                 pointing,
                 registry,
+                upgrade,
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),
             ]),
             false => Subscription::batch([
-                closing, hints, pads, window_focus, resizes, dragging, pointing, registry,
+                closing, hints, pads, window_focus, resizes, dragging, pointing, registry, upgrade,
             ]),
         }
     }

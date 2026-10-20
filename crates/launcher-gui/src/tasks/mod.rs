@@ -37,6 +37,7 @@ mod store;
 mod launch;
 mod backups;
 mod headlines;
+pub(crate) mod upgrade;
 
 pub(crate) use branding::*;
 pub(crate) use catalog::*;
@@ -45,6 +46,7 @@ pub(crate) use store::*;
 pub(crate) use launch::*;
 pub(crate) use backups::*;
 pub(crate) use headlines::*;
+pub(crate) use upgrade::{Prepared, Stamp};
 
 
 /// An error on its way to the screen: what went wrong, and what to do about

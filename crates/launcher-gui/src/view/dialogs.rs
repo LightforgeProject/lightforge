@@ -669,63 +669,6 @@ impl Lightforge {
         .into()
     }
 
-    /// A newer Lightforge exists. Says so, links to it, installs nothing.
-    ///
-    /// Deliberately small and deliberately passive: the binary belongs to
-    /// whatever installed it, a distribution package most of the time, and a
-    /// launcher that replaced itself behind one would be the wrong kind of
-    /// helpful. The releases page is where the decision belongs.
-    pub(crate) fn update_card<'a>(
-        &'a self,
-        available: &'a lightforge_core::update::Available,
-    ) -> Element<'a, Message> {
-        let body = column![
-            text(format!("Lightforge {} is available.", available.latest)).size(theme::BODY),
-            muted(
-                format!(
-                    "You are running {}. Nothing is installed automatically; \
-                     the releases page has the downloads and the notes.",
-                    available.current
-                ),
-                theme::LABEL,
-            ),
-        ]
-        .spacing(theme::SM)
-        .width(Length::Fixed(420.0));
-
-        let choice = |label: &'static str| {
-            button(text(label).size(theme::LABEL).width(Length::Fill).center())
-                .width(Length::Fixed(150.0))
-                .padding(theme::tap([theme::SM, theme::MD]))
-        };
-        let actions = row![
-            Space::new().width(Length::Fill),
-            self.ring(
-                focus::Target::UpdateLater,
-                Some(Message::DismissUpdate),
-                choice("Not now").style(theme::outlined).on_press(Message::DismissUpdate),
-            ),
-            self.ring(
-                focus::Target::UpdateOpen,
-                Some(Message::OpenReleases),
-                choice("See the release")
-                    .style(theme::filled(theme::ACCENT))
-                    .on_press(Message::OpenReleases),
-            ),
-        ]
-        .spacing(theme::SM)
-        .align_y(Alignment::Center);
-
-        container(
-            column![section("Update available".to_owned(), body.into()), actions]
-                .spacing(theme::LG),
-        )
-        .width(Length::Fixed(420.0))
-        .padding(theme::LG)
-        .style(theme::dialog)
-        .into()
-    }
-
     /// The confirmation for giving a download up.
     ///
     /// Two shapes, because an update and a first install are not the same

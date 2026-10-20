@@ -1149,3 +1149,83 @@ fn byte_readouts_survive_an_unknown_total() {
     assert_eq!(bytes_of(1024 * 1024 * 1024, 0), "1.00 GiB");
     assert!(bytes_of(0, 1024 * 1024 * 1024).ends_with("of 1.00 GiB"));
 }
+
+fn update_notice_app() -> Lightforge {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.update_notice = Some(lightforge_core::update::Available {
+        current: "1.0.0-beta.6".to_owned(),
+        latest: "1.0.0-beta.7".to_owned(),
+        url: lightforge_core::update::RELEASES_PAGE.to_owned(),
+    });
+    app
+}
+
+#[test]
+fn the_update_card_draws_for_every_route_and_stage() {
+    use lightforge_core::upgrade::Origin;
+    let mut app = update_notice_app();
+    let available = app.update_notice.clone().unwrap();
+    let origins = [
+        Origin::Installer { bin_dir: "/home/u/.local/bin".into() },
+        Origin::Pacman { package: "lightforge".into() },
+        Origin::Deb,
+        Origin::Copr { atomic: true },
+        Origin::Checkout { repo: "/home/u/lightforge".into() },
+        Origin::Unknown,
+    ];
+    let stages = [
+        None,
+        Some(UpgradeStage::Fetching),
+        Some(UpgradeStage::InTerminal { command: "makepkg -si --noconfirm".into(), stamp: None }),
+        Some(UpgradeStage::NoTerminal { command: "sh update.sh".into() }),
+        Some(UpgradeStage::Installed),
+        Some(UpgradeStage::Failed("no connection".into())),
+    ];
+    for origin in origins {
+        app.origin = origin;
+        for stage in stages.clone() {
+            app.upgrade = stage.map(|stage| Upgrade { stage, rx: None, sample: (5, Some(10)) });
+            let _ = app.update_card(&available);
+        }
+    }
+}
+
+#[test]
+fn the_update_notice_stays_while_files_are_being_replaced() {
+    let mut app = update_notice_app();
+    app.upgrade = Some(Upgrade { stage: UpgradeStage::Fetching, rx: None, sample: (0, None) });
+    let _ = app.update(Message::DismissUpdate);
+    assert!(app.update_notice.is_some(), "closed halfway through an update");
+
+    app.upgrade.as_mut().unwrap().stage = UpgradeStage::Installed;
+    let _ = app.update(Message::DismissUpdate);
+    assert!(app.update_notice.is_none() && app.upgrade.is_none());
+}
+
+#[test]
+fn a_package_manager_replacing_the_binary_ends_the_wait() {
+    let dir = std::env::temp_dir().join(format!("lightforge-upgrade-watch-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = dir.join("lightforge-gui");
+    std::fs::write(&exe, "old").unwrap();
+
+    let mut app = update_notice_app();
+    app.exe = Some(exe.clone());
+    let stamp = tasks::upgrade::stamp(&exe);
+    app.upgrade = Some(Upgrade {
+        stage: UpgradeStage::InTerminal { command: "makepkg -si".into(), stamp },
+        rx: None,
+        sample: (0, None),
+    });
+
+    let _ = app.update(Message::UpgradeWatch);
+    assert!(matches!(app.upgrade.as_ref().unwrap().stage, UpgradeStage::InTerminal { .. }));
+
+    // What pacman does: a new file renamed over the old one.
+    std::fs::write(dir.join("new"), "new").unwrap();
+    std::fs::rename(dir.join("new"), &exe).unwrap();
+    let _ = app.update(Message::UpgradeWatch);
+    assert_eq!(app.upgrade.as_ref().unwrap().stage, UpgradeStage::Installed);
+    let _ = std::fs::remove_dir_all(&dir);
+}

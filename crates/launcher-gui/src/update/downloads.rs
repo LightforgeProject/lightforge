@@ -15,6 +15,11 @@ impl Lightforge {
                 if let Some(rx) = &self.scan_rx {
                     self.scan_sample = *rx.borrow();
                 }
+                if let Some(upgrade) = self.upgrade.as_mut() {
+                    if let Some(rx) = &upgrade.rx {
+                        upgrade.sample = *rx.borrow();
+                    }
+                }
                 if let Some(entry) = self
                     .queue
                     .iter_mut()

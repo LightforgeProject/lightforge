@@ -12,6 +12,29 @@ pub(crate) struct PatchNotes {
     pub(crate) mute: bool,
 }
 
+/// An update of Lightforge itself, from "Update" on.
+#[derive(Debug)]
+pub(crate) struct Upgrade {
+    pub(crate) stage: UpgradeStage,
+    /// The download's progress while [`UpgradeStage::Fetching`].
+    pub(crate) rx: Option<tokio::sync::watch::Receiver<(u64, Option<u64>)>>,
+    pub(crate) sample: (u64, Option<u64>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum UpgradeStage {
+    /// Downloading and checking, and for the installer's copy installing.
+    Fetching,
+    /// A terminal runs the package manager. Over once the binary on disk is
+    /// no longer the one this process started from, `stamp`.
+    InTerminal { command: String, stamp: Option<crate::tasks::Stamp> },
+    /// No terminal could be opened: the command, to run by hand.
+    NoTerminal { command: String },
+    /// The new version is on disk; this process is still the old one.
+    Installed,
+    Failed(Problem),
+}
+
 /// What the splash window is waiting on.
 #[derive(Debug, Clone)]
 pub(crate) struct Splash {
