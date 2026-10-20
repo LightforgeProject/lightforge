@@ -1166,9 +1166,12 @@ pub struct SetupReport {
 /// Install Battle.net and configure it, in one call.
 ///
 /// Assumes the prefix already exists, [`crate::prefix::provision`] is the
-/// step before this one, not part of it.
+/// step before this one, not part of it. `container` is where the installer
+/// alone runs, from [`crate::runtime::installer_container`]; the rest runs
+/// on the host as always.
 pub fn provision(
     runner: &ProtonRunner,
+    container: Option<&Path>,
     layout: &Layout,
     user: &str,
     locale: &str,
@@ -1179,7 +1182,11 @@ pub fn provision(
         return Err(BattleNetError::PrefixNotReady(layout.prefix()));
     }
 
-    let install = Installer::new(layout, installer).with_locale(locale).install(runner)?;
+    let install_runner = match container {
+        Some(entry) => runner.clone().in_container(entry),
+        None => runner.clone(),
+    };
+    let install = Installer::new(layout, installer).with_locale(locale).install(&install_runner)?;
 
     let registry = registry_tweaks();
     apply_registry(runner, &registry)?;
@@ -1857,7 +1864,7 @@ mod tests {
         let runner = ProtonRunner::new(&release, &layout, dir.join("Steam"));
 
         assert!(matches!(
-            provision(&runner, &layout, "steamuser", "enUS", &dir.join("setup.exe"), &[]),
+            provision(&runner, None, &layout, "steamuser", "enUS", &dir.join("setup.exe"), &[]),
             Err(BattleNetError::PrefixNotReady(_))
         ));
     }

@@ -80,6 +80,23 @@ pub enum RuntimeError {
         stderr: String,
     },
 
+    #[error(
+        "Battle.net's installer would have no internet here: this system has no 32-bit gnutls, \
+         which Wine needs for HTTPS{}",
+        match install {
+            Some(appid) => format!(
+                ", and the Steam Linux Runtime that would bring its own is not installed \
+                 (install it in Steam: steam://install/{appid})"
+            ),
+            None => format!(" — {ADVICE}"),
+        }
+    )]
+    NoTls {
+        /// The Steam Linux Runtime the Proton build asks for, when Steam is
+        /// here to install it.
+        install: Option<u32>,
+    },
+
     #[error("could not run {wine}")]
     Spawn {
         wine: PathBuf,
@@ -596,5 +613,160 @@ mod remedy_tests {
         assert_eq!(remedy_for(&OsRelease::default()).distro, "this system");
         let id_only = OsRelease { id: "debian".into(), ..Default::default() };
         assert_eq!(remedy_for(&id_only).distro, "debian");
+    }
+}
+
+// ---------------------------------------------------------------------
+// Steam's container, for the TLS the host lacks
+// ---------------------------------------------------------------------
+//
+// Wine does HTTPS through the host's gnutls, which it dlopens, so neither
+// check above sees it. SteamOS ships the 32-bit stack Steam itself needs
+// and no 32-bit gnutls, and there `Battle.net-Setup.exe` fails its first
+// request in a second (`BLZBNTBTS00000028`) and calls it "no connection".
+// Steam never hits this because it runs Proton inside the Steam Linux
+// Runtime, which brings its own libraries. Only the installer is 32-bit:
+// Battle.net and the games run fine on the host's 64-bit gnutls, so only
+// the installer is sent into the container, and only when it has to be.
+
+/// The runtime a Proton build asks Steam to run it in, from its
+/// `toolmanifest.vdf`: `4183110` (Steam Linux Runtime 4.0) for GE-Proton 11.
+pub fn required_runtime(proton_root: &Path) -> Option<u32> {
+    let text = std::fs::read_to_string(proton_root.join("toolmanifest.vdf")).ok()?;
+    vdf_value(&text, "require_tool_appid")?.parse().ok()
+}
+
+/// The runtime's entry point, if Steam has `appid` installed in any of
+/// `libraries`. Found through the app manifest's `installdir` rather than a
+/// folder name, which differs between runtimes.
+pub fn find_steam_runtime(libraries: &[PathBuf], appid: u32) -> Option<PathBuf> {
+    libraries.iter().find_map(|library| {
+        let steamapps = library.join("steamapps");
+        let manifest =
+            std::fs::read_to_string(steamapps.join(format!("appmanifest_{appid}.acf"))).ok()?;
+        let entry = steamapps.join("common").join(vdf_value(&manifest, "installdir")?).join("_v2-entry-point");
+        entry.is_file().then_some(entry)
+    })
+}
+
+/// Whether the dynamic loader can find a 32-bit gnutls, from its own cache.
+///
+/// `None` when that cache cannot be read: no `ldconfig` (NixOS), or one that
+/// fails. Not knowing is not a reason to change how setup runs.
+pub fn has_32bit_tls() -> Option<bool> {
+    ["ldconfig", "/sbin/ldconfig", "/usr/sbin/ldconfig"].iter().find_map(|ldconfig| {
+        let output = Command::new(ldconfig).arg("-p").stdin(Stdio::null()).output().ok()?;
+        output
+            .status
+            .success()
+            .then(|| has_32bit(&String::from_utf8_lossy(&output.stdout), "libgnutls.so.30"))
+    })
+}
+
+/// Where to run Battle.net's installer: `None` straight on the host, as
+/// everything else runs, or the Steam Linux Runtime entry point to run it
+/// through when the host has no 32-bit gnutls.
+pub fn installer_container(
+    proton_root: &Path,
+    steam: Option<&crate::steam::SteamRoot>,
+) -> Result<Option<PathBuf>, RuntimeError> {
+    if has_32bit_tls() != Some(false) {
+        return Ok(None);
+    }
+    let appid = required_runtime(proton_root);
+    let found = steam
+        .zip(appid)
+        .and_then(|(steam, appid)| find_steam_runtime(&steam.library_paths(), appid));
+    match found {
+        Some(entry) => Ok(Some(entry)),
+        None => Err(RuntimeError::NoTls { install: appid.filter(|_| steam.is_some()) }),
+    }
+}
+
+/// Whether `ldconfig -p` lists a 32-bit `lib`. A 64-bit entry is tagged
+/// `(libc6,x86-64)`, a 32-bit one plain `(libc6)`.
+fn has_32bit(ldconfig: &str, lib: &str) -> bool {
+    ldconfig.lines().any(|line| {
+        line.trim_start()
+            .strip_prefix(lib)
+            .is_some_and(|rest| rest.trim_start().starts_with("(libc6)"))
+    })
+}
+
+/// One quoted `"key" "value"` pair from a Valve KeyValues file, by key.
+fn vdf_value<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+    text.lines().find_map(|line| {
+        let mut parts = line.split('"').filter(|s| !s.trim().is_empty());
+        match (parts.next(), parts.next()) {
+            (Some(k), Some(value)) if k == key => Some(value),
+            _ => None,
+        }
+    })
+}
+
+#[cfg(test)]
+mod container_tests {
+    use super::*;
+
+    const LDCONFIG: &str = "\
+1234 libs found in cache `/etc/ld.so.cache'
+\tlibgnutls.so.30 (libc6,x86-64) => /usr/lib/libgnutls.so.30
+\tlibgnutlsxx.so.30 (libc6) => /usr/lib32/libgnutlsxx.so.30
+";
+
+    #[test]
+    fn only_a_plain_libc6_entry_is_32_bit() {
+        // SteamOS: the 64-bit library, and a 32-bit one whose name merely
+        // starts the same way.
+        assert!(!has_32bit(LDCONFIG, "libgnutls.so.30"));
+        let arch = format!("{LDCONFIG}\tlibgnutls.so.30 (libc6) => /usr/lib32/libgnutls.so.30\n");
+        assert!(has_32bit(&arch, "libgnutls.so.30"));
+    }
+
+    #[test]
+    fn the_runtime_comes_from_the_tool_manifest() {
+        let dir = std::env::temp_dir().join(format!("lightforge-toolmanifest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("toolmanifest.vdf"),
+            "\"manifest\"\n{\n  \"version\" \"2\"\n  \"commandline\" \"/proton %verb%\"\n  \
+             \"require_tool_appid\" \"4183110\"\n  \"use_sessions\" \"1\"\n}\n",
+        )
+        .unwrap();
+        assert_eq!(required_runtime(&dir), Some(4183110));
+        assert_eq!(required_runtime(&dir.join("missing")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_runtime_is_found_by_its_manifest_in_any_library() {
+        let root = std::env::temp_dir().join(format!("lightforge-steam-runtime-{}", std::process::id()));
+        let (first, second) = (root.join("one"), root.join("two"));
+        let steamapps = second.join("steamapps");
+        std::fs::create_dir_all(first.join("steamapps")).unwrap();
+        std::fs::create_dir_all(steamapps.join("common/SteamLinuxRuntime_4")).unwrap();
+        std::fs::write(
+            steamapps.join("appmanifest_4183110.acf"),
+            "\"AppState\"\n{\n\t\"appid\"\t\t\"4183110\"\n\t\"installdir\"\t\t\"SteamLinuxRuntime_4\"\n}\n",
+        )
+        .unwrap();
+        let libraries = [first, second];
+
+        // Listed but not downloaded yet: no entry point, no runtime.
+        assert_eq!(find_steam_runtime(&libraries, 4183110), None);
+
+        let entry = steamapps.join("common/SteamLinuxRuntime_4/_v2-entry-point");
+        std::fs::write(&entry, "").unwrap();
+        assert_eq!(find_steam_runtime(&libraries, 4183110), Some(entry));
+        assert_eq!(find_steam_runtime(&libraries, 1628350), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn without_steam_the_message_names_the_32_bit_wine() {
+        let rendered = RuntimeError::NoTls { install: None }.to_string();
+        assert!(rendered.contains("gnutls") && rendered.contains(ADVICE), "{rendered}");
+        let rendered = RuntimeError::NoTls { install: Some(4183110) }.to_string();
+        assert!(rendered.contains("steam://install/4183110"), "{rendered}");
     }
 }

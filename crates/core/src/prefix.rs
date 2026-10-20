@@ -38,6 +38,10 @@ pub struct ProtonRunner {
     compat_mounts: Vec<PathBuf>,
     shader_cache: Option<PathBuf>,
     env: Vec<(OsString, OsString)>,
+    /// A Steam Linux Runtime entry point to run Proton inside, as Steam
+    /// does. Only for Battle.net's installer, see
+    /// [`crate::runtime::installer_container`].
+    container: Option<PathBuf>,
 }
 
 impl ProtonRunner {
@@ -58,6 +62,7 @@ impl ProtonRunner {
             compat_mounts: vec![layout.games_root()],
             shader_cache: None,
             env: Vec::new(),
+            container: None,
         }
     }
 
@@ -95,6 +100,15 @@ impl ProtonRunner {
         self
     }
 
+    /// Run Proton inside the Steam Linux Runtime whose `_v2-entry-point` this
+    /// is. Its libraries replace the host's, and it sees only what it is
+    /// told to: the prefix, the mounts, the Proton build, and the program's
+    /// own directory.
+    pub fn in_container(mut self, entry_point: impl Into<PathBuf>) -> Self {
+        self.container = Some(entry_point.into());
+        self
+    }
+
     /// The Wine prefix Proton will create or reuse: `<compat data>/pfx`.
     pub fn prefix(&self) -> PathBuf {
         self.compat_data.join("pfx")
@@ -107,13 +121,32 @@ impl ProtonRunner {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut cmd = Command::new(&self.entry_point);
+        let program = program.as_ref();
+        let mut mounts = self.compat_mounts.clone();
+        let mut cmd = match &self.container {
+            None => Command::new(&self.entry_point),
+            Some(container) => {
+                // Steam's own pairing: the container waits for the session,
+                // and Proton inside it for the prefix.
+                let mut cmd = Command::new(container);
+                cmd.args(["--verb=waitforexitandrun", "--"]).arg(&self.entry_point);
+                if let Some(proton) = self.entry_point.parent() {
+                    cmd.env("STEAM_COMPAT_TOOL_PATHS", proton);
+                }
+                mounts.extend(Path::new(program).parent().map(Path::to_path_buf));
+                cmd
+            }
+        };
+        let verb = match self.container {
+            Some(_) if verb == "run" => "waitforexitandrun",
+            _ => verb,
+        };
         cmd.arg(verb).arg(program).args(args);
 
         cmd.env("STEAM_COMPAT_DATA_PATH", &self.compat_data);
         cmd.env("STEAM_COMPAT_CLIENT_INSTALL_PATH", &self.steam_client);
-        if !self.compat_mounts.is_empty() {
-            cmd.env("STEAM_COMPAT_MOUNTS", join_paths(&self.compat_mounts));
+        if !mounts.is_empty() {
+            cmd.env("STEAM_COMPAT_MOUNTS", join_paths(&mounts));
         }
         // Proton keys parts of its runtime state off the app id. Lightforge
         // isn't a Steam app, so pin a stable placeholder instead of letting
@@ -519,6 +552,44 @@ mod tests {
         assert_eq!(
             env_of(&cmd, "STEAM_COMPAT_CLIENT_INSTALL_PATH").as_deref(),
             Some("/scratch/Steam")
+        );
+    }
+
+    #[test]
+    fn in_a_container_proton_runs_the_way_steam_starts_it() {
+        let cmd = runner(Path::new("/scratch"))
+            .in_container("/steam/common/SteamLinuxRuntime_4/_v2-entry-point")
+            .command("run", "/home/u/.cache/lightforge/Battle.net-Setup.exe", ["--lang=deDE"]);
+
+        assert_eq!(
+            cmd.get_program(),
+            OsStr::new("/steam/common/SteamLinuxRuntime_4/_v2-entry-point")
+        );
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                "--verb=waitforexitandrun",
+                "--",
+                "/scratch/GE-Proton11-7/proton",
+                "waitforexitandrun",
+                "/home/u/.cache/lightforge/Battle.net-Setup.exe",
+                "--lang=deDE",
+            ]
+        );
+        // The container sees only what it is shown: the build, the games,
+        // and the installer's own directory.
+        assert_eq!(
+            env_of(&cmd, "STEAM_COMPAT_TOOL_PATHS").as_deref(),
+            Some("/scratch/GE-Proton11-7")
+        );
+        assert_eq!(
+            env_of(&cmd, "STEAM_COMPAT_MOUNTS").as_deref(),
+            Some("/scratch/Blizzard/games:/home/u/.cache/lightforge")
+        );
+        assert_eq!(
+            env_of(&cmd, "STEAM_COMPAT_DATA_PATH").as_deref(),
+            Some("/scratch/Blizzard/prefix")
         );
     }
 

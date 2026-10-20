@@ -216,9 +216,16 @@ pub async fn run(
         return Ok(status);
     }
 
-    if !status.battle_net {
-        runtime::check_wine(runner.dist())?;
-    }
+    //    Wine's HTTPS needs a 32-bit gnutls too, which neither check sees;
+    //    without it the installer runs inside Steam's runtime, which brings
+    //    its own (SteamOS ships none).
+    let container = match status.battle_net {
+        true => None,
+        false => {
+            runtime::check_wine(runner.dist())?;
+            runtime::installer_container(&build.path, steam.as_ref())?
+        }
+    };
 
     if status.battle_net {
         on_event(Event::Finished {
@@ -228,7 +235,9 @@ pub async fn run(
         });
     } else {
         on_event(Event::Started(Step::BattleNet));
-        let report = install_battle_net(&http, layout, dirs, config, &runner, &mut on_event).await?;
+        let report =
+            install_battle_net(&http, layout, dirs, config, &runner, container.as_deref(), &mut on_event)
+                .await?;
         on_event(Event::Finished {
             step: Step::BattleNet,
             skipped: false,
@@ -302,6 +311,7 @@ async fn install_battle_net(
     dirs: &AppDirs,
     config: &Config,
     runner: &ProtonRunner,
+    container: Option<&std::path::Path>,
     on_event: &mut impl FnMut(Event),
 ) -> Result<SetupReport, SetupError> {
     let installer = dirs.cache_dir().join(battlenet::INSTALLER_FILE);
@@ -313,6 +323,7 @@ async fn install_battle_net(
     }
     Ok(battlenet::provision(
         runner,
+        container,
         layout,
         &config.prefix_user,
         &config.locale,

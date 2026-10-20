@@ -46,16 +46,23 @@ pub(crate) fn battlenet_setup(ctx: Ctx, proton: Option<String>, locale: String, 
     let setup = Installer::new(&layout, &installer_path)
         .with_locale(&locale)
         .with_timeout(std::time::Duration::from_secs(timeout));
+    let mut container = None;
     if !setup.is_installed() {
+        let steam = lightforge_core::steam::SteamRoot::discover();
+        container = lightforge_core::runtime::installer_container(&build.path, steam.as_ref())?;
+        if let Some(entry) = &container {
+            println!("no 32-bit gnutls here, running the installer in {}", entry.display());
+        }
         println!("running setup — this takes a few minutes");
     }
 
     let managed = Config::load_or_default(&dirs.config_file())
         .map(|c| c.managed_products())
         .unwrap_or_default();
-    let report =
-        battlenet::provision(&runner, &layout, &user, &locale, &installer_path, &managed)
-        .context("setting Battle.net up")?;
+    let report = battlenet::provision(
+        &runner, container.as_deref(), &layout, &user, &locale, &installer_path, &managed,
+    )
+    .context("setting Battle.net up")?;
     if report.install.skipped {
         println!("battle.net      already installed");
     } else {
