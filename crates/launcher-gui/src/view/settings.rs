@@ -280,6 +280,14 @@ impl Lightforge {
                             .enabled(!self.setup_running),
                     )
                 }))
+                // Games installed after setup, by Lutris or another Battle.net,
+                // without walking through region and drives again.
+                .extend((!in_wizard).then(|| {
+                    Element::from(
+                        secondary("Look for games", Message::Wizard(wizard::Msg::Scan))
+                            .enabled(!self.setup_running),
+                    )
+                }))
                 .spacing(theme::SM)
                 .align_y(Alignment::Center),
         );

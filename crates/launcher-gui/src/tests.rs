@@ -455,6 +455,34 @@ fn a_button_gone_once_pressed_leaves_the_ring_nearby() {
 }
 
 #[test]
+fn right_from_the_settings_index_goes_in_and_left_comes_back_out() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.splash = None;
+    app.wizard = None;
+    app.screen = Screen::Settings;
+    let at = |x, y| iced::Rectangle { x, y, width: 80.0, height: 30.0 };
+    let send = || focus::Press::Send(Message::MenuClick);
+    let tab = focus::Target::SettingsTab(SettingsTab::ALL[0]);
+    let switch = focus::Target::Key("switch".to_owned());
+
+    focus::reset();
+    focus::put(tab.clone(), at(20.0, 100.0), focus::Press::Send(Message::SettingsTab(SettingsTab::ALL[0])), 0);
+    focus::put_in(SETTINGS_PAGE, switch.clone(), at(400.0, 100.0), send());
+    app.focus = Some(tab.clone());
+
+    // Right is A here: into the section, once it has been drawn.
+    let _ = app.update(Message::FocusStep(focus::Step::Right));
+    app.focus_entering = FOCUS_ENTER_FRAMES;
+    let _ = app.update(Message::FocusSettle);
+    assert_eq!(app.focus, Some(switch));
+
+    // Nothing further left inside the section: back onto its entry, as B.
+    let _ = app.update(Message::FocusStep(focus::Step::Left));
+    assert_eq!(app.focus, Some(tab));
+}
+
+#[test]
 fn the_keyboard_alone_picks_a_game_and_closes_the_release_notes() {
     let (mut app, _) = Lightforge::new();
     app.dirs = None;

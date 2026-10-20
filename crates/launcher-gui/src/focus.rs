@@ -274,6 +274,17 @@ pub fn put(target: Target, bounds: Rectangle, press: Press, depth: u32) {
     });
 }
 
+/// Record `target` as drawn inside the [`pane`] `id`.
+#[cfg(test)]
+pub fn put_in(id: &'static str, target: Target, bounds: Rectangle, press: Press) {
+    put(target.clone(), bounds, press, 0);
+    with(|r| {
+        let spot = r.spots.get_mut(&target).expect("just put");
+        spot.region = Some(id);
+        spot.pane = Some(id);
+    });
+}
+
 /// Forget the last frame, as the next one starting would.
 #[cfg(test)]
 pub fn reset() {

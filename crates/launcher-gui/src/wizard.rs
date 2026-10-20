@@ -135,6 +135,9 @@ pub struct Wizard {
     pub adopted: Vec<Note>,
     /// Hand-offs to link once the prefix and Battle.net exist.
     pub pending: Vec<(HandOff, PathBuf)>,
+    /// Opened from Settings to look for games after setup: the one slide,
+    /// adopting in place, and closing without touching the first-run state.
+    pub scan_only: bool,
 }
 
 impl Default for Wizard {
@@ -151,6 +154,7 @@ impl Default for Wizard {
             battle_net: true,
             adopted: Vec::new(),
             pending: Vec::new(),
+            scan_only: false,
         }
     }
 }
@@ -160,6 +164,8 @@ impl Default for Wizard {
 pub enum Msg {
     /// Open it again from Settings.
     Open,
+    /// Look for games installed since setup, from Settings.
+    Scan,
     Next,
     Back,
     Region(Region),
@@ -255,6 +261,11 @@ pub fn update(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
             prefetch(app)
         }
 
+        Msg::Scan => {
+            app.wizard = Some(Wizard { step: Step::Found, scanning: true, scan_only: true, ..Wizard::default() });
+            scan(app)
+        }
+
         Msg::Finish => {
             let pending = app.wizard.as_ref().map(|w| w.pending.clone()).unwrap_or_default();
             app.wizard = None;
@@ -283,6 +294,13 @@ pub fn update(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
         }
 
         Msg::Next => advance(app),
+
+        // There is nothing behind the one slide a scan shows: its Back is
+        // the way out, and Escape with it.
+        Msg::Back if app.wizard.as_ref().is_some_and(|w| w.scan_only) => {
+            app.wizard = None;
+            app.reload(app.selected.code.clone())
+        }
 
         Msg::Back => {
             if let Some(wizard) = app.wizard.as_mut() {
@@ -320,6 +338,7 @@ pub fn update(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
                 wizard.scanned = true;
                 wizard.rows = rows_of(found);
             }
+            mark_known(app);
             iced::Task::none()
         }
 
@@ -368,6 +387,7 @@ pub fn update(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
                     }
                     wizard.pointed.clear();
                     wizard.point_error = None;
+                    mark_known(app);
                 }
                 _ => {
                     wizard.point_error = Some(
@@ -440,19 +460,21 @@ fn advance(app: &mut Lightforge) -> iced::Task<Message> {
                 wizard.scanning = fresh;
             }
             match fresh {
-                true => {
-                    let prefix = app.layout.prefix();
-                    iced::Task::perform(
-                        async move {
-                            tokio::task::spawn_blocking(move || discover::scan(&prefix))
-                                .await
-                                .unwrap_or_default()
-                        },
-                        |found| Message::Wizard(Msg::Scanned(found)),
-                    )
-                }
+                true => scan(app),
                 false => iced::Task::none(),
             }
+        }
+
+        // After setup the prefix and Battle.net are there already, so a
+        // found game is linked as it is added, and the slide stays up to say
+        // how that went.
+        Step::Found if app.wizard.as_ref().is_some_and(|w| w.scan_only) => {
+            adopt_taken(app);
+            let pending = app.wizard.as_mut().map(|w| std::mem::take(&mut w.pending)).unwrap_or_default();
+            if !pending.is_empty() {
+                link_hand_offs(app, &pending);
+            }
+            iced::Task::none()
         }
 
         Step::Found => {
@@ -470,6 +492,51 @@ fn advance(app: &mut Lightforge) -> iced::Task<Message> {
                 }
             }
             iced::Task::none()
+        }
+    }
+}
+
+/// Look through the usual Wine prefixes, off the UI thread: it reads two
+/// files per prefix and measures what it finds, like any other walk of a disk.
+fn scan(app: &Lightforge) -> iced::Task<Message> {
+    let prefix = app.layout.prefix();
+    iced::Task::perform(
+        async move {
+            tokio::task::spawn_blocking(move || discover::scan(&prefix)).await.unwrap_or_default()
+        },
+        |found| Message::Wizard(Msg::Scanned(found)),
+    )
+}
+
+/// Untick and explain what Lightforge already has, so a second look offers
+/// only what is new rather than the install it has been playing for a week.
+///
+/// A WoW install is had when its folder is a library's and every product in
+/// it is assigned there; a Battle.net game when the link to it is already in
+/// the default library.
+fn mark_known(app: &mut Lightforge) {
+    let config = &app.config;
+    let default = config.libraries.iter().find(|l| l.is_default);
+    let known = |row: &Row| match &row.kind {
+        RowKind::Wow(install) => {
+            let library = config.libraries.iter().find(|l| Some(l.games()) == install.path.parent());
+            library.is_some_and(|library| {
+                install.products.iter().all(|code| {
+                    config.product(code).is_some_and(|p| p.profile.library.as_deref() == Some(library.id.as_str()))
+                })
+            })
+        }
+        RowKind::Game(game) => default.is_some_and(|library| {
+            std::fs::read_link(library.games().join(&game.label)).is_ok_and(|to| to == game.path)
+        }),
+    };
+    let Some(wizard) = app.wizard.as_mut() else {
+        return;
+    };
+    for row in wizard.rows.iter_mut().filter(|row| row.blocked.is_none()) {
+        if known(row) {
+            row.take = false;
+            row.blocked = Some("already in Lightforge".to_owned());
         }
     }
 }
@@ -722,8 +789,15 @@ pub fn view<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message>
     };
 
     let card = column![
-        dots(wizard.step),
-        text(wizard.step.title()).size(theme::TITLE),
+        match wizard.scan_only {
+            true => Element::from(Space::new()),
+            false => dots(wizard.step),
+        },
+        text(match wizard.scan_only {
+            true => "Look for games",
+            false => wizard.step.title(),
+        })
+        .size(theme::TITLE),
         container(body).height(Length::Fill),
         footer(app, wizard),
     ]
@@ -768,6 +842,18 @@ fn dots(step: Step) -> Element<'static, Message> {
 /// controller one press of A was enough to lose the setup.
 fn footer<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     let mut actions = row![].spacing(theme::SM).align_y(Alignment::Center);
+
+    if wizard.scan_only {
+        let ticked = wizard.rows.iter().any(|row| row.take);
+        return actions
+            .push(secondary("Close", Message::Wizard(Msg::Back)).enabled(!app.busy))
+            .push(Space::new().width(Length::Fill))
+            .push(
+                action_button("Add these", theme::INSTALL, Message::Wizard(Msg::Next))
+                    .enabled(ticked && !wizard.scanning),
+            )
+            .into();
+    }
 
     if wizard.step.back().is_some() && wizard.step != Step::Done {
         actions = actions.push(secondary("Back", Message::Wizard(Msg::Back)).enabled(!app.busy));
@@ -1012,6 +1098,12 @@ fn found<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
         return body.into();
     }
 
+    // A scan from Settings has no next slide to report on, so what adding
+    // did is said here, above the rows it was about.
+    if wizard.scan_only {
+        body = body.extend(wizard.adopted.iter().map(note));
+    }
+
     let takeable = wizard.rows.iter().any(|row| row.blocked.is_none());
     body = body.push(
         text(match (wizard.rows.is_empty(), takeable) {
@@ -1125,23 +1217,22 @@ fn found<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     body.into()
 }
 
+/// One line about what adding an install did.
+fn note(note: &Note) -> Element<'_, Message> {
+    match note.level {
+        Level::Done => muted(note.text.clone(), theme::CAPTION).into(),
+        // Loud on purpose. A game that was not added is the one thing on
+        // this slide the user has to act on, and it used to look exactly
+        // like the receipts around it.
+        Level::Warning => text(note.text.clone()).size(theme::LABEL).color(theme::PAUSE).into(),
+        Level::Failed => text(note.text.clone()).size(theme::BODY).color(theme::ERROR).into(),
+    }
+}
+
 fn install<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     let mut body = column![].spacing(theme::MD);
 
-    for note in &wizard.adopted {
-        body = match note.level {
-            Level::Done => body.push(muted(note.text.clone(), theme::CAPTION)),
-            // Loud on purpose. A game that was not added is the one thing on
-            // this slide the user has to act on, and it used to look exactly
-            // like the receipts around it.
-            Level::Warning => body.push(
-                text(note.text.clone()).size(theme::LABEL).color(theme::PAUSE),
-            ),
-            Level::Failed => body.push(
-                text(note.text.clone()).size(theme::BODY).color(theme::ERROR),
-            ),
-        };
-    }
+    body = body.extend(wizard.adopted.iter().map(note));
 
     body = body.push(
         text("Install Proton-GE, the Wine prefix and Battle.net (opt-out possible).")
@@ -1442,6 +1533,63 @@ mod tests {
         let _ = app.update(Message::FocusBack);
         assert!(app.wizard.is_some(), "Escape in setup over Settings left setup");
         assert_eq!(app.screen, crate::Screen::Settings);
+    }
+
+    /// A second look lists what is new, and greys out what Lightforge
+    /// already plays: the WoW install in one of its libraries, and the game
+    /// already linked into the default one.
+    #[test]
+    fn a_scan_after_setup_does_not_offer_what_is_already_here() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        let root = std::env::temp_dir().join(format!("lightforge-wizard-known-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let games = root.join("games");
+        std::fs::create_dir_all(&games).unwrap();
+        std::os::unix::fs::symlink(game("Hearthstone").path, games.join("Hearthstone")).unwrap();
+
+        let library = lightforge_core::library::Library::main_at(games.clone(), "Main");
+        let mut retail = lightforge_core::Product::new(ProductCode::Retail, "Retail");
+        retail.profile.library = Some(library.id.clone());
+        app.config.libraries = vec![library];
+        app.config.products = vec![retail];
+        app.wizard = Some(Wizard { step: Step::Found, scanning: true, scan_only: true, ..Wizard::default() });
+
+        let found = Found {
+            prefix: PathBuf::from("/lutris/pfx"),
+            origin: Origin::Pointed,
+            battle_net: None,
+            wow: vec![
+                install(games.join("World of Warcraft").to_str().unwrap(), None),
+                install("/elsewhere/World of Warcraft", None),
+            ],
+            hand_offs: vec![game("Hearthstone"), game("Diablo IV")],
+        };
+        let _ = update(&mut app, Msg::Scanned(vec![found]));
+
+        let rows = &app.wizard.as_ref().unwrap().rows;
+        let had: Vec<bool> = rows.iter().map(|row| row.blocked.as_deref() == Some("already in Lightforge")).collect();
+        assert_eq!(had, [true, false, true, false]);
+        assert!(rows[1].take && rows[3].take, "what is new is offered ticked");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Opened from Settings, the slide closes on Back, and closing it is not
+    /// finishing setup: the release notes stay owed.
+    #[test]
+    fn closing_a_scan_leaves_the_first_run_state_alone() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.config.patch_notes_seen = Some("0.0.1".to_owned());
+        let _ = update(&mut app, Msg::Scan);
+        let wizard = app.wizard.as_ref().unwrap();
+        assert!(wizard.scan_only && wizard.scanning);
+        assert_eq!(wizard.step, Step::Found);
+
+        let _ = update(&mut app, Msg::Back);
+
+        assert!(app.wizard.is_none());
+        assert_eq!(app.config.patch_notes_seen.as_deref(), Some("0.0.1"));
     }
 
     #[test]
