@@ -67,6 +67,12 @@ pub fn plan(install: &Path, code: &ProductCode) -> Result<Plan, UninstallError> 
     if !is_plain_child(install, &flavor) {
         return Err(UninstallError::Outside(flavor));
     }
+    // Two codes can name one folder: `wow_retail` derives `_retail_`, which is
+    // Retail's. Removing it would take another product's game, settings and
+    // all, while its row stayed behind claiming an install that is gone.
+    if let Some(owner) = remaining.iter().find(|p| p.install_dir() == code.install_dir()) {
+        return Err(UninstallError::SharedFlavor { flavor, owner: owner.as_str().to_owned() });
+    }
     let flavor_dir = flavor.is_dir().then_some(flavor);
     let store = install.join("Data");
 
@@ -233,6 +239,9 @@ pub enum UninstallError {
     #[error("refusing to plan an uninstall: .build.info cannot be read, so it is unknown which products still use the shared game data")]
     Unreadable(#[source] Box<crate::buildinfo::BuildInfoError>),
 
+    #[error("refusing to delete {flavor}: it belongs to {owner}, which is still installed")]
+    SharedFlavor { flavor: PathBuf, owner: String },
+
     #[error(transparent)]
     ProductDb(#[from] productdb::ProductDbError),
 
@@ -269,6 +278,18 @@ mod tests {
         }
         info.save(dir.join(".build.info")).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_code_that_names_another_products_folder_is_refused() {
+        let dir = install_with("alias", &[("wow", "_retail_")]);
+
+        // `wow_retail` is not Retail, but derives Retail's folder.
+        let refused = plan(&dir, &"wow_retail".parse().unwrap());
+
+        assert!(matches!(refused, Err(UninstallError::SharedFlavor { .. })), "{refused:?}");
+        assert!(dir.join("_retail_/game.exe").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

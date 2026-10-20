@@ -273,8 +273,16 @@ impl InstallEntry {
     /// and normalising it would be inventing a convention Blizzard does not
     /// have. Under Wine the filesystem is case-insensitive by configuration,
     /// not by us.
-    pub fn relative_path(&self) -> std::path::PathBuf {
-        self.path.split('\\').collect()
+    ///
+    /// `None` for a path that climbs out with `..`. These files are executables
+    /// written wherever the manifest says, so one that names a place outside
+    /// the install is refused rather than followed. Empty and `.` segments,
+    /// a leading separator among them, mean nothing and are dropped.
+    pub fn relative_path(&self) -> Option<std::path::PathBuf> {
+        let parts: Vec<&str> =
+            self.path.split(['\\', '/']).filter(|p| !p.is_empty() && *p != ".").collect();
+        let safe = !parts.is_empty() && parts.iter().all(|p| *p != ".." && !p.contains('\0'));
+        safe.then(|| parts.into_iter().collect())
     }
 }
 
@@ -868,10 +876,23 @@ mod tests {
             size: 1,
         };
         assert_eq!(
-            entry.relative_path(),
+            entry.relative_path().unwrap(),
             std::path::Path::new("Utils/swiftshader/libEGL.dll")
         );
-        assert!(entry.relative_path().is_relative());
+    }
+
+    #[test]
+    fn install_paths_never_leave_the_install() {
+        let path = |path: &str| InstallEntry { path: path.into(), ckey: [0; 16], size: 1 }.relative_path();
+
+        assert_eq!(path("..\\..\\.bashrc"), None);
+        assert_eq!(path("Utils\\..\\..\\Wow.exe"), None);
+        assert_eq!(path("Utils/../../Wow.exe"), None);
+        assert_eq!(path(""), None);
+        // A leading separator would have made the join absolute.
+        assert_eq!(path("\\etc\\passwd").unwrap(), std::path::Path::new("etc/passwd"));
+        assert_eq!(path("/etc/passwd").unwrap(), std::path::Path::new("etc/passwd"));
+        assert_eq!(path(".\\Wow.exe").unwrap(), std::path::Path::new("Wow.exe"));
     }
 
     #[test]
