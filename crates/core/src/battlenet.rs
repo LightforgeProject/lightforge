@@ -1146,6 +1146,18 @@ pub fn launch_wrapped(
         return Err(BattleNetError::NotInstalled(install_dir));
     }
 
+    // In a container, a call that finds the prefix already running must join
+    // it: the client's hand-off, or a second open of the client, arrives that
+    // way and would otherwise wait for the session it is talking to to end.
+    let joined;
+    let runner = match runner.has_container() && !crate::preflight::scan(layout).is_empty() {
+        true => {
+            joined = runner.clone().joining_session();
+            &joined
+        }
+        false => runner,
+    };
+
     let (exe, args) = launch.command(&install_dir);
     let mut cmd = crate::tweaks::wrapped(runner.command("run", &exe, args), wrappers);
     cmd.stdin(Stdio::null())
@@ -1167,7 +1179,7 @@ pub struct SetupReport {
 ///
 /// Assumes the prefix already exists, [`crate::prefix::provision`] is the
 /// step before this one, not part of it. `container` is where the installer
-/// alone runs, from [`crate::runtime::installer_container`]; the rest runs
+/// alone runs, from [`crate::runtime::tls_container`]; the rest runs
 /// on the host as always.
 pub fn provision(
     runner: &ProtonRunner,

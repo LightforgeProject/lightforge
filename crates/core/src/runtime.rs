@@ -81,8 +81,8 @@ pub enum RuntimeError {
     },
 
     #[error(
-        "Battle.net's installer would have no internet here: this system has no 32-bit gnutls, \
-         which Wine needs for HTTPS{}",
+        "Battle.net would have no internet here: this system has no 32-bit gnutls, which Wine \
+         needs for HTTPS{}",
         match install {
             Some(appid) => format!(
                 ", and the Steam Linux Runtime that would bring its own is not installed \
@@ -625,9 +625,12 @@ mod remedy_tests {
 // and no 32-bit gnutls, and there `Battle.net-Setup.exe` fails its first
 // request in a second (`BLZBNTBTS00000028`) and calls it "no connection".
 // Steam never hits this because it runs Proton inside the Steam Linux
-// Runtime, which brings its own libraries. Only the installer is 32-bit:
-// Battle.net and the games run fine on the host's 64-bit gnutls, so only
-// the installer is sent into the container, and only when it has to be.
+// Runtime, which brings its own libraries. The installer is not the only
+// 32-bit program: `Battle.net.exe` and `Agent.exe` are too, and without a
+// TLS stack the client still draws its login page (that is the embedded
+// browser's own TLS) and then never finishes signing in. So everything
+// Battle.net runs goes into the container, and only when it has to. The
+// games are 64-bit and stay on the host.
 
 /// The runtime a Proton build asks Steam to run it in, from its
 /// `toolmanifest.vdf`: `4183110` (Steam Linux Runtime 4.0) for GE-Proton 11.
@@ -663,10 +666,10 @@ pub fn has_32bit_tls() -> Option<bool> {
     })
 }
 
-/// Where to run Battle.net's installer: `None` straight on the host, as
-/// everything else runs, or the Steam Linux Runtime entry point to run it
-/// through when the host has no 32-bit gnutls.
-pub fn installer_container(
+/// Where to run Battle.net, its installer and its client alike: `None`
+/// straight on the host, as the games run, or the Steam Linux Runtime entry
+/// point to run it through when the host has no 32-bit gnutls.
+pub fn tls_container(
     proton_root: &Path,
     steam: Option<&crate::steam::SteamRoot>,
 ) -> Result<Option<PathBuf>, RuntimeError> {

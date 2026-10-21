@@ -181,6 +181,22 @@ fn runner_for(
     Ok(runner)
 }
 
+/// [`runner_for`] Battle.net itself, inside Steam's runtime where the host has
+/// no 32-bit gnutls. Only for the calls that start the client or hand it
+/// something, everything else about the prefix still runs on the host.
+fn client_runner(
+    layout: &Layout,
+    code: &ProductCode,
+) -> Result<lightforge_core::prefix::ProtonRunner, Problem> {
+    let runner = runner_for(layout, code, Runs::BattleNet)?;
+    let steam = lightforge_core::steam::SteamRoot::discover();
+    match lightforge_core::runtime::tls_container(runner.build(), steam.as_ref()) {
+        Ok(Some(entry)) => Ok(runner.in_container(entry)),
+        Ok(None) => Ok(runner),
+        Err(e) => Err(Problem::of(&e)),
+    }
+}
+
 /// The shared profile Battle.net and its games launch under.
 ///
 /// Not per-product on purpose; see `Config::battle_net_tweaks`.

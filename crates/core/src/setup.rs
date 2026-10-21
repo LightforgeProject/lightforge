@@ -223,7 +223,7 @@ pub async fn run(
         true => None,
         false => {
             runtime::check_wine(runner.dist())?;
-            runtime::installer_container(&build.path, steam.as_ref())?
+            runtime::tls_container(&build.path, steam.as_ref())?
         }
     };
 

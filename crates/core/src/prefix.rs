@@ -39,9 +39,11 @@ pub struct ProtonRunner {
     shader_cache: Option<PathBuf>,
     env: Vec<(OsString, OsString)>,
     /// A Steam Linux Runtime entry point to run Proton inside, as Steam
-    /// does. Only for Battle.net's installer, see
-    /// [`crate::runtime::installer_container`].
+    /// does. Only for Battle.net, see [`crate::runtime::tls_container`].
     container: Option<PathBuf>,
+    /// The prefix already has a session this command joins, see
+    /// [`ProtonRunner::joining_session`].
+    joins_session: bool,
 }
 
 impl ProtonRunner {
@@ -59,10 +61,11 @@ impl ProtonRunner {
             dist: dist_dir(&release.path),
             compat_data: layout.compat_data(),
             steam_client: steam_client.into(),
-            compat_mounts: vec![layout.games_root()],
+            compat_mounts: games_mounts(layout),
             shader_cache: None,
             env: Vec::new(),
             container: None,
+            joins_session: false,
         }
     }
 
@@ -109,6 +112,28 @@ impl ProtonRunner {
         self
     }
 
+    /// Whether commands run inside a container.
+    pub fn has_container(&self) -> bool {
+        self.container.is_some()
+    }
+
+    /// Run alongside a session the prefix already has, rather than after it.
+    ///
+    /// In a container a plain run becomes `waitforexitandrun`, which waits
+    /// for the prefix's wineserver to exit first. Right for the call that
+    /// becomes the client, and a hang for one that only hands a running
+    /// client its arguments: measured, it waited until the client was closed.
+    pub fn joining_session(mut self) -> Self {
+        self.joins_session = true;
+        self
+    }
+
+    /// The Proton build this runs, the directory holding `proton` and its
+    /// `toolmanifest.vdf`.
+    pub fn build(&self) -> &Path {
+        self.entry_point.parent().unwrap_or(&self.entry_point)
+    }
+
     /// The Wine prefix Proton will create or reuse: `<compat data>/pfx`.
     pub fn prefix(&self) -> PathBuf {
         self.compat_data.join("pfx")
@@ -123,23 +148,21 @@ impl ProtonRunner {
     {
         let program = program.as_ref();
         let mut mounts = self.compat_mounts.clone();
+        let verb = match self.container {
+            Some(_) if verb == "run" && !self.joins_session => "waitforexitandrun",
+            _ => verb,
+        };
         let mut cmd = match &self.container {
             None => Command::new(&self.entry_point),
             Some(container) => {
                 // Steam's own pairing: the container waits for the session,
-                // and Proton inside it for the prefix.
+                // and Proton inside it for the prefix, both under one verb.
                 let mut cmd = Command::new(container);
-                cmd.args(["--verb=waitforexitandrun", "--"]).arg(&self.entry_point);
-                if let Some(proton) = self.entry_point.parent() {
-                    cmd.env("STEAM_COMPAT_TOOL_PATHS", proton);
-                }
+                cmd.arg(format!("--verb={verb}")).arg("--").arg(&self.entry_point);
+                cmd.env("STEAM_COMPAT_TOOL_PATHS", self.build());
                 mounts.extend(Path::new(program).parent().map(Path::to_path_buf));
                 cmd
             }
-        };
-        let verb = match self.container {
-            Some(_) if verb == "run" => "waitforexitandrun",
-            _ => verb,
         };
         cmd.arg(verb).arg(program).args(args);
 
@@ -247,6 +270,21 @@ impl ProtonRunner {
         }
         Ok(())
     }
+}
+
+/// Every library's games folder, the default one first.
+///
+/// A container sees only what it is shown, and its wineserver serves the
+/// whole prefix: a game on another drive, started on the host while the
+/// client runs in the container, is still opened through it.
+fn games_mounts(layout: &Layout) -> Vec<PathBuf> {
+    let mut mounts = vec![layout.games_root()];
+    for library in layout.libraries().all() {
+        if !mounts.iter().any(|m| m == library.games()) {
+            mounts.push(library.games().to_path_buf());
+        }
+    }
+    mounts
 }
 
 /// Proton's unpacked runtime directory, which holds `bin/wineserver`.
@@ -635,6 +673,59 @@ mod tests {
             env_of(&cmd, "STEAM_COMPAT_MOUNTS").as_deref(),
             Some("/scratch/Blizzard/games")
         );
+    }
+
+    #[test]
+    fn every_library_is_mounted_not_only_the_default() {
+        use crate::library::{Libraries, Library};
+
+        let main = Library::main_at(PathBuf::from("/scratch/Blizzard/games"), "home");
+        let second = Library::on_partition(Path::new("/mnt/games"), "nvme2", None);
+        let layout = Layout::with_root("/scratch/Blizzard")
+            .with_libraries(Libraries::new(vec![main, second]));
+        let release = ProtonRelease {
+            version: "GE-Proton11-7".into(),
+            flavor: ProtonFlavor::GloriousEggroll,
+            source: ProtonSource::Managed,
+            path: PathBuf::from("/scratch/GE-Proton11-7"),
+            built_at: None,
+        };
+        let cmd = ProtonRunner::new(&release, &layout, "/scratch/Steam")
+            .command("run", "wineboot", ["-u"]);
+        assert_eq!(
+            env_of(&cmd, "STEAM_COMPAT_MOUNTS").as_deref(),
+            Some("/scratch/Blizzard/games:/mnt/games/Lightforge/games")
+        );
+    }
+
+    #[test]
+    fn a_call_into_a_running_session_does_not_wait_for_it() {
+        // Measured: `waitforexitandrun` here waited until the client it was
+        // handing a launch to was closed.
+        let cmd = runner(Path::new("/scratch"))
+            .in_container("/steam/common/SteamLinuxRuntime_4/_v2-entry-point")
+            .joining_session()
+            .command("run", "/games/Battle.net/Battle.net.exe", ["--exec=launch WoW"]);
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                "--verb=run",
+                "--",
+                "/scratch/GE-Proton11-7/proton",
+                "run",
+                "/games/Battle.net/Battle.net.exe",
+                "--exec=launch WoW",
+            ]
+        );
+    }
+
+    #[test]
+    fn joining_a_session_changes_nothing_on_the_host() {
+        let cmd = runner(Path::new("/scratch")).joining_session().command("run", "wineboot", ["-u"]);
+        assert_eq!(cmd.get_program(), OsStr::new("/scratch/GE-Proton11-7/proton"));
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args, ["run", "wineboot", "-u"]);
     }
 
     #[test]

@@ -49,7 +49,7 @@ pub(crate) fn battlenet_setup(ctx: Ctx, proton: Option<String>, locale: String, 
     let mut container = None;
     if !setup.is_installed() {
         let steam = lightforge_core::steam::SteamRoot::discover();
-        container = lightforge_core::runtime::installer_container(&build.path, steam.as_ref())?;
+        container = lightforge_core::runtime::tls_container(&build.path, steam.as_ref())?;
         if let Some(entry) = &container {
             println!("no 32-bit gnutls here, running the installer in {}", entry.display());
         }
@@ -157,6 +157,12 @@ pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<St
             .context("pre-flight cleanup")?;
         print_preflight(&report);
         download_paused = report.download_paused;
+    }
+
+    let steam = lightforge_core::steam::SteamRoot::discover();
+    if let Some(entry) = lightforge_core::runtime::tls_container(&build.path, steam.as_ref())? {
+        println!("no 32-bit gnutls here, running Battle.net in {}", entry.display());
+        runner = runner.in_container(entry);
     }
 
     println!("running {}{}", exe.display(), if args.is_empty() { String::new() } else { format!(" {}", args.join(" ")) });

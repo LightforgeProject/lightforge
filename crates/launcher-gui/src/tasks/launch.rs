@@ -312,7 +312,7 @@ pub async fn launch_via_battle_net(
         use lightforge_core::battlenet::{self, Launch, Readiness};
         use lightforge_core::preflight;
 
-        let runner = runner_for(&layout, &code, Runs::BattleNet)?;
+        let runner = client_runner(&layout, &code)?;
         back_up_before_launch(&layout, &code);
 
         // Counted too, though nothing here winds the prefix down: a direct
@@ -413,7 +413,7 @@ pub async fn install_via_battle_net(
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch};
 
-        let runner = runner_for(&layout, &code, Runs::BattleNet)?;
+        let runner = client_runner(&layout, &code)?;
 
         // Normal window, whatever a launch would have chosen: the next thing
         // that happens is a person choosing where to install.
@@ -527,7 +527,7 @@ pub async fn open_battle_net(
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch};
 
-        let runner = runner_for(&layout, &code, Runs::BattleNet)?;
+        let runner = client_runner(&layout, &code)?;
         // A normal window, whatever the last hand-off left behind: somebody
         // asked for the client itself, so hiding it in the tray would be
         // answering a different request.
