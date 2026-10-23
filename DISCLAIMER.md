@@ -80,12 +80,21 @@ There's no analytics, no usage tracking and no crash pings. There isn't even a
 panic handler that could send something without you — reports exist only
 because somebody filled in a form.
 
-Two requests do go out when the launcher starts, and neither says anything
+A few requests do go out when the launcher starts, and none says anything
 about you beyond the IP address any request reveals: it fetches the game
-artwork it shows you, and it asks GitHub whether a newer Lightforge has been
-released. The second one is a public release listing, and Settings › General
-turns it off. Nothing is downloaded from it unless you press Update on the
-notice it shows. Both are in the table below.
+artwork it shows you, it asks GitHub whether a newer Lightforge has been
+released, and if you manage addons with it, it asks for their newest
+versions. The GitHub check is a public release listing, and Settings ›
+General turns it off; nothing is downloaded from it unless you press Update
+on the notice it shows. The addon check only runs for addons set to update
+themselves; turning automatic addon updates off in Settings stops it. All
+of them are in the table below.
+
+CurseForge lookups go through Lightforge's own server rather than straight
+to CurseForge because CurseForge's API needs a key, and a key can't sit in a
+public repository or in a binary anyone can unpack. The server holds the key
+and caches the answers. The addon files themselves still come straight from
+CurseForge's CDN.
 
 The longer version, because "we respect your privacy" is what everyone says
 and a list is more useful:
@@ -93,7 +102,7 @@ and a list is more useful:
 | Who it talks to | When | What they see |
 | --- | --- | --- |
 | `*.version.battle.net`, `level3.blizzard.com` | installing, updating, checking for patches | Blizzard's own CDN, same as their client |
-| `lightforge.tuxcore.pro` | artwork, news, addon search | your IP address, and what you searched for |
+| `lightforge.tuxcore.pro` | artwork, news, addon search and updates, matching addons you already have | your IP address, what you searched for, and which addons you have (their ids, or the fingerprints of their folders) |
 | `api.mmoui.com`, `cdn.wowinterface.com`, `api.tukui.org`, `api.github.com`, `edge.forgecdn.net` | installing or updating addons | your IP address, by those providers |
 | `wow.zamimg.com` | news headlines with pictures | your IP address, by Wowhead's CDN |
 | `api.github.com` | checking for new Proton-GE builds | a public release listing |

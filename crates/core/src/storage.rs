@@ -322,7 +322,7 @@ fn battle_net_games(layout: &Layout) -> Vec<Game> {
     games
 }
 
-/// The directory under the cache root that holds DXVK state caches, see
+/// The directory under the cache root that holds the shader caches, see
 /// [`AppDirs::shader_cache_dir`].
 const SHADER_CACHE_DIR: &str = "dxvk";
 
@@ -494,11 +494,11 @@ mod tests {
         std::fs::create_dir_all(&shaders).unwrap();
         std::fs::write(assets.join("bg.jpg"), [0u8; 100]).unwrap();
         std::fs::write(dirs.cache_dir().join("Battle.net-Setup.exe"), [0u8; 50]).unwrap();
-        std::fs::write(shaders.join("Wow.dxvk-cache"), [0u8; 70]).unwrap();
+        std::fs::write(shaders.join("Wow.dxvk.bin"), [0u8; 70]).unwrap();
 
         assert_eq!(clear_cache(&dirs).unwrap(), 150);
         assert!(!assets.exists());
-        assert!(shaders.join("Wow.dxvk-cache").exists());
+        assert!(shaders.join("Wow.dxvk.bin").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 

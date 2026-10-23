@@ -85,7 +85,11 @@ impl ProtonRunner {
         }
     }
 
-    /// Isolate DXVK's shader cache for one product, per the shared-prefix model.
+    /// Keep one product's DXVK and VKD3D shader caches in `dir`.
+    ///
+    /// Left alone, DXVK writes to `%LOCALAPPDATA%\dxvk` inside the prefix.
+    /// Here both sit beside Lightforge's other caches, where Storage can size
+    /// and clear them per product.
     pub fn with_shader_cache(mut self, dir: impl Into<PathBuf>) -> Self {
         self.shader_cache = Some(dir.into());
         self
@@ -180,8 +184,12 @@ impl ProtonRunner {
         // 11-7 is fine). Removed rather than left unset, because Steam puts
         // its own into this process when it starts the launcher.
         cmd.env_remove("SteamGameId");
+        // The names the DXVK (3.1) and VKD3D-Proton in GE-Proton11-7 read.
+        // The older `DXVK_STATE_CACHE_PATH` went with DXVK's state cache and
+        // is not read by that build at all.
         if let Some(cache) = &self.shader_cache {
-            cmd.env("DXVK_STATE_CACHE_PATH", cache);
+            cmd.env("DXVK_SHADER_CACHE_PATH", cache);
+            cmd.env("VKD3D_SHADER_CACHE_PATH", cache);
         }
         for (key, value) in &self.env {
             cmd.env(key, value);
@@ -646,14 +654,13 @@ mod tests {
     #[test]
     fn shader_cache_is_only_set_when_a_product_asks_for_one() {
         let root = Path::new("/scratch");
-        assert!(env_of(&runner(root).command("run", "wineboot", ["-u"]), "DXVK_STATE_CACHE_PATH")
-            .is_none());
-
-        let pinned = runner(root).with_shader_cache("/cache/dxvk/wow");
-        assert_eq!(
-            env_of(&pinned.command("run", "wineboot", ["-u"]), "DXVK_STATE_CACHE_PATH").as_deref(),
-            Some("/cache/dxvk/wow")
-        );
+        let plain = runner(root).command("run", "wineboot", ["-u"]);
+        let pinned = runner(root).with_shader_cache("/cache/dxvk/wow").command("run", "wineboot", ["-u"]);
+        for key in ["DXVK_SHADER_CACHE_PATH", "VKD3D_SHADER_CACHE_PATH"] {
+            assert!(env_of(&plain, key).is_none(), "{key}");
+            assert_eq!(env_of(&pinned, key).as_deref(), Some("/cache/dxvk/wow"), "{key}");
+        }
+        assert!(env_of(&pinned, "DXVK_STATE_CACHE_PATH").is_none());
     }
 
     #[test]

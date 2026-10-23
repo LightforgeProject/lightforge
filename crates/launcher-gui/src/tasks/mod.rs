@@ -159,12 +159,16 @@ fn runner_for(
 
     let target =
         std::fs::read_link(layout.wow_symlink()).unwrap_or_else(|_| layout.wow_install(code));
+    // Made here rather than trusting DXVK and VKD3D to create it. Failing
+    // only costs the cache, so the launch goes on either way.
+    let shaders = dirs.shader_cache_dir(code);
+    let _ = std::fs::create_dir_all(&shaders);
     let mut runner =
         ProtonRunner::new(build, layout, ProtonRunner::steam_client_path(steam.as_ref(), &dirs))
             .with_compat_mount(&target)
             // The prefix is shared, so pooling the shader cache would mean one
             // product's Proton swap discarding another's shaders.
-            .with_shader_cache(dirs.shader_cache_dir(code));
+            .with_shader_cache(shaders);
 
     // Two profiles, because they are two different questions. A direct
     // launch is this product's own; a Battle.net launch is the client's and

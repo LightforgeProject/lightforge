@@ -55,7 +55,7 @@ enum Command {
     PrefixLink,
     /// Download Battle.net-Setup.exe into the cache.
     BattlenetFetch,
-    /// Install Battle.net headlessly, then apply registry and config defaults.
+    /// Install Battle.net unattended, then apply registry and config defaults.
     BattlenetSetup {
         /// Proton build to run the installer under.
         #[arg(long)]

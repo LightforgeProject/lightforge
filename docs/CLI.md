@@ -242,7 +242,7 @@ Options:
 ### `lightforge battlenet-setup`
 
 ```text
-Install Battle.net headlessly, then apply registry and config defaults
+Install Battle.net unattended, then apply registry and config defaults
 
 Usage: lightforge battlenet-setup [OPTIONS]
 

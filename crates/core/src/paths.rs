@@ -174,7 +174,7 @@ impl Layout {
         self.drive_c().join(WINDOWS_PROGRAM_FILES)
     }
 
-    /// Headless Battle.net install inside the prefix.
+    /// Unattended Battle.net install inside the prefix.
     pub fn battle_net_dir(&self) -> PathBuf {
         battle_net_dir_in(&self.prefix())
     }
@@ -539,7 +539,8 @@ impl AppDirs {
         self.data.join("proton")
     }
 
-    /// DXVK state cache for one product, passed as `DXVK_STATE_CACHE_PATH`.
+    /// Shader caches for one product, passed as `DXVK_SHADER_CACHE_PATH` and
+    /// `VKD3D_SHADER_CACHE_PATH`.
     ///
     /// Keyed per product deliberately. All products share a single prefix, so
     /// letting DXVK pool its cache there would mean clearing Retail's stale

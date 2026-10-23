@@ -137,7 +137,7 @@ reporter (`☰ › Report a bug`).
 | --- | --- |
 | **OS** | Any current Linux. glibc 2.36+ for the release binaries. |
 | **GPU** | Vulkan if you have it; it falls back to software rendering if you don't. |
-| **32-bit** | Only for Battle.net's installer, the one 32-bit binary in the flow. WoW alone doesn't need it. |
+| **32-bit** | Only for Battle.net, whose installer and client are 32-bit. WoW alone doesn't need it. |
 
 Proton-GE is downloaded and verified by Lightforge itself. You don't need
 Steam, Lutris or a system Wine.
@@ -155,7 +155,7 @@ Steam, Lutris or a system Wine.
 - **Tunes the game** with presets, Proton's Wayland backend with HDR, frame
   caps and your own environment variables.
 - **Sets Battle.net up for you**, then launches its games with one press. The
-  in-game shop works too.
+  in-game shop works too, [which took some finding](TECHDOC.md#the-in-game-shop).
 - **Plays well on a controller**, with a handheld mode for the Steam Deck and
   similar devices.
 - **Stays out of your way:** one native binary, no background service, nothing
@@ -168,8 +168,12 @@ Steam, Lutris or a system Wine.
 - **It never touches the running game.** No memory reads, no injection.
   Lightforge manages the prefix, the files and the process around `Wow.exe`,
   never inside it.
-- **Nothing is sent anywhere** unless you fill in the bug reporter and press
-  Send, and it shows you the whole report first.
+- **No tracking.** No analytics, no crash pings, no account. It talks to
+  Blizzard's CDN for the game, to GitHub for updates, and to Lightforge's
+  own server for artwork, news and CurseForge lookups (CurseForge's API
+  needs a key that can't live in a public repo). Bug reports only go out when you
+  press Send, and you see the whole report first. Every host and what it
+  sees is listed in [DISCLAIMER.md](DISCLAIMER.md#what-leaves-your-machine).
 - **WoW first.** Other Blizzard games are installed and run by Battle.net.
 - **Linux only.**
 

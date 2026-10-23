@@ -28,6 +28,9 @@ pub(crate) fn play(ctx: Ctx, product: String, proton: Option<String>, dry_run: b
 
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let (runner, build) = proton_runner(&layout, proton.as_deref())?;
+    // Made here rather than trusting DXVK and VKD3D to create it. Failing
+    // only costs the cache, so the launch goes on either way.
+    let _ = std::fs::create_dir_all(dirs.shader_cache_dir(&code));
     let mut runner = runner
         .with_compat_mount(&target)
         // Per-product shader cache: the prefix is shared, so pooling

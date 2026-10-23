@@ -115,9 +115,10 @@ one place rather than being rebuilt from string joins all over the tree:
 
 The split is not tidiness. Game files live on the native filesystem and are
 **symlinked** into the prefix, so the prefix stays disposable — you can delete
-and rebuild it without touching 120 GB of downloads. And because the game then
-executes from a path Wine believes is a normal Windows location, the in-game
-Chromium (the shop, the Token) stops rendering a grey rectangle.
+and rebuild it without touching 120 GB of downloads. The game is not started
+through that symlink, though: each library also gets its own drive letter,
+and the game runs from there, which is what the in-game shop needs (see
+[The in-game shop](#the-in-game-shop)).
 
 Lightforge's own data is XDG, and deliberately not under the games root:
 
@@ -291,9 +292,35 @@ single file.
   download writing to the CASC store paused first — two writers in one store
   is a real corruption risk, not a theoretical one.
 
+### The in-game shop
+
+The shop and the WoW Token are not Battle.net's browser. They are
+`Utils/BlizzardBrowser.exe`, a CEF 83 child process that `Wow.exe` starts
+itself, so nothing passed to Battle.net (`--in-process-gpu` included) reaches
+them, and they work from a direct launch with no Battle.net running at all.
+
+Started from `C:` (through the prefix symlink) or the catch-all `Z:`, the
+browser's GPU process dies on start, and its log in
+`_retail_/Logs/BlizzardBrowser/CEF-*.log` reads `The GPU process has crashed`
+three times before Chromium gives up and leaves a grey rectangle. With the
+install on a drive letter of its own (`dosdevices/d:` and up) and the game
+started by its native path, so Wine resolves it onto that drive, the same log
+reads `Exiting GPU process due to errors during initialization` once,
+Chromium falls back to software rendering, and the page draws. It was
+verified up to a completed checkout. Launching by the native path alone,
+without the drive letter, changes nothing.
+
+It also needs a recent enough Proton: on GE-Proton10-34 the support page
+rendered and the shop still hung on "Loading…"; GE-Proton11-7 works. Related
+upstream: Wine bug 47778.
+
+`WSALookupServiceBegin failed with: 0` appears in every one of those logs,
+working or not. It is Wine's unimplemented network-location API and has
+nothing to do with the shop.
+
 ## Battle.net and the hand-off
 
-`battlenet.rs` installs the client headlessly into the prefix and applies the
+`battlenet.rs` installs the client into the prefix unattended and applies the
 registry and config defaults that stop it fighting you.
 
 For games outside the WoW family, Lightforge is a pass-through, and the

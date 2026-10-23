@@ -1,4 +1,4 @@
-//! Automated, headless Battle.net setup inside the shared prefix.
+//! Automated Battle.net setup inside the shared prefix.
 //!
 //! Four phases, in this order:
 //!
