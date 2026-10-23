@@ -515,20 +515,6 @@ impl AppDirs {
         self.cache.join("assets")
     }
 
-    /// The merged news feed and its ETag, so the News page draws something
-    /// on a cold start and keeps reading after the proxy goes away.
-    pub fn news_cache_file(&self) -> PathBuf {
-        self.cache.join("news.json")
-    }
-
-    /// Headline pictures, content-addressed by URL. Beside the feed rather
-    /// than inside the asset cache: these are not themed art, nothing prunes
-    /// them against a manifest, and mixing the two would put a `Store::prune`
-    /// over files it knows nothing about.
-    pub fn news_image_dir(&self) -> PathBuf {
-        self.cache.join("news")
-    }
-
     /// The download queue as it stood, restored on the next start.
     pub fn queue_file(&self) -> PathBuf {
         self.data.join("queue.toml")

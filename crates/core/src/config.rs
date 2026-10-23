@@ -153,14 +153,6 @@ pub struct Config {
     /// desktop, and nothing on the machine says which one this is.
     #[serde(default)]
     pub steamos_use: Option<SteamOsUse>,
-    /// Whether the News panel is shown beside the game's key art.
-    ///
-    /// Off by default: a first run should show the game's key art and nothing
-    /// else, and the panel also costs a network fetch on every visit to the
-    /// Play page. Settings › General turns it on, and that is where someone
-    /// who wants news about the game they are looking at will find it.
-    #[serde(default)]
-    pub news_on_play: bool,
     /// Whether the release-notes popup has been switched off for good.
     ///
     /// The checkbox on it says "never show this again", and that is what it
@@ -251,7 +243,6 @@ impl Default for Config {
             setup_complete: false,
             battle_net_declined: false,
             steamos_use: None,
-            news_on_play: false,
             patch_notes_muted: false,
             patch_notes_seen: None,
             check_for_updates: true,
@@ -454,20 +445,6 @@ impl Config {
         match source.contains("://") {
             true => crate::addons::catalog::Origin::Http(source.to_owned()),
             false => crate::addons::catalog::Origin::Dir(PathBuf::from(source)),
-        }
-    }
-
-    /// Where the News page reads its headlines from.
-    ///
-    /// The same base as [`Config::catalog_origin`], with no knob of its own:
-    /// one proxy serves both namespaces, and a second URL to keep in step
-    /// would only be a second thing to point somewhere wrong. A fixture
-    /// directory works here too, it reads `news.json` beside the catalog's
-    /// fixtures.
-    pub fn news_origin(&self) -> crate::news::Origin {
-        match self.catalog_origin() {
-            crate::addons::catalog::Origin::Http(base) => crate::news::Origin::Http(base),
-            crate::addons::catalog::Origin::Dir(dir) => crate::news::Origin::Dir(dir),
         }
     }
 

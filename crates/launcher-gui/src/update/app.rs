@@ -43,11 +43,6 @@ impl Lightforge {
                 }
                 Task::none()
             }
-            Message::NewsOnPlay(show) => {
-                self.config.news_on_play = show;
-                self.save_config();
-                Task::none()
-            }
             Message::ShowReleaseNotes(show) => {
                 self.config.patch_notes_muted = !show;
                 self.save_config();

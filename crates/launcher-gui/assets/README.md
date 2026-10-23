@@ -22,20 +22,6 @@ comes from the manifest at runtime.
 | `x.png` | Simple Icons `x`, same treatment | CC0 |
 | `kofi.png` | Simple Icons `kofi`, same treatment | CC0 |
 | `paypal.png` | Simple Icons `paypal`, same treatment | CC0 |
-| `news-background.jpg` | Supplied by Gabriel; resized, see below | — |
-
-`news-background.jpg` is the odd one out: artwork, not a mark. Gabriel
-supplied it at 6715x3719 and 19 MB; it ships at **2560x1418, JPEG q85,
-progressive, 4:2:2** — about 500 KB. 2560 is `art::BACKGROUND_MAX_WIDTH`, the
-same ceiling a product background gets, so nothing downscales it twice. Its
-native 1.806 ratio is kept rather than cropped to 16:9: the page draws it
-`ContentFit::Cover` at whatever shape the window is, so cropping here would
-only throw away pixels the window might have wanted.
-
-It is bundled rather than published through the asset manifest because that
-manifest is keyed by product and this is chrome for a page that belongs to no
-game. The cost is ~500 KB of binary; moving it to the asset repo is the
-alternative if that ever matters.
 
 The icons below are white with an alpha channel, 64x64, and drawn small (18pt for the cog,
 16pt for the band's two marks): one source at a size no display asks to

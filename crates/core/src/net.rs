@@ -27,7 +27,7 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// without end should fail here rather than in the allocator.
 const MAX_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
 
-/// Ceiling on a cached picture: key art and news images.
+/// Ceiling on a cached picture, key art the largest of them.
 const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 
 /// Name prefix of an unfinished [`Http::download`].

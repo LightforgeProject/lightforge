@@ -9,10 +9,8 @@ impl Lightforge {
                 // Picking from the overflow menu closes it: the tile is in the
                 // band now, and the menu is answering a question already asked.
                 self.close_panels();
-                // The band is on News too, where choosing a game is a request
-                // to go and look at it, leaving you on a page that says
-                // nothing about the game you just picked would read as a dead
-                // click.
+                // Choosing a game is a request to go and look at it, wherever
+                // the menu was opened from.
                 self.go_to(Screen::Dashboard);
                 self.select_line(&line)
             }

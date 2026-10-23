@@ -274,7 +274,7 @@ much of this as you want gone:
 ```text
 ~/.config/lightforge/        settings
 ~/.local/share/lightforge/   Proton builds, addon ledger
-~/.cache/lightforge/         artwork, news, catalogues — safe to delete any time
+~/.cache/lightforge/         artwork, catalogues — safe to delete any time
 ```
 
 The games are somewhere else on purpose:

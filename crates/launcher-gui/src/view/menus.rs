@@ -8,7 +8,7 @@ impl Lightforge {
     /// band's (which game) and the tabs' (which page).
     ///
     /// Settings lives here rather than in the ribbon because it is somewhere
-    /// you go rarely and deliberately, unlike Play and News.
+    /// you go rarely and deliberately, unlike Play.
     pub(crate) fn app_menu(&self) -> Element<'_, Message> {
         // No destination yet means no press and a dimmed face: the entry says
         // what is coming without pretending it is here.

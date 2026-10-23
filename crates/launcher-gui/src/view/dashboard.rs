@@ -1,4 +1,4 @@
-//! The Play page: art, news rail and the action panel.
+//! The Play page: art and the action panel.
 
 use crate::*;
 use iced::widget::column;
@@ -199,8 +199,7 @@ impl Lightforge {
                 // The wordmark hangs straight under the band (a gap leaves it
                 // floating in the art) and is inset by [`theme::LOGO_INSET`],
                 // since a mark trimmed to its ink would otherwise touch the
-                // page edge. A row, so the news rail gets this region's full
-                // height rather than a share of it.
+                // page edge.
                 row![
                     column![
                         container(logo)
@@ -216,7 +215,6 @@ impl Lightforge {
                     ]
                     .width(Length::Fill),
                 ]
-                .extend(self.news_rail())
                 .spacing(theme::MD)
                 .height(Length::Fill),
                 // A product Battle.net owns gets a panel that offers only what
@@ -274,110 +272,6 @@ impl Lightforge {
             .into(),
             None => content.into(),
         }
-    }
-
-    /// Headlines for the game on screen, down the right of the key art.
-    ///
-    /// `None` draws nothing: for a Battle.net hand-off (every feed is Wowhead,
-    /// so there will never be an article), before the fetch was asked for (so
-    /// the rail does not change shape under the reader), and when the fetch
-    /// failed with nothing cached. A line with no recent coverage does get the
-    /// rail, saying so, because that is a fact about this week.
-    pub(crate) fn news_rail(&self) -> Option<Element<'_, Message>> {
-        /// Width of the rail. Taken from the shape Gabriel drew over a
-        /// screenshot rather than derived from anything.
-        const RAIL: f32 = 260.0;
-        /// How many headlines fit before the rail wants scrolling, which it
-        /// will not get: this is a glance, and the News page is one click
-        /// away at the foot of it.
-        const MOST: usize = 5;
-
-        if !self.config.news_on_play {
-            return None;
-        }
-        // Hand-offs never match, but asking the feed would also mean drawing
-        // the rail while the fetch is in flight for a game that cannot have
-        // news. Answered from the product instead.
-        if self.kind_of(&self.selected.code) == Kind::HandOff {
-            return None;
-        }
-        let line = self.catalog.line_of(&self.selected.code);
-
-        let body: Element<'_, Message> = match &self.news {
-            Some(headlines) => {
-                let items = headlines.feed.about(&line, MOST);
-                match items.is_empty() {
-                    true => muted(
-                        format!("Nothing recent for {}.", line.label()),
-                        theme::CAPTION,
-                    )
-                    .into(),
-                    false => column(items.into_iter().map(|item| self.rail_item(item)))
-                        .spacing(theme::XS)
-                        .into(),
-                }
-            }
-            // Pending. `news_asked` without a feed means it failed with
-            // nothing on disk, which is the case that draws no rail at all.
-            None if !self.news_asked => {
-                muted("Fetching headlines…".to_owned(), theme::CAPTION).into()
-            }
-            None => return None,
-        };
-
-        let more = button(
-            row![
-                text("More in News").size(theme::LABEL),
-                Space::new().width(Length::Fill),
-                text("→").size(theme::LABEL),
-            ]
-            .align_y(Alignment::Center),
-        )
-        .padding(theme::tap([theme::XS, theme::SM]))
-        .width(Length::Fill)
-        .style(theme::ghost)
-        .on_press(Message::Show(Screen::News));
-
-        Some(
-            container(
-                column![
-                    muted("LATEST NEWS".to_owned(), theme::CAPTION),
-                    body,
-                    // Pinned to the foot however few headlines there are, so
-                    // the link does not wander up the rail on a quiet week.
-                    Space::new().height(Length::Fill),
-                    more,
-                ]
-                .spacing(theme::SM),
-            )
-            .width(Length::Fixed(RAIL))
-            .height(Length::Fill)
-            .padding(theme::MD)
-            .style(theme::floating)
-            .into(),
-        )
-    }
-
-    /// One headline in the rail: the date, then the title, and nothing else.
-    ///
-    /// No summary and no picture, unlike [`Lightforge::news_card`] on the News
-    /// page. This is 260 points wide standing over artwork, a thumbnail
-    /// would leave room for about four words, and the summary is the reason
-    /// to click rather than something to read here.
-    pub(crate) fn rail_item<'a>(&self, item: &'a news::Item) -> Element<'a, Message> {
-        button(
-            column![
-                muted(short_day(&item.published), theme::CAPTION),
-                text(item.title.clone()).size(theme::LABEL),
-            ]
-            .spacing(2.0)
-            .width(Length::Fill),
-        )
-        .padding([theme::XS, theme::SM])
-        .width(Length::Fill)
-        .style(theme::card_button)
-        .on_press(Message::OpenArticle(item.url.clone()))
-        .into()
     }
 
     /// Status, progress, and every action for the selected product.

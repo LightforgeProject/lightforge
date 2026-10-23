@@ -27,8 +27,6 @@ pub(crate) enum Message {
     MutePatchNotes(bool),
     /// The same preference from Settings › General, read the other way round.
     ShowReleaseNotes(bool),
-    /// Show or hide the headlines beside the key art.
-    NewsOnPlay(bool),
     /// Close the release-notes popup, recording what it was told.
     DismissPatchNotes,
     /// The start-up artwork fetch finished, with the number of products whose
@@ -209,13 +207,6 @@ pub(crate) enum Message {
     GoForward,
     /// Open one of the project's own links in the browser.
     OpenLink(&'static str),
-    /// A headline's own link. Owned, unlike [`Message::OpenLink`]'s static
-    /// chrome URLs: these come off the wire.
-    OpenArticle(String),
-    NewsLoaded(Option<Box<news::Headlines>>),
-    NewsImages(Vec<(String, image::Handle)>),
-    NewsBackground(image::Handle),
-    RefreshNews,
     /// Quit.
     Exit,
     /// A click that no widget consumed, close whatever is open, the way

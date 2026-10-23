@@ -125,10 +125,8 @@ impl Lightforge {
             false => frame,
         };
         // Nobody ever *navigates* to the opening screen, so `arrived` has
-        // never run for it, and the news rail on it needs the headlines.
-        // Through the same function the navigation uses rather than a second
-        // call to `fetch_news`, so the dashboard has one definition of what
-        // it wants on the way in.
+        // never run for it. Through the same function the navigation uses, so
+        // every page has one definition of what it wants on the way in.
         Task::batch([frame, self.arrived()])
     }
 

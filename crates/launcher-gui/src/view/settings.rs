@@ -854,15 +854,6 @@ impl Lightforge {
             ]),
             setting_group([
                 setting(
-                    "News on the Play page",
-                    "The newest articles beside the key art, for World of Warcraft.",
-                    self.hint(
-                        "Only the World of Warcraft family has a news source; the games \
-                         Battle.net launches never show one.",
-                    ),
-                    switch("news on play", self.config.news_on_play, Message::NewsOnPlay),
-                ),
-                setting(
                     "What's new after an update",
                     "Once per version. The notes are always under Lightforge Updates.",
                     None,

@@ -466,12 +466,7 @@ impl RegistryWatch {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Screen {
     Dashboard,
-    /// Live news, once there is something to show. A placeholder for now: the
-    /// tab is in the ribbon so the shape of the app is settled, and what fills
-    /// it, Wowhead, sales, patch notes, is still being decided.
-    News,
-    /// Lightforge's own release notes. Placeholder, like [`Screen::News`], and
-    /// separate from it: what Lightforge changed is not what Blizzard did.
+    /// Lightforge's own release notes.
     Updates,
     /// Setup lives here too, as the first card.
     Settings,

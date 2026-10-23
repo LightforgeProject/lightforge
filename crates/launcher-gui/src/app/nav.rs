@@ -34,25 +34,6 @@ impl Lightforge {
     /// the runtime.
     pub(crate) fn arrived(&mut self) -> Task<Message> {
         match self.screen {
-            Screen::News => {
-                // Decoded on first arrival rather than at startup: half a
-                // megabyte of JPEG is not work the first frame should do for
-                // a page nobody has opened.
-                let backdrop = match self.news_bg.is_none() {
-                    true => Task::perform(
-                        tasks::news_background(NEWS_BACKGROUND),
-                        Message::NewsBackground,
-                    ),
-                    false => Task::none(),
-                };
-                Task::batch([backdrop, self.fetch_news(false)])
-            }
-            // The dashboard needs them too now that the rail is on it. The
-            // same once-per-session fetch, `fetch_news` is idempotent, so
-            // arriving here first and the News page second costs one request
-            // between them, not two. With the rail switched off there is
-            // nothing here to fill, and the News page asks for itself.
-            Screen::Dashboard if self.config.news_on_play => self.fetch_news(false),
             // Arriving back on Browse with nothing in it, by the back
             // button, or on a first visit, is the same question the tab
             // itself answers: what is there?

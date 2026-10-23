@@ -16,7 +16,6 @@ mod storage;
 mod setup;
 mod settings;
 mod navigation;
-mod news;
 mod report;
 mod upgrade;
 mod app;
@@ -27,7 +26,7 @@ type Area = fn(&mut Lightforge, Message) -> Result<Task<Message>, Message>;
 
 impl Lightforge {
     pub(crate) fn handle(&mut self, message: Message) -> Task<Message> {
-        const AREAS: [Area; 13] = [
+        const AREAS: [Area; 12] = [
             Lightforge::update_products,
             Lightforge::update_launch,
             Lightforge::update_downloads,
@@ -37,7 +36,6 @@ impl Lightforge {
             Lightforge::update_setup,
             Lightforge::update_settings,
             Lightforge::update_navigation,
-            Lightforge::update_news,
             Lightforge::update_report,
             Lightforge::update_upgrade,
             Lightforge::update_app,
@@ -67,7 +65,6 @@ mod tests {
         ("setup", include_str!("setup.rs")),
         ("settings", include_str!("settings.rs")),
         ("navigation", include_str!("navigation.rs")),
-        ("news", include_str!("news.rs")),
         ("report", include_str!("report.rs")),
         ("upgrade", include_str!("upgrade.rs")),
         ("app", include_str!("app.rs")),

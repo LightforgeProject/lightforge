@@ -17,7 +17,6 @@ use lightforge_core::error::chain;
 use lightforge_core::assets::{Manifest, Pipeline};
 use lightforge_core::config::Config;
 use lightforge_core::net::Http;
-use lightforge_core::news;
 use lightforge_core::families::Families;
 use lightforge_core::paths::{AppDirs, Layout};
 use lightforge_core::preflight::{DownloadGuard, GameProcess, Preflight, PreflightError};
@@ -36,7 +35,6 @@ mod transfer;
 mod store;
 mod launch;
 mod backups;
-mod headlines;
 pub(crate) mod upgrade;
 
 pub(crate) use branding::*;
@@ -45,7 +43,6 @@ pub(crate) use transfer::*;
 pub(crate) use store::*;
 pub(crate) use launch::*;
 pub(crate) use backups::*;
-pub(crate) use headlines::*;
 pub(crate) use upgrade::{Prepared, Stamp};
 
 

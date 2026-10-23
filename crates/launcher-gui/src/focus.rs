@@ -1127,7 +1127,7 @@ mod tests {
         let places = vec![
             (Target::AppMenu, at(40.0, 10.0, 240.0, 30.0)),
             (Target::Tab(Screen::Dashboard), at(390.0, 10.0, 40.0, 30.0)),
-            (Target::Tab(Screen::News), at(455.0, 10.0, 50.0, 30.0)),
+            (Target::Shop, at(455.0, 10.0, 50.0, 30.0)),
             (Target::Tile(ProductLine::Retail), at(110.0, 58.0, 56.0, 48.0)),
             (Target::Tile(ProductLine::Classic), at(236.0, 58.0, 56.0, 48.0)),
             (Target::Tile(ProductLine::ClassicEra), at(300.0, 58.0, 56.0, 48.0)),
@@ -1248,7 +1248,7 @@ mod tests {
         assert_eq!(step(&page, &Target::Key("picker version".to_owned()), Step::Down), Some(Target::Addons));
         // Down from the header is the next row, however far to the side.
         assert_eq!(step(&page, &Target::AppMenu, Step::Down), Some(Target::Tile(ProductLine::Retail)));
-        assert_eq!(step(&page, &Target::Tab(Screen::News), Step::Down), Some(Target::Tile(ProductLine::Forever)));
+        assert_eq!(step(&page, &Target::Shop, Step::Down), Some(Target::Tile(ProductLine::Forever)));
         assert_eq!(step(&page, &Target::BattleNet, Step::Down), Some(Target::Gear));
         assert_eq!(step(&page, &Target::Primary, Step::Down), Some(Target::LaunchViaBattleNet));
         assert_eq!(step(&page, &Target::Primary, Step::Right), Some(Target::Gear));

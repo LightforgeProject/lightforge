@@ -116,19 +116,6 @@ pub fn try_mark(path: &Path) -> Option<Handle> {
     try_scale(path, MARK_MAX_WIDTH, FilterType::Lanczos3)
 }
 
-/// A headline's picture, at the size the News card draws it.
-///
-/// A large reduction, Wowhead publishes these around 800px wide and the card
-/// shows them at [`crate::theme::NEWS_THUMB_WIDTH`], so it takes the sharper
-/// filter for the same reason [`mark`] does: handing the renderer eight times
-/// the pixels and letting it reduce them is what reads as "pixelated".
-///
-/// Twice the drawn width, so a 2x display maps one texel to one device pixel
-/// and a 1x display gets the clean 2:1 reduction.
-pub fn thumbnail(path: &Path) -> Handle {
-    scale(path, (crate::theme::NEWS_THUMB_WIDTH * 2.0) as u32, FilterType::Lanczos3)
-}
-
 /// Decode a bundled image that is already at the size it is drawn.
 ///
 /// Bundled art goes through here rather than `Handle::from_bytes` for the
@@ -258,8 +245,8 @@ fn load(path: &Path, max_width: u32) -> Handle {
 
 /// Decode a file, asking a JPEG to come out no larger than it needs to be.
 ///
-/// Decoding at full size first cost 665 MB across one news feed for 22 MB of
-/// thumbnails. JPEG can emit at 1/2, 1/4 or 1/8 scale almost free, so `scale`
+/// Decoding at full size once cost 665 MB across a page of pictures for 22 MB
+/// of thumbnails. JPEG can emit at 1/2, 1/4 or 1/8 scale almost free, so `scale`
 /// asks for the smallest that still covers `max_width` and the resize below
 /// finishes the job. JPEG is recognised by its magic bytes (cache files are
 /// named by URL hash); PNG has no such trick and is decoded whole. The box is
@@ -380,9 +367,9 @@ mod tests {
     #[test]
     fn a_scaled_decode_still_ends_at_the_width_asked_for() {
         let path = write_jpeg("thumb", 2560, 1440);
-        let handle = thumbnail(&path);
+        let width = 320;
+        let handle = scale(&path, width, FilterType::Lanczos3);
         let _ = std::fs::remove_file(&path);
-        let width = (crate::theme::NEWS_THUMB_WIDTH * 2.0) as u32;
         assert_eq!(rgba_size(&handle), Some((width, width * 1440 / 2560)));
     }
 
@@ -471,7 +458,7 @@ mod tests {
         let garbage = std::env::temp_dir()
             .join(format!("lightforge-art-{}-garbage.png", std::process::id()));
         std::fs::write(&garbage, b"\x89PNG not really").unwrap();
-        let handle = thumbnail(&garbage);
+        let handle = scale(&garbage, 320, FilterType::Lanczos3);
         let _ = std::fs::remove_file(&garbage);
         assert_eq!(handle.id(), empty.id());
     }

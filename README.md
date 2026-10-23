@@ -170,8 +170,13 @@ Steam, Lutris or a system Wine.
   never inside it.
 - **No tracking.** No analytics, no crash pings, no account. It talks to
   Blizzard's CDN for the game, to GitHub for updates, and to Lightforge's
+<<<<<<< HEAD
   own server for artwork, news and CurseForge lookups (CurseForge's API
   needs a key that can't live in a public repo). Bug reports only go out when you
+=======
+  own server for artwork and CurseForge lookups (CurseForge's API needs a
+  key that can't live in a public repo). Bug reports only go out when you
+>>>>>>> 09e2051 (xyz)
   press Send, and you see the whole report first. Every host and what it
   sees is listed in [DISCLAIMER.md](DISCLAIMER.md#what-leaves-your-machine).
 - **WoW first.** Other Blizzard games are installed and run by Battle.net.

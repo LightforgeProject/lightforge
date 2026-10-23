@@ -125,7 +125,7 @@ Lightforge's own data is XDG, and deliberately not under the games root:
 ```text
 ~/.config/lightforge/config.toml      settings, written atomically
 ~/.local/share/lightforge/            Proton builds, the addon ledger, the queue
-~/.cache/lightforge/                  artwork, news, catalogues — disposable
+~/.cache/lightforge/                  artwork, catalogues — disposable
 ```
 
 ## Getting a game: TACT / NGDP
@@ -408,7 +408,7 @@ The rest:
 - **Channels are a floor, not a filter**: choosing "beta" means beta *or
   better*, so an addon that ships a release after a beta still updates to it.
 
-## Assets, news and the catalogue
+## Assets and the catalogue
 
 `assets.rs` resolves a product's artwork through a hosted manifest, cached by
 URL and revalidated with ETags so a start-up check costs a `304`. The
@@ -427,9 +427,6 @@ derive wrongly**: 1.0.0-beta.3 would install a stated `wowf` into a literal
 branch borrows it. Reading the folder and executable from the product config
 would lift the limit, and is the planned fix.
 
-`news.rs` fetches headlines through the same backend and files each article
-against the game it belongs to.
-
 ## The GUI
 
 `crates/launcher-gui`, iced 0.14, Elm architecture: one `Message` enum, one
@@ -447,8 +444,8 @@ against the game it belongs to.
   buffer and a 0.5 MB one.
 - **The allocator is tuned at startup.** `mallopt` pins the mmap threshold, so
   large short-lived image buffers are returned to the OS instead of being
-  retained in glibc's per-thread arenas. Measured: it took the News page from
-  444 MB resident to 149 MB.
+  retained in glibc's per-thread arenas. Measured: it took the old News page
+  from 444 MB resident to 149 MB.
 - **Rendering** is wgpu with an automatic tiny-skia fallback;
   `ICED_BACKEND=tiny-skia` forces software.
 

@@ -119,15 +119,6 @@ bundled_icons! {
     paypal_icon => "paypal.png",
 }
 
-/// The News page's backdrop.
-///
-/// Bundled rather than fetched from the asset manifest, unlike every product
-/// background: that manifest is keyed by product, and this is chrome for one
-/// page that belongs to no game. Kept at [`art::BACKGROUND_MAX_WIDTH`]'s 2560,
-/// the same ceiling product art gets, which lands it at about half a megabyte;
-/// see `assets/README.md` for how it was prepared.
-pub(crate) const NEWS_BACKGROUND: &[u8] = include_bytes!("../assets/news-background.jpg");
-
 /// What Steam shows for Lightforge in its library, built by
 /// `assets/steam/make.sh` from the icon and the wordmark.
 pub(crate) const STEAM_ART: lightforge_core::steam_shortcut::Artwork<'static> = {

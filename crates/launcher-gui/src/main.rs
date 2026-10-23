@@ -65,7 +65,6 @@ use lightforge_core::config::{Config, SteamOsUse};
 use lightforge_core::debug::DebugInfo;
 use lightforge_core::library;
 use lightforge_core::net::Http;
-use lightforge_core::news;
 use lightforge_core::paths::{AppDirs, Layout};
 use lightforge_core::product::{Branch, Catalog, Kind, Product, ProductCode, ProductLine};
 use lightforge_core::state::{self, ActionState, Local};
@@ -82,21 +81,6 @@ use tasks::{Problem, Refreshed, SharedDownloads, TransferState};
 
 /// Where a player manages their subscription, per the spec.
 const ACCOUNT_URL: &str = "https://account.battle.net/games";
-
-/// How far the News backdrop is darkened over the body of the page.
-///
-/// Higher than the dashboard's mid-page 0.35 because far more text sits over
-/// it: a hundred headline cards rather than a handful of controls. At 0.70
-/// the picture still reads as a picture between the cards while the muted
-/// summary text keeps the contrast it has on a plain page.
-const NEWS_SCRIM: f32 = 0.70;
-
-/// How far it is darkened across the header and the page title.
-///
-/// The navigation row has no backdrop of its own, and this artwork is pale
-/// sky across its top third, the one combination that leaves white text
-/// sitting on white. Held, not ramped, so the whole row is on even cover.
-const NEWS_SCRIM_TOP: f32 = 0.88;
 
 /// The desktop entry's basename, the Wayland `app_id` and the AppStream
 /// component id, which are required to be the same string, see
@@ -149,8 +133,8 @@ const SPLASH_BUDGET: Duration = Duration::from_secs(12);
 /// Decoding pictures makes big buffers that are freed correctly, but glibc
 /// raises its mmap threshold as it watches them (up to 32 MiB), so later ones
 /// come off the heap and freed pages stay resident, hundreds of MB across 48
-/// arenas. Measured on News with 97 images: 444 MB RSS as shipped, 149 MB with
-/// fixed trim and mmap thresholds. Pinning the threshold is what stops the
+/// arenas. Measured on the old News page with 97 images: 444 MB RSS as
+/// shipped, 149 MB with fixed trim and mmap thresholds. Pinning the threshold is what stops the
 /// drift. glibc only; musl would need measuring again.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn tune_allocator() {
@@ -335,29 +319,6 @@ struct Lightforge {
     /// handle: iced has no decoder of its own, and a handle rebuilt in `view`
     /// would be a fresh texture on every frame.
     bnet_icon: Option<image::Handle>,
-    /// The headlines, once the News page has asked for them.
-    ///
-    /// Fetched when that page is first opened rather than at startup: a
-    /// launcher's job on the first frame is to show the Play button, and a
-    /// feed nobody has looked at yet is not worth a request in front of it.
-    news: Option<news::Headlines>,
-    /// Whether a fetch is in flight, so the page says "loading" once and the
-    /// tab cannot start a second one by being clicked twice.
-    news_pending: bool,
-    /// Set once the first attempt has finished, so an empty result reads as
-    /// "nothing came back" rather than as "not asked yet".
-    news_asked: bool,
-    /// Headline pictures by their URL, decoded once.
-    ///
-    /// Keyed by URL rather than by index because the list is re-fetched: a
-    /// picture whose article is still in the feed keeps the handle it already
-    /// had, and a handle that does not change is a texture iced does not
-    /// re-upload.
-    news_images: HashMap<String, image::Handle>,
-    /// The page's backdrop, decoded once off the UI thread. Drawn when it
-    /// arrives; the page is perfectly readable in the instant before.
-    news_bg: Option<image::Handle>,
-
     /// Whether the cog menu beside the primary button is open.
     gear_open: bool,
     /// Live progress of a store scan, and whether one is running.
@@ -695,11 +656,6 @@ impl Lightforge {
             forward: Vec::new(),
             hints: false,
             bnet_icon,
-            news: None,
-            news_pending: false,
-            news_asked: false,
-            news_images: HashMap::new(),
-            news_bg: None,
             gear_open: false,
             scan_rx: None,
             scan_sample: lightforge_core::tact::verify::Progress::default(),
@@ -1086,7 +1042,6 @@ impl Lightforge {
         }
         let screen = match self.screen {
             Screen::Dashboard => self.dashboard(),
-            Screen::News => self.news_screen(),
             Screen::Updates => self.updates_screen(),
             Screen::Settings => self.settings(),
             Screen::Addons => self.addons_screen(),
@@ -1214,9 +1169,6 @@ const SHOP_URL: &str = "https://shop.battle.net";
 const STEAM_KEYBOARD: &str = "steam://open/keyboard";
 /// And to put it away: the pair SDL uses, found in Steam's own libSDL3.
 const STEAM_KEYBOARD_CLOSE: &str = "steam://close/keyboard";
-
-/// Where the News page's headlines come from, and where its button goes.
-const WOWHEAD_URL: &str = "https://www.wowhead.com";
 
 /// Where the app menu's links point. `None` is a destination that does not
 /// exist yet: the entry draws dimmed and unclickable until it is filled in.

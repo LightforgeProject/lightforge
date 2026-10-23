@@ -22,7 +22,6 @@ pub mod error;
 pub mod families;
 pub mod library;
 pub mod net;
-pub mod news;
 pub mod paths;
 pub mod prefix;
 pub mod preflight;

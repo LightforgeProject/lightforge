@@ -125,11 +125,6 @@ impl Lightforge {
                     nav("Play", Screen::Dashboard),
                 ),
                 self.ring(
-                    focus::Target::Tab(Screen::News),
-                    Some(Message::Show(Screen::News)),
-                    nav("News", Screen::News),
-                ),
-                self.ring(
                     focus::Target::Shop,
                     Some(Message::OpenLink(SHOP_URL)),
                     outbound("Battle.net Shop", SHOP_URL),
@@ -718,14 +713,12 @@ impl Lightforge {
 
     /// Which screens wear the game band under the tabs.
     ///
-    /// The pages you move between freely, the dashboard and News, keep the
-    /// same chrome, so switching tabs changes the content under a header that
-    /// does not move. Settings and a game's own pages (Addons, Game
+    /// Only the dashboard. Settings and a game's own pages (Addons, Game
     /// Optimizations) are somewhere you went *into*: they are about one thing,
     /// and a band offering to switch games above them invites a click that
     /// would throw away what you are doing.
     pub(crate) fn shows_band(&self) -> bool {
-        matches!(self.screen, Screen::Dashboard | Screen::News)
+        matches!(self.screen, Screen::Dashboard)
     }
 
     /// The hand-off into Battle.net, at the right-hand end of the game card.
