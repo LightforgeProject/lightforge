@@ -175,7 +175,11 @@ impl ProtonRunner {
         // isn't a Steam app, so pin a stable placeholder instead of letting
         // each build invent its own.
         cmd.env("SteamAppId", "0");
-        cmd.env("SteamGameId", "0");
+        // Never a game id, not even an empty one: under GE-Proton11-9 the
+        // variable being set at all hangs `wineboot -u` for good (measured,
+        // 11-7 is fine). Removed rather than left unset, because Steam puts
+        // its own into this process when it starts the launcher.
+        cmd.env_remove("SteamGameId");
         if let Some(cache) = &self.shader_cache {
             cmd.env("DXVK_STATE_CACHE_PATH", cache);
         }
@@ -718,6 +722,15 @@ mod tests {
                 "--exec=launch WoW",
             ]
         );
+    }
+
+    #[test]
+    fn proton_is_never_handed_a_game_id() {
+        // Set at all, even empty, it hangs a GE-Proton11-9 prefix creation.
+        let cmd = runner(Path::new("/scratch")).command("run", "wineboot", ["-u"]);
+        let game_id: Vec<_> =
+            cmd.get_envs().filter(|(k, _)| *k == OsStr::new("SteamGameId")).collect();
+        assert_eq!(game_id, [(OsStr::new("SteamGameId"), None)], "removed, not just unset");
     }
 
     #[test]
