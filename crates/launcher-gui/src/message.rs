@@ -275,6 +275,8 @@ pub(crate) enum Message {
     InstallProton,
     /// That build finished, or did not.
     ProtonInstalled(Result<(), Problem>),
+    /// The tested build fetched in the background; a failure is not shown.
+    TestedProtonFetched(Result<(), Problem>),
     /// Delete one managed build, by version.
     RemoveProton(String),
     ProtonRemoved(Result<String, String>),

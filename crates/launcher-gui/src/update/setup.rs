@@ -49,9 +49,42 @@ impl Lightforge {
                 // one moment the answer can have changed.
                 self.bnet_icon =
                     self.layout.battle_net_icon().and_then(|path| art::try_mark(&path));
+                // Not under the first run or another install, and once a
+                // session: offline it would fail again on every re-read.
+                let fetch = match &status {
+                    Some(status)
+                        if !self.tested_proton_asked
+                            && !self.setup_running
+                            && self.wizard.is_none()
+                            && proton::wants_tested(
+                                &status.installed,
+                                self.config.default_proton.version(),
+                                proton::prefix_build(&self.layout.compat_data()).as_deref(),
+                            ) =>
+                    {
+                        self.tested_proton_asked = true;
+                        // Nobody reads this progress, and it stays out of
+                        // `setup_running` so nothing in the UI locks for it.
+                        let (tx, _) = tokio::sync::watch::channel(provision::Progress::default());
+                        Task::perform(
+                            provision::install_build(proton::TESTED.to_owned(), tx),
+                            Message::TestedProtonFetched,
+                        )
+                    }
+                    _ => Task::none(),
+                };
                 self.setup = status;
-                Task::batch([measure, opened])
+                Task::batch([measure, opened, fetch])
             }
+            // Quiet either way: it was nobody's request. A failure leaves the
+            // build they have, and the next start asks again.
+            Message::TestedProtonFetched(result) => match result {
+                Ok(()) => Task::perform(
+                    provision::status(self.layout.clone(), self.config.clone()),
+                    |status| Message::SetupStatus(status.map(Box::new)),
+                ),
+                Err(_) => Task::none(),
+            },
             Message::Wizard(msg) => wizard::update(self, msg),
             Message::InstallBattleNet => {
                 self.config.battle_net_declined = false;

@@ -400,6 +400,9 @@ struct Lightforge {
     /// Editable copy of Battle.net's *own* cap, in MB/s. Empty means none.
     bnet_limit_input: String,
     proton_notice: Option<String>,
+    /// The tested Proton build has been asked for this session, so a failed
+    /// fetch (offline) is not retried on every status read.
+    tested_proton_asked: bool,
     /// Stable releases that could be installed, newest first.
     proton_available: Vec<String>,
     /// The one picked in the install picker, if any.
@@ -693,6 +696,7 @@ impl Lightforge {
             limit_input,
             bnet_limit_input: String::new(),
             proton_notice: None,
+            tested_proton_asked: false,
             proton_available: Vec::new(),
             proton_choice: None,
             proton_sizes: HashMap::new(),

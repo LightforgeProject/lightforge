@@ -215,6 +215,35 @@ pub fn select<'a>(builds: &'a [ProtonRelease], pin: Option<&str>) -> Option<&'a 
     }
 }
 
+/// Whether to fetch [`TESTED`] on the user's behalf.
+///
+/// For a machine set up before [`TESTED`] was the default, which otherwise
+/// stays on whatever build it had: a GE-Proton11-5 install could not start
+/// Warcraft III's web UI, and 11-7 could. Only ever a step *forward*, so:
+/// nothing is fetched under a pin (a pin is a choice), when it is already
+/// installed, when no supported build is installed yet (setup installs one),
+/// when a newer build is installed (someone who has one and plays on it keeps
+/// it), or when the prefix was made by a newer build than [`TESTED`], which
+/// would turn the switch into a downgrade of the shared prefix.
+pub fn wants_tested(
+    installed: &[ProtonRelease],
+    pin: Option<&str>,
+    prefix_built_by: Option<&str>,
+) -> bool {
+    if pin.is_some() || installed.iter().any(|b| b.version == TESTED) {
+        return false;
+    }
+    let mut supported = installed.iter().filter(|b| b.flavor.is_supported()).peekable();
+    if supported.peek().is_none() {
+        return false;
+    }
+    let tested = ge_version(TESTED);
+    if supported.any(|b| ge_version(&b.version) > tested) {
+        return false;
+    }
+    !prefix_fit(TESTED, prefix_built_by).is_downgrade()
+}
+
 /// A GE release tag as the pair of numbers it is, for ordering.
 ///
 /// `GE-Proton11-7` → `(11, 7)`. Needed because these tags do not sort as
@@ -618,6 +647,23 @@ mod tests {
         assert_eq!(select(&builds, None).unwrap().version, TESTED);
         // A pin still means exactly what it says.
         assert_eq!(select(&builds, Some("GE-Proton11-9")).unwrap().version, "GE-Proton11-9");
+    }
+
+    #[test]
+    fn the_tested_build_is_fetched_only_as_a_step_forward() {
+        let have = |tags: &[&str]| -> Vec<ProtonRelease> {
+            tags.iter().map(|t| build(t, None, ProtonFlavor::GloriousEggroll)).collect()
+        };
+        let old = have(&["GE-Proton11-5"]);
+        assert!(wants_tested(&old, None, Some("GE-Proton11-5")));
+        assert!(wants_tested(&old, None, None), "no prefix yet");
+        assert!(!wants_tested(&old, Some("GE-Proton11-5"), None), "a pin is a choice");
+        assert!(!wants_tested(&have(&["GE-Proton11-5", TESTED]), None, None), "already there");
+        assert!(!wants_tested(&[], None, None), "setup installs the first build");
+        assert!(!wants_tested(&have(&["GE-Proton11-11"]), None, None), "a newer build is kept");
+        assert!(!wants_tested(&old, None, Some("GE-Proton11-9")), "would downgrade the prefix");
+        let valve = [build("proton-11.0-2-x86_64", None, ProtonFlavor::Valve)];
+        assert!(!wants_tested(&valve, None, None), "nothing supported installed");
     }
 
     #[test]
