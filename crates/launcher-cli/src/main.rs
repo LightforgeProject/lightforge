@@ -46,8 +46,8 @@ enum Command {
     Prefix,
     /// Create or update the prefix, then put the game symlink in place.
     PrefixInit {
-        /// Proton build to use, e.g. `GE-Proton11-7`. Defaults to the newest
-        /// supported build installed.
+        /// Proton build to use, e.g. `GE-Proton11-7`. Defaults to the tested
+        /// build when it is installed, else the newest supported one.
         #[arg(long)]
         proton: Option<String>,
     },
@@ -887,7 +887,7 @@ fn managed_products() -> Vec<lightforge_core::product::ProductCode> {
 }
 
 /// Resolve the Proton build to run against the shared prefix, and a runner for
-/// it. `None` selects the newest supported build installed.
+/// it. `None` selects the tested build, see `proton::select`.
 fn proton_runner(
     layout: &Layout,
     version: Option<&str>,

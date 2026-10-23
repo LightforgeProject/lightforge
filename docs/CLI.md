@@ -208,7 +208,7 @@ Create or update the prefix, then put the game symlink in place
 Usage: lightforge prefix-init [OPTIONS]
 
 Options:
-      --proton <PROTON>  Proton build to use, e.g. `GE-Proton11-7`. Defaults to the newest supported build installed
+      --proton <PROTON>  Proton build to use, e.g. `GE-Proton11-7`. Defaults to the tested build when it is installed, else the newest supported one
       --root <ROOT>      Override the Blizzard root (default: ~/Games/Blizzard)
   -h, --help             Print help
 ```

@@ -125,7 +125,7 @@ pub enum Event {
 /// Provision whatever is missing. Safe to call when nothing is.
 ///
 /// `proton_version` pins which release to install when one is needed; `None`
-/// takes the newest stable.
+/// takes [`proton::TESTED`], installing it even beside a newer build.
 pub async fn run(
     layout: &Layout,
     dirs: &AppDirs,
@@ -148,17 +148,11 @@ pub async fn run(
 
     // 1. Proton. Everything else runs *through* a Proton build, so this is
     //    first whether the user cares about it or not.
-    let build = match (&status.proton, proton_version) {
-        // Already have the pinned build (or any build, when nothing is pinned).
-        (Some(build), None) => {
-            on_event(Event::Finished {
-                step: Step::Proton,
-                skipped: true,
-                note: build.version.clone(),
-            });
-            build.clone()
-        }
-        (Some(build), Some(wanted)) if build.version == wanted => {
+    //    Not "any build will do": a newer one found in Steam's folders is not
+    //    one Lightforge was tested on, and 11-9 could not install Battle.net.
+    let wanted = proton_version.unwrap_or(proton::TESTED);
+    let build = match &status.proton {
+        Some(build) if build.version == wanted => {
             on_event(Event::Finished {
                 step: Step::Proton,
                 skipped: true,
@@ -168,7 +162,7 @@ pub async fn run(
         }
         _ => {
             on_event(Event::Started(Step::Proton));
-            let build = install_proton(&http, dirs, proton_version, &mut on_event).await?;
+            let build = install_proton(&http, dirs, Some(wanted), &mut on_event).await?;
             on_event(Event::Finished {
                 step: Step::Proton,
                 skipped: false,

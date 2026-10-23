@@ -251,6 +251,15 @@ impl Lightforge {
             body = body.push(container(log).padding(theme::MD).style(theme::card));
         }
 
+        // Where the progress was, so a failed run says why. The Settings page
+        // shows its errors above every section; the wizard covers that, and a
+        // step that failed used to look like a button that did nothing.
+        if in_wizard && !self.setup_running {
+            if let Some(e) = &self.error {
+                body = body.push(problem(e));
+            }
+        }
+
         let ready = self.setup.as_ref().is_some_and(|s| s.is_ready());
         let label = match (self.setup_running, ready) {
             (true, _) => "Working…",

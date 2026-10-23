@@ -186,20 +186,32 @@ pub fn discover_all(
     found
 }
 
+/// The build Lightforge is tested against, used whenever nothing is pinned.
+///
+/// Newest is not safest. GE-Proton11-9 hangs `wineboot` when given a game id
+/// and crashes Battle.net's installer on start (`c00000fd`), and it was the
+/// newest build on the machine it broke. Moved by hand, after a release has
+/// been through setup, a Battle.net sign-in and a game launch.
+pub const TESTED: &str = "GE-Proton11-7";
+
 /// Choose the build to launch with.
 ///
 /// A pin is honored exactly, silently falling back to another build is how a
 /// user ends up debugging a regression against a Proton version they never
-/// selected. Without a pin, the newest supported build wins, dated by the
-/// `version` file rather than by tag, since tags don't sort numerically
-/// (`GE-Proton11-10` < `GE-Proton11-7` lexically).
+/// selected. Without a pin, [`TESTED`] wins when it is installed. Only when it
+/// is not does the newest supported build stand in, dated by the `version`
+/// file rather than by tag, since tags don't sort numerically
+/// (`GE-Proton11-10` < `GE-Proton11-7` lexically). Setup installs [`TESTED`]
+/// when it is missing, so the stand-in is for machines set up before it.
 pub fn select<'a>(builds: &'a [ProtonRelease], pin: Option<&str>) -> Option<&'a ProtonRelease> {
     match pin {
         Some(version) => builds.iter().find(|b| b.version == version),
-        None => builds
-            .iter()
-            .filter(|b| b.flavor.is_supported())
-            .max_by_key(|b| (b.built_at, b.version.clone())),
+        None => builds.iter().find(|b| b.version == TESTED).or_else(|| {
+            builds
+                .iter()
+                .filter(|b| b.flavor.is_supported())
+                .max_by_key(|b| (b.built_at, b.version.clone()))
+        }),
     }
 }
 
@@ -575,10 +587,10 @@ mod tests {
     }
 
     #[test]
-    fn selection_prefers_the_newest_supported_build() {
+    fn without_the_tested_build_the_newest_supported_one_stands_in() {
         let builds = vec![
             build(
-                "GE-Proton11-7",
+                "GE-Proton10-25",
                 Some(1_787_951_532),
                 ProtonFlavor::GloriousEggroll,
             ),
@@ -593,7 +605,19 @@ mod tests {
                 ProtonFlavor::Valve,
             ),
         ];
-        assert_eq!(select(&builds, None).unwrap().version, "GE-Proton11-7");
+        assert_eq!(select(&builds, None).unwrap().version, "GE-Proton10-25");
+    }
+
+    #[test]
+    fn the_tested_build_beats_a_newer_one() {
+        // The machine GE-Proton11-9 broke had both, and newest-wins took 11-9.
+        let builds = vec![
+            build(TESTED, Some(1_787_951_532), ProtonFlavor::GloriousEggroll),
+            build("GE-Proton11-9", Some(1_791_936_695), ProtonFlavor::GloriousEggroll),
+        ];
+        assert_eq!(select(&builds, None).unwrap().version, TESTED);
+        // A pin still means exactly what it says.
+        assert_eq!(select(&builds, Some("GE-Proton11-9")).unwrap().version, "GE-Proton11-9");
     }
 
     #[test]
