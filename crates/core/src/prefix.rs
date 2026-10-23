@@ -184,6 +184,15 @@ impl ProtonRunner {
         // 11-7 is fine). Removed rather than left unset, because Steam puts
         // its own into this process when it starts the launcher.
         cmd.env_remove("SteamGameId");
+        // Pointers at somebody else's Wine. Proton appends to these rather
+        // than replacing them, so a stray `WINEDLLPATH` in the user's shell
+        // makes the build load another Wine's DLLs against its own unix side
+        // (`unimplemented function win32u...`, aborting). Nothing a user sets
+        // for their own wine means anything to a Proton build. The tweaks in
+        // `self.env` below are applied after this and still win.
+        for var in FOREIGN_WINE_VARS {
+            cmd.env_remove(var);
+        }
         // The names the DXVK (3.1) and VKD3D-Proton in GE-Proton11-7 read.
         // The older `DXVK_STATE_CACHE_PATH` went with DXVK's state cache and
         // is not read by that build at all.
@@ -283,6 +292,11 @@ impl ProtonRunner {
         Ok(())
     }
 }
+
+/// Variables that point a Wine at another Wine's files, dropped from every
+/// Proton run. `WINEPREFIX` and the `WINEDLLOVERRIDES`/`WINEESYNC` family are
+/// deliberately not here: Proton sets the first itself and users tune the rest.
+const FOREIGN_WINE_VARS: [&str; 3] = ["WINEDLLPATH", "WINELOADER", "WINESERVER"];
 
 /// Every library's games folder, the default one first.
 ///
@@ -476,6 +490,15 @@ impl PrefixStatus {
 /// `drive_c`, and Wine must be finished writing before the link is created, or
 /// `wineboot` can replace the link with a real directory of its own.
 pub fn provision(runner: &ProtonRunner, layout: &Layout) -> Result<PrefixStatus, PrefixError> {
+    // A prefix about to be built from nothing can still have a server from the
+    // one that stood there before, possibly another Proton build's: a deleted
+    // directory does not stop its processes, and the new one can inherit the
+    // old one's socket. The scan only matches processes whose environment
+    // names this prefix, so nobody else's Wine is touched. Best effort, and
+    // skipped on an existing prefix, where a running client is the user's.
+    if !is_initialized(&runner.prefix()) {
+        let _ = crate::preflight::shutdown(runner, layout, crate::preflight::DEFAULT_GRACE);
+    }
     runner.wineboot_update()?;
     runner.wineserver_kill()?;
     link_libraries(layout)?;
@@ -738,6 +761,17 @@ mod tests {
         let game_id: Vec<_> =
             cmd.get_envs().filter(|(k, _)| *k == OsStr::new("SteamGameId")).collect();
         assert_eq!(game_id, [(OsStr::new("SteamGameId"), None)], "removed, not just unset");
+    }
+
+    #[test]
+    fn another_wines_files_are_never_handed_to_proton() {
+        let cmd = runner(Path::new("/scratch")).command("run", "wineboot", ["-u"]);
+        for var in ["WINEDLLPATH", "WINELOADER", "WINESERVER"] {
+            let seen: Vec<_> = cmd.get_envs().filter(|(k, _)| *k == OsStr::new(var)).collect();
+            assert_eq!(seen, [(OsStr::new(var), None)], "{var} removed");
+        }
+        let overrides = cmd.get_envs().any(|(k, _)| k == OsStr::new("WINEDLLOVERRIDES"));
+        assert!(!overrides, "user tuning is left alone, not listed");
     }
 
     #[test]
