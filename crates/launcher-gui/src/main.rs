@@ -403,10 +403,12 @@ struct Lightforge {
     /// The tested Proton build has been asked for this session, so a failed
     /// fetch (offline) is not retried on every status read.
     tested_proton_asked: bool,
-    /// Stable releases that could be installed, newest first.
-    proton_available: Vec<String>,
-    /// The one picked in the install picker, if any.
-    proton_choice: Option<String>,
+    /// Stable releases that could be installed per family, newest first.
+    proton_available: Vec<(proton::ProtonFamily, Vec<String>)>,
+    /// Valve Protons this session asked Steam to install.
+    steam_proton_asked: HashSet<u32>,
+    /// The tab of the "Install Proton Version" window, while it is open.
+    proton_installer: Option<ProtonCategory>,
     /// Measured size of each installed build, keyed by its directory.
     proton_sizes: HashMap<PathBuf, u64>,
     /// The last Storage measurement; `None` until the section first asks.
@@ -699,7 +701,8 @@ impl Lightforge {
             proton_notice: None,
             tested_proton_asked: false,
             proton_available: Vec::new(),
-            proton_choice: None,
+            steam_proton_asked: HashSet::new(),
+            proton_installer: None,
             proton_sizes: HashMap::new(),
             storage: None,
             storage_measuring: false,
@@ -1114,6 +1117,7 @@ impl Lightforge {
             (.., Some(available)) => Some(self.update_card(available)),
             _ => None,
         };
+        let card = card.or_else(|| self.proton_installer.map(|tab| self.proton_installer_card(tab)));
         let settings_on_top = self.game_settings.is_some()
             && self.install_dialog.is_none()
             && self.uninstall_dialog.is_none()

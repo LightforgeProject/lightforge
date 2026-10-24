@@ -1229,3 +1229,30 @@ fn a_package_manager_replacing_the_binary_ends_the_wait() {
     assert_eq!(app.upgrade.as_ref().unwrap().stage, UpgradeStage::Installed);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn the_proton_installer_opens_on_proton_ge_switches_tabs_and_closes_on_escape() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.queue.clear();
+    app.wizard = None;
+    app.splash = None;
+    app.update_notice = None;
+    app.patch_notes = None;
+    // A list already fetched, so opening it asks GitHub for nothing.
+    app.proton_available = vec![(proton::ProtonFamily::GloriousEggroll, vec!["GE-Proton11-7".to_owned()])];
+
+    let _ = app.update(Message::OpenProtonInstaller);
+    assert_eq!(app.proton_installer, Some(ProtonCategory::GloriousEggroll));
+
+    for tab in ProtonCategory::ALL {
+        let _ = app.update(Message::ProtonInstallerTab(tab));
+        assert_eq!(app.proton_installer, Some(tab));
+        // Every tab draws, including the two that only explain.
+        let _ = app.proton_installer_card(tab);
+    }
+
+    assert!(matches!(app.dialog_dismissal(), Some(Message::CloseProtonInstaller)));
+    let _ = app.update(Message::CloseProtonInstaller);
+    assert_eq!(app.proton_installer, None);
+}

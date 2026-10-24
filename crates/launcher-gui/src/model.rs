@@ -232,6 +232,35 @@ pub(crate) struct DowngradeDialog {
     pub(crate) label: String,
 }
 
+/// A tab of the "Install Proton Version" window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ProtonCategory {
+    Steam,
+    GloriousEggroll,
+    CachyOs,
+}
+
+impl ProtonCategory {
+    pub(crate) const ALL: [Self; 3] = [Self::Steam, Self::GloriousEggroll, Self::CachyOs];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Steam => "Steam Proton",
+            Self::GloriousEggroll => "Proton-GE",
+            Self::CachyOs => "Proton-CachyOS",
+        }
+    }
+
+    /// The downloadable family behind the tab, if there is one.
+    pub(crate) fn family(self) -> Option<proton::ProtonFamily> {
+        match self {
+            Self::GloriousEggroll => Some(proton::ProtonFamily::GloriousEggroll),
+            Self::CachyOs => Some(proton::ProtonFamily::CachyOs),
+            Self::Steam => None,
+        }
+    }
+}
+
 /// A section of the Settings page, and its entry in the index beside it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SettingsTab {

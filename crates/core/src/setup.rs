@@ -276,8 +276,13 @@ async fn install_proton(
     version: Option<&str>,
     on_event: &mut impl FnMut(Event),
 ) -> Result<ProtonRelease, SetupError> {
-    let cache = crate::net::ETagCache::new(dirs.asset_cache_dir().join("proton-releases.json"));
-    let releases = proton::fetch_releases(http, &cache).await?;
+    // A tag names its family; with none asked for, the newest GE is the
+    // default, as it always was.
+    let family = version
+        .and_then(proton::ProtonFamily::of_tag)
+        .unwrap_or(proton::ProtonFamily::GloriousEggroll);
+    let cache = crate::net::ETagCache::new(dirs.asset_cache_dir().join(family.cache_file()));
+    let releases = proton::fetch_releases(http, &cache, family).await?;
 
     let release = match version {
         Some(tag) => releases

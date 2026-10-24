@@ -49,7 +49,7 @@ pub(crate) async fn proton_check() -> Result<()> {
     let cached = cache.etag().is_some();
 
     let http = Http::new()?;
-    let releases = proton::fetch_releases(&http, &cache)
+    let releases = proton::fetch_releases(&http, &cache, proton::ProtonFamily::GloriousEggroll)
         .await
         .context("fetching Proton-GE releases")?;
 
@@ -78,7 +78,7 @@ pub(crate) async fn proton_check() -> Result<()> {
     let steam = lightforge_core::steam::SteamRoot::discover();
     let installed: Vec<_> = proton::discover_all(steam.as_ref(), &dirs.proton_dir())
         .into_iter()
-        .filter(|r| r.flavor.is_supported())
+        .filter(|r| r.flavor == proton::ProtonFlavor::GloriousEggroll)
         .collect();
 
     for build in &installed {
@@ -96,9 +96,13 @@ pub(crate) async fn proton_install(version: Option<String>) -> Result<()> {
     use std::io::Write;
 
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
-    let cache = ETagCache::new(dirs.cache_dir().join("proton-releases.json"));
+    let family = version
+        .as_deref()
+        .and_then(proton::ProtonFamily::of_tag)
+        .unwrap_or(proton::ProtonFamily::GloriousEggroll);
+    let cache = ETagCache::new(dirs.cache_dir().join(family.cache_file()));
     let http = Http::new()?;
-    let releases = proton::fetch_releases(&http, &cache).await?;
+    let releases = proton::fetch_releases(&http, &cache, family).await?;
 
     let release = match &version {
         Some(tag) => releases

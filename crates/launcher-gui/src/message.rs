@@ -264,10 +264,15 @@ pub(crate) enum Message {
     BattleNetLimitWritten(Result<(), String>),
     CheckProton,
     ProtonChecked(Result<provision::ProtonReleases, String>),
-    /// A version was chosen in the "install another build" picker.
-    ChooseProtonVersion(ProtonChoice),
-    /// Install the chosen version.
-    InstallProton,
+    /// Open the "Install Proton Version" window.
+    OpenProtonInstaller,
+    CloseProtonInstaller,
+    /// Another tab of that window.
+    ProtonInstallerTab(ProtonCategory),
+    /// Install one release, by tag.
+    InstallProton(String),
+    /// Ask Steam to install one of Valve's Protons, by app id.
+    InstallSteamProton(u32),
     /// That build finished, or did not.
     ProtonInstalled(Result<(), Problem>),
     /// The tested build fetched in the background; a failure is not shown.
@@ -476,7 +481,14 @@ pub(crate) enum Unpinned {
 impl std::fmt::Display for ProtonChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match (&self.0, self.1) {
-            (Some(version), _) => f.write_str(version),
+            (Some(version), _) => {
+                f.write_str(version)?;
+                // Anything that is not the lineage Lightforge is tested on.
+                match proton::ProtonFlavor::classify(version) == proton::ProtonFlavor::GloriousEggroll {
+                    true => Ok(()),
+                    false => f.write_str(" (untested)"),
+                }
+            }
             (None, Unpinned::Newest) => f.write_str("Newest installed"),
             (None, Unpinned::Default) => f.write_str("Follow the default"),
             (None, Unpinned::BattleNet) => f.write_str("Follow Battle.net"),

@@ -384,60 +384,31 @@ impl Lightforge {
         // progress bar existed, pressing Install and landing on a different
         // page reads as a misclick.
         if self.setup_running {
-            let mut working = column![].spacing(theme::XS);
-            for line in &self.setup_sample.log {
-                working = working.push(muted(line.clone(), theme::CAPTION));
-            }
-            working = working.push(match self.setup_sample.fraction() {
-                Some(fraction) => Element::from(progress_bar(0.0..=1.0, fraction).girth(6)),
-                // No content-length: the bytes are the only honest figure.
-                None => mono(bytes_of(self.setup_sample.done, 0)).into(),
-            });
-            rows = rows.push(container(working).padding(theme::MD).style(theme::card));
+            rows = rows.push(self.install_progress());
         }
 
         rows.into()
     }
 
-    /// The control that adds a build, for the Builds card's header.
-    ///
-    /// The release list is fetched on the way into the page (see
-    /// [`Lightforge::arrived`]), so by the time anyone reads this it is
-    /// usually populated. The three states it can be in all say which one
-    /// they are rather than showing an empty dropdown.
-    pub(crate) fn proton_install(&self) -> Element<'_, Message> {
-        if self.proton_available.is_empty() {
-            return row![
-                muted(
-                    self.proton_notice.clone().unwrap_or_else(|| "checking…".to_owned()),
-                    theme::CAPTION,
-                ),
-                secondary("Check again", Message::CheckProton).enabled(!self.setup_running),
-            ]
-            .spacing(theme::SM)
-            .align_y(Alignment::Center)
-            .into();
+    /// The build being installed: what setup has said so far and a bar.
+    pub(crate) fn install_progress(&self) -> Element<'_, Message> {
+        let mut working = column![].spacing(theme::XS);
+        for line in &self.setup_sample.log {
+            working = working.push(muted(line.clone(), theme::CAPTION));
         }
+        working = working.push(match self.setup_sample.fraction() {
+            Some(fraction) => Element::from(progress_bar(0.0..=1.0, fraction).girth(6)),
+            // No content-length: the bytes are the only honest figure.
+            None => mono(bytes_of(self.setup_sample.done, 0)).into(),
+        });
+        container(working).padding(theme::MD).style(theme::card).into()
+    }
 
-        row![
-            self.picker(
-                "proton-install".to_owned(),
-                self.proton_available
-                    .iter()
-                    .map(|v| ProtonChoice(Some(v.clone()), Unpinned::Newest))
-                    .collect::<Vec<_>>(),
-                self.proton_choice.clone().map(|v| ProtonChoice(Some(v), Unpinned::Newest)),
-                "Install a version",
-                Message::ChooseProtonVersion,
-                Length::Fixed(220.0),
-                theme::BODY,
-            ),
-            secondary("Install", Message::InstallProton)
-                .enabled(self.proton_choice.is_some() && !self.setup_running),
-        ]
-        .spacing(theme::SM)
-        .align_y(Alignment::Center)
-        .into()
+    /// The control that adds a build, for the Builds card's header: one
+    /// button, the window behind it has the lists.
+    pub(crate) fn proton_install(&self) -> Element<'_, Message> {
+        secondary("Install Proton Version", Message::OpenProtonInstaller)
+            .enabled(!self.setup_running)
     }
 
     /// Settings: every section on one page, with an index down the left

@@ -181,6 +181,7 @@ impl Lightforge {
             _ if self.addon_detail.is_some() => Message::CloseAddonDetail,
             _ if self.report_dialog.is_some() => Message::ReportCancel,
             _ if self.game_settings.is_some() => Message::CloseGameSettings,
+            _ if self.proton_installer.is_some() => Message::CloseProtonInstaller,
             _ if self.patch_notes.is_some() => Message::DismissPatchNotes,
             _ if self.update_notice.is_some() => Message::DismissUpdate,
             _ => return None,

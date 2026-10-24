@@ -12,7 +12,7 @@ use lightforge_core::net::Http;
 use lightforge_core::config::Config;
 use lightforge_core::paths::{AppDirs, Layout};
 use lightforge_core::setup::{self, Event, Status, Step};
-use lightforge_core::proton::ProtonRelease;
+use lightforge_core::proton::{self, ProtonRelease};
 
 /// What setup publishes while it runs.
 #[derive(Debug, Clone, Default)]
@@ -104,19 +104,19 @@ pub async fn status(layout: Layout, config: Config) -> Option<Status> {
     .flatten()
 }
 
-/// Ask GitHub whether a newer Proton-GE exists. Notify-only, per the policy:
-/// nothing here installs anything by itself.
 /// What one trip to GitHub tells us: whether a newer build exists, and every
 /// build that could be installed.
 ///
-/// Both come out of the same release list, so they are fetched together, the
-/// request is ETag-revalidated and asking twice would buy nothing.
+/// Both come out of the same release lists, so they are fetched together, the
+/// requests are ETag-revalidated and asking twice would buy nothing.
+/// Notify-only, per the policy: nothing here installs anything by itself.
 #[derive(Debug, Clone, Default)]
 pub struct ProtonReleases {
-    /// A newer stable release than the installed one, if there is one.
+    /// A newer stable Proton-GE than the installed one, if there is one.
     pub update: Option<String>,
-    /// Every installable stable tag, newest first.
-    pub available: Vec<String>,
+    /// Every installable stable tag per family, newest first. A family whose
+    /// list could not be fetched is left out, not shown empty.
+    pub available: Vec<(proton::ProtonFamily, Vec<String>)>,
 }
 
 pub async fn check_proton(
@@ -124,30 +124,47 @@ pub async fn check_proton(
     installed: Option<String>,
 ) -> Result<ProtonReleases, String> {
     use lightforge_core::net::ETagCache;
-    use lightforge_core::proton;
 
     let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
     let http = http.ok_or(crate::tasks::NO_HTTP)?;
-    let cache = ETagCache::new(dirs.asset_cache_dir().join("proton-releases.json"));
-    let releases = proton::fetch_releases(&http, &cache)
-        .await
-        .map_err(|e| chain(&e))?;
 
-    // Pre-releases are deliberately not offered: `latest_stable` skips them
-    // for the update check, and a list that could install one would make the
-    // two disagree about what "available" means.
-    let available = releases
-        .iter()
-        .filter(|release| !release.prerelease && release.tarball().is_some())
-        .map(|release| release.tag_name.clone())
-        .collect();
+    let mut found = ProtonReleases::default();
+    let mut first_error = None;
+    for family in proton::ProtonFamily::ALL {
+        let cache = ETagCache::new(dirs.asset_cache_dir().join(family.cache_file()));
+        let releases = match proton::fetch_releases(&http, &cache, family).await {
+            Ok(releases) => releases,
+            Err(e) => {
+                first_error.get_or_insert_with(|| chain(&e));
+                continue;
+            }
+        };
 
-    Ok(ProtonReleases {
-        update: installed
-            .and_then(|installed| proton::check_for_update(&installed, &releases))
-            .map(|notice| notice.available),
-        available,
-    })
+        // Pre-releases are deliberately not offered: `latest_stable` skips
+        // them for the update check, and a list that could install one would
+        // make the two disagree about what "available" means.
+        let tags = releases
+            .iter()
+            .filter(|release| !release.prerelease && release.tarball().is_some())
+            .map(|release| release.tag_name.clone())
+            .collect();
+        found.available.push((family, tags));
+
+        // The update check follows the family of the build in use.
+        if family == proton::ProtonFamily::GloriousEggroll {
+            found.update = installed
+                .as_deref()
+                .filter(|v| proton::ProtonFamily::of_tag(v) == Some(family))
+                .and_then(|v| proton::check_for_update(v, &releases))
+                .map(|notice| notice.available);
+        }
+    }
+
+    // One list answering is enough to show something; none is a failure.
+    match (found.available.is_empty(), first_error) {
+        (true, Some(e)) => Err(e),
+        _ => Ok(found),
+    }
 }
 
 /// Measure every installed build, off the UI thread.
