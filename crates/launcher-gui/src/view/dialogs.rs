@@ -516,6 +516,32 @@ impl Lightforge {
             .into()
     }
 
+    /// The question before a running game is stopped.
+    pub(crate) fn stop_card<'a>(&'a self, dialog: &'a StopDialog) -> Element<'a, Message> {
+        let choice = |label: &'static str| {
+            button(text(label).size(theme::LABEL).width(Length::Fill).center())
+                .width(Length::Fixed(170.0))
+                .padding(theme::tap([theme::SM, theme::MD]))
+        };
+        let actions = row![
+            Space::new().width(Length::Fill),
+            tappable("keep playing", Some(Message::StopGameDismiss), choice("Keep playing").style(theme::outlined)),
+            tappable(
+                "stop game",
+                Some(Message::StopGameConfirm),
+                choice("Stop game").style(theme::filled(theme::ERROR)),
+            ),
+        ]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center);
+
+        container(column![text(format!("Stop {}?", dialog.label)).size(theme::HEADING + 2.0), actions].spacing(theme::LG))
+            .width(Length::Fixed(520.0))
+            .padding(theme::LG)
+            .style(theme::dialog)
+            .into()
+    }
+
     pub(crate) fn uninstall_card<'a>(&'a self, dialog: &'a UninstallDialog) -> Element<'a, Message> {
         let mut body = column![].spacing(theme::MD);
         let mut ready = false;

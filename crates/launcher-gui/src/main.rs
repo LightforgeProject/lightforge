@@ -445,6 +445,12 @@ struct Lightforge {
     /// on the click, so the launch, and what follows it, cannot move to a
     /// tile selected in the meantime.
     launching: Option<ProductCode>,
+    /// A game process is up in the prefix during a launch of ours: PLAY
+    /// becomes STOP.
+    game_up: bool,
+    /// STOP was confirmed and the game has been told to go.
+    stopping: bool,
+    stop_dialog: Option<StopDialog>,
     /// A launch whose pre-flight is done, held until the download it paused
     /// has finished winding down: the client and a still-checkpointing
     /// downloader would share one store.
@@ -718,6 +724,9 @@ impl Lightforge {
             delete_after_cancel: Vec::new(),
             discarding: None,
             launching: None,
+            game_up: false,
+            stopping: false,
+            stop_dialog: None,
             launch_when_quiet: None,
             report_dialog: None,
             system: None,
@@ -976,6 +985,12 @@ impl Lightforge {
             false => Subscription::none(),
         };
         let upgrade = self.upgrade_watch();
+        // Only during a launch of ours: asking the process table whether a
+        // game is up is what turns PLAY into STOP.
+        let game_watch = match self.busy && self.launching.is_some() {
+            true => iced::time::every(Duration::from_secs(2)).map(|_| Message::GameWatch),
+            false => Subscription::none(),
+        };
 
         // The splash's bar sweeps off the clock, so it needs the tick as much
         // as a live transfer does.
@@ -998,10 +1013,12 @@ impl Lightforge {
                 pointing,
                 registry,
                 upgrade,
+                game_watch,
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),
             ]),
             false => Subscription::batch([
                 closing, hints, pads, window_focus, resizes, dragging, pointing, registry, upgrade,
+                game_watch,
             ]),
         }
     }
@@ -1117,7 +1134,9 @@ impl Lightforge {
             (.., Some(available)) => Some(self.update_card(available)),
             _ => None,
         };
-        let card = card.or_else(|| self.proton_installer.map(|tab| self.proton_installer_card(tab)));
+        let card = card
+            .or_else(|| self.stop_dialog.as_ref().map(|d| self.stop_card(d)))
+            .or_else(|| self.proton_installer.map(|tab| self.proton_installer_card(tab)));
         let settings_on_top = self.game_settings.is_some()
             && self.install_dialog.is_none()
             && self.uninstall_dialog.is_none()

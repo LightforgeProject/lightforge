@@ -336,7 +336,7 @@ fn shutdown_timed(
         return Ok(outcomes);
     }
 
-    let stubborn = signal_all(&mut system, layout, &remaining, Signal::Term, grace);
+    let stubborn = signal_all(&mut system, layout, &pids_of(&remaining), Signal::Term, grace);
     stamp(timings, "SIGTERM");
     let (ignored_term, exited): (Vec<_>, Vec<_>) =
         remaining.into_iter().partition(|p| stubborn.contains(&p.pid));
@@ -346,7 +346,7 @@ fn shutdown_timed(
     }));
 
     if !ignored_term.is_empty() {
-        let survivors = signal_all(&mut system, layout, &ignored_term, Signal::Kill, grace);
+        let survivors = signal_all(&mut system, layout, &pids_of(&ignored_term), Signal::Kill, grace);
         stamp(timings, "SIGKILL");
         outcomes.extend(ignored_term.into_iter().map(|process| {
             let disposition = if survivors.contains(&process.pid) {
@@ -362,6 +362,10 @@ fn shutdown_timed(
     Ok(outcomes)
 }
 
+fn pids_of(processes: &[PrefixProcess]) -> Vec<u32> {
+    processes.iter().map(|p| p.pid).collect()
+}
+
 /// Send `signal` to each process, then wait up to `grace` for them all to go
 /// away. Returns the pids still alive at the end.
 ///
@@ -371,15 +375,15 @@ fn shutdown_timed(
 fn signal_all(
     system: &mut System,
     layout: &Layout,
-    targets: &[PrefixProcess],
+    targets: &[u32],
     signal: Signal,
     grace: Duration,
 ) -> HashSet<u32> {
     let prefixes = owned_prefixes(layout);
     let mut pending: HashSet<u32> = HashSet::new();
 
-    for target in targets {
-        let pid = Pid::from_u32(target.pid);
+    for &target in targets {
+        let pid = Pid::from_u32(target);
         let Some(proc) = system.process(pid) else {
             continue;
         };
@@ -387,7 +391,7 @@ fn signal_all(
             continue;
         }
         if proc.kill_with(signal).is_some() {
-            pending.insert(target.pid);
+            pending.insert(target);
         }
     }
 
@@ -400,7 +404,13 @@ fn signal_all(
             true,
             ProcessRefreshKind::nothing(),
         );
-        pending.retain(|pid| system.process(Pid::from_u32(*pid)).is_some());
+        // A zombie has exited and is only waiting to be reaped by its parent;
+        // counting it would report a dead process as one that survived.
+        pending.retain(|pid| {
+            system
+                .process(Pid::from_u32(*pid))
+                .is_some_and(|p| p.status() != sysinfo::ProcessStatus::Zombie)
+        });
     }
     pending
 }
@@ -692,6 +702,53 @@ fn names_a_game(argv: &[std::ffi::OsString], fallback: &str) -> Option<String> {
     Some(name)
 }
 
+/// A game process and how it was made to stop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stopped {
+    pub game: GameProcess,
+    pub disposition: Disposition,
+}
+
+/// Stop the running game, and only the game.
+///
+/// Not [`shutdown`]: `wineserver -k` takes the whole prefix with it, which is
+/// Battle.net and any other game started from it. This signals the processes
+/// [`games_running`] names, `SIGTERM` first so Wine can tear its windows
+/// down, `SIGKILL` for whatever is still there after `grace`. Each pid is
+/// re-attributed to the prefix right before it is signalled, as in
+/// [`signal_all`]. Lifecycle only: nothing here reads or writes the game.
+///
+/// The prefix is left for the next pre-flight to settle, exactly as after a
+/// game that closed by itself.
+pub fn stop_games(layout: &Layout, grace: Duration) -> Vec<Stopped> {
+    let mut system = System::new();
+    refresh(&mut system);
+    let games = collect_games(&system, layout);
+    if games.is_empty() {
+        return Vec::new();
+    }
+
+    let pids: Vec<u32> = games.iter().map(|g| g.pid).collect();
+    let stubborn = signal_all(&mut system, layout, &pids, Signal::Term, grace);
+    let stubborn_pids: Vec<u32> = stubborn.iter().copied().collect();
+    let survivors = match stubborn_pids.is_empty() {
+        true => HashSet::new(),
+        false => signal_all(&mut system, layout, &stubborn_pids, Signal::Kill, grace),
+    };
+
+    games
+        .into_iter()
+        .map(|game| {
+            let disposition = match (stubborn.contains(&game.pid), survivors.contains(&game.pid)) {
+                (false, _) => Disposition::Terminated,
+                (true, false) => Disposition::Killed,
+                (true, true) => Disposition::Survived,
+            };
+            Stopped { game, disposition }
+        })
+        .collect()
+}
+
 /// Wait for a handed-off game to start.
 ///
 /// `before` is what [`games_running`] returned *prior* to the hand-off, so a
@@ -788,6 +845,41 @@ mod tests {
 
     const BNET: &str = r"C:\Program Files (x86)\Battle.net\Battle.net.exe";
     const AGENT: &str = r"C:\ProgramData\Battle.net\Agent\Agent.9775\Agent.exe";
+
+    #[test]
+    fn a_process_that_ignores_sigterm_is_killed_and_a_stranger_is_left_alone() {
+        use std::process::{Command, Stdio};
+
+        let layout = Layout::with_root("/games/Blizzard");
+        let prefix = layout.prefix();
+        let stubborn = |env: Option<&Path>| {
+            let mut cmd = Command::new("sh");
+            cmd.args(["-c", "trap '' TERM; while :; do sleep 0.05; done"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            if let Some(prefix) = env {
+                cmd.env("WINEPREFIX", prefix);
+            }
+            cmd.spawn().unwrap()
+        };
+        let mut ours = stubborn(Some(&prefix));
+        let mut stranger = stubborn(None);
+        std::thread::sleep(Duration::from_millis(200));
+
+        let mut system = System::new();
+        refresh(&mut system);
+        let grace = Duration::from_millis(400);
+        let ignored = signal_all(&mut system, &layout, &[ours.id(), stranger.id()], Signal::Term, grace);
+        assert_eq!(ignored, HashSet::from([ours.id()]), "SIGTERM is ignored, and the stranger was never signalled");
+        let survivors = signal_all(&mut system, &layout, &[ours.id()], Signal::Kill, Duration::from_secs(2));
+        assert!(survivors.is_empty());
+
+        assert!(ours.wait().is_ok());
+        // Still running: it was not ours to signal.
+        assert!(stranger.try_wait().unwrap().is_none());
+        let _ = stranger.kill();
+        let _ = stranger.wait();
+    }
 
     #[test]
     fn a_handed_off_game_is_whatever_is_not_battle_net_or_wine() {

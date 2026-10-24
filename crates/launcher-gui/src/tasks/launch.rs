@@ -457,6 +457,30 @@ pub async fn await_game_exit(layout: Layout, game: GameProcess) -> Result<String
     .map_err(|e| Problem::of(&e))?
 }
 
+/// Whether a game is running in the prefix right now.
+pub async fn game_running(layout: Layout) -> bool {
+    tokio::task::spawn_blocking(move || !lightforge_core::preflight::games_running(&layout).is_empty())
+        .await
+        .unwrap_or(false)
+}
+
+/// How long a game gets to close on `SIGTERM` before it is killed outright.
+const STOP_GRACE: Duration = Duration::from_secs(5);
+
+/// Stop the running game, leaving Battle.net and the rest of the prefix be.
+pub async fn stop_game(layout: Layout) -> Result<String, Problem> {
+    use lightforge_core::preflight::{self, Disposition};
+
+    let stopped = tokio::task::spawn_blocking(move || preflight::stop_games(&layout, STOP_GRACE))
+        .await
+        .map_err(|e| Problem::of(&e))?;
+    match stopped.iter().find(|s| s.disposition == Disposition::Survived) {
+        Some(stuck) => Err(format!("{} would not stop", stuck.game.name).into()),
+        None if stopped.is_empty() => Ok("no game was running".to_owned()),
+        None => Ok("game stopped".to_owned()),
+    }
+}
+
 /// What Battle.net reports as installed, keyed by product code.
 ///
 /// Read when the browse panel opens, never on a timer and never to decide

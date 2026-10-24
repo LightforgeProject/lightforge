@@ -622,6 +622,12 @@ pub(crate) struct Maintain {
     pub(crate) repair: bool,
 }
 
+/// The question asked before a running game is stopped.
+#[derive(Debug, Clone)]
+pub(crate) struct StopDialog {
+    pub(crate) label: String,
+}
+
 /// The Game Settings popup, for the game that was selected when it opened.
 #[derive(Debug, Clone)]
 pub(crate) struct GameSettings {

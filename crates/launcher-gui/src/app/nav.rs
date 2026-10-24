@@ -173,6 +173,7 @@ impl Lightforge {
     /// In the order the view stacks them, so Escape closes the one on top.
     pub(crate) fn dialog_dismissal(&self) -> Option<Message> {
         Some(match () {
+            _ if self.stop_dialog.is_some() => Message::StopGameDismiss,
             _ if self.install_dialog.is_some() => Message::InstallCancel,
             _ if self.uninstall_dialog.is_some() => Message::UninstallCancel,
             _ if self.cancel_dialog.is_some() => Message::CancelDownloadDismiss,

@@ -135,6 +135,14 @@ pub(crate) enum Message {
     Downloaded(ProductCode, Result<Complete, Problem>),
     CloseRequested(iced::window::Id),
     Launched(Result<String, Problem>),
+    /// Every couple of seconds of a launch: is a game up yet?
+    GameWatch,
+    GameSeen(bool),
+    /// STOP was pressed: ask first.
+    AskStopGame,
+    StopGameDismiss,
+    StopGameConfirm,
+    GameStopped(Result<String, Problem>),
     /// A hand-off ran to the point where there is something to say: the
     /// game is up, the client needs a person, or nothing started.
     HandoffStarted(Result<tasks::Handoff, Problem>),

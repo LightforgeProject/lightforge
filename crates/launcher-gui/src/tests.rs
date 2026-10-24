@@ -1256,3 +1256,48 @@ fn the_proton_installer_opens_on_proton_ge_switches_tabs_and_closes_on_escape() 
     let _ = app.update(Message::CloseProtonInstaller);
     assert_eq!(app.proton_installer, None);
 }
+
+#[test]
+fn stop_asks_first_and_play_comes_back_when_the_game_is_gone() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.queue.clear();
+    app.wizard = None;
+    app.splash = None;
+    app.update_notice = None;
+    app.patch_notes = None;
+    app.screen = Screen::Dashboard;
+
+    // Nothing is running: STOP has nothing to ask about.
+    let _ = app.update(Message::AskStopGame);
+    assert!(app.stop_dialog.is_none());
+
+    // A launch of ours, and a game seen in the prefix.
+    app.busy = true;
+    app.launching = Some(app.selected.code.clone());
+    let _ = app.update(Message::GameSeen(true));
+    assert!(app.game_up);
+    let _ = app.update(Message::AskStopGame);
+    assert!(app.stop_dialog.is_some());
+    assert!(matches!(app.dialog_dismissal(), Some(Message::StopGameDismiss)));
+    // Drawn, on the managed panel and as the dialog.
+    let _ = app.view();
+
+    // Keeping the game going changes nothing.
+    let _ = app.update(Message::StopGameDismiss);
+    assert!(app.stop_dialog.is_none() && app.game_up && !app.stopping);
+
+    // Confirmed: the game is told to go, once.
+    let _ = app.update(Message::AskStopGame);
+    let _ = app.update(Message::StopGameConfirm);
+    assert!(app.stopping && app.stop_dialog.is_none());
+    let _ = app.update(Message::StopGameConfirm);
+
+    // The watcher reports the exit: PLAY is back and nothing is left over.
+    let _ = app.update(Message::Launched(Ok("game closed".to_owned())));
+    assert!(!app.busy && !app.game_up && !app.stopping);
+
+    // A scan that was out when the session ended must not bring STOP back.
+    let _ = app.update(Message::GameSeen(true));
+    assert!(!app.game_up);
+}

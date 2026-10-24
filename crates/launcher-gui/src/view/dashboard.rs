@@ -48,8 +48,14 @@ impl Lightforge {
             .style(theme::ghost)
             .padding(theme::tap([theme::XS, theme::SM])),
         ));
+        let stoppable = self.busy && self.game_up && !self.stopping;
         let open = button(
-            container(text(act.label()).size(theme::HEADING)).center_x(Length::Fill),
+            container(text(match self.busy && self.game_up {
+                true => self.stop_label(),
+                false => act.label(),
+            })
+            .size(theme::HEADING))
+            .center_x(Length::Fill),
         )
         // Dressed as the Play control on a game Lightforge runs itself,
         // same 240 by CONTROL_HEIGHT, same heading, same filled face, because
@@ -60,25 +66,30 @@ impl Lightforge {
         // the colour is the one thing that can say so without a second line
         // of text. When there is no game family to ask for, the button only
         // opens the client, not a launch, so it does not dress as one.
-        .style(move |base: &iced::Theme, status| match act.colour() {
-            Some(colour) => theme::filled(colour)(base, status),
-            None => theme::outlined(base, status),
+        .style(move |base: &iced::Theme, status| match (stoppable, act.colour()) {
+            (true, _) => theme::filled(theme::ERROR)(base, status),
+            (_, Some(colour)) => theme::filled(colour)(base, status),
+            (_, None) => theme::outlined(base, status),
         })
         .padding([theme::MD, theme::LG])
         .width(Length::Fixed(240.0))
         .height(Length::Fixed(theme::CONTROL_HEIGHT));
 
-        let press = act.message();
+        let press = match stoppable {
+            true => Message::AskStopGame,
+            false => act.message(),
+        };
+        let can_press = stoppable || !self.busy;
 
         container(
             row![
                 left,
                 self.ring(
                     focus::Target::Primary,
-                    (!self.busy).then(|| press.clone()),
-                    match self.busy {
-                        true => open,
-                        false => open.on_press(press),
+                    can_press.then(|| press.clone()),
+                    match can_press {
+                        false => open,
+                        true => open.on_press(press),
                     },
                 ),
             ]
@@ -274,6 +285,14 @@ impl Lightforge {
         }
     }
 
+    /// The word on the button while a game is up.
+    fn stop_label(&self) -> &'static str {
+        match self.stopping {
+            true => "STOPPING…",
+            false => "STOP",
+        }
+    }
+
     /// Status, progress, and every action for the selected product.
     pub(crate) fn action_panel(&self, action: &ActionState) -> Element<'_, Message> {
         let color = match action {
@@ -450,9 +469,14 @@ impl Lightforge {
         // still say "pre-install" on release day.
         let release_date = self.families.release_date(self.selected.code.as_str(), "default");
         let label = match (action, release_date) {
+            _ if self.busy && self.game_up => self.stop_label(),
             (ActionState::Install, Some(_)) => "PRE-INSTALL",
             _ => action.label(),
         };
+        // A game that is up turns PLAY into STOP, in the colour of the other
+        // thing this button never is: an error.
+        let stoppable = self.busy && self.game_up && !self.stopping;
+        let color = if self.busy && self.game_up { theme::ERROR } else { color };
         let primary = button(
             container(text(label).size(theme::HEADING).color(iced::Color::WHITE))
                 .center_x(Length::Fill),
@@ -490,6 +514,12 @@ impl Lightforge {
         .height(Length::Fixed(theme::CONTROL_HEIGHT))
         .on_press(Message::ToggleGear);
 
+        let primary_press = match () {
+            _ if stoppable => Some(Message::AskStopGame),
+            _ if self.busy || matches!(action, ActionState::Unknown) => None,
+            _ => Some(Message::Primary),
+        };
+
         // Pinned to the control rather than placed near it. Everything else
         // was layout, and layout cannot put a child over its sibling: in the
         // panel's column the menu sized the card, and above the card its top
@@ -498,10 +528,10 @@ impl Lightforge {
             row![
                 self.ring(
                     focus::Target::Primary,
-                    (!self.busy && !matches!(action, ActionState::Unknown)).then_some(Message::Primary),
-                    match self.busy || matches!(action, ActionState::Unknown) {
-                        true => primary,
-                        false => primary.on_press(Message::Primary),
+                    primary_press.clone(),
+                    match primary_press {
+                        Some(message) => primary.on_press(message),
+                        None => primary,
                     },
                 ),
                 self.ring(focus::Target::Gear, Some(Message::ToggleGear), gear),
