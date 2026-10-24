@@ -221,6 +221,47 @@ pub async fn uninstall(
     .map_err(|e| Problem::of(&e))?
 }
 
+/// What deleting one optional download's files would free, for `code`.
+/// Nothing is touched.
+pub async fn optional_plan(
+    http: Option<Http>,
+    layout: Layout,
+    code: ProductCode,
+    name: String,
+    remaining: Vec<String>,
+) -> Result<lightforge_core::tact::reclaim::Reclaim, String> {
+    let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
+    let install = layout.wow_install(&code);
+    lightforge_core::tact::reclaim::plan_optional(&http, &install, &code, &name, &remaining)
+        .await
+        .map_err(|e| chain(&e))
+}
+
+/// Carry out a plan from [`optional_plan`], returning the bytes freed.
+///
+/// Behind the same gate as repair and uninstall: the files and the indices
+/// being rewritten are ones a running client has open.
+pub async fn optional_remove(
+    layout: Layout,
+    code: ProductCode,
+    plan: lightforge_core::tact::reclaim::Reclaim,
+) -> Result<u64, Problem> {
+    let alive = layout.clone();
+    let busy = tokio::task::spawn_blocking(move || lightforge_core::preflight::scan(&alive))
+        .await
+        .map_err(|e| Problem::of(&e))?;
+    if let Some(process) = busy.first() {
+        return Err(format!("close {} first — the game files are in use", process.name).into());
+    }
+    let install = layout.wow_install(&code);
+    tokio::task::spawn_blocking(move || {
+        lightforge_core::tact::reclaim::execute(&install, &plan, |_| {})
+            .map_err(|e| Problem::of(&e))
+    })
+    .await
+    .map_err(|e| Problem::of(&e))?
+}
+
 /// What freeing a store's unused game data would do: data no installed or
 /// pre-installed version uses, plus dead space older passes left.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

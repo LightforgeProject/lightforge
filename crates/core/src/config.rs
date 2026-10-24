@@ -584,7 +584,6 @@ mod tests {
     fn a_config_without_a_battle_net_profile_still_loads() {
         let config: Config = toml::from_str("blizzard_root = \"/games/Blizzard\"").unwrap();
         assert_eq!(config.battle_net_tweaks, crate::tweaks::Tweaks::default());
-        assert!(config.battle_net_tweaks.is_default());
     }
 
     // Written as a word a person could type, and absent until answered.
@@ -603,7 +602,7 @@ mod tests {
     #[test]
     fn the_battle_net_profile_round_trips() {
         let mut config = Config::default();
-        config.battle_net_tweaks.gamemode = true;
+        config.battle_net_tweaks.mangohud = true;
         config.battle_net_tweaks.wayland = true;
         config.battle_net_tweaks.env.insert("DXVK_HUD".to_owned(), "fps".to_owned());
 

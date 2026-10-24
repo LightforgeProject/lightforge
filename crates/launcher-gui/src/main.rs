@@ -74,7 +74,7 @@ use lightforge_core::storage;
 use lightforge_core::tact::install::Offerings;
 use lightforge_core::transfers::{self, Saved, Standing};
 use lightforge_core::tact::download::Cancel;
-use lightforge_core::tweaks::{GraphicsApi, HostTools, Preset, Tweaks};
+use lightforge_core::tweaks::{HostTools, Tweaks};
 
 use art::Art;
 use tasks::{Problem, Refreshed, SharedDownloads, TransferState};
@@ -483,14 +483,11 @@ struct Lightforge {
     /// A toggle for a binary that is not installed is a launch failure waiting
     /// to happen, so the panel hides what is missing.
     tools: HostTools,
+    /// The environment-variable editors: Game Settings' and Battle.net's.
+    env_editor: iced::widget::text_editor::Content,
+    bnet_env_editor: iced::widget::text_editor::Content,
     /// Editable copies of the selected product's numeric tweaks, and the two
     /// fields of the environment escape hatch.
-    fps_input: String,
-    fps_bk_input: String,
-    monitor_input: String,
-    bnet_monitor_input: String,
-    env_key_input: String,
-    env_value_input: String,
 
     addons: addonwork::Listing,
     token_input: String,
@@ -521,8 +518,6 @@ struct Lightforge {
     /// start: a hand-off game has no client settings, so environment
     /// variables are not a last resort there but most of what the page is
     /// for, and hiding them behind a Show button reads as "nothing here".
-    env_open: bool,
-    bnet_env_open: bool,
     /// Game families, as Blizzard's own catalogue names them, read out of the
     /// client's cache at startup. Empty on a prefix whose client has never
     /// run, which falls the hand-off back to the compiled-in families.
@@ -727,12 +722,8 @@ impl Lightforge {
             library_empty: false,
             drive_states: HashMap::new(),
             tools: HostTools::detect(),
-            fps_input: String::new(),
-            fps_bk_input: String::new(),
-            monitor_input: String::new(),
-            bnet_monitor_input: String::new(),
-            env_key_input: String::new(),
-            env_value_input: String::new(),
+            env_editor: iced::widget::text_editor::Content::new(),
+            bnet_env_editor: iced::widget::text_editor::Content::new(),
             addons: addonwork::Listing::default(),
             token_input: String::new(),
             addon_filter: String::new(),
@@ -741,8 +732,6 @@ impl Lightforge {
             version_picker: None,
             game_settings: None,
             addon_detail: None,
-            env_open: false,
-            bnet_env_open: true,
             families: lightforge_core::families::Families::default(),
             import_pinned: false,
             addon_auto_done: Vec::new(),
@@ -1049,7 +1038,6 @@ impl Lightforge {
             Screen::Updates => self.updates_screen(),
             Screen::Settings => self.settings(),
             Screen::Addons => self.addons_screen(),
-            Screen::Tweaks => self.tweaks_screen(),
         };
 
         // The manager hangs under its button on every screen, not just the

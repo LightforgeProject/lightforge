@@ -41,7 +41,7 @@ use super::config::{self as tact_config, BuildConfig};
 use super::encoding::Encoding;
 use super::productdb::{self, ProductDbError};
 use super::idx::Entry;
-use super::manifest::DownloadManifest;
+use super::manifest::{DownloadManifest, TagSet};
 use super::storage::{Storage, StorageError};
 #[cfg(test)]
 use super::storage::archive_name;
@@ -220,6 +220,49 @@ pub async fn plan_unused(http: &Http, install: &Path) -> Result<Reclaim, Reclaim
     Ok(select(store.files(), |e| !keep.contains(&e.key), store.data_dir(), snapshot))
 }
 
+/// Work out what switching one optional download off would free, for the
+/// installed build of `product`: only the files that option alone brought in,
+/// and only those no other build on disk needs. Changes nothing.
+///
+/// `remaining` is every other option still opted in to, so what they brought
+/// stays. The install's own tags come from `.build.info`, the same column
+/// the download that fetched it was made with, so this selects what that
+/// download selected rather than a guess at it. Nothing but the option's own
+/// files is ever a candidate, where [`plan_unused`] takes anything unneeded.
+pub async fn plan_optional(
+    http: &Http,
+    install: &Path,
+    product: &ProductCode,
+    name: &str,
+    remaining: &[String],
+) -> Result<Reclaim, ReclaimError> {
+    let info = BuildInfo::load(install.join(".build.info"))?;
+    let target = Build::installed(&info, product)?;
+    let base = TagSet::parse(info.get(product, "Tags")?).with_optional(remaining.iter().cloned());
+
+    let config = build_config(http, install, &target).await?;
+    let manifest = download_manifest(http, &target, &config).await?;
+    let only: HashSet<[u8; 9]> = manifest
+        .only_with(&base, name)
+        .iter()
+        .map(|e| e.ekey[..9].try_into().expect("9 of 16 bytes"))
+        .collect();
+
+    let mut store = Storage::open(install)?;
+    let mut keep = HashSet::new();
+    for build in builds(install)? {
+        let mut needs = keep_keys(http, install, &mut store, &build).await?;
+        if build.product == target.product && build.build_key == target.build_key {
+            needs.retain(|key| !only.contains(key));
+        }
+        keep.extend(needs);
+    }
+
+    let snapshot = Snapshot::take(store.data_dir())?;
+    let gone = |e: &Entry| only.contains(&e.key) && !keep.contains(&e.key);
+    Ok(select(store.files(), gone, store.data_dir(), snapshot))
+}
+
 /// The pure half of [`plan`]: which entries go, and which archives that
 /// leaves worth compacting.
 fn select<'a>(
@@ -334,6 +377,20 @@ async fn manifest_keys(
     build: &Build,
     config: &BuildConfig,
 ) -> Result<HashSet<[u8; 9]>, ReclaimError> {
+    let manifest = download_manifest(http, build, config).await?;
+    Ok(manifest
+        .entries()
+        .iter()
+        .map(|e| e.ekey[..9].try_into().expect("9 of 16 bytes"))
+        .collect())
+}
+
+/// An installed build's download manifest, from the CDN.
+async fn download_manifest(
+    http: &Http,
+    build: &Build,
+    config: &BuildConfig,
+) -> Result<DownloadManifest, ReclaimError> {
     let name = build.product.as_str().to_owned();
     let cdn_err = |source| ReclaimError::Cdn { product: name.clone(), source };
     let bad = |reason: String| ReclaimError::Manifest { product: name.clone(), reason };
@@ -342,13 +399,7 @@ async fn manifest_keys(
     let pair = config.download.as_ref().ok_or_else(|| bad("no download manifest".to_owned()))?;
     let ekey = pair.ekey.ok_or_else(|| bad("no download manifest key".to_owned()))?;
     let bytes = client.fetch_loose(http, &ekey, &pair.ckey, None).await.map_err(cdn_err)?;
-    let manifest = DownloadManifest::parse(&bytes).map_err(|e| bad(e.to_string()))?;
-
-    Ok(manifest
-        .entries()
-        .iter()
-        .map(|e| e.ekey[..9].try_into().expect("9 of 16 bytes"))
-        .collect())
+    DownloadManifest::parse(&bytes).map_err(|e| bad(e.to_string()))
 }
 
 #[cfg(test)]

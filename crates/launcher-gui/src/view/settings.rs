@@ -899,89 +899,58 @@ impl Lightforge {
     /// hand-off game has no `Config.wtf`.
     pub(crate) fn battle_net_section(&self) -> Element<'_, Message> {
         let tweaks = self.tweaks_of(Scope::BattleNet);
+        let tools = &self.tools;
         let scope = Scope::BattleNet;
-        let flip = |key: &'static str, which: Tweak, on: bool| -> Element<'_, Message> {
-            clickable(
-                key,
-                iced::widget::toggler(on)
-                    .on_toggle(move |on| Message::Tweak(scope, which, on))
-                    .size(theme::tap_text(20.0))
-                    .style(theme::switch),
-            )
-        };
 
-        let mut rows: Vec<Element<'_, Message>> = Vec::new();
-        if self.tools.game_performance.is_some() {
-            rows.push(setting(
+        let rows = vec![
+            setting(
                 "CPU performance profile",
-                "Holds the CPU on its performance profile while a game runs.",
+                match tools.game_performance {
+                    Some(_) => "Holds the CPU on its performance profile while a game runs.",
+                    None => "Needs CachyOS' game-performance, which is not installed.",
+                },
                 None,
-                flip("bnet game performance", Tweak::GamePerformance, tweaks.wants_game_performance()),
-            ));
-        }
-        if self.tools.gamemode.is_some() {
-            rows.push(setting(
-                "GameMode",
-                "Starts games through Feral's GameMode.",
-                None,
-                flip("bnet gamemode", Tweak::GameMode, tweaks.gamemode),
-            ));
-        }
-        if self.tools.mangohud.is_some() {
-            rows.push(setting(
+                self.tool_switch(
+                    "bnet game performance",
+                    tools.game_performance.is_some(),
+                    tweaks.wants_game_performance() && tools.game_performance.is_some(),
+                    scope,
+                    Tweak::GamePerformance,
+                ),
+            ),
+            setting(
                 "MangoHud overlay",
-                "Frame rate and frame times drawn over the game.",
+                match tools.mangohud {
+                    Some(_) => "Frame rate and frame times drawn over the game.",
+                    None => "Needs MangoHud, which is not installed.",
+                },
                 None,
-                flip("bnet mangohud", Tweak::MangoHud, tweaks.mangohud),
-            ));
-        }
-        rows.push(setting(
-            "Larger shader cache",
-            "Keeps more compiled shaders, so games stutter less after a while.",
-            None,
-            flip("bnet shader cache", Tweak::BigShaderCache, tweaks.big_shader_cache),
-        ));
-        if self.tools.wayland {
-            rows.push(setting(
+                self.tool_switch(
+                    "bnet mangohud",
+                    tools.mangohud.is_some(),
+                    tweaks.mangohud && tools.mangohud.is_some(),
+                    scope,
+                    Tweak::MangoHud,
+                ),
+            ),
+            setting(
                 "Wayland backend",
-                "Runs on Proton's Wayland backend instead of XWayland.",
+                match tools.wayland {
+                    true => "Runs on Proton's Wayland backend instead of XWayland.",
+                    false => "Only available in a Wayland session.",
+                },
                 self.hint(
                     "Newer and less travelled than the X11 path, so it is off until asked for.",
                 ),
-                flip("bnet wayland", Tweak::Wayland, tweaks.wayland),
-            ));
-            if tweaks.wayland {
-                rows.push(setting(
-                    "HDR output",
-                    "Asks the compositor for HDR.",
-                    None,
-                    flip("bnet hdr", Tweak::Hdr, tweaks.hdr),
-                ));
-                rows.push(setting(
-                    "Monitor",
-                    "A connector name such as DP-1. Empty lets Proton pick.",
-                    None,
-                    clickable(
-                        "bnet monitor",
-                        text_input("whichever Proton picks", &self.bnet_monitor_input)
-                            .on_input(move |v| Message::TweakWaylandMonitor(scope, v))
-                            .style(theme::field)
-                            .size(theme::BODY)
-                            .padding(theme::SM)
-                            .width(Length::Fixed(220.0)),
-                    ),
-                ));
-            }
-        }
-
-        let missing: Vec<&str> = [
-            self.tools.game_performance.is_none().then_some("game-performance"),
-            self.tools.gamemode.is_none().then_some("GameMode"),
-            self.tools.mangohud.is_none().then_some("MangoHud"),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
+                self.tool_switch(
+                    "bnet wayland",
+                    tools.wayland,
+                    tweaks.wayland && tools.wayland,
+                    scope,
+                    Tweak::Wayland,
+                ),
+            ),
+        ];
 
         column![muted(
             "These apply to Battle.net and every game it starts.".to_owned(),
@@ -996,16 +965,10 @@ impl Lightforge {
             .map(Element::from),
         )
         .push(setting_group(rows))
-        .extend((!missing.is_empty()).then(|| {
-            Element::from(muted(
-                format!("{} is not installed, so it is not offered.", missing.join(", ")),
-                theme::CAPTION,
-            ))
-        }))
         // The only way to tune a hand-off game beyond the switches above: it
         // has no client settings for Lightforge to write, so anything else
         // has to arrive as an environment variable.
-        .push(self.env_card(scope, &tweaks))
+        .push(self.environment_group(scope))
         .spacing(theme::SM)
         .into()
     }

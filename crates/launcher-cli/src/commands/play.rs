@@ -38,8 +38,7 @@ pub(crate) fn play(ctx: Ctx, product: String, proton: Option<String>, dry_run: b
         // another's accumulated shaders.
         .with_shader_cache(dirs.shader_cache_dir(&code));
 
-    // The same per-product settings the GUI's Game Optimizations panel
-    // writes. A launcher that honoured them from one entry point and
+    // The same per-product settings Game Settings writes. A launcher that honoured them from one entry point and
     // not the other would make every measurement unreproducible.
     let tweaks = Config::load_or_default(&dirs.config_file())
         .ok()
@@ -67,24 +66,6 @@ pub(crate) fn play(ctx: Ctx, product: String, proton: Option<String>, dry_run: b
         .run(&runner, &layout, Some(&code), &mut NoDownloads)
         .context("pre-flight cleanup")?;
     print_preflight(&report);
-
-    // After pre-flight, with the client closed: it rewrites Config.wtf
-    // from memory on exit, so anything set once is not still set.
-    match lightforge_core::cvars::reconcile(
-        &layout.wtf_dir(&code).join("Config.wtf"),
-        &tweaks.cvars(),
-        lightforge_core::tweaks::RETIRED,
-    ) {
-        Ok(done) => {
-            if done.changed > 0 {
-                println!("applied {} client setting(s)", done.changed);
-            }
-            if !done.yielded.is_empty() {
-                println!("left as set in the game: {}", done.yielded.join(", "));
-            }
-        }
-        Err(e) => eprintln!("could not apply client settings: {e}"),
-    }
 
     let status = lightforge_core::tweaks::wrapped(
         runner.command("run", &exe, Vec::<String>::new()),

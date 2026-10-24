@@ -443,6 +443,28 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Delete one optional download's files (`HighRes`, the texture pack) from
+    /// a product's install and compact the archives. Prints the plan unless
+    /// `--yes`.
+    ///
+    /// Only files that option alone brought in and no installed build needs.
+    /// It does not change what is opted in to: the GUI does both together.
+    DropOptional {
+        #[arg(long)]
+        product: String,
+        /// The optional tag's name, as the manifest spells it.
+        #[arg(long, default_value = "HighRes")]
+        tag: String,
+        /// Other options that stay on, so what they brought stays.
+        #[arg(long)]
+        keep: Vec<String>,
+        /// Install root. Defaults to the managed WoW install.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Actually delete. Without this, nothing is touched.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Drop game data no installed or pre-installed version uses, then compact
     /// what that leaves. Prints the plan unless `--yes`.
     ///
@@ -761,6 +783,9 @@ async fn run() -> Result<()> {
         Command::Uninstall { product, path, yes } => commands::storage::uninstall(ctx, product, path, yes),
         Command::Reclaim { product, build_key, region, path, yes } => commands::storage::reclaim(ctx, product, build_key, region, path, yes).await,
         Command::Prune { path, yes } => commands::storage::prune(ctx, path, yes).await,
+        Command::DropOptional { product, tag, keep, path, yes } => {
+            commands::storage::drop_optional(ctx, product, tag, keep, path, yes).await
+        }
         Command::Compact { path, yes } => commands::storage::compact(ctx, path, yes),
         Command::ProductDb { path, products, account_country, geo_country, agent_tags, dry_run } => commands::battlenet::product_db(ctx, path, products, account_country, geo_country, agent_tags, dry_run),
         Command::Setup { status, proton } => commands::proton::setup(ctx, status, proton).await,

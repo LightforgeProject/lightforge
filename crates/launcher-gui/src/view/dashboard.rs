@@ -427,9 +427,9 @@ impl Lightforge {
                     ),
                 ),
                 self.ring(
-                    focus::Target::Tweaks,
-                    Some(Message::Show(Screen::Tweaks)),
-                    link(sliders_icon(), "Game Optimizations", Some(Message::Show(Screen::Tweaks))),
+                    focus::Target::GameSettings,
+                    Some(Message::OpenGameSettings),
+                    link(sliders_icon(), "Game Settings", Some(Message::OpenGameSettings)),
                 ),
                 self.ring(
                     focus::Target::Subscription,

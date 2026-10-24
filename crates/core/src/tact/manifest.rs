@@ -476,6 +476,30 @@ impl DownloadManifest {
     pub fn optional_names(&self, tags: &TagSet) -> Vec<String> {
         tags.optional_names(&self.tags, self.entries.len())
     }
+
+    /// The entries present only because `name` was opted in to: selected
+    /// with it, not selected without it, with everything else `base` asks for
+    /// (its own opt-ins included) held fixed.
+    ///
+    /// What switching the option off would leave unneeded, by the same rule an
+    /// install uses: a file the option tags is never fetched without it, and a
+    /// file `base` does not select, another locale's, is not this install's
+    /// to begin with and stays out of the list.
+    pub fn only_with(&self, base: &TagSet, name: &str) -> Vec<DownloadEntry> {
+        let with = base
+            .clone()
+            .with_optional(base.optional().iter().cloned().chain([name.to_owned()]));
+        let without = base
+            .clone()
+            .with_optional(base.optional().iter().filter(|n| *n != name).cloned());
+        let kept: std::collections::HashSet<_> =
+            self.selected_indices(&without).into_iter().collect();
+        self.selected_indices(&with)
+            .into_iter()
+            .filter(|i| !kept.contains(i))
+            .map(|i| self.entries[i])
+            .collect()
+    }
 }
 
 /// Bounds-checked sequential reader. Every manifest field goes through it, so
@@ -831,6 +855,32 @@ mod tests {
         let tags = TagSet::parse("Windows enUS").with_optional(["HighRes"]);
         assert_eq!(manifest.select(&tags).len(), 3);
         assert_eq!(manifest.selected_size(&tags), 9300);
+    }
+
+    #[test]
+    fn what_an_option_alone_brings_in_is_what_turning_it_off_frees() {
+        // File 1 is the game, file 2 is tagged HighRes but is not part of this
+        // install's base selection (another locale's, say), file 3 is the
+        // texture pack the base install selects once the option is on.
+        let bytes = download(
+            &[
+                ("Windows", 1, &[0, 1, 2]),
+                ("Base", 5, &[0, 2]),
+                ("HighRes", 16384, &[1, 2]),
+            ],
+            &[(1, 100, 0), (2, 200, 0), (3, 400, 0)],
+        );
+        let manifest = DownloadManifest::parse(&bytes).unwrap();
+
+        let base = TagSet::parse("Windows Base");
+        let only: Vec<u64> =
+            manifest.only_with(&base, "HighRes").iter().map(|e| e.size).collect();
+        assert_eq!(only, [400]);
+
+        // Already opted in: the same answer, and another opt-in is untouched.
+        let opted = base.with_optional(["HighRes"]);
+        assert_eq!(manifest.only_with(&opted, "HighRes").len(), 1);
+        assert!(manifest.only_with(&opted, "Missing").is_empty());
     }
 
     #[test]

@@ -228,10 +228,6 @@ impl Lightforge {
                 self.downgrade_ok.insert(dialog.pick);
                 self.preflight(dialog.what)
             }
-            Message::OptionalContent(name, on) => {
-                self.set_optional(&self.selected.code.clone(), &name, on);
-                Task::none()
-            }
 
             other => return Err(other),
         })

@@ -60,17 +60,12 @@ impl Lightforge {
         self.save_config();
     }
 
-    /// Refill the numeric fields from the selected product's settings.
+    /// Refill the environment editors from the settings they edit.
     pub(crate) fn load_tweak_inputs(&mut self) {
-        let tweaks = self.tweaks();
-        self.fps_input = tweaks.fps_cap.map(|v| v.to_string()).unwrap_or_default();
-        self.fps_bk_input =
-            tweaks.fps_cap_background.map(|v| v.to_string()).unwrap_or_default();
-        self.monitor_input = tweaks.wayland_monitor.clone().unwrap_or_default();
-        self.bnet_monitor_input =
-            self.config.battle_net_tweaks.wayland_monitor.clone().unwrap_or_default();
-        self.env_key_input.clear();
-        self.env_value_input.clear();
+        use iced::widget::text_editor::Content;
+        let env = lightforge_core::tweaks::env_text;
+        self.env_editor = Content::with_text(&env(&self.tweaks().env));
+        self.bnet_env_editor = Content::with_text(&env(&self.config.battle_net_tweaks.env));
     }
 
     /// Rebuild the layout from the config, after a library is added, removed,

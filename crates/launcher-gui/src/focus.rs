@@ -62,7 +62,7 @@ pub enum Target {
     AddGame,
     BattleNet,
     Addons,
-    Tweaks,
+    GameSettings,
     Subscription,
     Primary,
     Gear,

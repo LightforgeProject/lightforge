@@ -15,7 +15,6 @@ pub mod backup;
 pub mod battlenet;
 pub mod buildinfo;
 pub mod config;
-pub mod cvars;
 pub mod debug;
 pub mod discover;
 pub mod error;

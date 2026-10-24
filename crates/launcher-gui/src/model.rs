@@ -471,25 +471,6 @@ pub(crate) enum Screen {
     /// Setup lives here too, as the first card.
     Settings,
     Addons,
-    /// Per-product performance settings.
-    Tweaks,
-}
-
-/// One switch on the Game Optimizations panel.
-///
-/// A single message with a discriminant rather than a variant each: the panel
-/// is a list of independent booleans, and fifteen near-identical messages would
-/// only obscure that.
-/// Which row of the Game Optimizations grid a height is for.
-///
-/// The two rows hold different amounts, so they are measured apart, see
-/// [`Lightforge::card_height`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CardRow {
-    /// Performance and Looks.
-    Top,
-    /// Input and feel, and Advanced.
-    Bottom,
 }
 
 /// The parts of a finished run the UI actually shows. `install::Summary` is not
@@ -626,6 +607,24 @@ pub(crate) struct GameSettings {
     pub(crate) confirm: Option<(PathBuf, BackupAction)>,
     /// The last outcome: a sentence, or what went wrong.
     pub(crate) note: Option<Result<String, String>>,
+    /// What the texture pack weighs, `None` until the manifest has said or
+    /// when this build has none behind the option.
+    pub(crate) textures_bytes: Option<u64>,
+    /// Where deleting the texture pack stands.
+    pub(crate) textures: TexturesStep,
+}
+
+/// The question asked when the high-resolution textures are switched off.
+#[derive(Debug, Clone, Default)]
+pub(crate) enum TexturesStep {
+    #[default]
+    Idle,
+    /// Working out what can be deleted.
+    Planning,
+    /// Waiting for the answer to "delete them too?".
+    Ask(Box<lightforge_core::tact::reclaim::Reclaim>),
+    /// Deleting, which rewrites archives and takes a while.
+    Removing,
 }
 
 /// One addon's builds, while the user chooses between them.

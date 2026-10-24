@@ -9,11 +9,11 @@ impl Lightforge {
         let nav = |label: &'static str, screen: Screen| {
             let entry = button(text(label).size(theme::tap_text(TAB_LABEL)).font(theme::BOLD))
                 .padding(theme::tap([theme::SM, theme::SM]));
-            // Addons and Game Optimizations are a game's own pages, opened
+            // Addons is a game's own page, opened
             // from its panel, so Play stays lit on them, and stays clickable,
             // since it is the way back.
             let within = match screen {
-                Screen::Dashboard => matches!(self.screen, Screen::Addons | Screen::Tweaks),
+                Screen::Dashboard => matches!(self.screen, Screen::Addons),
                 _ => false,
             };
             match (self.screen == screen, within) {

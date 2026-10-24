@@ -174,30 +174,25 @@ pub(crate) enum Message {
     SettingsScrolled(scrollable::Viewport),
     /// Where each Settings section sits on the page, as last laid out.
     SettingsMeasured(SettingsLayout),
-    /// A switch on a Game Optimizations panel was flipped.
+    /// A switch in Game Settings, or in Settings › Battle.net, was flipped.
     Tweak(Scope, Tweak, bool),
-    /// A starting point was chosen, setting the frames-versus-scenery switches.
-    TweakPreset(Preset),
-    /// "Custom": clear the managed switches and leave them to the user.
-    TweakCustom,
-    /// Show or hide the environment-variable editor.
-    TweakEnvToggle(Scope),
-    /// The graphics API the client should ask for.
-    TweakApi(ApiChoice),
-    TweakFpsCap(String),
-    /// Frame cap for when the window is not focused.
-    TweakFpsCapBackground(String),
-    /// Which monitor the Wayland backend should treat as primary.
-    TweakWaylandMonitor(Scope, String),
-    /// Key and value fields of the environment escape hatch.
-    TweakEnvKey(String),
-    TweakEnvValue(String),
-    TweakEnvAdd(Scope),
-    TweakEnvRemove(Scope, String),
+    /// The environment-variable editor was typed in.
+    EnvEdit(Scope, iced::widget::text_editor::Action),
     /// Throw away this product's shader cache, e.g. after a Proton swap.
     ClearShaderCache,
-    /// Opt in or out of one optional download, by manifest tag name.
+    /// Opt in or out of one optional download, by manifest tag name. On starts
+    /// the download; off asks whether to delete what it fetched.
     OptionalContent(String, bool),
+    /// What the open Game Settings product's optional download weighs.
+    OptionalSized(ProductCode, Box<Result<lightforge_core::tact::install::Offerings, String>>),
+    /// What deleting an optional download's files would free.
+    OptionalPlanned(Result<Box<lightforge_core::tact::reclaim::Reclaim>, String>),
+    /// Leave the files an option fetched where they are.
+    KeepOptional,
+    /// Delete the files the question was asked about.
+    RemoveOptional,
+    /// The deletion finished, with the bytes it freed.
+    OptionalRemoved(Result<u64, Problem>),
     /// The cog beside the primary button.
     ToggleGear,
     /// The menu under the Lightforge wordmark.
@@ -454,37 +449,8 @@ pub(crate) enum Scope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tweak {
     GamePerformance,
-    GameMode,
     MangoHud,
-    SkipAddonProfiling,
-    ReduceRaidEffects,
-    FasterZoneLoads,
-    RawMouse,
-    NoScreenEffects,
-    MaxDrawDistance,
-    NoClothPhysics,
-    SoftwareCursor,
-    ClipCursor,
-    NoMouseAcceleration,
-    ShowCursorInRelativeMode,
-    Controller,
     Wayland,
-    Hdr,
-    BigShaderCache,
-}
-
-/// A graphics API in a picker, or the "leave the client's own choice alone"
-/// entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ApiChoice(pub(crate) Option<GraphicsApi>);
-
-impl std::fmt::Display for ApiChoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            Some(api) => f.write_str(api.label()),
-            None => f.write_str("Whatever the client picks"),
-        }
-    }
 }
 
 /// A Proton build in a picker, or the "follow the default" entry.

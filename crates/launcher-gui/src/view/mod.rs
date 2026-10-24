@@ -5,7 +5,7 @@ mod dashboard;
 mod dialogs;
 mod header;
 mod menus;
-mod optimizations;
+mod game_settings;
 mod settings;
 mod updates;
 mod upgrade;

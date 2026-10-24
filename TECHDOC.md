@@ -453,7 +453,7 @@ would lift the limit, and is the planned fix.
 
 TOML at `~/.config/lightforge/config.toml`, written atomically. It holds
 settings a person edits — region, locale, libraries, per-product profiles,
-optimization choices. Two things that are *state* rather than settings live
+launch settings. Two things that are *state* rather than settings live
 beside it instead: the download queue (`transfers.rs`, rewritten on every
 pause and resume) and the addon ledger.
 
