@@ -145,12 +145,14 @@ impl Installer {
     /// How long to keep watching after the installer exits, cleanly, then
     /// with a failure. Exists for the same reason [`Installer::with_timeout`]
     /// does: so a test does not have to wait a real minute.
+    #[cfg(test)]
     pub fn with_exit_grace(mut self, clean: Duration, failed: Duration) -> Self {
         self.exit_grace = clean;
         self.failed_exit_grace = failed;
         self
     }
 
+    #[cfg(test)]
     pub fn with_poll_interval(mut self, interval: Duration) -> Self {
         self.poll_interval = interval;
         self
@@ -1084,6 +1086,7 @@ impl Launch {
 
     /// Whether this launch can actually hand off, or would only open the
     /// client. Lets a caller label the button for what it will really do.
+    #[cfg(test)]
     pub fn hands_off(&self) -> bool {
         match self {
             Self::Client | Self::Autostart => false,

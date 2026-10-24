@@ -448,10 +448,6 @@ impl Downloads {
         self.paused.remove(code);
     }
 
-    pub fn is_running(&self, code: &crate::ProductCode) -> bool {
-        self.running.contains_key(code)
-    }
-
     /// Products paused by a launch and not yet restarted.
     pub fn pending(&self) -> impl Iterator<Item = &crate::ProductCode> {
         self.paused.iter()
@@ -1133,12 +1129,10 @@ mod tests {
         let cancel = Cancel::new();
         let mut downloads = Downloads::new();
         downloads.register(code.clone(), cancel.clone());
-        assert!(downloads.is_running(&code));
 
         // The launch path pauses: the loop stops, and a restart is owed.
         assert!(downloads.pause(&code).unwrap());
         assert!(cancel.is_cancelled());
-        assert!(!downloads.is_running(&code));
         assert_eq!(downloads.pending().count(), 1);
 
         // After Battle.net exits, the caller is told to start it again, once.

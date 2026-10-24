@@ -165,11 +165,6 @@ impl ProductCode {
             },
         })
     }
-
-    /// Whether this is an official Blizzard product code.
-    pub fn is_official(&self) -> bool {
-        !matches!(self, Self::Custom(_))
-    }
 }
 
 impl FromStr for ProductCode {
@@ -675,7 +670,6 @@ mod tests {
             "wow_beta",
         ] {
             let parsed: ProductCode = code.parse().unwrap();
-            assert!(parsed.is_official());
             assert_eq!(parsed.as_str(), code);
         }
     }
@@ -684,7 +678,6 @@ mod tests {
     fn unknown_code_becomes_custom() {
         let parsed: ProductCode = "turtle_wow".parse().unwrap();
         assert_eq!(parsed, ProductCode::Custom("turtle_wow".into()));
-        assert!(!parsed.is_official());
         assert_eq!(parsed.install_dir(), "turtle_wow");
         // A code shaped like a WoW flavor gets a WoW flavor directory.
         let future: ProductCode = "wow_midnight_ptr".parse().unwrap();

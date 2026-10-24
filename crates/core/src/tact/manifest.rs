@@ -462,6 +462,7 @@ impl DownloadManifest {
     }
 
     /// Total encoded bytes `tags` selects, without materialising the list.
+    #[cfg(test)]
     pub fn selected_size(&self, tags: &TagSet) -> u64 {
         let selection = tags.against(&self.tags, self.entries.len());
         self.entries

@@ -12,9 +12,6 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// GitHub repository Proton-GE releases are polled from.
-pub const GE_RELEASES_REPO: &str = "GloriousEggroll/proton-ge-custom";
-
 /// The build WoW's in-game shop is known to work under.
 ///
 /// Newer GE builds start the shop's browser (`Utils/BlizzardBrowser.exe`) but

@@ -134,9 +134,9 @@ const SPLASH_BUDGET: Duration = Duration::from_secs(12);
 /// Decoding pictures makes big buffers that are freed correctly, but glibc
 /// raises its mmap threshold as it watches them (up to 32 MiB), so later ones
 /// come off the heap and freed pages stay resident, hundreds of MB across 48
-/// arenas. Measured on the old News page with 97 images: 444 MB RSS as
-/// shipped, 149 MB with fixed trim and mmap thresholds. Pinning the threshold is what stops the
-/// drift. glibc only; musl would need measuring again.
+/// arenas. Measured on a page of 97 images: 444 MB RSS as shipped, 149 MB
+/// with fixed trim and mmap thresholds. Pinning the threshold is what stops
+/// the drift. glibc only; musl would need measuring again.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn tune_allocator() {
     // 128 KiB: large enough that ordinary small allocations are untouched,
@@ -584,12 +584,6 @@ struct Lightforge {
 impl Lightforge {
     fn new() -> (Self, Task<Message>) {
         let dirs = AppDirs::discover().ok();
-        // The News page's cache outlives the page. Off the main thread: it can
-        // be dozens of megabytes of images.
-        if let Some(dirs) = &dirs {
-            let cache = dirs.cache_dir().to_path_buf();
-            std::thread::spawn(move || lightforge_core::storage::remove_retired_caches(&cache));
-        }
         // A missing file is a first run and gets defaults. A file that exists
         // but will not load is someone's settings with a problem in them: the
         // app stops on it rather than quietly running on defaults, which

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::product::{Product, ProductCode, ProductError};
+use crate::product::{Product, ProductCode};
 use crate::proton::ProtonPin;
 
 /// Windows user name inside a Proton prefix.
@@ -353,9 +353,10 @@ impl Config {
     }
 
     /// Add a product, rejecting a duplicate code.
-    pub fn add_product(&mut self, product: Product) -> Result<(), ProductError> {
+    #[cfg(test)]
+    pub fn add_product(&mut self, product: Product) -> Result<(), crate::product::ProductError> {
         if self.product(&product.code).is_some() {
-            return Err(ProductError::Duplicate(product.code));
+            return Err(crate::product::ProductError::Duplicate(product.code));
         }
         self.products.push(product);
         Ok(())
@@ -932,7 +933,7 @@ mod tests {
     fn duplicate_product_codes_are_rejected() {
         let mut config = Config::with_default_products();
         let dup = Product::new(ProductCode::Retail, "Another Retail");
-        assert!(matches!(config.add_product(dup), Err(ProductError::Duplicate(_))));
+        assert!(matches!(config.add_product(dup), Err(crate::product::ProductError::Duplicate(_))));
     }
 
     #[test]

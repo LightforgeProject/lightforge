@@ -137,14 +137,6 @@ impl Provider {
             Self::Curse | Self::GitHub | Self::WowInterface | Self::TukUI
         )
     }
-
-    /// Whether this provider is resolved without any server of ours.
-    ///
-    /// The keyless ones keep working when the catalog proxy is down, which is
-    /// why the split exists.
-    pub fn is_keyless(&self) -> bool {
-        matches!(self, Self::GitHub | Self::WowInterface | Self::TukUI)
-    }
 }
 
 /// One addon named by an import token.
@@ -736,9 +728,6 @@ mod tests {
         assert_eq!(Provider::parse("GitHub"), Provider::GitHub);
         assert_eq!(Provider::parse("TukUI"), Provider::TukUI);
         assert_eq!(Provider::parse("WowInterface"), Provider::WowInterface);
-        // Keyless providers need no server of ours; Curse does.
-        assert!(Provider::TukUI.is_keyless());
-        assert!(!Provider::Curse.is_keyless());
         assert!(Provider::Curse.is_supported());
         // Wago is known but unresolvable: listed, never attempted.
         assert!(!Provider::Wago.is_supported());
