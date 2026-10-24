@@ -617,6 +617,26 @@ pub enum Readiness {
 /// The line the client writes once it is signed in.
 const SIGNED_IN: &str = "Logged into Battle.net successfully";
 
+/// The line that says its game list is built, the only moment a launch
+/// command is acted on. Sign-in comes first and the list a beat later, or
+/// several seconds later on a slow start, and a command that arrives in
+/// between is consumed without a trace: no `LaunchBinary`, nothing starts.
+/// Measured on 2026-10-24: every launch that worked arrived after this line,
+/// both that failed arrived before it, Warcraft III and Hearthstone alike.
+const GAMES_READY: &str = "GameController initialization complete";
+
+/// How long after sign-in the game list gets before the command goes anyway.
+/// The client's own log is the only witness, and a line that never comes
+/// (the window-drawn marker was missing from one log in six) must cost a
+/// short wait, not the whole sign-in timeout.
+const GAMES_GRACE: Duration = Duration::from_secs(20);
+
+/// Whether a launch command sent now would be acted on, given the log so far
+/// and how long it has said the client is signed in.
+fn client_ready(log: &str, signed_in_for: Duration) -> bool {
+    log.contains(SIGNED_IN) && (log.contains(GAMES_READY) || signed_in_for >= GAMES_GRACE)
+}
+
 // There is deliberately no "the window has drawn" marker here. The obvious
 // candidate, `End recording load sequence for browser content_browser`: is
 // missing from one full-client log in six, so waiting for it stalls for the
@@ -628,7 +648,7 @@ const SIGNED_IN: &str = "Logged into Battle.net successfully";
 /// How often the log is re-read while waiting.
 const READY_POLL: Duration = Duration::from_millis(250);
 
-/// Wait until the client says it is signed in.
+/// Wait until the client says it is signed in and has its games.
 ///
 /// Reads the newest log in [`Layout::battle_net_logs`] written after `since`
 /// (so an old session cannot answer) for the client's own marker. Nothing is
@@ -647,12 +667,17 @@ pub fn wait_until_ready(
 ) -> Readiness {
     let dir = layout.battle_net_logs(user);
     let deadline = Instant::now() + within;
+    // When the sign-in line was first seen, to time the grace from.
+    let mut signed_in_at: Option<Instant> = None;
 
     loop {
         if let Some(path) = newest_log_after(&dir, since) {
             if let Ok(text) = std::fs::read_to_string(&path) {
                 if text.contains(SIGNED_IN) {
-                    return Readiness::SignedIn;
+                    let seen = *signed_in_at.get_or_insert_with(Instant::now);
+                    if client_ready(&text, seen.elapsed()) {
+                        return Readiness::SignedIn;
+                    }
                 }
             }
         }
@@ -1363,7 +1388,8 @@ mod tests {
         // this start. That is how a hand-off fires at a client that is
         // still booting.
         let old = logs.join("battle.net-20260101T000000.000000.log");
-        std::fs::write(&old, format!("I [BNLogin] {SIGNED_IN}. |bnet=1:0:x\n")).unwrap();
+        std::fs::write(&old, format!("I [BNLogin] {SIGNED_IN}. |bnet=1:0:x\n{GAMES_READY}\n"))
+            .unwrap();
 
         let since = SystemTime::now() + Duration::from_secs(60);
         assert_eq!(
@@ -1385,6 +1411,23 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn a_launch_waits_for_the_game_list_not_just_the_sign_in() {
+        let signed = format!("I [BNLogin] {SIGNED_IN}. |bnet=1:0:x\n");
+        let listed = format!("{signed}I [GameController] {GAMES_READY}\n");
+        let none = Duration::ZERO;
+
+        assert!(!client_ready("", none));
+        assert!(!client_ready(&signed, none), "signed in, list not built: the command is lost");
+        assert!(client_ready(&listed, none));
+        // The list's line is in the log before the sign-in's on some starts,
+        // which is no reason to wait for it twice.
+        assert!(client_ready(&format!("{GAMES_READY}\n{signed}"), none));
+        assert!(!client_ready(&listed.replace(SIGNED_IN, "x"), GAMES_GRACE), "not signed in");
+        assert!(client_ready(&signed, GAMES_GRACE), "a line that never comes costs the grace, not 60 s");
+    }
+
     #[test]
     fn game_uids_are_client_family_ids_not_tact_codes() {
         use super::*;
