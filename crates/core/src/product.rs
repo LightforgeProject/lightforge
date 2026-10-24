@@ -228,7 +228,7 @@ pub enum ProductLine {
     Retail,
     Classic,
     ClassicEra,
-    /// "World of Warcraft: Forever": the beta, with `wowf` beside it. Its own line rather
+    /// "World of Warcraft: Forever": `wowf`, with the retired beta beside it. Its own line rather
     /// than a branch of Era: Battle.net gives it its own game family (`WoWF`,
     /// see [`crate::battlenet`]) and its own tile, and this bar is modelled on
     /// that one. Its *addons* are still Era addons, compatibility and
@@ -271,9 +271,9 @@ impl ProductLine {
             Self::Retail => ProductCode::Retail,
             Self::Classic => ProductCode::Classic,
             Self::ClassicEra => ProductCode::ClassicEra,
-            // The beta, not `wowf`, until Forever launches (November 4, 2026):
-            // the stress test is a weekend, the beta is what people play.
-            Self::Forever => ProductCode::ClassicBeta,
+            // Live `wowf`. The beta it replaced is still a branch so an
+            // install of it keeps working, but it is no longer the head.
+            Self::Forever => ProductCode::Forever,
             Self::Custom(code) => ProductCode::Custom(code.clone()),
         }
     }
@@ -287,7 +287,7 @@ impl ProductLine {
             Self::Retail => vec![ProductCode::Retail, ProductCode::Ptr, ProductCode::Ptr2, ProductCode::Beta],
             Self::Classic => vec![ProductCode::Classic, ProductCode::ClassicPtr],
             Self::ClassicEra => vec![ProductCode::ClassicEra, ProductCode::EraPtr],
-            Self::Forever => vec![ProductCode::ClassicBeta, ProductCode::Forever],
+            Self::Forever => vec![ProductCode::Forever, ProductCode::ClassicBeta],
             // Nothing is known about a custom code beyond itself.
             Self::Custom(code) => vec![ProductCode::Custom(code.clone())],
         }
@@ -844,8 +844,8 @@ mod tests {
         assert_eq!(code.executable(), "Wow.exe");
         assert_eq!(code.line(), ProductLine::Forever);
         assert_eq!(code.branch(), Branch::Live);
-        assert_eq!(ProductLine::Forever.head(), ProductCode::ClassicBeta, "the beta leads until launch");
-        assert_eq!(ProductLine::Forever.branches(), vec![ProductCode::ClassicBeta, ProductCode::Forever]);
+        assert_eq!(ProductLine::Forever.head(), ProductCode::Forever, "live leads, the beta is retired");
+        assert_eq!(ProductLine::Forever.branches(), vec![ProductCode::Forever, ProductCode::ClassicBeta]);
     }
 
     /// Add a game lists only live branches, so this is what puts Forever in it.

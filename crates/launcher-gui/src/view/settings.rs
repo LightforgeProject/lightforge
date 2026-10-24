@@ -822,6 +822,15 @@ impl Lightforge {
                     ),
                     switch("battle.net minimized", self.config.battle_net_minimized, Message::BattleNetMinimized),
                 ),
+                setting(
+                    "Close Battle.net when I press Play",
+                    "Off keeps it open beside the game.",
+                    self.hint(
+                        "Only for Play. Launching through Battle.net, and its own install \
+                         and repair flows, start the client afresh whatever this says.",
+                    ),
+                    switch("close battle.net on play", self.config.close_battle_net_on_play, Message::CloseBattleNetOnPlay),
+                ),
             ]),
             setting_group([
                 setting(

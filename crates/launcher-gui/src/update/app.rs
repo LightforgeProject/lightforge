@@ -132,6 +132,11 @@ impl Lightforge {
                 self.save_config();
                 Task::none()
             }
+            Message::CloseBattleNetOnPlay(on) => {
+                self.config.close_battle_net_on_play = on;
+                self.save_config();
+                Task::none()
+            }
             Message::BattleNetMinimized(on) => {
                 self.config.battle_net_minimized = on;
                 self.save_config();

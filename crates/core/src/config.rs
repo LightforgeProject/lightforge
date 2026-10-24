@@ -106,6 +106,13 @@ pub struct Config {
     /// nobody can see is a launch that quietly never happens.
     #[serde(default = "yes")]
     pub battle_net_minimized: bool,
+    /// Whether PLAY closes a running Battle.net first.
+    ///
+    /// Off by default: a direct launch leaves the client alone, so the
+    /// friends list and chat stay up beside the game. It only governs PLAY;
+    /// a launch through Battle.net starts the client afresh either way.
+    #[serde(default)]
+    pub close_battle_net_on_play: bool,
     /// How Battle.net and every game it launches are started.
     ///
     /// Shared, not per game: Lightforge only sets the environment of a client
@@ -237,6 +244,7 @@ impl Default for Config {
             pause_downloads_while_playing: true,
             minimize_on_launch: false,
             battle_net_minimized: true,
+            close_battle_net_on_play: false,
             battle_net_tweaks: crate::tweaks::Tweaks::default(),
             region: crate::tact::version::Region::default(),
             locale: default_locale(),
@@ -264,7 +272,6 @@ impl Config {
                 Product::new(ProductCode::Retail, "World of Warcraft"),
                 Product::new(ProductCode::ClassicEra, "World of Warcraft Classic"),
                 Product::new(ProductCode::Classic, "WoW Classic (progression)"),
-                Product::new(ProductCode::ClassicBeta, "World of Warcraft: Forever — Beta"),
                 Product::new(ProductCode::Forever, "World of Warcraft: Forever"),
                 Product::new(ProductCode::Ptr, "WoW PTR"),
             ],
@@ -678,6 +685,8 @@ mod tests {
         let old: Config = toml::from_str("prefix_user = \"steamuser\"\n").unwrap();
         assert!(!old.minimize_on_launch);
         assert!(old.battle_net_minimized);
+        // And a config from before the switch leaves the client running.
+        assert!(!old.close_battle_net_on_play);
     }
 
     #[test]

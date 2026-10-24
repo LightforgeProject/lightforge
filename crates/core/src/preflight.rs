@@ -469,6 +469,8 @@ pub struct Preflight {
     /// setting this once at install time does not hold.
     managed: Vec<ProductCode>,
     grace: Duration,
+    /// Leave a running Battle.net client (and its Agent) alone.
+    keep_client: bool,
 }
 
 impl Preflight {
@@ -477,7 +479,21 @@ impl Preflight {
             user: user.into(),
             managed: Vec::new(),
             grace: DEFAULT_GRACE,
+            keep_client: false,
         }
+    }
+
+    /// Do not close a Battle.net client that is already up.
+    ///
+    /// For a direct launch of the game, which has no need of the prefix
+    /// being empty: the client is the only thing a scan finds besides its own
+    /// helpers, so the pass has nothing else to clean. The caches and
+    /// configs it would rewrite belong to that running client, which writes
+    /// its config back on exit, so they wait for a launch that finds it
+    /// closed. With no client up this changes nothing.
+    pub fn keeping_client(mut self, keep: bool) -> Self {
+        self.keep_client = keep;
+        self
     }
 
     /// Products whose Battle.net auto-update should stay off.
@@ -502,6 +518,10 @@ impl Preflight {
         downloads: &mut dyn DownloadGuard,
     ) -> Result<Report, PreflightError> {
         let mut timings = Vec::new();
+
+        if self.keep_client && client_running(layout) {
+            return self.run_beside_client(layout, code, downloads, timings);
+        }
         let processes = shutdown_timed(runner, layout, self.grace, &mut timings)?;
         let mut at = Instant::now();
         let mut stamp = |timings: &mut Vec<Timing>, stage: &'static str| {
@@ -553,6 +573,37 @@ impl Preflight {
             agent_cache_removed: agent_cache,
             staging_removed: staging,
             configs,
+            download_paused,
+        })
+    }
+}
+
+impl Preflight {
+    /// The pass when the client stays up: a game already running is still a
+    /// refusal, and the download is still paused.
+    fn run_beside_client(
+        &self,
+        layout: &Layout,
+        code: Option<&ProductCode>,
+        downloads: &mut dyn DownloadGuard,
+        mut timings: Vec<Timing>,
+    ) -> Result<Report, PreflightError> {
+        let at = Instant::now();
+        let games = games_running(layout);
+        if !games.is_empty() {
+            return Err(PreflightError::GameRunning(games));
+        }
+        let download_paused = match code {
+            Some(code) => downloads.pause(code)?,
+            None => false,
+        };
+        timings.push(Timing { stage: "pause transfers", took: at.elapsed() });
+        Ok(Report {
+            timings,
+            processes: Vec::new(),
+            agent_cache_removed: None,
+            staging_removed: None,
+            configs: Vec::new(),
             download_paused,
         })
     }
@@ -845,6 +896,33 @@ mod tests {
 
     const BNET: &str = r"C:\Program Files (x86)\Battle.net\Battle.net.exe";
     const AGENT: &str = r"C:\ProgramData\Battle.net\Agent\Agent.9775\Agent.exe";
+
+    #[test]
+    fn a_pass_beside_the_client_leaves_it_running_and_touches_nothing() {
+        use std::process::{Command, Stdio};
+
+        let layout = Layout::with_root("/games/Blizzard");
+        // A process that presents itself as the client, the way Wine does.
+        let mut client = Command::new("bash")
+            .args(["-c", r#"exec -a 'C:\Program Files (x86)\Battle.net\Battle.net.exe' sleep 30"#])
+            .env("WINEPREFIX", layout.prefix())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(client_running(&layout), "the stand-in is recognised as the client");
+
+        let report = Preflight::new("steamuser")
+            .keeping_client(true)
+            .run_beside_client(&layout, None, &mut NoDownloads, Vec::new())
+            .unwrap();
+        assert!(report.processes.is_empty() && report.configs.is_empty());
+        assert!(report.agent_cache_removed.is_none() && report.staging_removed.is_none());
+        assert!(client.try_wait().unwrap().is_none(), "the client is still up");
+        let _ = client.kill();
+        let _ = client.wait();
+    }
 
     #[test]
     fn a_process_that_ignores_sigterm_is_killed_and_a_stranger_is_left_alone() {

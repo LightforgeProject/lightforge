@@ -771,6 +771,11 @@ impl Lightforge {
             .catalog
             .branches(&line)
             .into_iter()
+            // The retired beta is not offered. It is only listed while it is
+            // the selected branch, so nobody is left on one the picker hides.
+            .filter(|entry| {
+                entry.code != ProductCode::ClassicBeta || entry.code == self.selected.code
+            })
             .map(|entry| BranchChoice {
                 configured: self.choices.iter().any(|c| c.code == entry.code),
                 branch: entry.branch,

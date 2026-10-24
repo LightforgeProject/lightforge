@@ -617,7 +617,16 @@ impl Lightforge {
             .iter()
             .map(|p| Choice { code: p.code.clone(), label: p.display_name.clone() })
             .collect();
-        let selected = choices.first().cloned().unwrap_or(Choice {
+        // The retired beta never opens the app: the live build of its line
+        // does, or failing that the next game in the list.
+        let first = choices.first().filter(|c| c.code != ProductCode::ClassicBeta).or_else(|| {
+            choices
+                .iter()
+                .find(|c| c.code == ProductCode::Forever)
+                .or_else(|| choices.iter().find(|c| c.code != ProductCode::ClassicBeta))
+                .or_else(|| choices.first())
+        });
+        let selected = first.cloned().unwrap_or(Choice {
             code: ProductCode::Retail,
             label: "World of Warcraft".to_owned(),
         });

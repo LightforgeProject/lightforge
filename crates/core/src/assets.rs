@@ -532,8 +532,13 @@ impl Pipeline {
             background: self
                 .cached_asset(manifest.slot(code, |t| t.background.as_ref())?, Slot::Background)?,
             // Optional, so a `?` here would throw away a perfectly good theme
-            // over a mark the bar can do without.
-            icon: theme.icon.as_ref().and_then(|i| self.cached_asset(i, Slot::Icon)),
+            // over a mark the bar can do without. The product's *own* mark,
+            // as [`Pipeline::icon`] reads it: a theme borrowed from its line
+            // carries the line head's icon, and answering with that here
+            // while the revalidation answers with none made the two
+            // brandings differ, so the page swapped its art a second or two
+            // after opening.
+            icon: self.cached_icon(&manifest, code),
         })
     }
 
@@ -1162,6 +1167,41 @@ mod tests {
             pipeline.cached(&ProductCode::Retail).unwrap().icon,
             Some(icon)
         );
+    }
+
+    /// The cache-first and the revalidated branding are compared to decide
+    /// whether to swap the art. A product on a borrowed theme (live Forever
+    /// wearing the beta's) must read the same icon both ways, which is none.
+    #[test]
+    fn a_borrowed_theme_does_not_lend_its_icon_to_the_cached_branding() {
+        let dir = tmpdir("borrowed");
+        let body = r#"{
+            "schema": 2,
+            "default": "wow",
+            "products": {
+              "wow": { "label": "Retail",
+                       "logo": { "url": "retail-logo.png" },
+                       "background": { "url": "retail-bg.jpg" } },
+              "wow_classic_beta": { "label": "WoW Forever",
+                       "logo": { "url": "retail-logo.png" },
+                       "background": { "url": "retail-bg.jpg" },
+                       "icon": { "url": "forever-icon.png" } }
+            }
+        }"#;
+        std::fs::write(dir.join(MANIFEST_FILE), body).unwrap();
+        std::fs::write(dir.join("retail-logo.png"), b"PNG-logo").unwrap();
+        std::fs::write(dir.join("retail-bg.jpg"), b"JPG-bg").unwrap();
+        std::fs::write(dir.join("forever-icon.png"), b"PNG-icon").unwrap();
+
+        let pipeline = Pipeline::new(Origin::Dir(dir), Store::new(tmpdir("borrowed-c")));
+        let manifest = pipeline.cached_manifest().unwrap();
+
+        let branding = pipeline.cached(&ProductCode::Forever).unwrap();
+        assert_eq!(branding.label, "WoW Forever", "the art is still borrowed");
+        assert_eq!(branding.icon, pipeline.cached_icon(&manifest, &ProductCode::Forever));
+        assert!(branding.icon.is_none());
+        // The beta's own mark is its own.
+        assert!(pipeline.cached(&ProductCode::ClassicBeta).unwrap().icon.is_some());
     }
 
     #[test]

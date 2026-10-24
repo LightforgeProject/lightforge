@@ -32,6 +32,8 @@ pub async fn preflight(
         let started = Instant::now();
         let report = Preflight::new(config.prefix_user.clone())
             .with_managed(config.managed_products())
+            // PLAY only: anything that goes through the client starts it afresh.
+            .keeping_client(runs == Runs::Game && !config.close_battle_net_on_play)
             .run(&runner, &layout, Some(&code), &mut guard)
             .map_err(|e| Problem::of(&e))?;
         // The report is for the CLI, which prints it. Here the outcome is

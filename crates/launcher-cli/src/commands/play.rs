@@ -63,6 +63,7 @@ pub(crate) fn play(ctx: Ctx, product: String, proton: Option<String>, dry_run: b
     }
 
     let report = Preflight::new(config.prefix_user.clone()).with_managed(managed_products())
+        .keeping_client(!config.close_battle_net_on_play)
         .run(&runner, &layout, Some(&code), &mut NoDownloads)
         .context("pre-flight cleanup")?;
     print_preflight(&report);
