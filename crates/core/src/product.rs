@@ -630,6 +630,9 @@ pub struct ProductProfile {
     /// the list is only knowable after reading the build's download manifest,
     /// so the panel would have nothing to show before the first refresh.
     pub optional_available: Vec<String>,
+    /// The language this product is installed in, e.g. `deDE`. `None` follows
+    /// [`crate::config::Config::locale`], the one chosen at setup.
+    pub locale: Option<String>,
     pub prefix_state: PrefixState,
 }
 

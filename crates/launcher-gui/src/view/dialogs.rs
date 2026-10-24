@@ -282,6 +282,84 @@ impl Lightforge {
         .into()
     }
 
+    /// The cog's "Game Version": what is installed and where.
+    pub(crate) fn version_card_info<'a>(&'a self, dialog: &'a VersionDialog) -> Element<'a, Message> {
+        let body = column![
+            field_row("Version".to_owned(), mono(dialog.version.clone()).into()),
+            field_row("Install Location".to_owned(), mono(dialog.location.clone()).into()),
+        ]
+        .spacing(theme::SM);
+        let actions = row![
+            Space::new().width(Length::Fill),
+            tappable(
+                "close version",
+                Some(Message::CloseGameVersion),
+                button(text("Close").size(theme::LABEL).width(Length::Fill).center())
+                    .width(Length::Fixed(170.0))
+                    .padding(theme::tap([theme::SM, theme::MD]))
+                    .style(theme::outlined),
+            ),
+        ];
+        container(
+            column![section(dialog.label.clone(), body.into()), actions].spacing(theme::LG),
+        )
+        .width(Length::Fixed(560.0))
+        .padding(theme::LG)
+        .style(theme::dialog)
+        .into()
+    }
+
+    /// The cog's "Modify Install": the language the game is installed in.
+    pub(crate) fn modify_card<'a>(&'a self, dialog: &'a ModifyDialog) -> Element<'a, Message> {
+        let locales: Vec<LocaleChoice> = lightforge_core::tact::install::LOCALES
+            .iter()
+            .map(|(code, _)| LocaleChoice(code.to_string()))
+            .collect();
+        let changed = dialog.locale != dialog.current;
+        let body = column![
+            muted(
+                "Downloads the files for the chosen language, and the game starts in it. \
+                 Files already stored are not fetched again."
+                    .to_owned(),
+                theme::LABEL,
+            ),
+            self.picker(
+                "modify locale".to_owned(),
+                locales,
+                Some(LocaleChoice(dialog.locale.clone())),
+                "Language",
+                |choice| Message::ModifyLocale(choice.0),
+                Length::Fixed(300.0),
+                theme::BODY,
+            ),
+        ]
+        .spacing(theme::MD);
+        let choice = |label: &'static str| {
+            button(text(label).size(theme::LABEL).width(Length::Fill).center())
+                .width(Length::Fixed(170.0))
+                .padding(theme::tap([theme::SM, theme::MD]))
+        };
+        let actions = row![
+            Space::new().width(Length::Fill),
+            tappable("modify cancel", Some(Message::ModifyCancel), choice("Cancel").style(theme::outlined)),
+            tappable(
+                "modify start",
+                changed.then_some(Message::ModifyStart),
+                choice("Start Update").style(theme::filled(theme::UPDATE)),
+            ),
+        ]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center);
+        container(
+            column![section(format!("Modify {}", dialog.label), body.into()), actions]
+                .spacing(theme::LG),
+        )
+        .width(Length::Fixed(560.0))
+        .padding(theme::LG)
+        .style(theme::dialog)
+        .into()
+    }
+
     /// The uninstall confirmation's card.
     /// The builds one addon offers, for choosing an older one on purpose.
     ///

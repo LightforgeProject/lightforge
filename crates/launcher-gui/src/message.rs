@@ -203,6 +203,16 @@ pub(crate) enum Message {
     OptionalRemoved(Result<u64, Problem>),
     /// The cog beside the primary button.
     ToggleGear,
+    /// The cog's "Show in Explorer": the game's folder in the file manager.
+    ShowInExplorer,
+    /// The cog's "Game Version": the build and where it is installed.
+    AskGameVersion,
+    CloseGameVersion,
+    /// The cog's "Modify Install": the language the game is installed in.
+    AskModifyInstall,
+    ModifyLocale(String),
+    ModifyCancel,
+    ModifyStart,
     /// The menu under the Lightforge wordmark.
     ToggleAppMenu,
     /// Back and forward through the pages visited this session.

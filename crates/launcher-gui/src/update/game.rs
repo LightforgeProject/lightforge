@@ -44,6 +44,66 @@ impl Lightforge {
                 self.version_picker = None;
                 Task::none()
             }
+            Message::ShowInExplorer => {
+                self.gear_open = false;
+                let dir = self.layout.wow_install(&self.selected.code);
+                if let Err(e) = tasks::open_path(dir) {
+                    self.error = Some(e.into());
+                }
+                Task::none()
+            }
+            Message::AskGameVersion => {
+                self.gear_open = false;
+                self.version_dialog = Some(VersionDialog {
+                    label: self.selected.label.clone(),
+                    version: self.local.version.clone().unwrap_or_else(|| "unknown".to_owned()),
+                    location: self.layout.wow_install(&self.selected.code).display().to_string(),
+                });
+                Task::none()
+            }
+            Message::CloseGameVersion => {
+                self.version_dialog = None;
+                Task::none()
+            }
+            Message::AskModifyInstall => {
+                self.gear_open = false;
+                let code = self.selected.code.clone();
+                let current = self.config.locale_for(&code).to_owned();
+                self.modify_dialog = Some(ModifyDialog {
+                    code,
+                    label: self.selected.label.clone(),
+                    locale: current.clone(),
+                    current,
+                });
+                Task::none()
+            }
+            Message::ModifyLocale(locale) => {
+                if let Some(dialog) = self.modify_dialog.as_mut() {
+                    dialog.locale = locale;
+                }
+                Task::none()
+            }
+            Message::ModifyCancel => {
+                self.modify_dialog = None;
+                Task::none()
+            }
+            Message::ModifyStart => {
+                let Some(dialog) = self.modify_dialog.take() else {
+                    return Ok(Task::none());
+                };
+                if dialog.locale == dialog.current {
+                    return Ok(Task::none());
+                }
+                let Some(product) = self.config.product_mut(&dialog.code) else {
+                    self.error = Some(format!("{} is not a managed game", dialog.label).into());
+                    return Ok(Task::none());
+                };
+                product.profile.locale = Some(dialog.locale);
+                self.save_config();
+                // The download plans against the new language and fetches
+                // only what the store lacks.
+                self.enqueue_for(dialog.code)
+            }
             Message::OpenGameSettings => {
                 self.close_panels();
                 self.game_settings = Some(GameSettings {

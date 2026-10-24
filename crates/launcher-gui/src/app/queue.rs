@@ -237,7 +237,7 @@ impl Lightforge {
                 self.layout.clone(),
                 code.clone(),
                 self.config.region,
-                self.config.locale.clone(),
+                self.config.locale_for(&code).to_owned(),
                 self.config.download_limit_bytes(),
                 self.opted_optional(&code),
                 cancel,

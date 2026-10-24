@@ -345,6 +345,13 @@ impl Config {
         self.products.iter_mut().find(|p| &p.code == code)
     }
 
+    /// The language `code` is downloaded in: its own, else the setup choice.
+    pub fn locale_for(&self, code: &ProductCode) -> &str {
+        self.product(code)
+            .and_then(|p| p.profile.locale.as_deref())
+            .unwrap_or(&self.locale)
+    }
+
     /// Add a product, rejecting a duplicate code.
     pub fn add_product(&mut self, product: Product) -> Result<(), ProductError> {
         if self.product(&product.code).is_some() {

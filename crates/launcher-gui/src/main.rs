@@ -43,6 +43,7 @@ use format::*;
 use icons::*;
 use message::*;
 use model::*;
+use wizard::LocaleChoice;
 use widgets::*;
 
 use std::collections::{HashMap, HashSet};
@@ -451,6 +452,8 @@ struct Lightforge {
     /// STOP was confirmed and the game has been told to go.
     stopping: bool,
     stop_dialog: Option<StopDialog>,
+    version_dialog: Option<VersionDialog>,
+    modify_dialog: Option<ModifyDialog>,
     /// A launch whose pre-flight is done, held until the download it paused
     /// has finished winding down: the client and a still-checkpointing
     /// downloader would share one store.
@@ -736,6 +739,8 @@ impl Lightforge {
             game_up: false,
             stopping: false,
             stop_dialog: None,
+            version_dialog: None,
+            modify_dialog: None,
             launch_when_quiet: None,
             report_dialog: None,
             system: None,
@@ -1145,6 +1150,8 @@ impl Lightforge {
         };
         let card = card
             .or_else(|| self.stop_dialog.as_ref().map(|d| self.stop_card(d)))
+            .or_else(|| self.version_dialog.as_ref().map(|d| self.version_card_info(d)))
+            .or_else(|| self.modify_dialog.as_ref().map(|d| self.modify_card(d)))
             .or_else(|| self.proton_installer.map(|tab| self.proton_installer_card(tab)));
         let settings_on_top = self.game_settings.is_some()
             && self.install_dialog.is_none()

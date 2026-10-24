@@ -362,12 +362,15 @@ impl Lightforge {
         // paused or still waiting its turn. Pause is on the button itself;
         // this is the one that ends it.
         let queued = self.queue.iter().any(|d| d.code == self.selected.code);
+        // Battle.net's order and wording: the game's own entries, then the
+        // two that change the install below a rule.
         let menu = container(
             column![
                 item("Game Settings", Message::OpenGameSettings, installed),
-                item("Check for Updates", Message::CheckForUpdates, !self.busy),
+                item("Show in Explorer", Message::ShowInExplorer, installed),
+                item("Game Version", Message::AskGameVersion, installed),
                 item("Scan and Repair", Message::ScanAndRepair, can.scan),
-                item("Copy Debug Info", Message::CopyDebug, true),
+                item("Check for Updates", Message::CheckForUpdates, !self.busy),
             ]
             .extend(
                 self.owed_repair
@@ -380,6 +383,10 @@ impl Lightforge {
                     true,
                 )
             }))
+            .push(container(Space::new()).height(Length::Fixed(1.0)).width(Length::Fill).style(theme::divider))
+            .push(item("Modify Install", Message::AskModifyInstall, can.scan))
+            .push(item("Uninstall", Message::AskUninstall, can.uninstall))
+            .push(item("Copy Debug Info", Message::CopyDebug, true))
             .spacing(theme::XS),
         )
         .padding(theme::XS)

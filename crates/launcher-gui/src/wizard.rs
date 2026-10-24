@@ -1442,7 +1442,7 @@ impl std::fmt::Display for RegionChoice {
 
 /// A locale as a picker option, named in its own language.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct LocaleChoice(String);
+pub(crate) struct LocaleChoice(pub(crate) String);
 
 impl std::fmt::Display for LocaleChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

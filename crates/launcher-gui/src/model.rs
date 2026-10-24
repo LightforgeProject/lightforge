@@ -622,6 +622,24 @@ pub(crate) struct Maintain {
     pub(crate) repair: bool,
 }
 
+/// What the cog's "Game Version" shows.
+#[derive(Debug, Clone)]
+pub(crate) struct VersionDialog {
+    pub(crate) label: String,
+    pub(crate) version: String,
+    pub(crate) location: String,
+}
+
+/// The cog's "Modify Install": the game's language, before it is changed.
+#[derive(Debug, Clone)]
+pub(crate) struct ModifyDialog {
+    pub(crate) code: ProductCode,
+    pub(crate) label: String,
+    /// What the game is installed in now.
+    pub(crate) current: String,
+    pub(crate) locale: String,
+}
+
 /// The question asked before a running game is stopped.
 #[derive(Debug, Clone)]
 pub(crate) struct StopDialog {

@@ -174,6 +174,8 @@ impl Lightforge {
     pub(crate) fn dialog_dismissal(&self) -> Option<Message> {
         Some(match () {
             _ if self.stop_dialog.is_some() => Message::StopGameDismiss,
+            _ if self.version_dialog.is_some() => Message::CloseGameVersion,
+            _ if self.modify_dialog.is_some() => Message::ModifyCancel,
             _ if self.install_dialog.is_some() => Message::InstallCancel,
             _ if self.uninstall_dialog.is_some() => Message::UninstallCancel,
             _ if self.cancel_dialog.is_some() => Message::CancelDownloadDismiss,
