@@ -14,6 +14,7 @@ pub mod assets;
 pub mod backup;
 pub mod battlenet;
 pub mod buildinfo;
+pub mod clientlocale;
 pub mod config;
 pub mod debug;
 pub mod discover;
