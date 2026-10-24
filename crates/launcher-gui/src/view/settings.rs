@@ -895,8 +895,7 @@ impl Lightforge {
     /// One profile, not one per game: Lightforge only sets the environment of
     /// a client it starts cold, and a running client takes launches over its
     /// own IPC queue, so two games from one session cannot differ (see
-    /// `Config::battle_net_tweaks`). No preset row and no client settings: a
-    /// hand-off game has no `Config.wtf`.
+    /// `Config::battle_net_tweaks`).
     pub(crate) fn battle_net_section(&self) -> Element<'_, Message> {
         let tweaks = self.tweaks_of(Scope::BattleNet);
         let tools = &self.tools;

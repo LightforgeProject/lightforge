@@ -713,8 +713,8 @@ impl Lightforge {
 
     /// Which screens wear the game band under the tabs.
     ///
-    /// Only the dashboard. Settings and a game's own pages (Addons, Game
-    /// Optimizations) are somewhere you went *into*: they are about one thing,
+    /// Only the dashboard. Settings and a game's own page (Addons)
+    /// is somewhere you went *into*: they are about one thing,
     /// and a band offering to switch games above them invites a click that
     /// would throw away what you are doing.
     pub(crate) fn shows_band(&self) -> bool {

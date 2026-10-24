@@ -28,7 +28,7 @@ impl Lightforge {
         let act = self.handoff_act();
         left = left.extend(self.hint(act.hint()).map(Element::from));
         // The managed panel has a row of links and this one had none, so a
-        // hand-off game had no route to any optimization page. It is phrased
+        // hand-off game had no route to any launch settings. It is phrased
         // for the shared profile on purpose, "its games", not "this game",
         // because one environment covers every game the client starts.
         left = left.push(self.ring(

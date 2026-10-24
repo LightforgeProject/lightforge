@@ -430,7 +430,7 @@ pub(crate) enum NavFrom {
 /// so a held direction stays with whichever source started it.
 pub(crate) const NAV_DOUBLED: Duration = Duration::from_millis(150);
 
-/// Which profile a Game Optimizations control edits.
+/// Which profile a launch-settings control edits.
 ///
 /// The same switches appear twice, on a product's own page, and in
 /// Settings › Battle.net for the shared profile that Battle.net and every

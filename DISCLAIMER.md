@@ -102,11 +102,7 @@ and a list is more useful:
 | Who it talks to | When | What they see |
 | --- | --- | --- |
 | `*.version.battle.net`, `level3.blizzard.com` | installing, updating, checking for patches | Blizzard's own CDN, same as their client |
-<<<<<<< HEAD
-| `lightforge.tuxcore.pro` | artwork, news, addon search and updates, matching addons you already have | your IP address, what you searched for, and which addons you have (their ids, or the fingerprints of their folders) |
-=======
 | `lightforge.tuxcore.pro` | artwork, addon search and updates, matching addons you already have | your IP address, what you searched for, and which addons you have (their ids, or the fingerprints of their folders) |
->>>>>>> 09e2051 (xyz)
 | `api.mmoui.com`, `cdn.wowinterface.com`, `api.tukui.org`, `api.github.com`, `edge.forgecdn.net` | installing or updating addons | your IP address, by those providers |
 | `api.github.com` | checking for new Proton-GE builds | a public release listing |
 | `api.github.com` | once at startup, checking whether a newer Lightforge was released | a public release listing |

@@ -411,6 +411,27 @@ pub fn clear_cache(dirs: &AppDirs) -> Result<u64, StorageError> {
     Ok(freed)
 }
 
+/// Cache entries left by features that no longer exist: the News page's
+/// articles and images. An upgrade never visits them again, so without this
+/// they sit in the cache for good, tens of megabytes of them. Best effort and
+/// silent: what cannot be removed now is tried again at the next start.
+pub fn remove_retired_caches(cache: &Path) -> u64 {
+    const RETIRED: [&str; 3] = ["news", "news.json", "news.json.etag"];
+    let mut freed = 0;
+    for name in RETIRED {
+        let path = cache.join(name);
+        let bytes = entry_size(&path);
+        let removed = match path.is_dir() && !path.is_symlink() {
+            true => std::fs::remove_dir_all(&path),
+            false => std::fs::remove_file(&path),
+        };
+        if removed.is_ok() {
+            freed += bytes;
+        }
+    }
+    freed
+}
+
 fn clearable_entries(dirs: &AppDirs) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dirs.cache_dir()) else {
         return Vec::new();
@@ -459,6 +480,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn the_retired_news_cache_goes_and_the_rest_of_the_cache_stays() {
+        let cache = scratch("retired");
+        std::fs::create_dir_all(cache.join("news")).unwrap();
+        std::fs::write(cache.join("news").join("a.jpg"), [0u8; 100]).unwrap();
+        std::fs::write(cache.join("news.json"), [0u8; 20]).unwrap();
+        std::fs::create_dir_all(cache.join("assets")).unwrap();
+        std::fs::write(cache.join("assets").join("logo.png"), [0u8; 5]).unwrap();
+
+        assert_eq!(remove_retired_caches(&cache), 120);
+        assert!(!cache.join("news").exists() && !cache.join("news.json").exists());
+        assert!(cache.join("assets").join("logo.png").is_file());
+        // Nothing there is not an error, which is every start after the first.
+        assert_eq!(remove_retired_caches(&cache), 0);
+
+        let _ = std::fs::remove_dir_all(&cache);
     }
 
     /// A `product.db` record with only the two fields this file reads.

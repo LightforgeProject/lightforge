@@ -1,4 +1,4 @@
-//! One game's own settings: versions, backups, Game Optimizations.
+//! One game's own settings: versions, backups, launch settings, textures.
 
 use crate::*;
 

@@ -573,6 +573,12 @@ struct Lightforge {
 impl Lightforge {
     fn new() -> (Self, Task<Message>) {
         let dirs = AppDirs::discover().ok();
+        // The News page's cache outlives the page. Off the main thread: it can
+        // be dozens of megabytes of images.
+        if let Some(dirs) = &dirs {
+            let cache = dirs.cache_dir().to_path_buf();
+            std::thread::spawn(move || lightforge_core::storage::remove_retired_caches(&cache));
+        }
         // A missing file is a first run and gets defaults. A file that exists
         // but will not load is someone's settings with a problem in them: the
         // app stops on it rather than quietly running on defaults, which

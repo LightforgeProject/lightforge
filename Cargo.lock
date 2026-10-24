@@ -2469,7 +2469,6 @@ dependencies = [
 name = "lightforge-gui"
 version = "1.0.0-beta.6"
 dependencies = [
- "anyhow",
  "ashpd",
  "base64",
  "futures-util",

@@ -36,7 +36,7 @@ pub(crate) fn package_icon() -> image::Handle {
     PACKAGE.get_or_init(|| art::decode_bundled(PACKAGE_ICON)).clone()
 }
 
-/// Game Optimizations. Sliders rather than the cog: the cog is already the
+/// Game Settings. Sliders rather than the cog: the cog is already the
 /// split button's own mark for Lightforge's settings, and these are the
 /// game's.
 pub(crate) const SLIDERS_ICON: &[u8] = include_bytes!("../assets/sliders-horizontal.png");

@@ -39,7 +39,7 @@
       <li>Keeps games on as many drives as you like, and leaves installs it finds where they already are.</li>
       <li>Downloads, checks and manages Proton-GE itself — no Steam, no Lutris, no system Wine.</li>
       <li>Manages addons from CurseForge, WoWInterface, Tukui and GitHub in one list.</li>
-      <li>Applies graphics and Wine tuning as three presets, over your own environment variables.</li>
+      <li>Per-game launch settings: CPU performance profile, MangoHud, Wayland backend, high-resolution textures and your own environment variables.</li>
     </ul>
   </description>
 

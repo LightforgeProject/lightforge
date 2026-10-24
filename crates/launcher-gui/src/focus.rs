@@ -1143,7 +1143,7 @@ mod tests {
     }
 
     /// Two cards side by side, the right one's rows sitting a little lower,
-    /// the way Game Optimizations draws Performance beside Looks.
+    /// as a page of settings cards draws them.
     #[test]
     fn down_a_card_stays_in_the_card() {
         let place = |name: &str, x: f32, y: f32, group: &str| Place {

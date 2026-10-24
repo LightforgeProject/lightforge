@@ -152,8 +152,9 @@ Steam, Lutris or a system Wine.
 - **Puts games on any drive** you add, Battle.net's own included.
 - **Manages addons** from CurseForge, WoWInterface, Tukui and GitHub, with
   update channels, changelogs, pinning, and WoWUp import and export.
-- **Tunes the game** with presets, Proton's Wayland backend with HDR, frame
-  caps and your own environment variables.
+- **Tunes the game** with the CPU performance profile, MangoHud, Proton's
+  Wayland backend, optional high-resolution textures and your own environment
+  variables.
 - **Sets Battle.net up for you**, then launches its games with one press. The
   in-game shop works too, [which took some finding](TECHDOC.md#the-in-game-shop).
 - **Plays well on a controller**, with a handheld mode for the Steam Deck and
@@ -170,13 +171,8 @@ Steam, Lutris or a system Wine.
   never inside it.
 - **No tracking.** No analytics, no crash pings, no account. It talks to
   Blizzard's CDN for the game, to GitHub for updates, and to Lightforge's
-<<<<<<< HEAD
-  own server for artwork, news and CurseForge lookups (CurseForge's API
-  needs a key that can't live in a public repo). Bug reports only go out when you
-=======
   own server for artwork and CurseForge lookups (CurseForge's API needs a
   key that can't live in a public repo). Bug reports only go out when you
->>>>>>> 09e2051 (xyz)
   press Send, and you see the whole report first. Every host and what it
   sees is listed in [DISCLAIMER.md](DISCLAIMER.md#what-leaves-your-machine).
 - **WoW first.** Other Blizzard games are installed and run by Battle.net.
