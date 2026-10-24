@@ -1101,7 +1101,11 @@ impl Lightforge {
             (_, _, _, _, Some(picker), ..) => Some(self.version_card(picker)),
             (_, _, _, _, _, Some(detail), ..) => Some(self.detail_card(detail)),
             (_, _, _, _, _, _, Some(dialog), ..) => Some(self.report_card(dialog)),
-            (_, _, _, _, _, _, _, Some(settings), ..) => Some(self.game_settings_card(settings)),
+            // Closes on a click outside it, so a click inside that no control
+            // wanted has to stop at the card rather than reach the scrim.
+            (_, _, _, _, _, _, _, Some(settings), ..) => Some(
+                mouse_area(self.game_settings_card(settings)).on_press(Message::MenuClick).into(),
+            ),
             // Last, so a dialog someone opened themselves is never buried
             // under the one the app opened for them. The notes come before
             // the update notice: they are about the build that is running,
@@ -1110,6 +1114,14 @@ impl Lightforge {
             (.., Some(available)) => Some(self.update_card(available)),
             _ => None,
         };
+        let settings_on_top = self.game_settings.is_some()
+            && self.install_dialog.is_none()
+            && self.uninstall_dialog.is_none()
+            && self.cancel_dialog.is_none()
+            && self.downgrade_dialog.is_none()
+            && self.version_picker.is_none()
+            && self.addon_detail.is_none()
+            && self.report_dialog.is_none();
         let screen = match card {
             Some(card) => stack![
                 screen,
@@ -1118,9 +1130,12 @@ impl Lightforge {
                         // A click no control in the dialog wanted closes a
                         // dropdown open in it, as a click on a page does;
                         // otherwise it only stops at the dialog.
-                        .on_press(match self.panel_open() {
-                            true => Message::Dismiss,
-                            false => Message::MenuClick,
+                        .on_press(match (self.panel_open(), settings_on_top) {
+                            (true, _) => Message::Dismiss,
+                            // Game Settings is the one card a click outside
+                            // closes: it holds no half-finished input.
+                            (false, true) => Message::CloseGameSettings,
+                            (false, false) => Message::MenuClick,
                         }),
                 ),
             ]
