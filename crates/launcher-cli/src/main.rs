@@ -46,8 +46,8 @@ enum Command {
     Prefix,
     /// Create or update the prefix, then put the game symlink in place.
     PrefixInit {
-        /// Proton build to use, e.g. `GE-Proton11-7`. Defaults to the newest
-        /// supported build installed.
+        /// Proton build to use, e.g. `GE-Proton11-7`. Defaults to the tested
+        /// build when it is installed, else the newest supported one.
         #[arg(long)]
         proton: Option<String>,
     },
@@ -55,7 +55,7 @@ enum Command {
     PrefixLink,
     /// Download Battle.net-Setup.exe into the cache.
     BattlenetFetch,
-    /// Install Battle.net headlessly, then apply registry and config defaults.
+    /// Install Battle.net unattended, then apply registry and config defaults.
     BattlenetSetup {
         /// Proton build to run the installer under.
         #[arg(long)]
@@ -70,6 +70,7 @@ enum Command {
         #[arg(long, default_value_t = 600)]
         timeout: u64,
     },
+    #[command(hide = true)]
     /// Re-apply the `Battle.net.config` defaults without running the installer.
     BattlenetConfig,
     /// Open Battle.net in the prefix, optionally handing straight off to a game.
@@ -131,6 +132,7 @@ enum Command {
         #[arg(default_value = "wow")]
         product: String,
     },
+    #[command(hide = true)]
     /// Rebuild an install's CASC store into a scratch copy, then verify it.
     ///
     /// The source is only ever read. Used to prove that a store Lightforge
@@ -144,6 +146,7 @@ enum Command {
         #[arg(long, default_value_t = 100)]
         percent: u8,
     },
+    #[command(hide = true)]
     /// Compare a rebuilt CASC store against the install it was built from.
     CascVerify {
         /// The original install.
@@ -154,6 +157,7 @@ enum Command {
         #[arg(long, default_value_t = 20000)]
         sample: usize,
     },
+    #[command(hide = true)]
     /// Read an archive's index and pull real files out of it by range request.
     CdnArchive {
         /// Archive hash. Defaults to the first archive in the CDN config.
@@ -170,6 +174,7 @@ enum Command {
         #[arg(long)]
         verify_with: Option<PathBuf>,
     },
+    #[command(hide = true)]
     /// Fetch content from Blizzard's CDN and verify it by hash.
     CdnFetch {
         /// Product code, e.g. `wow`.
@@ -240,6 +245,7 @@ enum Command {
         #[arg(long)]
         cancel_after: Option<u64>,
     },
+    #[command(hide = true)]
     /// Explain a plan: what a build wants, what the store already has, and
     /// why the difference is the size it is. Fetches nothing.
     Plan {
@@ -266,6 +272,7 @@ enum Command {
         #[arg(long, default_value_t = 32)]
         concurrency: usize,
     },
+    #[command(hide = true)]
     /// Fingerprint each installed addon folder, and say what the catalog
     /// expects for the ones Lightforge installed.
     ///
@@ -380,6 +387,7 @@ enum Command {
         #[arg(long, default_value = "wow")]
         product: String,
     },
+    #[command(hide = true)]
     /// Decode a WoWUp import token and print what it contains.
     AddonToken {
         /// The token, or `@path` to read it from a file.
@@ -422,6 +430,7 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    #[command(hide = true)]
     /// Give back the shared store's space held by one product's data: the
     /// files no other installed product uses. Prints the plan unless `--yes`.
     ///
@@ -436,6 +445,29 @@ enum Command {
         build_key: Option<String>,
         #[arg(long, default_value = "eu")]
         region: String,
+        /// Install root. Defaults to the managed WoW install.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Actually delete. Without this, nothing is touched.
+        #[arg(long)]
+        yes: bool,
+    },
+    #[command(hide = true)]
+    /// Delete one optional download's files (`HighRes`, the texture pack) from
+    /// a product's install and compact the archives. Prints the plan unless
+    /// `--yes`.
+    ///
+    /// Only files that option alone brought in and no installed build needs.
+    /// It does not change what is opted in to: the GUI does both together.
+    DropOptional {
+        #[arg(long)]
+        product: String,
+        /// The optional tag's name, as the manifest spells it.
+        #[arg(long, default_value = "HighRes")]
+        tag: String,
+        /// Other options that stay on, so what they brought stays.
+        #[arg(long)]
+        keep: Vec<String>,
         /// Install root. Defaults to the managed WoW install.
         #[arg(long)]
         path: Option<PathBuf>,
@@ -470,6 +502,7 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    #[command(hide = true)]
     /// Write `.product.db` so Battle.net will adopt an existing install.
     ///
     /// Agent refuses to locate an install without this file (error 2800). The
@@ -552,6 +585,7 @@ enum Command {
         #[arg(long, default_value = "eu")]
         region: String,
     },
+    #[command(hide = true)]
     /// Resolve files through an install's root and encoding manifests.
     Content {
         /// A WoW install root.
@@ -569,6 +603,7 @@ enum Command {
         #[arg(long, conflicts_with = "fdid")]
         file: Option<String>,
     },
+    #[command(hide = true)]
     /// Open an install's CASC store and decode a sample of its files.
     Casc {
         /// A WoW install root, or a `Data`/`Data/data` directory.
@@ -577,12 +612,14 @@ enum Command {
         #[arg(long, default_value_t = 2000)]
         sample: usize,
     },
+    #[command(hide = true)]
     /// Inspect the CASC bucket indices of an install, verifying both hashes
     /// and re-serializing each file to prove we can write them byte-identically.
     Idx {
         /// A WoW install root, or a `Data/data` directory directly.
         path: PathBuf,
     },
+    #[command(hide = true)]
     /// Atomically rewrite one product's build keys in `.build.info`.
     BuildInfoSet {
         /// Product code, e.g. `wow`.
@@ -761,6 +798,9 @@ async fn run() -> Result<()> {
         Command::Uninstall { product, path, yes } => commands::storage::uninstall(ctx, product, path, yes),
         Command::Reclaim { product, build_key, region, path, yes } => commands::storage::reclaim(ctx, product, build_key, region, path, yes).await,
         Command::Prune { path, yes } => commands::storage::prune(ctx, path, yes).await,
+        Command::DropOptional { product, tag, keep, path, yes } => {
+            commands::storage::drop_optional(ctx, product, tag, keep, path, yes).await
+        }
         Command::Compact { path, yes } => commands::storage::compact(ctx, path, yes),
         Command::ProductDb { path, products, account_country, geo_country, agent_tags, dry_run } => commands::battlenet::product_db(ctx, path, products, account_country, geo_country, agent_tags, dry_run),
         Command::Setup { status, proton } => commands::proton::setup(ctx, status, proton).await,
@@ -887,7 +927,7 @@ fn managed_products() -> Vec<lightforge_core::product::ProductCode> {
 }
 
 /// Resolve the Proton build to run against the shared prefix, and a runner for
-/// it. `None` selects the newest supported build installed.
+/// it. `None` selects the tested build, see `proton::select`.
 fn proton_runner(
     layout: &Layout,
     version: Option<&str>,

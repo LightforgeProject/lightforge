@@ -455,6 +455,34 @@ fn a_button_gone_once_pressed_leaves_the_ring_nearby() {
 }
 
 #[test]
+fn right_from_the_settings_index_goes_in_and_left_comes_back_out() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.splash = None;
+    app.wizard = None;
+    app.screen = Screen::Settings;
+    let at = |x, y| iced::Rectangle { x, y, width: 80.0, height: 30.0 };
+    let send = || focus::Press::Send(Message::MenuClick);
+    let tab = focus::Target::SettingsTab(SettingsTab::ALL[0]);
+    let switch = focus::Target::Key("switch".to_owned());
+
+    focus::reset();
+    focus::put(tab.clone(), at(20.0, 100.0), focus::Press::Send(Message::SettingsTab(SettingsTab::ALL[0])), 0);
+    focus::put_in(SETTINGS_PAGE, switch.clone(), at(400.0, 100.0), send());
+    app.focus = Some(tab.clone());
+
+    // Right is A here: into the section, once it has been drawn.
+    let _ = app.update(Message::FocusStep(focus::Step::Right));
+    app.focus_entering = FOCUS_ENTER_FRAMES;
+    let _ = app.update(Message::FocusSettle);
+    assert_eq!(app.focus, Some(switch));
+
+    // Nothing further left inside the section: back onto its entry, as B.
+    let _ = app.update(Message::FocusStep(focus::Step::Left));
+    assert_eq!(app.focus, Some(tab));
+}
+
+#[test]
 fn the_keyboard_alone_picks_a_game_and_closes_the_release_notes() {
     let (mut app, _) = Lightforge::new();
     app.dirs = None;
@@ -1120,4 +1148,186 @@ fn eta_is_rendered_in_the_largest_useful_unit() {
 fn byte_readouts_survive_an_unknown_total() {
     assert_eq!(bytes_of(1024 * 1024 * 1024, 0), "1.00 GiB");
     assert!(bytes_of(0, 1024 * 1024 * 1024).ends_with("of 1.00 GiB"));
+}
+
+fn update_notice_app() -> Lightforge {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.update_notice = Some(lightforge_core::update::Available {
+        current: "1.0.0-beta.6".to_owned(),
+        latest: "1.0.0-beta.7".to_owned(),
+        url: lightforge_core::update::RELEASES_PAGE.to_owned(),
+    });
+    app
+}
+
+#[test]
+fn the_update_card_draws_for_every_route_and_stage() {
+    use lightforge_core::upgrade::Origin;
+    let mut app = update_notice_app();
+    let available = app.update_notice.clone().unwrap();
+    let origins = [
+        Origin::Installer { bin_dir: "/home/u/.local/bin".into() },
+        Origin::Pacman { package: "lightforge".into() },
+        Origin::Deb,
+        Origin::Copr { atomic: true },
+        Origin::Checkout { repo: "/home/u/lightforge".into() },
+        Origin::Unknown,
+    ];
+    let stages = [
+        None,
+        Some(UpgradeStage::Fetching),
+        Some(UpgradeStage::InTerminal { command: "makepkg -si --noconfirm".into(), stamp: None }),
+        Some(UpgradeStage::NoTerminal { command: "sh update.sh".into() }),
+        Some(UpgradeStage::Installed),
+        Some(UpgradeStage::Failed("no connection".into())),
+    ];
+    for origin in origins {
+        app.origin = origin;
+        for stage in stages.clone() {
+            app.upgrade = stage.map(|stage| Upgrade { stage, rx: None, sample: (5, Some(10)) });
+            let _ = app.update_card(&available);
+        }
+    }
+}
+
+#[test]
+fn the_check_button_shows_a_release_that_was_dismissed_before() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    let found = lightforge_core::update::Available {
+        current: "1.0.0-beta.6".to_owned(),
+        latest: "1.0.0-beta.7".to_owned(),
+        url: lightforge_core::update::RELEASES_PAGE.to_owned(),
+    };
+    app.config.update_seen = Some(found.latest.clone());
+    let _ = app.update(Message::LauncherChecked(Ok(Some(found))));
+    assert!(app.update_notice.is_some(), "the button's answer was swallowed by update_seen");
+    assert_eq!(app.launcher_check, LauncherCheck::Idle);
+}
+
+#[test]
+fn the_check_button_says_what_it_found() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    let _ = app.update(Message::LauncherChecked(Ok(None)));
+    assert_eq!(app.launcher_check, LauncherCheck::Newest);
+    assert!(app.update_notice.is_none());
+    let _ = app.update(Message::LauncherChecked(Err("no network connection".to_owned())));
+    assert_eq!(app.launcher_check, LauncherCheck::Failed("no network connection".to_owned()));
+    for state in [LauncherCheck::Idle, LauncherCheck::Asking, LauncherCheck::Newest] {
+        app.launcher_check = state;
+        let _ = app.about_section();
+    }
+}
+
+#[test]
+fn the_update_notice_stays_while_files_are_being_replaced() {
+    let mut app = update_notice_app();
+    app.upgrade = Some(Upgrade { stage: UpgradeStage::Fetching, rx: None, sample: (0, None) });
+    let _ = app.update(Message::DismissUpdate);
+    assert!(app.update_notice.is_some(), "closed halfway through an update");
+
+    app.upgrade.as_mut().unwrap().stage = UpgradeStage::Installed;
+    let _ = app.update(Message::DismissUpdate);
+    assert!(app.update_notice.is_none() && app.upgrade.is_none());
+}
+
+#[test]
+fn a_package_manager_replacing_the_binary_ends_the_wait() {
+    let dir = std::env::temp_dir().join(format!("lightforge-upgrade-watch-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = dir.join("lightforge-gui");
+    std::fs::write(&exe, "old").unwrap();
+
+    let mut app = update_notice_app();
+    app.exe = Some(exe.clone());
+    let stamp = tasks::upgrade::stamp(&exe);
+    app.upgrade = Some(Upgrade {
+        stage: UpgradeStage::InTerminal { command: "makepkg -si".into(), stamp },
+        rx: None,
+        sample: (0, None),
+    });
+
+    let _ = app.update(Message::UpgradeWatch);
+    assert!(matches!(app.upgrade.as_ref().unwrap().stage, UpgradeStage::InTerminal { .. }));
+
+    // What pacman does: a new file renamed over the old one.
+    std::fs::write(dir.join("new"), "new").unwrap();
+    std::fs::rename(dir.join("new"), &exe).unwrap();
+    let _ = app.update(Message::UpgradeWatch);
+    assert_eq!(app.upgrade.as_ref().unwrap().stage, UpgradeStage::Installed);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_proton_installer_opens_on_proton_ge_switches_tabs_and_closes_on_escape() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.queue.clear();
+    app.wizard = None;
+    app.splash = None;
+    app.update_notice = None;
+    app.patch_notes = None;
+    // A list already fetched, so opening it asks GitHub for nothing.
+    app.proton_available = vec![(proton::ProtonFamily::GloriousEggroll, vec!["GE-Proton11-7".to_owned()])];
+
+    let _ = app.update(Message::OpenProtonInstaller);
+    assert_eq!(app.proton_installer, Some(ProtonCategory::GloriousEggroll));
+
+    for tab in ProtonCategory::ALL {
+        let _ = app.update(Message::ProtonInstallerTab(tab));
+        assert_eq!(app.proton_installer, Some(tab));
+        // Every tab draws, including the two that only explain.
+        let _ = app.proton_installer_card(tab);
+    }
+
+    assert!(matches!(app.dialog_dismissal(), Some(Message::CloseProtonInstaller)));
+    let _ = app.update(Message::CloseProtonInstaller);
+    assert_eq!(app.proton_installer, None);
+}
+
+#[test]
+fn stop_asks_first_and_play_comes_back_when_the_game_is_gone() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.queue.clear();
+    app.wizard = None;
+    app.splash = None;
+    app.update_notice = None;
+    app.patch_notes = None;
+    app.screen = Screen::Dashboard;
+
+    // Nothing is running: STOP has nothing to ask about.
+    let _ = app.update(Message::AskStopGame);
+    assert!(app.stop_dialog.is_none());
+
+    // A launch of ours, and a game seen in the prefix.
+    app.busy = true;
+    app.launching = Some(app.selected.code.clone());
+    let _ = app.update(Message::GameSeen(true));
+    assert!(app.game_up);
+    let _ = app.update(Message::AskStopGame);
+    assert!(app.stop_dialog.is_some());
+    assert!(matches!(app.dialog_dismissal(), Some(Message::StopGameDismiss)));
+    // Drawn, on the managed panel and as the dialog.
+    let _ = app.view();
+
+    // Keeping the game going changes nothing.
+    let _ = app.update(Message::StopGameDismiss);
+    assert!(app.stop_dialog.is_none() && app.game_up && !app.stopping);
+
+    // Confirmed: the game is told to go, once.
+    let _ = app.update(Message::AskStopGame);
+    let _ = app.update(Message::StopGameConfirm);
+    assert!(app.stopping && app.stop_dialog.is_none());
+    let _ = app.update(Message::StopGameConfirm);
+
+    // The watcher reports the exit: PLAY is back and nothing is left over.
+    let _ = app.update(Message::Launched(Ok("game closed".to_owned())));
+    assert!(!app.busy && !app.game_up && !app.stopping);
+
+    // A scan that was out when the session ended must not bring STOP back.
+    let _ = app.update(Message::GameSeen(true));
+    assert!(!app.game_up);
 }

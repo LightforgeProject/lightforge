@@ -96,24 +96,47 @@ pub async fn check_for_update(
     http: Option<Http>,
     enabled: bool,
 ) -> Option<lightforge_core::update::Available> {
+    // A development build is ahead of every release or about to be, and
+    // its own checkout is how it updates.
+    if !enabled || cfg!(debug_assertions) {
+        return None;
+    }
+    latest_release(http?).await.ok().flatten()
+}
+
+/// The same question, asked because someone pressed the button in Settings.
+///
+/// Unlike the start-up check it says why when it cannot answer, and it runs
+/// in a development build too: pressing the button is the request, not an
+/// interruption.
+pub async fn check_for_update_now(
+    http: Option<Http>,
+) -> Result<Option<lightforge_core::update::Available>, String> {
+    let http = http.ok_or_else(|| "no network connection".to_owned())?;
+    latest_release(http).await
+}
+
+async fn latest_release(http: Http) -> Result<Option<lightforge_core::update::Available>, String> {
     use lightforge_core::net::ETagCache;
     use lightforge_core::update;
 
-    if !enabled {
-        return None;
-    }
-    let http = http?;
-    let dirs = AppDirs::discover().ok()?;
+    let dirs = AppDirs::discover().map_err(|e| e.to_string())?;
     // Shares GitHub's 60-per-hour unauthenticated budget with the Proton-GE
     // check, so the ETag is what keeps a start from costing two of it.
     let cache = ETagCache::new(dirs.asset_cache_dir().join("lightforge-releases.json"));
-    let releases = update::fetch(&http, &cache).await.ok()?;
-    let found = update::newer_than(env!("CARGO_PKG_VERSION"), &releases);
+    let releases = update::fetch(&http, &cache).await.map_err(|e| e.to_string())?;
+    // `LIGHTFORGE_PRETEND_VERSION` is for development, like
+    // `LIGHTFORGE_OS_RELEASE`: a build that calls itself older is offered
+    // the real newest release, which is the only way to walk an update
+    // through before the next one exists.
+    let running = std::env::var("LIGHTFORGE_PRETEND_VERSION")
+        .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_owned());
+    let found = update::newer_than(&running, &releases);
     crate::trace::mark(match &found {
         Some(available) => format!("update: {} is out", available.latest),
         None => "update: this is the newest build".to_owned(),
     });
-    found
+    Ok(found)
 }
 
 /// Read the client's cached catalogue, for the game families in it.

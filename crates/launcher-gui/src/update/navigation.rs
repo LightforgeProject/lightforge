@@ -81,11 +81,23 @@ impl Lightforge {
                         None => self.scroll_page(step, None),
                     });
                 };
+                // The Settings index is a pane of its own, so Right from it
+                // reached nothing. It reads as a way in, the same as A, and
+                // Left off the edge of a section is the way back out, as B.
+                if matches!(current, focus::Target::SettingsTab(_)) && step == focus::Step::Right {
+                    return Ok(self.update(Message::FocusPress));
+                }
                 match focus::step(&spots, &current, step) {
                     Some(next) => {
                         Self::scroll_into_view(&next);
                         self.focus = Some(next);
                         Task::none()
+                    }
+                    None if step == focus::Step::Left
+                        && self.screen == Screen::Settings
+                        && focus::spot(&current).and_then(|spot| spot.region) == Some(SETTINGS_PAGE) =>
+                    {
+                        self.update(Message::FocusBack)
                     }
                     None => self.scroll_page(step, Some(&current)),
                 }

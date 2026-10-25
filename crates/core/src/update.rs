@@ -1,9 +1,9 @@
 //! Is there a newer Lightforge?
 //!
 //! One question, asked once per start against GitHub's release list, answered
-//! with a sentence and a link. Nothing here downloads or installs anything:
-//! the user's package manager owns the binary, and a launcher that replaced
-//! itself behind a distribution's back would be the wrong kind of helpful.
+//! with a sentence and a link. Nothing here downloads or installs anything;
+//! getting the new version onto the machine is [`crate::upgrade`]'s, and only
+//! when the user asks for it.
 //!
 //! Two things make this less trivial than it reads.
 //!

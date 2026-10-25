@@ -49,9 +49,42 @@ impl Lightforge {
                 // one moment the answer can have changed.
                 self.bnet_icon =
                     self.layout.battle_net_icon().and_then(|path| art::try_mark(&path));
+                // Not under the first run or another install, and once a
+                // session: offline it would fail again on every re-read.
+                let fetch = match &status {
+                    Some(status)
+                        if !self.tested_proton_asked
+                            && !self.setup_running
+                            && self.wizard.is_none()
+                            && proton::wants_tested(
+                                &status.installed,
+                                self.config.default_proton.version(),
+                                proton::prefix_build(&self.layout.compat_data()).as_deref(),
+                            ) =>
+                    {
+                        self.tested_proton_asked = true;
+                        // Nobody reads this progress, and it stays out of
+                        // `setup_running` so nothing in the UI locks for it.
+                        let (tx, _) = tokio::sync::watch::channel(provision::Progress::default());
+                        Task::perform(
+                            provision::install_build(proton::TESTED.to_owned(), tx),
+                            Message::TestedProtonFetched,
+                        )
+                    }
+                    _ => Task::none(),
+                };
                 self.setup = status;
-                Task::batch([measure, opened])
+                Task::batch([measure, opened, fetch])
             }
+            // Quiet either way: it was nobody's request. A failure leaves the
+            // build they have, and the next start asks again.
+            Message::TestedProtonFetched(result) => match result {
+                Ok(()) => Task::perform(
+                    provision::status(self.layout.clone(), self.config.clone()),
+                    |status| Message::SetupStatus(status.map(Box::new)),
+                ),
+                Err(_) => Task::none(),
+            },
             Message::Wizard(msg) => wizard::update(self, msg),
             Message::InstallBattleNet => {
                 self.config.battle_net_declined = false;
@@ -146,14 +179,40 @@ impl Lightforge {
                 }
                 Task::none()
             }
-            Message::ChooseProtonVersion(choice) => {
-                self.proton_choice = choice.0;
+            Message::OpenProtonInstaller => {
+                self.close_panels();
+                self.proton_installer = Some(ProtonCategory::GloriousEggroll);
+                match self.proton_available.is_empty() {
+                    true => Task::done(Message::CheckProton),
+                    false => Task::none(),
+                }
+            }
+            Message::CloseProtonInstaller => {
+                self.proton_installer = None;
                 Task::none()
             }
-            Message::InstallProton => {
-                let Some(version) = self.proton_choice.clone() else {
+            Message::ProtonInstallerTab(tab) => {
+                self.proton_installer = Some(tab);
+                Task::none()
+            }
+            Message::InstallSteamProton(app_id) => {
+                let Some(tool) = proton::STEAM_TOOLS.iter().find(|t| t.app_id == app_id) else {
                     return Ok(Task::none());
                 };
+                self.proton_notice = Some(match tasks::open_url(&tool.install_url()) {
+                    Ok(()) => format!(
+                        "Steam is asked to install {}. It appears in the list once Steam is done.",
+                        tool.name
+                    ),
+                    Err(e) => format!("Could not reach Steam: {e}"),
+                });
+                self.steam_proton_asked.insert(app_id);
+                Task::none()
+            }
+            Message::InstallProton(version) => {
+                if self.setup_running {
+                    return Ok(Task::none());
+                }
                 let (tx, rx) = tokio::sync::watch::channel(provision::Progress::default());
                 self.setup_rx = Some(rx);
                 self.setup_sample = provision::Progress::default();
@@ -176,7 +235,6 @@ impl Lightforge {
                 self.setup_rx = None;
                 match result {
                     Ok(()) => {
-                        self.proton_choice = None;
                         self.proton_notice = Some("installed".to_owned());
                         // What is installed just changed, so re-probe rather
                         // than editing the list we happen to be holding.

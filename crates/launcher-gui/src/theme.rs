@@ -39,12 +39,6 @@ pub const TEXT: Color = rgb(0xE8, 0xED, 0xF2);
 pub const MUTED: Color = rgb(0x8A, 0x94, 0xA3);
 
 /// Blizzard blue, the single accent, and the Battle.net hand-off colour.
-/// Wowhead's own red, sampled from their mark (831 px of its 180x180, by a
-/// wide margin the dominant colour). Used for the one button that goes to
-/// Wowhead and nowhere else in the app: a brand colour borrowed for anything
-/// but a link to that brand is a colour pretending to mean something.
-pub const WOWHEAD: Color = rgb(0xC2, 0x21, 0x26);
-
 pub const ACCENT: Color = rgb(0x00, 0xB4, 0xFF);
 pub const INSTALL: Color = rgb(0x4F, 0xC3, 0xF7);
 
@@ -226,16 +220,6 @@ pub fn tap_text(size: f32) -> f32 {
         false => size,
     }
 }
-
-/// A headline's picture on the News page, and the 16:9 box it sits in.
-///
-/// Wowhead publishes these at whatever shape the article wanted, 802x624 is
-/// typical, so the box is fixed and the picture is cropped to fill it. A row
-/// of thumbnails that each kept their own aspect ratio would leave the titles
-/// beside them starting at different places, which is the thing the eye
-/// notices first in a list.
-pub const NEWS_THUMB_WIDTH: f32 = 160.0;
-pub const NEWS_THUMB_HEIGHT: f32 = NEWS_THUMB_WIDTH * 9.0 / 16.0;
 
 // A manifest may still carry a `height` per art set. Nothing reads it any
 // more, and the field is kept only so older manifests still parse.
@@ -706,17 +690,15 @@ pub fn ghost(_theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-/// A whole card that is also a link, the News page's headlines.
+/// A whole card that is also a button.
 ///
 /// [`card`] as a button rather than a container: the card *is* the click
 /// target, so the hover has to happen on the card itself. A row-sized hover
 /// highlight inside a static card would say the row is pressable and leave
 /// the rest of the card looking like it is not.
 ///
-/// Translucent, and wearing [`BORDER_OVER_ART`], because these sit over the
-/// page's backdrop, the same pair [`floating`] uses and for the same reason.
-/// A hundred opaque cards would cover the picture entirely and leave it
-/// showing only in the margins, which is a background nobody can see.
+/// Translucent, and wearing [`BORDER_OVER_ART`], the same pair [`floating`]
+/// uses, so it can sit over artwork without covering it.
 pub fn card_button(_theme: &Theme, status: button::Status) -> button::Style {
     let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
     button::Style {

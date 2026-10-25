@@ -29,7 +29,6 @@ install your config points at, so you rarely have to pass one.
 - [Games: install, update, remove](#games-install-update-remove)
 - [Addons and settings backups](#addons-and-settings-backups)
 - [Catalogue and artwork](#catalogue-and-artwork)
-- [Digging into the CDN and CASC](#digging-into-the-cdn-and-casc)
 
 ## Everyday
 
@@ -208,7 +207,7 @@ Create or update the prefix, then put the game symlink in place
 Usage: lightforge prefix-init [OPTIONS]
 
 Options:
-      --proton <PROTON>  Proton build to use, e.g. `GE-Proton11-7`. Defaults to the newest supported build installed
+      --proton <PROTON>  Proton build to use, e.g. `GE-Proton11-7`. Defaults to the tested build when it is installed, else the newest supported one
       --root <ROOT>      Override the Blizzard root (default: ~/Games/Blizzard)
   -h, --help             Print help
 ```
@@ -242,7 +241,7 @@ Options:
 ### `lightforge battlenet-setup`
 
 ```text
-Install Battle.net headlessly, then apply registry and config defaults
+Install Battle.net unattended, then apply registry and config defaults
 
 Usage: lightforge battlenet-setup [OPTIONS]
 
@@ -253,18 +252,6 @@ Options:
       --installer <INSTALLER>  Use an already-downloaded installer instead of the cached one
       --timeout <TIMEOUT>      Seconds to wait for the install to appear [default: 600]
   -h, --help                   Print help
-```
-
-### `lightforge battlenet-config`
-
-```text
-Re-apply the `Battle.net.config` defaults without running the installer
-
-Usage: lightforge battlenet-config [OPTIONS]
-
-Options:
-      --root <ROOT>  Override the Blizzard root (default: ~/Games/Blizzard)
-  -h, --help         Print help
 ```
 
 ### `lightforge battlenet-run`
@@ -283,46 +270,6 @@ Options:
       --install-game <INSTALL_GAME>  Open the client's install flow for an install uid, e.g. `w1r`
       --skip-preflight               Skip pre-flight. For testing a hand-off against a client that is already running, without killing the session first
   -h, --help                         Print help
-```
-
-### `lightforge product-db`
-
-```text
-Write `.product.db` so Battle.net will adopt an existing install.
-
-Agent refuses to locate an install without this file (error 2800). The record is built from `.build.info`, so it cannot disagree with it.
-
-Usage: lightforge product-db [OPTIONS] [PATH]
-
-Arguments:
-  [PATH]
-          Install root. Defaults to the managed WoW install
-
-Options:
-      --product <CODE>
-          Products to record. Defaults to every row in `.build.info`
-
-      --root <ROOT>
-          Override the Blizzard root (default: ~/Games/Blizzard)
-
-      --account-country <ACCOUNT_COUNTRY>
-          Account country as Battle.net reports it, e.g. `AUT`
-          
-          [default: ""]
-
-      --geo-country <GEO_COUNTRY>
-          GeoIP country, e.g. `AT`
-          
-          [default: ""]
-
-      --agent-tags
-          Write tags the way Agent writes them (`EU? acct-AUT? … speech?`), and update `.build.info` to match
-
-      --dry-run
-          Print what would be written without writing it
-
-  -h, --help
-          Print help (see a summary with '-h')
 ```
 
 ## Games: install, update, remove
@@ -370,39 +317,6 @@ Options:
           With `--dry-run`, list the install-manifest files this build would extract, and where each would land
       --cancel-after <CANCEL_AFTER>
           Trip the cancel token after this many seconds, the same path the GUI's pause button takes. For measuring how long a pause takes to come to rest
-  -h, --help
-          Print help
-```
-
-### `lightforge plan`
-
-```text
-Explain a plan: what a build wants, what the store already has, and why the difference is the size it is. Fetches nothing
-
-Usage: lightforge plan [OPTIONS] <DEST>
-
-Arguments:
-  <DEST>  Install root to explain against
-
-Options:
-      --product <PRODUCT>
-          [default: wow]
-      --root <ROOT>
-          Override the Blizzard root (default: ~/Games/Blizzard)
-      --region <REGION>
-          [default: eu]
-      --locale <LOCALE>
-          [default: enUS]
-      --flavor <FLAVOR>
-          [default: _retail_]
-      --explain
-          Break the difference down by priority, bucket and source, and cross-examine the store probe that produced it
-      --optional <OPTIONAL>
-          Opt in to optional content by tag name, e.g. `HighRes`. Repeatable
-      --limit-archives <LIMIT_ARCHIVES>
-          Only cache this many archive indices. Bounds a test run
-      --concurrency <CONCURRENCY>
-          [default: 32]
   -h, --help
           Print help
 ```
@@ -459,38 +373,6 @@ Options:
       --path <PATH>        Install root. Defaults to the managed WoW install
       --yes                Actually delete. Without this, nothing is touched
   -h, --help               Print help
-```
-
-### `lightforge reclaim`
-
-```text
-Give back the shared store's space held by one product's data: the files no other installed product uses. Prints the plan unless `--yes`.
-
-Uninstalling from the GUI does this itself. This is for a product removed before it could, pass the `--build-key` it had installed.
-
-Usage: lightforge reclaim [OPTIONS] --product <PRODUCT>
-
-Options:
-      --product <PRODUCT>
-          
-
-      --root <ROOT>
-          Override the Blizzard root (default: ~/Games/Blizzard)
-
-      --build-key <BUILD_KEY>
-          Build config hash of the departing build. Defaults to the one `.build.info` lists for `--product`
-
-      --region <REGION>
-          [default: eu]
-
-      --path <PATH>
-          Install root. Defaults to the managed WoW install
-
-      --yes
-          Actually delete. Without this, nothing is touched
-
-  -h, --help
-          Print help (see a summary with '-h')
 ```
 
 ### `lightforge prune`
@@ -552,24 +434,6 @@ Arguments:
 Options:
       --root <ROOT>  Override the Blizzard root (default: ~/Games/Blizzard)
   -h, --help         Print help
-```
-
-### `lightforge build-info-set`
-
-```text
-Atomically rewrite one product's build keys in `.build.info`
-
-Usage: lightforge build-info-set [OPTIONS] --build-key <BUILD_KEY> --cdn-key <CDN_KEY> --version <VERSION> <PRODUCT>
-
-Arguments:
-  <PRODUCT>  Product code, e.g. `wow`
-
-Options:
-      --build-key <BUILD_KEY>  
-      --root <ROOT>            Override the Blizzard root (default: ~/Games/Blizzard)
-      --cdn-key <CDN_KEY>      
-      --version <VERSION>      
-  -h, --help                   Print help
 ```
 
 ## Addons and settings backups
@@ -691,47 +555,6 @@ Options:
   -h, --help               Print help
 ```
 
-### `lightforge addon-fingerprints`
-
-```text
-Fingerprint each installed addon folder, and say what the catalog expects for the ones Lightforge installed.
-
-The check that the hashing is right: a folder we installed from CurseForge must hash to the number CurseForge publishes for it. A mismatch means we hash the wrong bytes, which is indistinguishable from "unknown addon" once matching starts.
-
-Usage: lightforge addon-fingerprints [OPTIONS]
-
-Options:
-      --product <PRODUCT>
-          [default: wow]
-
-      --root <ROOT>
-          Override the Blizzard root (default: ~/Games/Blizzard)
-
-      --path <PATH>
-          Read this AddOns directory instead of the product's own
-
-      --catalog <CATALOG>
-          Base URL of the addon catalog, or a fixture directory
-
-  -h, --help
-          Print help (see a summary with '-h')
-```
-
-### `lightforge addon-token`
-
-```text
-Decode a WoWUp import token and print what it contains
-
-Usage: lightforge addon-token [OPTIONS] <TOKEN>
-
-Arguments:
-  <TOKEN>  The token, or `@path` to read it from a file
-
-Options:
-      --root <ROOT>  Override the Blizzard root (default: ~/Games/Blizzard)
-  -h, --help         Print help
-```
-
 ### `lightforge backup-list`
 
 ```text
@@ -819,140 +642,4 @@ Options:
       --root <ROOT>        Override the Blizzard root (default: ~/Games/Blizzard)
       --source <SOURCE>    Base URL or fixture directory. Defaults to `assets_source` in config.toml, else the built-in source
   -h, --help               Print help
-```
-
-## Digging into the CDN and CASC
-
-### `lightforge cdn-fetch`
-
-```text
-Fetch content from Blizzard's CDN and verify it by hash
-
-Usage: lightforge cdn-fetch [OPTIONS] [HASH]
-
-Arguments:
-  [HASH]  Hash to fetch. Defaults to the current build config
-
-Options:
-      --product <PRODUCT>  Product code, e.g. `wow` [default: wow]
-      --root <ROOT>        Override the Blizzard root (default: ~/Games/Blizzard)
-      --region <REGION>    [default: eu]
-      --kind <KIND>        Where the hash lives: `config`, `data` or `patch` [default: config]
-      --compare <COMPARE>  Compare the result against this local file, byte for byte
-  -h, --help               Print help
-```
-
-### `lightforge cdn-archive`
-
-```text
-Read an archive's index and pull real files out of it by range request
-
-Usage: lightforge cdn-archive [OPTIONS] [ARCHIVE]
-
-Arguments:
-  [ARCHIVE]  Archive hash. Defaults to the first archive in the CDN config
-
-Options:
-      --product <PRODUCT>          [default: wow]
-      --root <ROOT>                Override the Blizzard root (default: ~/Games/Blizzard)
-      --region <REGION>            [default: eu]
-      --fetch <FETCH>              How many entries to fetch and verify [default: 5]
-      --verify-with <VERIFY_WITH>  Local install to resolve content keys from, so downloads can be verified against the key that can actually check them
-  -h, --help                       Print help
-```
-
-### `lightforge content`
-
-```text
-Resolve files through an install's root and encoding manifests
-
-Usage: lightforge content [OPTIONS] <PATH>
-
-Arguments:
-  <PATH>  A WoW install root
-
-Options:
-      --product <PRODUCT>  Product whose build key to take from `.build.info` [default: wow]
-      --root <ROOT>        Override the Blizzard root (default: ~/Games/Blizzard)
-      --locale <LOCALE>    Locale to filter the root manifest to (`any`, `enUS`, `deDE`, …) [default: any]
-      --fdid <FDID>        Read this file id and report what came back
-      --file <FILE>        Read this game-relative path, e.g. `Interface/FrameXML/GlobalStrings.lua`
-  -h, --help               Print help
-```
-
-### `lightforge casc`
-
-```text
-Open an install's CASC store and decode a sample of its files
-
-Usage: lightforge casc [OPTIONS] <PATH>
-
-Arguments:
-  <PATH>  A WoW install root, or a `Data`/`Data/data` directory
-
-Options:
-      --root <ROOT>      Override the Blizzard root (default: ~/Games/Blizzard)
-      --sample <SAMPLE>  How many files to decode, spread across the whole index [default: 2000]
-  -h, --help             Print help
-```
-
-### `lightforge idx`
-
-```text
-Inspect the CASC bucket indices of an install, verifying both hashes and re-serializing each file to prove we can write them byte-identically
-
-Usage: lightforge idx [OPTIONS] <PATH>
-
-Arguments:
-  <PATH>  A WoW install root, or a `Data/data` directory directly
-
-Options:
-      --root <ROOT>  Override the Blizzard root (default: ~/Games/Blizzard)
-  -h, --help         Print help
-```
-
-### `lightforge casc-rebuild`
-
-```text
-Rebuild an install's CASC store into a scratch copy, then verify it.
-
-The source is only ever read. Used to prove that a store Lightforge wrote is byte-for-byte usable in place of one Agent wrote.
-
-Usage: lightforge casc-rebuild [OPTIONS] <SRC> <DST>
-
-Arguments:
-  <SRC>
-          Existing install to read from
-
-  <DST>
-          Directory to build the rebuilt install in. Must not be inside src
-
-Options:
-      --percent <PERCENT>
-          Rebuild only this fraction of entries, for a quick smoke test
-          
-          [default: 100]
-
-      --root <ROOT>
-          Override the Blizzard root (default: ~/Games/Blizzard)
-
-  -h, --help
-          Print help (see a summary with '-h')
-```
-
-### `lightforge casc-verify`
-
-```text
-Compare a rebuilt CASC store against the install it was built from
-
-Usage: lightforge casc-verify [OPTIONS] <SRC> <DST>
-
-Arguments:
-  <SRC>  The original install
-  <DST>  The rebuilt copy
-
-Options:
-      --root <ROOT>      Override the Blizzard root (default: ~/Games/Blizzard)
-      --sample <SAMPLE>  How many entries to compare, spread across the whole store [default: 20000]
-  -h, --help             Print help
 ```

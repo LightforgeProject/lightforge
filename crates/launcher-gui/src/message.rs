@@ -27,8 +27,6 @@ pub(crate) enum Message {
     MutePatchNotes(bool),
     /// The same preference from Settings › General, read the other way round.
     ShowReleaseNotes(bool),
-    /// Show or hide the headlines beside the key art.
-    NewsOnPlay(bool),
     /// Close the release-notes popup, recording what it was told.
     DismissPatchNotes,
     /// The start-up artwork fetch finished, with the number of products whose
@@ -41,6 +39,19 @@ pub(crate) enum Message {
     DismissUpdate,
     /// Open the releases page in a browser.
     OpenReleases,
+    /// "Update" on the update notice: the route this copy was installed by.
+    UpgradeStart,
+    /// The update's work is done, as far as Lightforge can take it.
+    UpgradeReady(Result<crate::tasks::Prepared, Problem>),
+    /// While a terminal runs the update: has the binary been replaced yet?
+    UpgradeWatch,
+    /// Start the new version and close this one.
+    UpgradeRestart,
+    /// "Check for updates" in Settings: ask now, whatever the start-up check
+    /// was told and whatever was dismissed before.
+    CheckLauncherNow,
+    /// The answer to [`Message::CheckLauncherNow`].
+    LauncherChecked(Result<Option<lightforge_core::update::Available>, String>),
     /// Turn the start-up check for a new Lightforge on or off, from Settings.
     /// Distinct from `CheckForUpdates`, which asks Blizzard about the game.
     CheckLauncherUpdates(bool),
@@ -129,6 +140,14 @@ pub(crate) enum Message {
     Downloaded(ProductCode, Result<Complete, Problem>),
     CloseRequested(iced::window::Id),
     Launched(Result<String, Problem>),
+    /// Every couple of seconds of a launch: is a game up yet?
+    GameWatch,
+    GameSeen(bool),
+    /// STOP was pressed: ask first.
+    AskStopGame,
+    StopGameDismiss,
+    StopGameConfirm,
+    GameStopped(Result<String, Problem>),
     /// A hand-off ran to the point where there is something to say: the
     /// game is up, the client needs a person, or nothing started.
     HandoffStarted(Result<tasks::Handoff, Problem>),
@@ -168,32 +187,37 @@ pub(crate) enum Message {
     SettingsScrolled(scrollable::Viewport),
     /// Where each Settings section sits on the page, as last laid out.
     SettingsMeasured(SettingsLayout),
-    /// A switch on a Game Optimizations panel was flipped.
+    /// A switch in Game Settings, or in Settings › Battle.net, was flipped.
     Tweak(Scope, Tweak, bool),
-    /// A starting point was chosen, setting the frames-versus-scenery switches.
-    TweakPreset(Preset),
-    /// "Custom": clear the managed switches and leave them to the user.
-    TweakCustom,
-    /// Show or hide the environment-variable editor.
-    TweakEnvToggle(Scope),
-    /// The graphics API the client should ask for.
-    TweakApi(ApiChoice),
-    TweakFpsCap(String),
-    /// Frame cap for when the window is not focused.
-    TweakFpsCapBackground(String),
-    /// Which monitor the Wayland backend should treat as primary.
-    TweakWaylandMonitor(Scope, String),
-    /// Key and value fields of the environment escape hatch.
-    TweakEnvKey(String),
-    TweakEnvValue(String),
-    TweakEnvAdd(Scope),
-    TweakEnvRemove(Scope, String),
+    /// The environment-variable editor was typed in.
+    EnvEdit(Scope, iced::widget::text_editor::Action),
     /// Throw away this product's shader cache, e.g. after a Proton swap.
     ClearShaderCache,
-    /// Opt in or out of one optional download, by manifest tag name.
+    /// Opt in or out of one optional download, by manifest tag name. On starts
+    /// the download; off asks whether to delete what it fetched.
     OptionalContent(String, bool),
+    /// What the open Game Settings product's optional download weighs.
+    OptionalSized(ProductCode, Box<Result<lightforge_core::tact::install::Offerings, String>>),
+    /// What deleting an optional download's files would free.
+    OptionalPlanned(Result<Box<lightforge_core::tact::reclaim::Reclaim>, String>),
+    /// Leave the files an option fetched where they are.
+    KeepOptional,
+    /// Delete the files the question was asked about.
+    RemoveOptional,
+    /// The deletion finished, with the bytes it freed.
+    OptionalRemoved(Result<u64, Problem>),
     /// The cog beside the primary button.
     ToggleGear,
+    /// The cog's "Show in Explorer": the game's folder in the file manager.
+    ShowInExplorer,
+    /// The cog's "Game Version": the build and where it is installed.
+    AskGameVersion,
+    CloseGameVersion,
+    /// The cog's "Modify Install": the language the game is installed in.
+    AskModifyInstall,
+    ModifyLocale(String),
+    ModifyCancel,
+    ModifyStart,
     /// The menu under the Lightforge wordmark.
     ToggleAppMenu,
     /// Back and forward through the pages visited this session.
@@ -201,13 +225,6 @@ pub(crate) enum Message {
     GoForward,
     /// Open one of the project's own links in the browser.
     OpenLink(&'static str),
-    /// A headline's own link. Owned, unlike [`Message::OpenLink`]'s static
-    /// chrome URLs: these come off the wire.
-    OpenArticle(String),
-    NewsLoaded(Option<Box<news::Headlines>>),
-    NewsImages(Vec<(String, image::Handle)>),
-    NewsBackground(image::Handle),
-    RefreshNews,
     /// Quit.
     Exit,
     /// A click that no widget consumed, close whatever is open, the way
@@ -262,6 +279,7 @@ pub(crate) enum Message {
     MinimizeOnLaunch(bool),
     /// Whether a Battle.net hand-off puts the client in the tray.
     BattleNetMinimized(bool),
+    CloseBattleNetOnPlay(bool),
     /// Battle.net's own limit, as read from its config.
     BattleNetLimitRead(Option<u64>),
     /// The Battle.net limit field changed.
@@ -270,12 +288,19 @@ pub(crate) enum Message {
     BattleNetLimitWritten(Result<(), String>),
     CheckProton,
     ProtonChecked(Result<provision::ProtonReleases, String>),
-    /// A version was chosen in the "install another build" picker.
-    ChooseProtonVersion(ProtonChoice),
-    /// Install the chosen version.
-    InstallProton,
+    /// Open the "Install Proton Version" window.
+    OpenProtonInstaller,
+    CloseProtonInstaller,
+    /// Another tab of that window.
+    ProtonInstallerTab(ProtonCategory),
+    /// Install one release, by tag.
+    InstallProton(String),
+    /// Ask Steam to install one of Valve's Protons, by app id.
+    InstallSteamProton(u32),
     /// That build finished, or did not.
     ProtonInstalled(Result<(), Problem>),
+    /// The tested build fetched in the background; a failure is not shown.
+    TestedProtonFetched(Result<(), Problem>),
     /// Delete one managed build, by version.
     RemoveProton(String),
     ProtonRemoved(Result<String, String>),
@@ -434,7 +459,7 @@ pub(crate) enum NavFrom {
 /// so a held direction stays with whichever source started it.
 pub(crate) const NAV_DOUBLED: Duration = Duration::from_millis(150);
 
-/// Which profile a Game Optimizations control edits.
+/// Which profile a launch-settings control edits.
 ///
 /// The same switches appear twice, on a product's own page, and in
 /// Settings › Battle.net for the shared profile that Battle.net and every
@@ -453,37 +478,8 @@ pub(crate) enum Scope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tweak {
     GamePerformance,
-    GameMode,
     MangoHud,
-    SkipAddonProfiling,
-    ReduceRaidEffects,
-    FasterZoneLoads,
-    RawMouse,
-    NoScreenEffects,
-    MaxDrawDistance,
-    NoClothPhysics,
-    SoftwareCursor,
-    ClipCursor,
-    NoMouseAcceleration,
-    ShowCursorInRelativeMode,
-    Controller,
     Wayland,
-    Hdr,
-    BigShaderCache,
-}
-
-/// A graphics API in a picker, or the "leave the client's own choice alone"
-/// entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ApiChoice(pub(crate) Option<GraphicsApi>);
-
-impl std::fmt::Display for ApiChoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            Some(api) => f.write_str(api.label()),
-            None => f.write_str("Whatever the client picks"),
-        }
-    }
 }
 
 /// A Proton build in a picker, or the "follow the default" entry.
@@ -509,7 +505,14 @@ pub(crate) enum Unpinned {
 impl std::fmt::Display for ProtonChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match (&self.0, self.1) {
-            (Some(version), _) => f.write_str(version),
+            (Some(version), _) => {
+                f.write_str(version)?;
+                // Anything that is not the lineage Lightforge is tested on.
+                match proton::ProtonFlavor::classify(version) == proton::ProtonFlavor::GloriousEggroll {
+                    true => Ok(()),
+                    false => f.write_str(" (untested)"),
+                }
+            }
             (None, Unpinned::Newest) => f.write_str("Newest installed"),
             (None, Unpinned::Default) => f.write_str("Follow the default"),
             (None, Unpinned::BattleNet) => f.write_str("Follow Battle.net"),

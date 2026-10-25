@@ -22,6 +22,23 @@ const USER_AGENT: &str = concat!("Lightforge/", env!("CARGO_PKG_VERSION"));
 /// How long a response may go without sending a byte before it fails.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Ceiling on a JSON or text document read whole into memory. The largest
+/// real one, GitHub's release list, is a few hundred KB; a server streaming
+/// without end should fail here rather than in the allocator.
+const MAX_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
+
+/// Ceiling on a cached picture, key art the largest of them.
+const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+
+/// Name prefix of an unfinished [`Http::download`].
+const DOWNLOAD_PREFIX: &str = ".lightforge-download-";
+
+/// How old an unfinished download must be before the next one in the same
+/// directory clears it away. A live transfer touches its file with every
+/// chunk and fails after [`READ_TIMEOUT`] of silence, so an hour is only ever
+/// one a crash or a kill left behind.
+const STALE_DOWNLOAD: Duration = Duration::from_secs(60 * 60);
+
 /// Shared HTTP client.
 ///
 /// `reqwest::Client` owns a connection pool and is designed to be created once
@@ -87,10 +104,7 @@ impl Http {
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
 
-        let body = response.bytes().await.map_err(|e| NetError::Request {
-            url: url.to_owned(),
-            source: e,
-        })?;
+        let body = bounded_body(url, response, MAX_DOCUMENT_BYTES).await?;
 
         cache.store(&body, etag.as_deref())?;
 
@@ -193,13 +207,10 @@ impl Http {
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
 
-        let body = response.bytes().await.map_err(|e| NetError::Request {
-            url: url.to_owned(),
-            source: e,
-        })?;
+        let body = bounded_body(url, response, MAX_IMAGE_BYTES).await?;
 
         cache.store(&body, etag.as_deref())?;
-        Ok(Some(body.to_vec()))
+        Ok(Some(body))
     }
 
     /// Fetch and deserialize JSON, without caching.
@@ -214,10 +225,7 @@ impl Http {
             .await
             .map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
 
-        let bytes = check_status(url, response)?
-            .bytes()
-            .await
-            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
+        let bytes = bounded_body(url, check_status(url, response)?, MAX_DOCUMENT_BYTES).await?;
 
         serde_json::from_slice(&bytes).map_err(|e| NetError::Decode {
             url: url.to_owned(),
@@ -243,10 +251,7 @@ impl Http {
             .await
             .map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
 
-        let bytes = check_status(url, response)?
-            .bytes()
-            .await
-            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
+        let bytes = bounded_body(url, check_status(url, response)?, MAX_DOCUMENT_BYTES).await?;
 
         serde_json::from_slice(&bytes).map_err(|e| NetError::Decode {
             url: url.to_owned(),
@@ -266,13 +271,8 @@ impl Http {
                 source: e,
             })?;
 
-        check_status(url, response)?
-            .text()
-            .await
-            .map_err(|e| NetError::Request {
-                url: url.to_owned(),
-                source: e,
-            })
+        let body = bounded_body(url, check_status(url, response)?, MAX_DOCUMENT_BYTES).await?;
+        Ok(String::from_utf8_lossy(&body).into_owned())
     }
 
     /// Stream a download to `dest`, reporting progress and returning its
@@ -332,37 +332,43 @@ impl Http {
 
     /// Stream `url` to `dest`, returning the SHA-512 of what was written.
     ///
-    /// Written to `<dest>.part` and renamed only once complete, so `dest`
-    /// existing means the whole file arrived. Callers skip a download whose
-    /// file is already there, and a truncated one in its place used to be run,
-    /// or unpacked, on every attempt after.
+    /// Written to a fresh, randomly named file beside `dest` and renamed only
+    /// once complete, so `dest` existing means the whole file arrived. Callers
+    /// skip a download whose file is already there, and a truncated one in its
+    /// place used to be run, or unpacked, on every attempt after.
+    ///
+    /// The name is created exclusively, so nothing already sitting at it is
+    /// followed or truncated, and the file deletes itself when the transfer
+    /// fails or the future is dropped, a cancelled download included. The
+    /// fixed `<dest>.part` this replaces survived a cancel.
     pub async fn download(
         &self,
         url: &str,
         dest: &Path,
         on_progress: impl FnMut(u64, Option<u64>),
     ) -> Result<String, NetError> {
-        let mut part = dest.as_os_str().to_owned();
-        part.push(".part");
-        let part = PathBuf::from(part);
-        let result = self.download_to(url, &part, on_progress).await;
-        let result = match result {
-            Ok(digest) => tokio::fs::rename(&part, dest)
-                .await
-                .map(|()| digest)
-                .map_err(|source| NetError::Io { path: dest.to_path_buf(), source }),
-            Err(e) => Err(e),
-        };
-        if result.is_err() {
-            let _ = tokio::fs::remove_file(&part).await;
-        }
-        result
+        let dir = dest.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let io = |source| NetError::Io { path: dir.to_path_buf(), source };
+        tokio::fs::create_dir_all(dir).await.map_err(io)?;
+        sweep_stale_downloads(dir);
+
+        let temp = tempfile::Builder::new()
+            .prefix(DOWNLOAD_PREFIX)
+            .tempfile_in(dir)
+            .map_err(io)?;
+        let file = tokio::fs::File::from_std(temp.as_file().try_clone().map_err(io)?);
+        let digest = self.download_to(url, temp.path(), file, on_progress).await?;
+
+        temp.persist(dest)
+            .map_err(|e| NetError::Io { path: dest.to_path_buf(), source: e.error })?;
+        Ok(digest)
     }
 
     async fn download_to(
         &self,
         url: &str,
         dest: &Path,
+        mut file: tokio::fs::File,
         mut on_progress: impl FnMut(u64, Option<u64>),
     ) -> Result<String, NetError> {
         let response = self
@@ -376,22 +382,6 @@ impl Http {
             })?;
         let response = check_status(url, response)?;
         let total = response.content_length();
-
-        if let Some(parent) = dest.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| NetError::Io {
-                    path: parent.to_path_buf(),
-                    source: e,
-                })?;
-        }
-
-        let mut file = tokio::fs::File::create(dest)
-            .await
-            .map_err(|e| NetError::Io {
-                path: dest.to_path_buf(),
-                source: e,
-            })?;
 
         let mut hasher = Sha512::new();
         let mut written = 0u64;
@@ -425,6 +415,47 @@ impl Http {
         })?;
 
         Ok(hex(&hasher.finalize()))
+    }
+}
+
+/// Read a whole body, failing once it passes `max` bytes.
+///
+/// Both the declared length and the bytes actually received are checked: a
+/// chunked response declares nothing, and a declared one can be wrong.
+async fn bounded_body(url: &str, response: reqwest::Response, max: usize) -> Result<Vec<u8>, NetError> {
+    let too_large = || NetError::TooLarge { url: url.to_owned(), max };
+    if response.content_length().is_some_and(|len| len > max as u64) {
+        return Err(too_large());
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
+        if body.len() + chunk.len() > max {
+            return Err(too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+/// Delete unfinished downloads a crash or a kill left in `dir`.
+///
+/// Their names are random, so unlike the old `.part` no later attempt ever
+/// reuses one, and a Proton tarball is ~400 MB. Only stale ones go: another
+/// download may be writing beside this one right now.
+fn sweep_stale_downloads(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let stale = entry.file_name().to_string_lossy().starts_with(DOWNLOAD_PREFIX)
+            && entry.metadata().is_ok_and(|m| {
+                m.is_file() && m.modified().is_ok_and(|t| t.elapsed().is_ok_and(|age| age > STALE_DOWNLOAD))
+            });
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
     }
 }
 
@@ -549,6 +580,9 @@ pub enum NetError {
     #[error("{url} returned HTTP {status}")]
     Status { url: String, status: u16 },
 
+    #[error("{url} sent more than the {max} bytes allowed")]
+    TooLarge { url: String, max: usize },
+
     #[error("{url} ended after {got} of {expected} bytes")]
     Truncated { url: String, expected: u64, got: u64 },
 
@@ -616,5 +650,130 @@ mod tests {
     #[test]
     fn hex_is_lowercase_and_zero_padded() {
         assert_eq!(hex(&[0x00, 0x0f, 0xff]), "000fff");
+    }
+
+    /// A server that answers every request with `head` and then `body`, and
+    /// holds the connection open afterwards when `hold` is set.
+    fn server(head: String, body: Vec<u8>, hold: bool) -> String {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/file", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for mut stream in listener.incoming().flatten() {
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request);
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&body);
+                if hold {
+                    held.push(stream);
+                }
+            }
+        });
+        url
+    }
+
+    fn sized(body: &[u8], declared: usize) -> String {
+        let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {declared}\r\nConnection: close\r\n\r\n");
+        server(head, body.to_vec(), false)
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[tokio::test]
+    async fn a_finished_download_lands_whole_and_leaves_nothing_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("release.tar.gz");
+        let digest = Http::new()
+            .unwrap()
+            .download(&sized(b"downloaded", 10), &dest, |_, _| {})
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"downloaded");
+        assert_eq!(digest, hex(&Sha512::digest(b"downloaded")));
+        assert_eq!(names(dir.path()), ["release.tar.gz"]);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_download_leaves_no_file_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("release.tar.gz");
+        let head = "HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\r\n".to_owned();
+        let url = server(head, vec![0; 16], true);
+        let http = Http::new().unwrap();
+
+        // Dropping the future is how a cancel reaches it.
+        let download = http.download(&url, &dest, |_, _| {});
+        assert!(tokio::time::timeout(Duration::from_millis(300), download).await.is_err());
+
+        assert!(names(dir.path()).is_empty(), "{:?}", names(dir.path()));
+    }
+
+    #[tokio::test]
+    async fn a_truncated_download_keeps_the_file_it_would_have_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("release");
+        std::fs::write(&dest, b"old complete version").unwrap();
+
+        let result = Http::new().unwrap().download(&sized(b"partial", 100), &dest, |_, _| {}).await;
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"old complete version");
+        assert_eq!(names(dir.path()), ["release"]);
+    }
+
+    #[test]
+    fn only_stale_unfinished_downloads_are_swept() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join(format!("{DOWNLOAD_PREFIX}old"));
+        let live = dir.path().join(format!("{DOWNLOAD_PREFIX}live"));
+        let other = dir.path().join("Battle.net-Setup.exe");
+        for path in [&old, &live, &other] {
+            std::fs::write(path, b"x").unwrap();
+        }
+        let two_hours_ago = std::time::SystemTime::now() - Duration::from_secs(2 * 60 * 60);
+        for path in [&old, &other] {
+            std::fs::File::options().write(true).open(path).unwrap().set_modified(two_hours_ago).unwrap();
+        }
+
+        sweep_stale_downloads(dir.path());
+
+        assert!(!old.exists());
+        assert!(live.exists(), "a download in progress beside this one was deleted");
+        assert!(other.exists());
+    }
+
+    #[tokio::test]
+    async fn an_oversized_document_is_refused_by_its_declared_length_before_caching() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ETagCache::new(dir.path().join("manifest.json"));
+        let url = sized(b"{}", MAX_DOCUMENT_BYTES + 1);
+
+        let result = Http::new().unwrap().get_json_cached::<serde_json::Value>(&url, &cache).await;
+
+        assert!(matches!(result, Err(NetError::TooLarge { .. })), "{result:?}");
+        assert!(names(dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_oversized_image_is_refused_by_what_arrives_when_no_length_is_declared() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ETagCache::new(dir.path().join("art.png"));
+        // HTTP/1.0 without a length: the body runs until the connection closes.
+        let url = server("HTTP/1.0 200 OK\r\n\r\n".to_owned(), vec![0; MAX_IMAGE_BYTES + 1], false);
+
+        let result = Http::new().unwrap().get_bytes_cached(&url, &cache).await;
+
+        assert!(matches!(result, Err(NetError::TooLarge { .. })), "{:?}", result.map(|_| ()));
+        assert!(names(dir.path()).is_empty());
     }
 }

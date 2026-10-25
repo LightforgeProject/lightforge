@@ -1,4 +1,4 @@
-//! Automated, headless Battle.net setup inside the shared prefix.
+//! Automated Battle.net setup inside the shared prefix.
 //!
 //! Four phases, in this order:
 //!
@@ -145,12 +145,14 @@ impl Installer {
     /// How long to keep watching after the installer exits, cleanly, then
     /// with a failure. Exists for the same reason [`Installer::with_timeout`]
     /// does: so a test does not have to wait a real minute.
+    #[cfg(test)]
     pub fn with_exit_grace(mut self, clean: Duration, failed: Duration) -> Self {
         self.exit_grace = clean;
         self.failed_exit_grace = failed;
         self
     }
 
+    #[cfg(test)]
     pub fn with_poll_interval(mut self, interval: Duration) -> Self {
         self.poll_interval = interval;
         self
@@ -617,6 +619,26 @@ pub enum Readiness {
 /// The line the client writes once it is signed in.
 const SIGNED_IN: &str = "Logged into Battle.net successfully";
 
+/// The line that says its game list is built, the only moment a launch
+/// command is acted on. Sign-in comes first and the list a beat later, or
+/// several seconds later on a slow start, and a command that arrives in
+/// between is consumed without a trace: no `LaunchBinary`, nothing starts.
+/// Measured on 2026-10-24: every launch that worked arrived after this line,
+/// both that failed arrived before it, Warcraft III and Hearthstone alike.
+const GAMES_READY: &str = "GameController initialization complete";
+
+/// How long after sign-in the game list gets before the command goes anyway.
+/// The client's own log is the only witness, and a line that never comes
+/// (the window-drawn marker was missing from one log in six) must cost a
+/// short wait, not the whole sign-in timeout.
+const GAMES_GRACE: Duration = Duration::from_secs(20);
+
+/// Whether a launch command sent now would be acted on, given the log so far
+/// and how long it has said the client is signed in.
+fn client_ready(log: &str, signed_in_for: Duration) -> bool {
+    log.contains(SIGNED_IN) && (log.contains(GAMES_READY) || signed_in_for >= GAMES_GRACE)
+}
+
 // There is deliberately no "the window has drawn" marker here. The obvious
 // candidate, `End recording load sequence for browser content_browser`: is
 // missing from one full-client log in six, so waiting for it stalls for the
@@ -628,7 +650,7 @@ const SIGNED_IN: &str = "Logged into Battle.net successfully";
 /// How often the log is re-read while waiting.
 const READY_POLL: Duration = Duration::from_millis(250);
 
-/// Wait until the client says it is signed in.
+/// Wait until the client says it is signed in and has its games.
 ///
 /// Reads the newest log in [`Layout::battle_net_logs`] written after `since`
 /// (so an old session cannot answer) for the client's own marker. Nothing is
@@ -647,12 +669,17 @@ pub fn wait_until_ready(
 ) -> Readiness {
     let dir = layout.battle_net_logs(user);
     let deadline = Instant::now() + within;
+    // When the sign-in line was first seen, to time the grace from.
+    let mut signed_in_at: Option<Instant> = None;
 
     loop {
         if let Some(path) = newest_log_after(&dir, since) {
             if let Ok(text) = std::fs::read_to_string(&path) {
                 if text.contains(SIGNED_IN) {
-                    return Readiness::SignedIn;
+                    let seen = *signed_in_at.get_or_insert_with(Instant::now);
+                    if client_ready(&text, seen.elapsed()) {
+                        return Readiness::SignedIn;
+                    }
                 }
             }
         }
@@ -920,45 +947,9 @@ pub fn registry_tweaks() -> Vec<RegValue> {
             data: "",
             reason: "stop the installer writing Windows shortcuts into the desktop's app menu",
         },
-        // Subpixel font smoothing, the four values `winetricks fontsmooth=rgb`
-        // writes. Wine ships with smoothing off, and the storefront is a CEF
-        // browser rendering text under Wine's font stack, unsmoothed it is
-        // the thing that most obviously looks broken next to the same page in
-        // a native browser.
-        //
-        // Prefix-wide rather than Battle.net-only because the registry has no
-        // per-application scope for these. WoW draws its own text and is
-        // unaffected.
-        RegValue {
-            key: r"HKEY_CURRENT_USER\Control Panel\Desktop",
-            name: "FontSmoothing",
-            // A string, not a DWORD, Windows stores this one as text, and a
-            // DWORD here is silently ignored.
-            kind: "REG_SZ",
-            data: "2",
-            reason: "turn font smoothing on for the CEF storefront",
-        },
-        RegValue {
-            key: r"HKEY_CURRENT_USER\Control Panel\Desktop",
-            name: "FontSmoothingType",
-            kind: "REG_DWORD",
-            data: "2",
-            reason: "subpixel rather than greyscale smoothing",
-        },
-        RegValue {
-            key: r"HKEY_CURRENT_USER\Control Panel\Desktop",
-            name: "FontSmoothingOrientation",
-            kind: "REG_DWORD",
-            data: "1",
-            reason: "RGB subpixel order, which is what desktop panels use",
-        },
-        RegValue {
-            key: r"HKEY_CURRENT_USER\Control Panel\Desktop",
-            name: "FontSmoothingGamma",
-            kind: "REG_DWORD",
-            data: "1400",
-            reason: "the gamma winetricks pairs with subpixel smoothing",
-        },
+        // Deliberately no `FontSmoothing*`: Proton's prefix already smooths
+        // with greyscale, and the subpixel values `winetricks fontsmooth=rgb`
+        // writes make the CEF storefront's text look pixel-snapped and thin.
         // Deliberately no `LogPixels`: Wine's default of 96 is right at 1x,
         // writing 96 is a no-op, and any other value needs a display scale
         // that cannot be read from inside the prefix. A wrong one makes the
@@ -1059,6 +1050,7 @@ impl Launch {
 
     /// Whether this launch can actually hand off, or would only open the
     /// client. Lets a caller label the button for what it will really do.
+    #[cfg(test)]
     pub fn hands_off(&self) -> bool {
         match self {
             Self::Client | Self::Autostart => false,
@@ -1146,6 +1138,18 @@ pub fn launch_wrapped(
         return Err(BattleNetError::NotInstalled(install_dir));
     }
 
+    // In a container, a call that finds the prefix already running must join
+    // it: the client's hand-off, or a second open of the client, arrives that
+    // way and would otherwise wait for the session it is talking to to end.
+    let joined;
+    let runner = match runner.has_container() && !crate::preflight::scan(layout).is_empty() {
+        true => {
+            joined = runner.clone().joining_session();
+            &joined
+        }
+        false => runner,
+    };
+
     let (exe, args) = launch.command(&install_dir);
     let mut cmd = crate::tweaks::wrapped(runner.command("run", &exe, args), wrappers);
     cmd.stdin(Stdio::null())
@@ -1166,9 +1170,12 @@ pub struct SetupReport {
 /// Install Battle.net and configure it, in one call.
 ///
 /// Assumes the prefix already exists, [`crate::prefix::provision`] is the
-/// step before this one, not part of it.
+/// step before this one, not part of it. `container` is where the installer
+/// alone runs, from [`crate::runtime::tls_container`]; the rest runs
+/// on the host as always.
 pub fn provision(
     runner: &ProtonRunner,
+    container: Option<&Path>,
     layout: &Layout,
     user: &str,
     locale: &str,
@@ -1179,7 +1186,11 @@ pub fn provision(
         return Err(BattleNetError::PrefixNotReady(layout.prefix()));
     }
 
-    let install = Installer::new(layout, installer).with_locale(locale).install(runner)?;
+    let install_runner = match container {
+        Some(entry) => runner.clone().in_container(entry),
+        None => runner.clone(),
+    };
+    let install = Installer::new(layout, installer).with_locale(locale).install(&install_runner)?;
 
     let registry = registry_tweaks();
     apply_registry(runner, &registry)?;
@@ -1344,7 +1355,8 @@ mod tests {
         // this start. That is how a hand-off fires at a client that is
         // still booting.
         let old = logs.join("battle.net-20260101T000000.000000.log");
-        std::fs::write(&old, format!("I [BNLogin] {SIGNED_IN}. |bnet=1:0:x\n")).unwrap();
+        std::fs::write(&old, format!("I [BNLogin] {SIGNED_IN}. |bnet=1:0:x\n{GAMES_READY}\n"))
+            .unwrap();
 
         let since = SystemTime::now() + Duration::from_secs(60);
         assert_eq!(
@@ -1366,6 +1378,23 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn a_launch_waits_for_the_game_list_not_just_the_sign_in() {
+        let signed = format!("I [BNLogin] {SIGNED_IN}. |bnet=1:0:x\n");
+        let listed = format!("{signed}I [GameController] {GAMES_READY}\n");
+        let none = Duration::ZERO;
+
+        assert!(!client_ready("", none));
+        assert!(!client_ready(&signed, none), "signed in, list not built: the command is lost");
+        assert!(client_ready(&listed, none));
+        // The list's line is in the log before the sign-in's on some starts,
+        // which is no reason to wait for it twice.
+        assert!(client_ready(&format!("{GAMES_READY}\n{signed}"), none));
+        assert!(!client_ready(&listed.replace(SIGNED_IN, "x"), GAMES_GRACE), "not signed in");
+        assert!(client_ready(&signed, GAMES_GRACE), "a line that never comes costs the grace, not 60 s");
+    }
+
     #[test]
     fn game_uids_are_client_family_ids_not_tact_codes() {
         use super::*;
@@ -1704,25 +1733,12 @@ mod tests {
     }
 
     #[test]
-    fn font_smoothing_is_on_and_subpixel() {
-        let by_name = |name: &str| {
-            registry_tweaks()
-                .into_iter()
-                .find(|v| v.name == name)
-                .unwrap_or_else(|| panic!("{name} is not set"))
-        };
-
-        // The one that is a string rather than a DWORD. Getting this wrong
-        // leaves smoothing off with no error anywhere.
-        let on = by_name("FontSmoothing");
-        assert_eq!((on.kind, on.data), ("REG_SZ", "2"));
-
-        assert_eq!(by_name("FontSmoothingType").data, "2");
-        assert_eq!(by_name("FontSmoothingOrientation").data, "1");
-        assert_eq!(by_name("FontSmoothingGamma").data, "1400");
+    fn font_smoothing_is_left_at_protons_default() {
+        let tweaks = registry_tweaks();
+        assert!(tweaks.iter().all(|v| !v.name.starts_with("FontSmoothing")));
 
         // DPI is deliberately not written; see the comment beside the list.
-        assert!(registry_tweaks().iter().all(|v| v.name != "LogPixels"));
+        assert!(tweaks.iter().all(|v| v.name != "LogPixels"));
     }
 
     #[test]
@@ -1857,7 +1873,7 @@ mod tests {
         let runner = ProtonRunner::new(&release, &layout, dir.join("Steam"));
 
         assert!(matches!(
-            provision(&runner, &layout, "steamuser", "enUS", &dir.join("setup.exe"), &[]),
+            provision(&runner, None, &layout, "steamuser", "enUS", &dir.join("setup.exe"), &[]),
             Err(BattleNetError::PrefixNotReady(_))
         ));
     }

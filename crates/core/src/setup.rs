@@ -125,7 +125,7 @@ pub enum Event {
 /// Provision whatever is missing. Safe to call when nothing is.
 ///
 /// `proton_version` pins which release to install when one is needed; `None`
-/// takes the newest stable.
+/// takes [`proton::TESTED`], installing it even beside a newer build.
 pub async fn run(
     layout: &Layout,
     dirs: &AppDirs,
@@ -148,17 +148,11 @@ pub async fn run(
 
     // 1. Proton. Everything else runs *through* a Proton build, so this is
     //    first whether the user cares about it or not.
-    let build = match (&status.proton, proton_version) {
-        // Already have the pinned build (or any build, when nothing is pinned).
-        (Some(build), None) => {
-            on_event(Event::Finished {
-                step: Step::Proton,
-                skipped: true,
-                note: build.version.clone(),
-            });
-            build.clone()
-        }
-        (Some(build), Some(wanted)) if build.version == wanted => {
+    //    Not "any build will do": a newer one found in Steam's folders is not
+    //    one Lightforge was tested on, and 11-9 could not install Battle.net.
+    let wanted = proton_version.unwrap_or(proton::TESTED);
+    let build = match &status.proton {
+        Some(build) if build.version == wanted => {
             on_event(Event::Finished {
                 step: Step::Proton,
                 skipped: true,
@@ -168,7 +162,7 @@ pub async fn run(
         }
         _ => {
             on_event(Event::Started(Step::Proton));
-            let build = install_proton(&http, dirs, proton_version, &mut on_event).await?;
+            let build = install_proton(&http, dirs, Some(wanted), &mut on_event).await?;
             on_event(Event::Finished {
                 step: Step::Proton,
                 skipped: false,
@@ -216,9 +210,16 @@ pub async fn run(
         return Ok(status);
     }
 
-    if !status.battle_net {
-        runtime::check_wine(runner.dist())?;
-    }
+    //    Wine's HTTPS needs a 32-bit gnutls too, which neither check sees;
+    //    without it the installer runs inside Steam's runtime, which brings
+    //    its own (SteamOS ships none).
+    let container = match status.battle_net {
+        true => None,
+        false => {
+            runtime::check_wine(runner.dist())?;
+            runtime::tls_container(&build.path, steam.as_ref())?
+        }
+    };
 
     if status.battle_net {
         on_event(Event::Finished {
@@ -228,7 +229,9 @@ pub async fn run(
         });
     } else {
         on_event(Event::Started(Step::BattleNet));
-        let report = install_battle_net(&http, layout, dirs, config, &runner, &mut on_event).await?;
+        let report =
+            install_battle_net(&http, layout, dirs, config, &runner, container.as_deref(), &mut on_event)
+                .await?;
         on_event(Event::Finished {
             step: Step::BattleNet,
             skipped: false,
@@ -273,8 +276,13 @@ async fn install_proton(
     version: Option<&str>,
     on_event: &mut impl FnMut(Event),
 ) -> Result<ProtonRelease, SetupError> {
-    let cache = crate::net::ETagCache::new(dirs.asset_cache_dir().join("proton-releases.json"));
-    let releases = proton::fetch_releases(http, &cache).await?;
+    // A tag names its family; with none asked for, the newest GE is the
+    // default, as it always was.
+    let family = version
+        .and_then(proton::ProtonFamily::of_tag)
+        .unwrap_or(proton::ProtonFamily::GloriousEggroll);
+    let cache = crate::net::ETagCache::new(dirs.asset_cache_dir().join(family.cache_file()));
+    let releases = proton::fetch_releases(http, &cache, family).await?;
 
     let release = match version {
         Some(tag) => releases
@@ -302,6 +310,7 @@ async fn install_battle_net(
     dirs: &AppDirs,
     config: &Config,
     runner: &ProtonRunner,
+    container: Option<&std::path::Path>,
     on_event: &mut impl FnMut(Event),
 ) -> Result<SetupReport, SetupError> {
     let installer = dirs.cache_dir().join(battlenet::INSTALLER_FILE);
@@ -313,6 +322,7 @@ async fn install_battle_net(
     }
     Ok(battlenet::provision(
         runner,
+        container,
         layout,
         &config.prefix_user,
         &config.locale,

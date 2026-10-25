@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::product::{Product, ProductCode, ProductError};
+use crate::product::{Product, ProductCode};
 use crate::proton::ProtonPin;
 
 /// Windows user name inside a Proton prefix.
@@ -106,6 +106,13 @@ pub struct Config {
     /// nobody can see is a launch that quietly never happens.
     #[serde(default = "yes")]
     pub battle_net_minimized: bool,
+    /// Whether PLAY closes a running Battle.net first.
+    ///
+    /// Off by default: a direct launch leaves the client alone, so the
+    /// friends list and chat stay up beside the game. It only governs PLAY;
+    /// a launch through Battle.net starts the client afresh either way.
+    #[serde(default)]
+    pub close_battle_net_on_play: bool,
     /// How Battle.net and every game it launches are started.
     ///
     /// Shared, not per game: Lightforge only sets the environment of a client
@@ -153,14 +160,6 @@ pub struct Config {
     /// desktop, and nothing on the machine says which one this is.
     #[serde(default)]
     pub steamos_use: Option<SteamOsUse>,
-    /// Whether the News panel is shown beside the game's key art.
-    ///
-    /// Off by default: a first run should show the game's key art and nothing
-    /// else, and the panel also costs a network fetch on every visit to the
-    /// Play page. Settings › General turns it on, and that is where someone
-    /// who wants news about the game they are looking at will find it.
-    #[serde(default)]
-    pub news_on_play: bool,
     /// Whether the release-notes popup has been switched off for good.
     ///
     /// The checkbox on it says "never show this again", and that is what it
@@ -245,13 +244,13 @@ impl Default for Config {
             pause_downloads_while_playing: true,
             minimize_on_launch: false,
             battle_net_minimized: true,
+            close_battle_net_on_play: false,
             battle_net_tweaks: crate::tweaks::Tweaks::default(),
             region: crate::tact::version::Region::default(),
             locale: default_locale(),
             setup_complete: false,
             battle_net_declined: false,
             steamos_use: None,
-            news_on_play: false,
             patch_notes_muted: false,
             patch_notes_seen: None,
             check_for_updates: true,
@@ -273,7 +272,6 @@ impl Config {
                 Product::new(ProductCode::Retail, "World of Warcraft"),
                 Product::new(ProductCode::ClassicEra, "World of Warcraft Classic"),
                 Product::new(ProductCode::Classic, "WoW Classic (progression)"),
-                Product::new(ProductCode::ClassicBeta, "World of Warcraft: Forever — Beta"),
                 Product::new(ProductCode::Forever, "World of Warcraft: Forever"),
                 Product::new(ProductCode::Ptr, "WoW PTR"),
             ],
@@ -347,10 +345,18 @@ impl Config {
         self.products.iter_mut().find(|p| &p.code == code)
     }
 
+    /// The language `code` is downloaded in: its own, else the setup choice.
+    pub fn locale_for(&self, code: &ProductCode) -> &str {
+        self.product(code)
+            .and_then(|p| p.profile.locale.as_deref())
+            .unwrap_or(&self.locale)
+    }
+
     /// Add a product, rejecting a duplicate code.
-    pub fn add_product(&mut self, product: Product) -> Result<(), ProductError> {
+    #[cfg(test)]
+    pub fn add_product(&mut self, product: Product) -> Result<(), crate::product::ProductError> {
         if self.product(&product.code).is_some() {
-            return Err(ProductError::Duplicate(product.code));
+            return Err(crate::product::ProductError::Duplicate(product.code));
         }
         self.products.push(product);
         Ok(())
@@ -454,20 +460,6 @@ impl Config {
         match source.contains("://") {
             true => crate::addons::catalog::Origin::Http(source.to_owned()),
             false => crate::addons::catalog::Origin::Dir(PathBuf::from(source)),
-        }
-    }
-
-    /// Where the News page reads its headlines from.
-    ///
-    /// The same base as [`Config::catalog_origin`], with no knob of its own:
-    /// one proxy serves both namespaces, and a second URL to keep in step
-    /// would only be a second thing to point somewhere wrong. A fixture
-    /// directory works here too, it reads `news.json` beside the catalog's
-    /// fixtures.
-    pub fn news_origin(&self) -> crate::news::Origin {
-        match self.catalog_origin() {
-            crate::addons::catalog::Origin::Http(base) => crate::news::Origin::Http(base),
-            crate::addons::catalog::Origin::Dir(dir) => crate::news::Origin::Dir(dir),
         }
     }
 
@@ -607,7 +599,6 @@ mod tests {
     fn a_config_without_a_battle_net_profile_still_loads() {
         let config: Config = toml::from_str("blizzard_root = \"/games/Blizzard\"").unwrap();
         assert_eq!(config.battle_net_tweaks, crate::tweaks::Tweaks::default());
-        assert!(config.battle_net_tweaks.is_default());
     }
 
     // Written as a word a person could type, and absent until answered.
@@ -626,7 +617,7 @@ mod tests {
     #[test]
     fn the_battle_net_profile_round_trips() {
         let mut config = Config::default();
-        config.battle_net_tweaks.gamemode = true;
+        config.battle_net_tweaks.mangohud = true;
         config.battle_net_tweaks.wayland = true;
         config.battle_net_tweaks.env.insert("DXVK_HUD".to_owned(), "fps".to_owned());
 
@@ -702,6 +693,8 @@ mod tests {
         let old: Config = toml::from_str("prefix_user = \"steamuser\"\n").unwrap();
         assert!(!old.minimize_on_launch);
         assert!(old.battle_net_minimized);
+        // And a config from before the switch leaves the client running.
+        assert!(!old.close_battle_net_on_play);
     }
 
     #[test]
@@ -940,7 +933,7 @@ mod tests {
     fn duplicate_product_codes_are_rejected() {
         let mut config = Config::with_default_products();
         let dup = Product::new(ProductCode::Retail, "Another Retail");
-        assert!(matches!(config.add_product(dup), Err(ProductError::Duplicate(_))));
+        assert!(matches!(config.add_product(dup), Err(crate::product::ProductError::Duplicate(_))));
     }
 
     #[test]

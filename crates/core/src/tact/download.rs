@@ -21,7 +21,10 @@
 //! Encrypted content (about 2% of a build, unreleased material) cannot be
 //! decoded without a key this machine does not have. Those files are stored
 //! unverified rather than refused, which is what Agent does, and the outcome
-//! counts them so the caller can say so honestly.
+//! counts them so the caller can say so honestly. Unverified means the content
+//! key went unchecked, not that nothing was: the encoded bytes must still match
+//! their encoding key and every chunk its checksum, or one chunk marked
+//! encrypted would carry anything past the check.
 //!
 //! Durability is the store's own: every [`Options::checkpoint_bytes`] the
 //! writer flushes and rewrites its indices, leaving a store that opens and
@@ -445,10 +448,6 @@ impl Downloads {
         self.paused.remove(code);
     }
 
-    pub fn is_running(&self, code: &crate::ProductCode) -> bool {
-        self.running.contains_key(code)
-    }
-
     /// Products paused by a launch and not yet restarted.
     pub fn pending(&self) -> impl Iterator<Item = &crate::ProductCode> {
         self.paused.iter()
@@ -577,7 +576,11 @@ pub async fn extract_install(
             continue;
         }
 
-        let path = resolve_windows_path(dest, &entry.relative_path());
+        let Some(relative) = entry.relative_path() else {
+            fail(&mut report, "the install manifest names a path outside the install".into());
+            continue;
+        };
+        let path = resolve_windows_path(dest, &relative);
         match write_file(&path, &decoded) {
             Ok(()) => {
                 let written = Extracted { path, bytes: decoded.len() as u64 };
@@ -682,7 +685,7 @@ struct Sink<'a> {
 impl Sink<'_> {
     /// Verify one file and write it, counting what happened.
     fn store(&mut self, ekey: &EKey, ckey: Option<&CKey>, encoded: &[u8]) -> Result<(), DownloadError> {
-        match verify(encoded, ckey, self.keys) {
+        match verify(encoded, ekey, ckey, self.keys) {
             Verified::Ok => {}
             Verified::Unverifiable => self.outcome.unverified += 1,
             Verified::Wrong(reason) => {
@@ -709,9 +712,9 @@ enum Verified {
 }
 
 /// Decode and check against the content key.
-fn verify(encoded: &[u8], ckey: Option<&CKey>, keys: Option<&KeyService>) -> Verified {
+fn verify(encoded: &[u8], ekey: &EKey, ckey: Option<&CKey>, keys: Option<&KeyService>) -> Verified {
     let Some(ckey) = ckey else {
-        return Verified::Unverifiable;
+        return unverifiable(encoded, ekey);
     };
 
     match blte::decompress_blte(encoded.to_vec(), keys) {
@@ -733,11 +736,31 @@ fn verify(encoded: &[u8], ckey: Option<&CKey>, keys: Option<&KeyService>) -> Ver
         // distinguish "withheld key" from "corrupt".
         Err(e) => {
             if has_encrypted_chunk(encoded) {
-                Verified::Unverifiable
+                unverifiable(encoded, ekey)
             } else {
                 Verified::Wrong(e.to_string())
             }
         }
+    }
+}
+
+/// A file whose content key cannot be checked, held to what can be: the
+/// same test a store scan applies ([`super::verify`]), the encoding key over
+/// the chunk table and each chunk's own checksum, no decoding needed. Anything
+/// this refuses, a later `lightforge verify` would have called damaged.
+fn unverifiable(encoded: &[u8], ekey: &EKey) -> Verified {
+    use super::idx::KEY_SIZE;
+
+    let fault = match encoded.starts_with(b"BLTE") {
+        false => Some(super::verify::Fault::NotBlte),
+        true => {
+            let key = ekey[..KEY_SIZE].try_into().expect("an encoding key is longer than an index key");
+            super::verify::blte_fault(encoded, key)
+        }
+    };
+    match fault {
+        None => Verified::Unverifiable,
+        Some(fault) => Verified::Wrong(format!("does not match its encoding key: {}", fault.describe())),
     }
 }
 
@@ -840,11 +863,18 @@ mod tests {
         blte::compress_data_single(payload.to_vec(), blte::CompressionMode::ZLib, None).unwrap()
     }
 
+    /// What the encoding file would list: the MD5 of the chunk table, or of
+    /// the whole file when it has none.
+    fn ekey_of(encoded: &[u8]) -> EKey {
+        let header = u32::from_be_bytes(encoded[4..8].try_into().unwrap()) as usize;
+        *md5::compute(if header == 0 { encoded } else { &encoded[..header] })
+    }
+
     #[test]
     fn a_file_matching_its_content_key_verifies() {
         let encoded = blte(b"the real bytes");
         assert!(matches!(
-            verify(&encoded, Some(&ckey_of(b"the real bytes")), None),
+            verify(&encoded, &ekey_of(&encoded), Some(&ckey_of(b"the real bytes")), None),
             Verified::Ok
         ));
     }
@@ -854,7 +884,7 @@ mod tests {
         let encoded = blte(b"the real bytes");
         let wrong = ckey_of(b"something else entirely");
 
-        match verify(&encoded, Some(&wrong), None) {
+        match verify(&encoded, &ekey_of(&encoded), Some(&wrong), None) {
             Verified::Wrong(reason) => {
                 // The message has to name both, or a mismatch is unactionable.
                 assert!(reason.contains(&to_hex(&wrong)), "{reason}");
@@ -867,7 +897,16 @@ mod tests {
     #[test]
     fn a_file_encoding_does_not_list_is_stored_unverified() {
         // The 2-in-1.5-million case: no content key to check it against.
-        assert!(matches!(verify(&blte(b"x"), None, None), Verified::Unverifiable));
+        let encoded = blte(b"x");
+        assert!(matches!(verify(&encoded, &ekey_of(&encoded), None, None), Verified::Unverifiable));
+    }
+
+    #[test]
+    fn a_file_without_a_content_key_must_still_match_its_encoding_key() {
+        let encoded = blte(b"x");
+        let other = blte(b"something else");
+        assert!(matches!(verify(&other, &ekey_of(&encoded), None, None), Verified::Wrong(_)));
+        assert!(matches!(verify(b"not blte at all", &ekey_of(&encoded), None, None), Verified::Wrong(_)));
     }
 
     /// A BLTE container with an explicit chunk table.
@@ -879,15 +918,16 @@ mod tests {
         out.push(0x0F);
         out.extend_from_slice(&(modes.len() as u32).to_be_bytes()[1..]);
 
-        // Each chunk here is one mode byte plus three of payload.
-        for _ in modes {
+        // Each chunk here is one mode byte plus three of payload, and its
+        // table row carries the MD5 of the chunk as stored, as Blizzard's do.
+        let chunks: Vec<[u8; 4]> = modes.iter().map(|&mode| [mode, b'a', b'b', b'c']).collect();
+        for chunk in &chunks {
             out.extend_from_slice(&4u32.to_be_bytes());
             out.extend_from_slice(&3u32.to_be_bytes());
-            out.extend_from_slice(&[0u8; 16]);
+            out.extend_from_slice(&md5::compute(chunk).0);
         }
-        for mode in modes {
-            out.push(*mode);
-            out.extend_from_slice(b"abc");
+        for chunk in &chunks {
+            out.extend_from_slice(chunk);
         }
         out
     }
@@ -941,22 +981,40 @@ mod tests {
         // fails to decode, and must still reach the store.
         let encrypted = blte_chunks(b"E");
         assert!(matches!(
-            verify(&encrypted, Some(&ckey_of(b"whatever")), None),
+            verify(&encrypted, &ekey_of(&encrypted), Some(&ckey_of(b"whatever")), None),
             Verified::Unverifiable
         ));
 
         // Corruption that is not encrypted is still refused.
+        let plain = blte_chunks(b"Z");
         assert!(matches!(
-            verify(&blte_chunks(b"Z"), Some(&ckey_of(b"whatever")), None),
+            verify(&plain, &ekey_of(&plain), Some(&ckey_of(b"whatever")), None),
             Verified::Wrong(_)
         ));
+    }
+
+    #[test]
+    fn an_encrypted_chunk_does_not_carry_altered_bytes_past_the_check() {
+        let published = blte_chunks(b"ZE");
+        let ekey = ekey_of(&published);
+        let ckey = ckey_of(b"whatever");
+
+        // Bytes changed inside the encrypted chunk itself.
+        let mut altered = published.clone();
+        *altered.last_mut().unwrap() ^= 0xff;
+        assert!(matches!(verify(&altered, &ekey, Some(&ckey), None), Verified::Wrong(_)));
+
+        // A whole file rebuilt around an encrypted chunk: its own table is
+        // consistent, but it is not the one the encoding key names.
+        let forged = blte_chunks(b"EZ");
+        assert!(matches!(verify(&forged, &ekey, Some(&ckey), None), Verified::Wrong(_)));
     }
 
     #[test]
     fn junk_is_refused_rather_than_counted_as_unverifiable() {
         // Corruption must not be mistaken for encryption, or a broken download
         // would quietly fill the store.
-        match verify(b"not blte at all", Some(&ckey_of(b"x")), None) {
+        match verify(b"not blte at all", &[0; 16], Some(&ckey_of(b"x")), None) {
             Verified::Wrong(_) => {}
             _ => panic!("junk must be refused"),
         }
@@ -1071,12 +1129,10 @@ mod tests {
         let cancel = Cancel::new();
         let mut downloads = Downloads::new();
         downloads.register(code.clone(), cancel.clone());
-        assert!(downloads.is_running(&code));
 
         // The launch path pauses: the loop stops, and a restart is owed.
         assert!(downloads.pause(&code).unwrap());
         assert!(cancel.is_cancelled());
-        assert!(!downloads.is_running(&code));
         assert_eq!(downloads.pending().count(), 1);
 
         // After Battle.net exits, the caller is told to start it again, once.

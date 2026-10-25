@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/core", "crates/launcher-cli", "crates/launcher-gui"]
 
 [workspace.package]
-version = "1.0.0-beta.6"
+version = "1.0.0-beta.7"
 edition = "2021"
 rust-version = "1.90"
 license = "GPL-3.0-or-later"
@@ -21,6 +21,9 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 directories = "5"
 flate2 = "1"
+# Proton-CachyOS ships .tar.xz. Builds the reference liblzma from vendored
+# source, so no system library is needed at run time.
+liblzma = { version = "0.4", features = ["static"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # Gamepads, read straight from the kernel. Steam Input only turns a pad into
 # keys under a keyboard layout; under its usual gamepad one a non-Steam game
@@ -41,8 +44,8 @@ gilrs = "0.11"
 iced = { version = "0.14", features = ["tokio", "image-without-codecs", "advanced", "lazy", "canvas", "sysinfo"] }
 # The GUI's one decoder: every picture goes through `art.rs` into an RGBA
 # handle. Not the 0.25 iced carries, because only 0.24's JPEG decoder can
-# decode at a DCT scale. JPEG and PNG are all the asset manifest, the news
-# feed and Battle.net's marks serve; `ico` (which brings `bmp`) and `webp`
+# decode at a DCT scale. JPEG and PNG are all the asset manifest and
+# Battle.net's marks serve; `ico` (which brings `bmp`) and `webp`
 # are for the report's screenshot picker, which offers them. None of the
 # four pulls in a crate of its own.
 image = { version = "0.24", default-features = false, features = ["jpeg", "png", "ico", "webp"] }

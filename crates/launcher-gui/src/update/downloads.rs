@@ -15,6 +15,11 @@ impl Lightforge {
                 if let Some(rx) = &self.scan_rx {
                     self.scan_sample = *rx.borrow();
                 }
+                if let Some(upgrade) = self.upgrade.as_mut() {
+                    if let Some(rx) = &upgrade.rx {
+                        upgrade.sample = *rx.borrow();
+                    }
+                }
                 if let Some(entry) = self
                     .queue
                     .iter_mut()
@@ -98,6 +103,17 @@ impl Lightforge {
                     Ok(done) if done.complete => {
                         if let Some(at) = entry {
                             self.queue.remove(at);
+                        }
+                        // Only a game that was given its own language: one
+                        // that follows the setup choice keeps whatever the
+                        // client has already written.
+                        if let Some(locale) =
+                            self.config.product(&code).and_then(|p| p.profile.locale.clone())
+                        {
+                            let file = self.layout.product_dir(&code).join("WTF").join("Config.wtf");
+                            if let Err(e) = lightforge_core::clientlocale::set(&file, &locale) {
+                                self.error = Some(format!("{}: {e}", file.display()).into());
+                            }
                         }
                         note(
                             self,

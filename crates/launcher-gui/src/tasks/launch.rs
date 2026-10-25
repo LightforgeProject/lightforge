@@ -32,6 +32,8 @@ pub async fn preflight(
         let started = Instant::now();
         let report = Preflight::new(config.prefix_user.clone())
             .with_managed(config.managed_products())
+            // PLAY only: anything that goes through the client starts it afresh.
+            .keeping_client(runs == Runs::Game && !config.close_battle_net_on_play)
             .run(&runner, &layout, Some(&code), &mut guard)
             .map_err(|e| Problem::of(&e))?;
         // The report is for the CLI, which prints it. Here the outcome is
@@ -127,24 +129,6 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Probl
         back_up_before_launch(&layout, &code);
 
         let (tweaks, tools) = tweaks_for(&code);
-
-        // Reconciled here, not when the toggle was flipped: the client
-        // rewrites Config.wtf from memory every time it exits, so a value
-        // written once may be gone, or changed by the player in the game's own
-        // options, which then stays theirs. Behind the pre-flight gate, with
-        // the client closed.
-        let cvars = layout.wtf_dir(&code).join("Config.wtf");
-        match lightforge_core::cvars::reconcile(&cvars, &tweaks.cvars(), lightforge_core::tweaks::RETIRED) {
-            Ok(done) if !done.yielded.is_empty() => crate::trace::mark(format!(
-                "launch: left as set in the game: {}",
-                done.yielded.join(", ")
-            )),
-            Ok(_) => {}
-            // Not fatal. A settings file Lightforge could not write is a
-            // worse game, not an unplayable one, and refusing to launch over
-            // it would be the wrong trade.
-            Err(e) => eprintln!("lightforge: could not apply client settings: {e}"),
-        }
 
         let runner = runner_for(&layout, &code, Runs::Game)?;
         let mut launch = lightforge_core::tweaks::wrapped(
@@ -312,7 +296,7 @@ pub async fn launch_via_battle_net(
         use lightforge_core::battlenet::{self, Launch, Readiness};
         use lightforge_core::preflight;
 
-        let runner = runner_for(&layout, &code, Runs::BattleNet)?;
+        let runner = client_runner(&layout, &code)?;
         back_up_before_launch(&layout, &code);
 
         // Counted too, though nothing here winds the prefix down: a direct
@@ -413,7 +397,7 @@ pub async fn install_via_battle_net(
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch};
 
-        let runner = runner_for(&layout, &code, Runs::BattleNet)?;
+        let runner = client_runner(&layout, &code)?;
 
         // Normal window, whatever a launch would have chosen: the next thing
         // that happens is a person choosing where to install.
@@ -475,6 +459,30 @@ pub async fn await_game_exit(layout: Layout, game: GameProcess) -> Result<String
     .map_err(|e| Problem::of(&e))?
 }
 
+/// Whether a game is running in the prefix right now.
+pub async fn game_running(layout: Layout) -> bool {
+    tokio::task::spawn_blocking(move || !lightforge_core::preflight::games_running(&layout).is_empty())
+        .await
+        .unwrap_or(false)
+}
+
+/// How long a game gets to close on `SIGTERM` before it is killed outright.
+const STOP_GRACE: Duration = Duration::from_secs(5);
+
+/// Stop the running game, leaving Battle.net and the rest of the prefix be.
+pub async fn stop_game(layout: Layout) -> Result<String, Problem> {
+    use lightforge_core::preflight::{self, Disposition};
+
+    let stopped = tokio::task::spawn_blocking(move || preflight::stop_games(&layout, STOP_GRACE))
+        .await
+        .map_err(|e| Problem::of(&e))?;
+    match stopped.iter().find(|s| s.disposition == Disposition::Survived) {
+        Some(stuck) => Err(format!("{} would not stop", stuck.game.name).into()),
+        None if stopped.is_empty() => Ok("no game was running".to_owned()),
+        None => Ok("game stopped".to_owned()),
+    }
+}
+
 /// What Battle.net reports as installed, keyed by product code.
 ///
 /// Read when the browse panel opens, never on a timer and never to decide
@@ -527,7 +535,7 @@ pub async fn open_battle_net(
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch};
 
-        let runner = runner_for(&layout, &code, Runs::BattleNet)?;
+        let runner = client_runner(&layout, &code)?;
         // A normal window, whatever the last hand-off left behind: somebody
         // asked for the client itself, so hiding it in the tray would be
         // answering a different request.

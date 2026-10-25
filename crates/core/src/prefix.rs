@@ -38,6 +38,12 @@ pub struct ProtonRunner {
     compat_mounts: Vec<PathBuf>,
     shader_cache: Option<PathBuf>,
     env: Vec<(OsString, OsString)>,
+    /// A Steam Linux Runtime entry point to run Proton inside, as Steam
+    /// does. Only for Battle.net, see [`crate::runtime::tls_container`].
+    container: Option<PathBuf>,
+    /// The prefix already has a session this command joins, see
+    /// [`ProtonRunner::joining_session`].
+    joins_session: bool,
 }
 
 impl ProtonRunner {
@@ -55,9 +61,11 @@ impl ProtonRunner {
             dist: dist_dir(&release.path),
             compat_data: layout.compat_data(),
             steam_client: steam_client.into(),
-            compat_mounts: vec![layout.games_root()],
+            compat_mounts: games_mounts(layout),
             shader_cache: None,
             env: Vec::new(),
+            container: None,
+            joins_session: false,
         }
     }
 
@@ -77,7 +85,11 @@ impl ProtonRunner {
         }
     }
 
-    /// Isolate DXVK's shader cache for one product, per the shared-prefix model.
+    /// Keep one product's DXVK and VKD3D shader caches in `dir`.
+    ///
+    /// Left alone, DXVK writes to `%LOCALAPPDATA%\dxvk` inside the prefix.
+    /// Here both sit beside Lightforge's other caches, where Storage can size
+    /// and clear them per product.
     pub fn with_shader_cache(mut self, dir: impl Into<PathBuf>) -> Self {
         self.shader_cache = Some(dir.into());
         self
@@ -95,6 +107,37 @@ impl ProtonRunner {
         self
     }
 
+    /// Run Proton inside the Steam Linux Runtime whose `_v2-entry-point` this
+    /// is. Its libraries replace the host's, and it sees only what it is
+    /// told to: the prefix, the mounts, the Proton build, and the program's
+    /// own directory.
+    pub fn in_container(mut self, entry_point: impl Into<PathBuf>) -> Self {
+        self.container = Some(entry_point.into());
+        self
+    }
+
+    /// Whether commands run inside a container.
+    pub fn has_container(&self) -> bool {
+        self.container.is_some()
+    }
+
+    /// Run alongside a session the prefix already has, rather than after it.
+    ///
+    /// In a container a plain run becomes `waitforexitandrun`, which waits
+    /// for the prefix's wineserver to exit first. Right for the call that
+    /// becomes the client, and a hang for one that only hands a running
+    /// client its arguments: measured, it waited until the client was closed.
+    pub fn joining_session(mut self) -> Self {
+        self.joins_session = true;
+        self
+    }
+
+    /// The Proton build this runs, the directory holding `proton` and its
+    /// `toolmanifest.vdf`.
+    pub fn build(&self) -> &Path {
+        self.entry_point.parent().unwrap_or(&self.entry_point)
+    }
+
     /// The Wine prefix Proton will create or reuse: `<compat data>/pfx`.
     pub fn prefix(&self) -> PathBuf {
         self.compat_data.join("pfx")
@@ -107,21 +150,55 @@ impl ProtonRunner {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut cmd = Command::new(&self.entry_point);
+        let program = program.as_ref();
+        let mut mounts = self.compat_mounts.clone();
+        let verb = match self.container {
+            Some(_) if verb == "run" && !self.joins_session => "waitforexitandrun",
+            _ => verb,
+        };
+        let mut cmd = match &self.container {
+            None => Command::new(&self.entry_point),
+            Some(container) => {
+                // Steam's own pairing: the container waits for the session,
+                // and Proton inside it for the prefix, both under one verb.
+                let mut cmd = Command::new(container);
+                cmd.arg(format!("--verb={verb}")).arg("--").arg(&self.entry_point);
+                cmd.env("STEAM_COMPAT_TOOL_PATHS", self.build());
+                mounts.extend(Path::new(program).parent().map(Path::to_path_buf));
+                cmd
+            }
+        };
         cmd.arg(verb).arg(program).args(args);
 
         cmd.env("STEAM_COMPAT_DATA_PATH", &self.compat_data);
         cmd.env("STEAM_COMPAT_CLIENT_INSTALL_PATH", &self.steam_client);
-        if !self.compat_mounts.is_empty() {
-            cmd.env("STEAM_COMPAT_MOUNTS", join_paths(&self.compat_mounts));
+        if !mounts.is_empty() {
+            cmd.env("STEAM_COMPAT_MOUNTS", join_paths(&mounts));
         }
         // Proton keys parts of its runtime state off the app id. Lightforge
         // isn't a Steam app, so pin a stable placeholder instead of letting
         // each build invent its own.
         cmd.env("SteamAppId", "0");
-        cmd.env("SteamGameId", "0");
+        // Never a game id, not even an empty one: under GE-Proton11-9 the
+        // variable being set at all hangs `wineboot -u` for good (measured,
+        // 11-7 is fine). Removed rather than left unset, because Steam puts
+        // its own into this process when it starts the launcher.
+        cmd.env_remove("SteamGameId");
+        // Pointers at somebody else's Wine. Proton appends to these rather
+        // than replacing them, so a stray `WINEDLLPATH` in the user's shell
+        // makes the build load another Wine's DLLs against its own unix side
+        // (`unimplemented function win32u...`, aborting). Nothing a user sets
+        // for their own wine means anything to a Proton build. The tweaks in
+        // `self.env` below are applied after this and still win.
+        for var in FOREIGN_WINE_VARS {
+            cmd.env_remove(var);
+        }
+        // The names the DXVK (3.1) and VKD3D-Proton in GE-Proton11-7 read.
+        // The older `DXVK_STATE_CACHE_PATH` went with DXVK's state cache and
+        // is not read by that build at all.
         if let Some(cache) = &self.shader_cache {
-            cmd.env("DXVK_STATE_CACHE_PATH", cache);
+            cmd.env("DXVK_SHADER_CACHE_PATH", cache);
+            cmd.env("VKD3D_SHADER_CACHE_PATH", cache);
         }
         for (key, value) in &self.env {
             cmd.env(key, value);
@@ -214,6 +291,26 @@ impl ProtonRunner {
         }
         Ok(())
     }
+}
+
+/// Variables that point a Wine at another Wine's files, dropped from every
+/// Proton run. `WINEPREFIX` and the `WINEDLLOVERRIDES`/`WINEESYNC` family are
+/// deliberately not here: Proton sets the first itself and users tune the rest.
+const FOREIGN_WINE_VARS: [&str; 3] = ["WINEDLLPATH", "WINELOADER", "WINESERVER"];
+
+/// Every library's games folder, the default one first.
+///
+/// A container sees only what it is shown, and its wineserver serves the
+/// whole prefix: a game on another drive, started on the host while the
+/// client runs in the container, is still opened through it.
+fn games_mounts(layout: &Layout) -> Vec<PathBuf> {
+    let mut mounts = vec![layout.games_root()];
+    for library in layout.libraries().all() {
+        if !mounts.iter().any(|m| m == library.games()) {
+            mounts.push(library.games().to_path_buf());
+        }
+    }
+    mounts
 }
 
 /// Proton's unpacked runtime directory, which holds `bin/wineserver`.
@@ -393,6 +490,15 @@ impl PrefixStatus {
 /// `drive_c`, and Wine must be finished writing before the link is created, or
 /// `wineboot` can replace the link with a real directory of its own.
 pub fn provision(runner: &ProtonRunner, layout: &Layout) -> Result<PrefixStatus, PrefixError> {
+    // A prefix about to be built from nothing can still have a server from the
+    // one that stood there before, possibly another Proton build's: a deleted
+    // directory does not stop its processes, and the new one can inherit the
+    // old one's socket. The scan only matches processes whose environment
+    // names this prefix, so nobody else's Wine is touched. Best effort, and
+    // skipped on an existing prefix, where a running client is the user's.
+    if !is_initialized(&runner.prefix()) {
+        let _ = crate::preflight::shutdown(runner, layout, crate::preflight::DEFAULT_GRACE);
+    }
     runner.wineboot_update()?;
     runner.wineserver_kill()?;
     link_libraries(layout)?;
@@ -523,6 +629,44 @@ mod tests {
     }
 
     #[test]
+    fn in_a_container_proton_runs_the_way_steam_starts_it() {
+        let cmd = runner(Path::new("/scratch"))
+            .in_container("/steam/common/SteamLinuxRuntime_4/_v2-entry-point")
+            .command("run", "/home/u/.cache/lightforge/Battle.net-Setup.exe", ["--lang=deDE"]);
+
+        assert_eq!(
+            cmd.get_program(),
+            OsStr::new("/steam/common/SteamLinuxRuntime_4/_v2-entry-point")
+        );
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                "--verb=waitforexitandrun",
+                "--",
+                "/scratch/GE-Proton11-7/proton",
+                "waitforexitandrun",
+                "/home/u/.cache/lightforge/Battle.net-Setup.exe",
+                "--lang=deDE",
+            ]
+        );
+        // The container sees only what it is shown: the build, the games,
+        // and the installer's own directory.
+        assert_eq!(
+            env_of(&cmd, "STEAM_COMPAT_TOOL_PATHS").as_deref(),
+            Some("/scratch/GE-Proton11-7")
+        );
+        assert_eq!(
+            env_of(&cmd, "STEAM_COMPAT_MOUNTS").as_deref(),
+            Some("/scratch/Blizzard/games:/home/u/.cache/lightforge")
+        );
+        assert_eq!(
+            env_of(&cmd, "STEAM_COMPAT_DATA_PATH").as_deref(),
+            Some("/scratch/Blizzard/prefix")
+        );
+    }
+
+    #[test]
     fn the_wine_prefix_is_proton_owned_pfx_inside_compat_data() {
         // Proton hard-codes this; the layout has to agree with it.
         let layout = Layout::with_root("/scratch/Blizzard");
@@ -533,14 +677,13 @@ mod tests {
     #[test]
     fn shader_cache_is_only_set_when_a_product_asks_for_one() {
         let root = Path::new("/scratch");
-        assert!(env_of(&runner(root).command("run", "wineboot", ["-u"]), "DXVK_STATE_CACHE_PATH")
-            .is_none());
-
-        let pinned = runner(root).with_shader_cache("/cache/dxvk/wow");
-        assert_eq!(
-            env_of(&pinned.command("run", "wineboot", ["-u"]), "DXVK_STATE_CACHE_PATH").as_deref(),
-            Some("/cache/dxvk/wow")
-        );
+        let plain = runner(root).command("run", "wineboot", ["-u"]);
+        let pinned = runner(root).with_shader_cache("/cache/dxvk/wow").command("run", "wineboot", ["-u"]);
+        for key in ["DXVK_SHADER_CACHE_PATH", "VKD3D_SHADER_CACHE_PATH"] {
+            assert!(env_of(&plain, key).is_none(), "{key}");
+            assert_eq!(env_of(&pinned, key).as_deref(), Some("/cache/dxvk/wow"), "{key}");
+        }
+        assert!(env_of(&pinned, "DXVK_STATE_CACHE_PATH").is_none());
     }
 
     #[test]
@@ -564,6 +707,79 @@ mod tests {
             env_of(&cmd, "STEAM_COMPAT_MOUNTS").as_deref(),
             Some("/scratch/Blizzard/games")
         );
+    }
+
+    #[test]
+    fn every_library_is_mounted_not_only_the_default() {
+        use crate::library::{Libraries, Library};
+
+        let main = Library::main_at(PathBuf::from("/scratch/Blizzard/games"), "home");
+        let second = Library::on_partition(Path::new("/mnt/games"), "nvme2", None);
+        let layout = Layout::with_root("/scratch/Blizzard")
+            .with_libraries(Libraries::new(vec![main, second]));
+        let release = ProtonRelease {
+            version: "GE-Proton11-7".into(),
+            flavor: ProtonFlavor::GloriousEggroll,
+            source: ProtonSource::Managed,
+            path: PathBuf::from("/scratch/GE-Proton11-7"),
+            built_at: None,
+        };
+        let cmd = ProtonRunner::new(&release, &layout, "/scratch/Steam")
+            .command("run", "wineboot", ["-u"]);
+        assert_eq!(
+            env_of(&cmd, "STEAM_COMPAT_MOUNTS").as_deref(),
+            Some("/scratch/Blizzard/games:/mnt/games/Lightforge/games")
+        );
+    }
+
+    #[test]
+    fn a_call_into_a_running_session_does_not_wait_for_it() {
+        // Measured: `waitforexitandrun` here waited until the client it was
+        // handing a launch to was closed.
+        let cmd = runner(Path::new("/scratch"))
+            .in_container("/steam/common/SteamLinuxRuntime_4/_v2-entry-point")
+            .joining_session()
+            .command("run", "/games/Battle.net/Battle.net.exe", ["--exec=launch WoW"]);
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                "--verb=run",
+                "--",
+                "/scratch/GE-Proton11-7/proton",
+                "run",
+                "/games/Battle.net/Battle.net.exe",
+                "--exec=launch WoW",
+            ]
+        );
+    }
+
+    #[test]
+    fn proton_is_never_handed_a_game_id() {
+        // Set at all, even empty, it hangs a GE-Proton11-9 prefix creation.
+        let cmd = runner(Path::new("/scratch")).command("run", "wineboot", ["-u"]);
+        let game_id: Vec<_> =
+            cmd.get_envs().filter(|(k, _)| *k == OsStr::new("SteamGameId")).collect();
+        assert_eq!(game_id, [(OsStr::new("SteamGameId"), None)], "removed, not just unset");
+    }
+
+    #[test]
+    fn another_wines_files_are_never_handed_to_proton() {
+        let cmd = runner(Path::new("/scratch")).command("run", "wineboot", ["-u"]);
+        for var in ["WINEDLLPATH", "WINELOADER", "WINESERVER"] {
+            let seen: Vec<_> = cmd.get_envs().filter(|(k, _)| *k == OsStr::new(var)).collect();
+            assert_eq!(seen, [(OsStr::new(var), None)], "{var} removed");
+        }
+        let overrides = cmd.get_envs().any(|(k, _)| k == OsStr::new("WINEDLLOVERRIDES"));
+        assert!(!overrides, "user tuning is left alone, not listed");
+    }
+
+    #[test]
+    fn joining_a_session_changes_nothing_on_the_host() {
+        let cmd = runner(Path::new("/scratch")).joining_session().command("run", "wineboot", ["-u"]);
+        assert_eq!(cmd.get_program(), OsStr::new("/scratch/GE-Proton11-7/proton"));
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args, ["run", "wineboot", "-u"]);
     }
 
     #[test]

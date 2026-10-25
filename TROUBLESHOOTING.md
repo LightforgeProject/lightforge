@@ -90,9 +90,11 @@ textures most often — and on the Forever beta the texture pack alone is
 
 Before an install or update, the Play panel spells out what's included:
 *"includes optional content: …"*. The big one is offered as a checkbox in the
-install dialog, with its size next to it; the rest are switches under **Game
-Optimizations › Looks**. They're all off unless you ask, which is the same
-default Battle.net uses.
+install dialog, with its size next to it, and afterwards as **High-resolution
+textures** in **Game Settings › Graphics** (the cog beside PLAY). It's off
+unless you ask, which is the same default Battle.net uses. Switching it on
+starts the download; switching it off asks whether to delete the texture files
+as well.
 
 ### The download is slower than my connection
 

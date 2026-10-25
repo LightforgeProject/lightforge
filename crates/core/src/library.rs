@@ -608,6 +608,24 @@ pub fn mount_point_of(path: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// How the user would name the drive `path` is on, with the folder the
+/// library sits in when that is not the drive's root: "nvme2 · Battle.net".
+///
+/// The partition label, else the device name, as [`partitions`] spells it, so
+/// a library adopted from a folder and one added from the same partition read
+/// as the same drive. `None` when no device backs the path.
+pub fn drive_label(games: &Path) -> Option<String> {
+    let mount = mount_point_of(games);
+    let device = mounts().into_iter().find(|m| m.point == mount)?.device;
+    let name = device.file_name()?.to_string_lossy().into_owned();
+    let drive = by_id("/dev/disk/by-label").get(&name).cloned().unwrap_or(name);
+    let root = games.strip_prefix(&mount).ok().and_then(Path::parent);
+    Some(match root {
+        Some(root) if !root.as_os_str().is_empty() => format!("{drive} · {}", root.display()),
+        _ => drive,
+    })
+}
+
 /// The filesystem UUID a path is on, when `/dev/disk` names one.
 pub fn uuid_of(path: &Path) -> Option<String> {
     let point = mount_point_of(path);

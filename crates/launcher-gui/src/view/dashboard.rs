@@ -1,4 +1,4 @@
-//! The Play page: art, news rail and the action panel.
+//! The Play page: art and the action panel.
 
 use crate::*;
 use iced::widget::column;
@@ -28,7 +28,7 @@ impl Lightforge {
         let act = self.handoff_act();
         left = left.extend(self.hint(act.hint()).map(Element::from));
         // The managed panel has a row of links and this one had none, so a
-        // hand-off game had no route to any optimization page. It is phrased
+        // hand-off game had no route to any launch settings. It is phrased
         // for the shared profile on purpose, "its games", not "this game",
         // because one environment covers every game the client starts.
         left = left.push(self.ring(
@@ -48,8 +48,14 @@ impl Lightforge {
             .style(theme::ghost)
             .padding(theme::tap([theme::XS, theme::SM])),
         ));
+        let stoppable = self.busy && self.game_up && !self.stopping;
         let open = button(
-            container(text(act.label()).size(theme::HEADING)).center_x(Length::Fill),
+            container(text(match self.busy && self.game_up {
+                true => self.stop_label(),
+                false => act.label(),
+            })
+            .size(theme::HEADING))
+            .center_x(Length::Fill),
         )
         // Dressed as the Play control on a game Lightforge runs itself,
         // same 240 by CONTROL_HEIGHT, same heading, same filled face, because
@@ -60,25 +66,30 @@ impl Lightforge {
         // the colour is the one thing that can say so without a second line
         // of text. When there is no game family to ask for, the button only
         // opens the client, not a launch, so it does not dress as one.
-        .style(move |base: &iced::Theme, status| match act.colour() {
-            Some(colour) => theme::filled(colour)(base, status),
-            None => theme::outlined(base, status),
+        .style(move |base: &iced::Theme, status| match (stoppable, act.colour()) {
+            (true, _) => theme::filled(theme::ERROR)(base, status),
+            (_, Some(colour)) => theme::filled(colour)(base, status),
+            (_, None) => theme::outlined(base, status),
         })
         .padding([theme::MD, theme::LG])
         .width(Length::Fixed(240.0))
         .height(Length::Fixed(theme::CONTROL_HEIGHT));
 
-        let press = act.message();
+        let press = match stoppable {
+            true => Message::AskStopGame,
+            false => act.message(),
+        };
+        let can_press = stoppable || !self.busy;
 
         container(
             row![
                 left,
                 self.ring(
                     focus::Target::Primary,
-                    (!self.busy).then(|| press.clone()),
-                    match self.busy {
-                        true => open,
-                        false => open.on_press(press),
+                    can_press.then(|| press.clone()),
+                    match can_press {
+                        false => open,
+                        true => open.on_press(press),
                     },
                 ),
             ]
@@ -199,8 +210,7 @@ impl Lightforge {
                 // The wordmark hangs straight under the band (a gap leaves it
                 // floating in the art) and is inset by [`theme::LOGO_INSET`],
                 // since a mark trimmed to its ink would otherwise touch the
-                // page edge. A row, so the news rail gets this region's full
-                // height rather than a share of it.
+                // page edge.
                 row![
                     column![
                         container(logo)
@@ -216,7 +226,6 @@ impl Lightforge {
                     ]
                     .width(Length::Fill),
                 ]
-                .extend(self.news_rail())
                 .spacing(theme::MD)
                 .height(Length::Fill),
                 // A product Battle.net owns gets a panel that offers only what
@@ -276,108 +285,12 @@ impl Lightforge {
         }
     }
 
-    /// Headlines for the game on screen, down the right of the key art.
-    ///
-    /// `None` draws nothing: for a Battle.net hand-off (every feed is Wowhead,
-    /// so there will never be an article), before the fetch was asked for (so
-    /// the rail does not change shape under the reader), and when the fetch
-    /// failed with nothing cached. A line with no recent coverage does get the
-    /// rail, saying so, because that is a fact about this week.
-    pub(crate) fn news_rail(&self) -> Option<Element<'_, Message>> {
-        /// Width of the rail. Taken from the shape Gabriel drew over a
-        /// screenshot rather than derived from anything.
-        const RAIL: f32 = 260.0;
-        /// How many headlines fit before the rail wants scrolling, which it
-        /// will not get: this is a glance, and the News page is one click
-        /// away at the foot of it.
-        const MOST: usize = 5;
-
-        if !self.config.news_on_play {
-            return None;
+    /// The word on the button while a game is up.
+    fn stop_label(&self) -> &'static str {
+        match self.stopping {
+            true => "STOPPING…",
+            false => "STOP",
         }
-        // Hand-offs never match, but asking the feed would also mean drawing
-        // the rail while the fetch is in flight for a game that cannot have
-        // news. Answered from the product instead.
-        if self.kind_of(&self.selected.code) == Kind::HandOff {
-            return None;
-        }
-        let line = self.catalog.line_of(&self.selected.code);
-
-        let body: Element<'_, Message> = match &self.news {
-            Some(headlines) => {
-                let items = headlines.feed.about(&line, MOST);
-                match items.is_empty() {
-                    true => muted(
-                        format!("Nothing recent for {}.", line.label()),
-                        theme::CAPTION,
-                    )
-                    .into(),
-                    false => column(items.into_iter().map(|item| self.rail_item(item)))
-                        .spacing(theme::XS)
-                        .into(),
-                }
-            }
-            // Pending. `news_asked` without a feed means it failed with
-            // nothing on disk, which is the case that draws no rail at all.
-            None if !self.news_asked => {
-                muted("Fetching headlines…".to_owned(), theme::CAPTION).into()
-            }
-            None => return None,
-        };
-
-        let more = button(
-            row![
-                text("More in News").size(theme::LABEL),
-                Space::new().width(Length::Fill),
-                text("→").size(theme::LABEL),
-            ]
-            .align_y(Alignment::Center),
-        )
-        .padding(theme::tap([theme::XS, theme::SM]))
-        .width(Length::Fill)
-        .style(theme::ghost)
-        .on_press(Message::Show(Screen::News));
-
-        Some(
-            container(
-                column![
-                    muted("LATEST NEWS".to_owned(), theme::CAPTION),
-                    body,
-                    // Pinned to the foot however few headlines there are, so
-                    // the link does not wander up the rail on a quiet week.
-                    Space::new().height(Length::Fill),
-                    more,
-                ]
-                .spacing(theme::SM),
-            )
-            .width(Length::Fixed(RAIL))
-            .height(Length::Fill)
-            .padding(theme::MD)
-            .style(theme::floating)
-            .into(),
-        )
-    }
-
-    /// One headline in the rail: the date, then the title, and nothing else.
-    ///
-    /// No summary and no picture, unlike [`Lightforge::news_card`] on the News
-    /// page. This is 260 points wide standing over artwork, a thumbnail
-    /// would leave room for about four words, and the summary is the reason
-    /// to click rather than something to read here.
-    pub(crate) fn rail_item<'a>(&self, item: &'a news::Item) -> Element<'a, Message> {
-        button(
-            column![
-                muted(short_day(&item.published), theme::CAPTION),
-                text(item.title.clone()).size(theme::LABEL),
-            ]
-            .spacing(2.0)
-            .width(Length::Fill),
-        )
-        .padding([theme::XS, theme::SM])
-        .width(Length::Fill)
-        .style(theme::card_button)
-        .on_press(Message::OpenArticle(item.url.clone()))
-        .into()
     }
 
     /// Status, progress, and every action for the selected product.
@@ -533,9 +446,9 @@ impl Lightforge {
                     ),
                 ),
                 self.ring(
-                    focus::Target::Tweaks,
-                    Some(Message::Show(Screen::Tweaks)),
-                    link(sliders_icon(), "Game Optimizations", Some(Message::Show(Screen::Tweaks))),
+                    focus::Target::GameSettings,
+                    Some(Message::OpenGameSettings),
+                    link(sliders_icon(), "Game Settings", Some(Message::OpenGameSettings)),
                 ),
                 self.ring(
                     focus::Target::Subscription,
@@ -556,9 +469,14 @@ impl Lightforge {
         // still say "pre-install" on release day.
         let release_date = self.families.release_date(self.selected.code.as_str(), "default");
         let label = match (action, release_date) {
+            _ if self.busy && self.game_up => self.stop_label(),
             (ActionState::Install, Some(_)) => "PRE-INSTALL",
             _ => action.label(),
         };
+        // A game that is up turns PLAY into STOP, in the colour of the other
+        // thing this button never is: an error.
+        let stoppable = self.busy && self.game_up && !self.stopping;
+        let color = if self.busy && self.game_up { theme::ERROR } else { color };
         let primary = button(
             container(text(label).size(theme::HEADING).color(iced::Color::WHITE))
                 .center_x(Length::Fill),
@@ -596,6 +514,12 @@ impl Lightforge {
         .height(Length::Fixed(theme::CONTROL_HEIGHT))
         .on_press(Message::ToggleGear);
 
+        let primary_press = match () {
+            _ if stoppable => Some(Message::AskStopGame),
+            _ if self.busy || matches!(action, ActionState::Unknown) => None,
+            _ => Some(Message::Primary),
+        };
+
         // Pinned to the control rather than placed near it. Everything else
         // was layout, and layout cannot put a child over its sibling: in the
         // panel's column the menu sized the card, and above the card its top
@@ -604,10 +528,10 @@ impl Lightforge {
             row![
                 self.ring(
                     focus::Target::Primary,
-                    (!self.busy && !matches!(action, ActionState::Unknown)).then_some(Message::Primary),
-                    match self.busy || matches!(action, ActionState::Unknown) {
-                        true => primary,
-                        false => primary.on_press(Message::Primary),
+                    primary_press.clone(),
+                    match primary_press {
+                        Some(message) => primary.on_press(message),
+                        None => primary,
                     },
                 ),
                 self.ring(focus::Target::Gear, Some(Message::ToggleGear), gear),

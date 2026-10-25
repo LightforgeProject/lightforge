@@ -282,218 +282,79 @@ impl Lightforge {
         .into()
     }
 
-    /// The Game Settings popup. Backups are its first section; the game's
-    /// other per-product settings are meant to join them here.
-    pub(crate) fn game_settings_card<'a>(&'a self, settings: &'a GameSettings) -> Element<'a, Message> {
-        // Four sections can outgrow the smallest window, so they scroll under
-        // a fixed title and Close, the way the patch notes do. The figure is
-        // [`WINDOW_MIN`]'s height less the title, the footer and the padding.
-        const SECTIONS_MAX: f32 = 560.0;
-
-        let idle = !settings.working && !self.busy;
-        let code = &settings.code;
-        let can = self.can_maintain();
-
-        // Every line of every section is the same shape as Settings: what it
-        // is on the left, the control on the right, buttons at their natural
-        // width. Stacked full-width buttons with their words on the left read
-        // as empty fields rather than as things to press.
-        fn line<'a>(label: &str, controls: Vec<Element<'a, Message>>) -> Element<'a, Message> {
-            row![text(label.to_owned()).size(theme::BODY).width(Length::Fill)]
-                .extend(controls)
-                .spacing(theme::SM)
-                .align_y(Alignment::Center)
-                .into()
-        }
-
-        // Game: where it lives, and what can be done to the files there.
-        let dir = self.layout.product_dir(code);
-        let shown = match std::env::var_os("HOME").filter(|home| !home.is_empty()) {
-            Some(home) => match dir.strip_prefix(&home) {
-                Ok(rest) => Path::new("~").join(rest).display().to_string(),
-                Err(_) => dir.display().to_string(),
-            },
-            None => dir.display().to_string(),
-        };
-        let game = column![
-            row![
-                column![
-                    text("Location").size(theme::BODY),
-                    muted(shown, theme::LABEL),
-                ]
-                .spacing(theme::XS)
-                .width(Length::Fill),
-                secondary("Show in Explorer", Message::OpenFiles).enabled(true),
-            ]
-            .spacing(theme::SM)
-            .align_y(Alignment::Center),
-            line(
-                "Game files",
-                vec![
-                    match self.deep_cancel.is_some() {
-                        true => secondary("Stop Deep Scan", Message::DeepScan).enabled(true),
-                        false => secondary(
-                            "Deep Scan",
-                            Message::FromGameSettings(Box::new(Message::DeepScan)),
-                        )
-                        .enabled(can.deep_scan),
-                    },
-                    secondary(
-                        "Scan & Repair",
-                        Message::FromGameSettings(Box::new(Message::ScanAndRepair)),
-                    )
-                    .enabled(can.scan),
-                ],
+    /// The cog's "Game Version": what is installed and where.
+    pub(crate) fn version_card_info<'a>(&'a self, dialog: &'a VersionDialog) -> Element<'a, Message> {
+        let body = column![
+            field_row("Version".to_owned(), mono(dialog.version.clone()).into()),
+            field_row("Install Location".to_owned(), mono(dialog.location.clone()).into()),
+        ]
+        .spacing(theme::SM);
+        let actions = row![
+            Space::new().width(Length::Fill),
+            tappable(
+                "close version",
+                Some(Message::CloseGameVersion),
+                button(text("Close").size(theme::LABEL).width(Length::Fill).center())
+                    .width(Length::Fixed(170.0))
+                    .padding(theme::tap([theme::SM, theme::MD]))
+                    .style(theme::outlined),
             ),
-            line(
-                "Remove from this computer",
-                vec![action_button(
-                    "Uninstall",
-                    theme::ERROR,
-                    Message::FromGameSettings(Box::new(Message::AskUninstall)),
-                )
-                .enabled(can.uninstall)],
+        ];
+        container(
+            column![section(dialog.label.clone(), body.into()), actions].spacing(theme::LG),
+        )
+        .width(Length::Fixed(560.0))
+        .padding(theme::LG)
+        .style(theme::dialog)
+        .into()
+    }
+
+    /// The cog's "Modify Install": the language the game is installed in.
+    pub(crate) fn modify_card<'a>(&'a self, dialog: &'a ModifyDialog) -> Element<'a, Message> {
+        let locales: Vec<LocaleChoice> = lightforge_core::tact::install::LOCALES
+            .iter()
+            .map(|(code, _)| LocaleChoice(code.to_string()))
+            .collect();
+        let changed = dialog.locale != dialog.current;
+        let body = column![
+            muted(
+                "Downloads the files for the chosen language, and the game starts in it. \
+                 Files already stored are not fetched again."
+                    .to_owned(),
+                theme::LABEL,
+            ),
+            self.picker(
+                "modify locale".to_owned(),
+                locales,
+                Some(LocaleChoice(dialog.locale.clone())),
+                "Language",
+                |choice| Message::ModifyLocale(choice.0),
+                Length::Fixed(300.0),
+                theme::BODY,
             ),
         ]
         .spacing(theme::MD);
-
-        // Proton: the same pin as Settings › Proton, for whoever is here.
-        let unpinned = match Kind::of(code) {
-            Kind::Managed => Unpinned::Default,
-            Kind::HandOff => Unpinned::BattleNet,
+        let choice = |label: &'static str| {
+            button(text(label).size(theme::LABEL).width(Length::Fill).center())
+                .width(Length::Fixed(170.0))
+                .padding(theme::tap([theme::SM, theme::MD]))
         };
-        let builds: Vec<ProtonChoice> = std::iter::once(ProtonChoice(None, unpinned))
-            .chain(
-                self.setup
-                    .iter()
-                    .flat_map(|s| s.installed.iter())
-                    .map(|build| ProtonChoice(Some(build.version.clone()), unpinned)),
-            )
-            .collect();
-        let pin = self.config.product(code).and_then(|p| p.profile.proton_ge_version.clone());
-        let for_code = code.clone();
-        let proton = line(
-            "Proton version",
-            vec![self.picker(
-                "game settings proton".to_owned(),
-                builds,
-                Some(ProtonChoice(pin, unpinned)),
-                "",
-                move |choice| Message::PinProductProton(for_code.clone(), choice),
-                Length::Fixed(260.0),
-                theme::BODY,
-            )],
-        );
-
-        // Addons: the way to the page that manages them.
-        let addons = line(
-            "Installed addons",
-            vec![secondary(
-                "Manage Addons",
-                Message::FromGameSettings(Box::new(Message::Show(Screen::Addons))),
-            )
-            .enabled(true)],
-        );
-
-        // Backups: the WTF backups, each restorable or deletable, and the
-        // button that takes one now.
-        let mut backups = column![line(
-            "Your in-game settings",
-            vec![secondary("Back up now", Message::BackupNow).enabled(idle)],
-        )]
-        .spacing(theme::SM);
-        match settings.backups.as_deref() {
-            None => backups = backups.push(muted("reading backups…".to_owned(), theme::BODY)),
-            Some([]) => backups = backups.push(muted("No backups yet.".to_owned(), theme::BODY)),
-            Some(list) => {
-                for backup in list {
-                    let asking = settings
-                        .confirm
-                        .as_ref()
-                        .filter(|(path, _)| path == &backup.path)
-                        .map(|(_, action)| *action);
-                    // The question replaces the details under the date while it
-                    // is asked, so the row only ever holds two buttons; beside
-                    // them it pushed the confirming one off the card.
-                    let under = match asking {
-                        Some(BackupAction::Restore) => {
-                            text("Replace the current settings with this backup?")
-                                .size(theme::CAPTION)
-                                .color(theme::UPDATE)
-                        }
-                        Some(BackupAction::Delete) => {
-                            text("Delete this backup?").size(theme::CAPTION).color(theme::ERROR)
-                        }
-                        None => {
-                            let facts = [
-                                Some(backup.reason.label().to_owned()),
-                                backup.build.clone(),
-                                Some(size_of(backup.size)),
-                            ];
-                            muted(facts.into_iter().flatten().collect::<Vec<_>>().join(" · "), theme::CAPTION)
-                        }
-                    };
-                    let mut line = row![column![text(backup.when()).size(theme::BODY), under]
-                        .spacing(theme::XS)
-                        .width(Length::Fill)]
-                    .spacing(theme::SM)
-                    .align_y(Alignment::Center);
-
-                    line = match asking {
-                        Some(BackupAction::Restore) => line
-                            .push(secondary("Cancel", Message::CancelRestore).enabled(true))
-                            .push(action_button("Restore", theme::UPDATE, Message::ConfirmRestore).enabled(idle)),
-                        Some(BackupAction::Delete) => line
-                            .push(secondary("Cancel", Message::CancelRestore).enabled(true))
-                            .push(action_button("Delete", theme::ERROR, Message::ConfirmDeleteBackup).enabled(idle)),
-                        None => line
-                            .push(secondary("Restore", Message::AskRestore(backup.path.clone())).enabled(idle))
-                            .push(secondary("Delete", Message::AskDeleteBackup(backup.path.clone())).enabled(idle)),
-                    };
-                    backups = backups.push(container(line).padding(theme::MD).style(theme::row));
-                }
-            }
-        }
-        if let Some(note) = &settings.note {
-            backups = backups.push(match note {
-                Ok(line) => muted(line.clone(), theme::LABEL),
-                Err(e) => text(e.clone()).size(theme::LABEL).color(theme::ERROR),
-            });
-        }
-
-        let sections = column![
-            section("Game", game.into()),
-            section("Proton", proton),
-            section("Addons", addons),
-            section("Backups", backups.into()),
-        ]
-        .spacing(theme::LG);
-
         let actions = row![
             Space::new().width(Length::Fill),
-            secondary("Close", Message::CloseGameSettings).enabled(true),
+            tappable("modify cancel", Some(Message::ModifyCancel), choice("Cancel").style(theme::outlined)),
+            tappable(
+                "modify start",
+                changed.then_some(Message::ModifyStart),
+                choice("Start Update").style(theme::filled(theme::UPDATE)),
+            ),
         ]
+        .spacing(theme::SM)
         .align_y(Alignment::Center);
-
         container(
-            column![
-                column![
-                    text("Game Settings").size(theme::TITLE),
-                    muted(settings.label.clone(), theme::LABEL),
-                ]
-                .spacing(theme::XS),
-                container(focus::region(
-                    "game settings",
-                    scrollable(sections)
-                        .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
-                        .style(theme::scrollbar),
-                ))
-                .max_height(SECTIONS_MAX),
-                actions,
-            ]
-            .spacing(theme::LG),
+            column![section(format!("Modify {}", dialog.label), body.into()), actions]
+                .spacing(theme::LG),
         )
-        .width(Length::Fixed(620.0))
+        .width(Length::Fixed(560.0))
         .padding(theme::LG)
         .style(theme::dialog)
         .into()
@@ -669,63 +530,6 @@ impl Lightforge {
         .into()
     }
 
-    /// A newer Lightforge exists. Says so, links to it, installs nothing.
-    ///
-    /// Deliberately small and deliberately passive: the binary belongs to
-    /// whatever installed it, a distribution package most of the time, and a
-    /// launcher that replaced itself behind one would be the wrong kind of
-    /// helpful. The releases page is where the decision belongs.
-    pub(crate) fn update_card<'a>(
-        &'a self,
-        available: &'a lightforge_core::update::Available,
-    ) -> Element<'a, Message> {
-        let body = column![
-            text(format!("Lightforge {} is available.", available.latest)).size(theme::BODY),
-            muted(
-                format!(
-                    "You are running {}. Nothing is installed automatically; \
-                     the releases page has the downloads and the notes.",
-                    available.current
-                ),
-                theme::LABEL,
-            ),
-        ]
-        .spacing(theme::SM)
-        .width(Length::Fixed(420.0));
-
-        let choice = |label: &'static str| {
-            button(text(label).size(theme::LABEL).width(Length::Fill).center())
-                .width(Length::Fixed(150.0))
-                .padding(theme::tap([theme::SM, theme::MD]))
-        };
-        let actions = row![
-            Space::new().width(Length::Fill),
-            self.ring(
-                focus::Target::UpdateLater,
-                Some(Message::DismissUpdate),
-                choice("Not now").style(theme::outlined).on_press(Message::DismissUpdate),
-            ),
-            self.ring(
-                focus::Target::UpdateOpen,
-                Some(Message::OpenReleases),
-                choice("See the release")
-                    .style(theme::filled(theme::ACCENT))
-                    .on_press(Message::OpenReleases),
-            ),
-        ]
-        .spacing(theme::SM)
-        .align_y(Alignment::Center);
-
-        container(
-            column![section("Update available".to_owned(), body.into()), actions]
-                .spacing(theme::LG),
-        )
-        .width(Length::Fixed(420.0))
-        .padding(theme::LG)
-        .style(theme::dialog)
-        .into()
-    }
-
     /// The confirmation for giving a download up.
     ///
     /// Two shapes, because an update and a first install are not the same
@@ -784,6 +588,32 @@ impl Lightforge {
         .align_y(Alignment::Center);
 
         container(column![section(title, body.into()), actions].spacing(theme::LG))
+            .width(Length::Fixed(520.0))
+            .padding(theme::LG)
+            .style(theme::dialog)
+            .into()
+    }
+
+    /// The question before a running game is stopped.
+    pub(crate) fn stop_card<'a>(&'a self, dialog: &'a StopDialog) -> Element<'a, Message> {
+        let choice = |label: &'static str| {
+            button(text(label).size(theme::LABEL).width(Length::Fill).center())
+                .width(Length::Fixed(170.0))
+                .padding(theme::tap([theme::SM, theme::MD]))
+        };
+        let actions = row![
+            Space::new().width(Length::Fill),
+            tappable("keep playing", Some(Message::StopGameDismiss), choice("Keep playing").style(theme::outlined)),
+            tappable(
+                "stop game",
+                Some(Message::StopGameConfirm),
+                choice("Stop game").style(theme::filled(theme::ERROR)),
+            ),
+        ]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center);
+
+        container(column![text(format!("Stop {}?", dialog.label)).size(theme::HEADING + 2.0), actions].spacing(theme::LG))
             .width(Length::Fixed(520.0))
             .padding(theme::LG)
             .style(theme::dialog)

@@ -1,6 +1,40 @@
 # Lightforge release notes
 
 
+## 1.0.0-beta.7
+
+Lightforge 1.0.0-beta.7 fixes the Battle.net install on SteamOS and the
+Wine prefix hang on fresh setups. It also adds a way to stop a running game,
+a rebuilt Game Settings window, and a Proton installer.
+
+- Fixed the Battle.net installer on SteamOS. It refused to connect to
+  Blizzard's servers because the system has no 32-bit gnutls library. Thanks
+  to Shjnzzo for finding the cause.
+- Fixed fresh setups hanging at "Wine prefix" with GE-Proton11-9. Lightforge
+  also uses the tested Proton build unless you pin another, and fetches it
+  for installs that predate it.
+- Fixed setups failing because of a stale wineserver or Wine paths left by
+  another install.
+- The PLAY button now turns into a STOP button while a game is running.
+- Playing a game no longer closes Battle.net.
+- Lightforge can now update itself from the update notice.
+- Added a new window to install Proton versions: Steam Proton, Proton-GE and
+  Proton-CachyOS, in separate tabs.
+- Game Settings is rebuilt and groups Performance, Graphics, Environment,
+  Game, Proton, Addons and Backups. It closes when you click outside it.
+  Game Optimizations are gone, and so is the News page.
+- The cog menu now follows Battle.net's order, with version and language
+  dialogs. The language switcher works correctly after many switches.
+- Shader cache variables now match what DXVK 3 and VKD3D read, so the
+  per-product cache holds files and Clear works.
+- Proton versions in use, or not managed by Lightforge, now show as greyed
+  buttons that say why.
+- Waiting for Battle.net's game list before handing off a launch fixes games
+  that started before it had loaded.
+- Controller navigation was adjusted throughout.
+- Downloads, install paths and uninstall were hardened.
+- WoW Forever beta is no longer offered once the live version is available.
+
 ## 1.0.0-beta.6
 
 Lightforge 1.0.0-beta.6 is a stability release, built almost entirely from

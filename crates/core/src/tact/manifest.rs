@@ -273,8 +273,16 @@ impl InstallEntry {
     /// and normalising it would be inventing a convention Blizzard does not
     /// have. Under Wine the filesystem is case-insensitive by configuration,
     /// not by us.
-    pub fn relative_path(&self) -> std::path::PathBuf {
-        self.path.split('\\').collect()
+    ///
+    /// `None` for a path that climbs out with `..`. These files are executables
+    /// written wherever the manifest says, so one that names a place outside
+    /// the install is refused rather than followed. Empty and `.` segments,
+    /// a leading separator among them, mean nothing and are dropped.
+    pub fn relative_path(&self) -> Option<std::path::PathBuf> {
+        let parts: Vec<&str> =
+            self.path.split(['\\', '/']).filter(|p| !p.is_empty() && *p != ".").collect();
+        let safe = !parts.is_empty() && parts.iter().all(|p| *p != ".." && !p.contains('\0'));
+        safe.then(|| parts.into_iter().collect())
     }
 }
 
@@ -454,6 +462,7 @@ impl DownloadManifest {
     }
 
     /// Total encoded bytes `tags` selects, without materialising the list.
+    #[cfg(test)]
     pub fn selected_size(&self, tags: &TagSet) -> u64 {
         let selection = tags.against(&self.tags, self.entries.len());
         self.entries
@@ -467,6 +476,30 @@ impl DownloadManifest {
     /// Optional content this build offers that `tags` does not ask for.
     pub fn optional_names(&self, tags: &TagSet) -> Vec<String> {
         tags.optional_names(&self.tags, self.entries.len())
+    }
+
+    /// The entries present only because `name` was opted in to: selected
+    /// with it, not selected without it, with everything else `base` asks for
+    /// (its own opt-ins included) held fixed.
+    ///
+    /// What switching the option off would leave unneeded, by the same rule an
+    /// install uses: a file the option tags is never fetched without it, and a
+    /// file `base` does not select, another locale's, is not this install's
+    /// to begin with and stays out of the list.
+    pub fn only_with(&self, base: &TagSet, name: &str) -> Vec<DownloadEntry> {
+        let with = base
+            .clone()
+            .with_optional(base.optional().iter().cloned().chain([name.to_owned()]));
+        let without = base
+            .clone()
+            .with_optional(base.optional().iter().filter(|n| *n != name).cloned());
+        let kept: std::collections::HashSet<_> =
+            self.selected_indices(&without).into_iter().collect();
+        self.selected_indices(&with)
+            .into_iter()
+            .filter(|i| !kept.contains(i))
+            .map(|i| self.entries[i])
+            .collect()
     }
 }
 
@@ -826,6 +859,32 @@ mod tests {
     }
 
     #[test]
+    fn what_an_option_alone_brings_in_is_what_turning_it_off_frees() {
+        // File 1 is the game, file 2 is tagged HighRes but is not part of this
+        // install's base selection (another locale's, say), file 3 is the
+        // texture pack the base install selects once the option is on.
+        let bytes = download(
+            &[
+                ("Windows", 1, &[0, 1, 2]),
+                ("Base", 5, &[0, 2]),
+                ("HighRes", 16384, &[1, 2]),
+            ],
+            &[(1, 100, 0), (2, 200, 0), (3, 400, 0)],
+        );
+        let manifest = DownloadManifest::parse(&bytes).unwrap();
+
+        let base = TagSet::parse("Windows Base");
+        let only: Vec<u64> =
+            manifest.only_with(&base, "HighRes").iter().map(|e| e.size).collect();
+        assert_eq!(only, [400]);
+
+        // Already opted in: the same answer, and another opt-in is untouched.
+        let opted = base.with_optional(["HighRes"]);
+        assert_eq!(manifest.only_with(&opted, "HighRes").len(), 1);
+        assert!(manifest.only_with(&opted, "Missing").is_empty());
+    }
+
+    #[test]
     fn opting_in_to_one_option_does_not_admit_another() {
         let bytes = download(
             &[
@@ -868,10 +927,23 @@ mod tests {
             size: 1,
         };
         assert_eq!(
-            entry.relative_path(),
+            entry.relative_path().unwrap(),
             std::path::Path::new("Utils/swiftshader/libEGL.dll")
         );
-        assert!(entry.relative_path().is_relative());
+    }
+
+    #[test]
+    fn install_paths_never_leave_the_install() {
+        let path = |path: &str| InstallEntry { path: path.into(), ckey: [0; 16], size: 1 }.relative_path();
+
+        assert_eq!(path("..\\..\\.bashrc"), None);
+        assert_eq!(path("Utils\\..\\..\\Wow.exe"), None);
+        assert_eq!(path("Utils/../../Wow.exe"), None);
+        assert_eq!(path(""), None);
+        // A leading separator would have made the join absolute.
+        assert_eq!(path("\\etc\\passwd").unwrap(), std::path::Path::new("etc/passwd"));
+        assert_eq!(path("/etc/passwd").unwrap(), std::path::Path::new("etc/passwd"));
+        assert_eq!(path(".\\Wow.exe").unwrap(), std::path::Path::new("Wow.exe"));
     }
 
     #[test]

@@ -84,12 +84,6 @@ impl ActionState {
     pub fn is_playable(&self) -> bool {
         matches!(self, Self::Play)
     }
-
-    /// Whether a download is occupying CASC storage. Pre-flight must pause the
-    /// downloader before spawning Battle.net when this is true.
-    pub fn is_writing_casc(&self) -> bool {
-        matches!(self, Self::Downloading(_))
-    }
 }
 
 /// Live transfer progress, used for the MB/s and ETA readouts.
@@ -306,13 +300,11 @@ mod tests {
     }
 
     #[test]
-    fn a_paused_transfer_does_not_block_battle_net_but_a_running_one_does() {
+    fn a_transfer_in_progress_is_never_playable() {
         let progress = Progress::default();
         let running = decide(&complete(), None, Some(Transfer::Running(progress)));
         let paused = decide(&complete(), None, Some(Transfer::Paused(progress)));
 
-        assert!(running.is_writing_casc());
-        assert!(!paused.is_writing_casc());
         assert!(!running.is_playable() && !paused.is_playable());
     }
 
@@ -321,12 +313,6 @@ mod tests {
         assert!(ActionState::Play.is_playable());
         assert!(!ActionState::Install.is_playable());
         assert!(!ActionState::Downloading(Progress::default()).is_playable());
-    }
-
-    #[test]
-    fn paused_downloads_do_not_block_battle_net() {
-        assert!(ActionState::Downloading(Progress::default()).is_writing_casc());
-        assert!(!ActionState::Paused(Progress::default()).is_writing_casc());
     }
 
     #[test]

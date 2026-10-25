@@ -137,11 +137,10 @@ pub(crate) const TAB_LABEL: f32 = theme::LABEL;
 ///
 /// All of it lives here rather than in the tabs' own padding, and that is the
 /// point. A tab's padding is what the selected pill is drawn around, so air
-/// spent there is air you see on three sides of "Play" and nowhere beside
-/// "News", which is why the gap to "Battle.net Shop" used to look wider than
-/// the gap back to "Play" although both measured the same. Keeping the tabs'
-/// padding at the minimum a pill needs leaves the two gaps within a few
-/// pixels of each other.
+/// spent there is air you see on three sides of "Play" and nowhere beside an
+/// unselected tab, which made gaps that measured the same look different.
+/// Keeping the tabs' padding at the minimum a pill needs leaves them within a
+/// few pixels of each other.
 pub(crate) const TAB_GAP: f32 = theme::LG;
 
 /// Extra air on top of the row's own spacing where one group of controls in
@@ -177,8 +176,8 @@ pub(crate) const SETTINGS_NAV_WIDTH: f32 =
 /// Tighter than [`theme::XS`] on purpose. Every tab in the navigation row is
 /// separated by the same [`TAB_GAP`], but only this one carries anything after
 /// its label, and that padding is *inside* the button, so air there widens
-/// the space between "News" and "Battle.net Shop" without the row's spacing
-/// changing at all. Keeping the arrow against its word is what makes the two
+/// the space beside "Battle.net Shop" without the row's spacing changing at
+/// all. Keeping the arrow against its word is what makes the two
 /// gaps match by eye as well as in the arithmetic.
 pub(crate) const OUTBOUND_GAP: f32 = 2.0;
 
@@ -308,9 +307,9 @@ pub(crate) fn rich_block(block: &richtext::Block) -> Element<'_, Message> {
         .into(),
 
         // Deliberately not drawn. Showing them means fetching and decoding
-        // remote images into handles, which is the News page's whole image
-        // cache over again for a card that is open for ten seconds; the
-        // description's words carry the meaning and the page has the pictures.
+        // remote images into handles, a whole image cache for a card that is
+        // open for ten seconds; the description's words carry the meaning and
+        // the page has the pictures.
         Kind::Image => Space::new().into(),
 
         Kind::Para | Kind::Other(_) => rich_paragraph(block),
@@ -466,6 +465,24 @@ pub(crate) fn secondary(label: &str, message: Message) -> Action<'static> {
         inner: button(text(label.to_owned()).size(theme::tap_text(theme::LABEL)))
             .style(theme::outlined)
             .padding(theme::tap([theme::SM, theme::MD])),
+        message,
+    }
+}
+
+/// [`secondary`] at a fixed height, the label centred in it: a button's
+/// content sits at the top of any height it was not sized to, so this one is
+/// told to fill and centre.
+pub(crate) fn secondary_tall(label: &str, message: Message, height: f32) -> Action<'static> {
+    Action {
+        inner: button(
+            text(label.to_owned())
+                .size(theme::tap_text(theme::LABEL))
+                .height(Length::Fill)
+                .align_y(Alignment::Center),
+        )
+        .style(theme::outlined)
+        .padding(theme::tap([0.0, theme::MD]))
+        .height(Length::Fixed(height)),
         message,
     }
 }

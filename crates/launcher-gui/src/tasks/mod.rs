@@ -17,7 +17,6 @@ use lightforge_core::error::chain;
 use lightforge_core::assets::{Manifest, Pipeline};
 use lightforge_core::config::Config;
 use lightforge_core::net::Http;
-use lightforge_core::news;
 use lightforge_core::families::Families;
 use lightforge_core::paths::{AppDirs, Layout};
 use lightforge_core::preflight::{DownloadGuard, GameProcess, Preflight, PreflightError};
@@ -36,7 +35,7 @@ mod transfer;
 mod store;
 mod launch;
 mod backups;
-mod headlines;
+pub(crate) mod upgrade;
 
 pub(crate) use branding::*;
 pub(crate) use catalog::*;
@@ -44,7 +43,7 @@ pub(crate) use transfer::*;
 pub(crate) use store::*;
 pub(crate) use launch::*;
 pub(crate) use backups::*;
-pub(crate) use headlines::*;
+pub(crate) use upgrade::{Prepared, Stamp};
 
 
 /// An error on its way to the screen: what went wrong, and what to do about
@@ -157,12 +156,16 @@ fn runner_for(
 
     let target =
         std::fs::read_link(layout.wow_symlink()).unwrap_or_else(|_| layout.wow_install(code));
+    // Made here rather than trusting DXVK and VKD3D to create it. Failing
+    // only costs the cache, so the launch goes on either way.
+    let shaders = dirs.shader_cache_dir(code);
+    let _ = std::fs::create_dir_all(&shaders);
     let mut runner =
         ProtonRunner::new(build, layout, ProtonRunner::steam_client_path(steam.as_ref(), &dirs))
             .with_compat_mount(&target)
             // The prefix is shared, so pooling the shader cache would mean one
             // product's Proton swap discarding another's shaders.
-            .with_shader_cache(dirs.shader_cache_dir(code));
+            .with_shader_cache(shaders);
 
     // Two profiles, because they are two different questions. A direct
     // launch is this product's own; a Battle.net launch is the client's and
@@ -177,6 +180,22 @@ fn runner_for(
         runner = runner.with_env(key, value);
     }
     Ok(runner)
+}
+
+/// [`runner_for`] Battle.net itself, inside Steam's runtime where the host has
+/// no 32-bit gnutls. Only for the calls that start the client or hand it
+/// something, everything else about the prefix still runs on the host.
+fn client_runner(
+    layout: &Layout,
+    code: &ProductCode,
+) -> Result<lightforge_core::prefix::ProtonRunner, Problem> {
+    let runner = runner_for(layout, code, Runs::BattleNet)?;
+    let steam = lightforge_core::steam::SteamRoot::discover();
+    match lightforge_core::runtime::tls_container(runner.build(), steam.as_ref()) {
+        Ok(Some(entry)) => Ok(runner.in_container(entry)),
+        Ok(None) => Ok(runner),
+        Err(e) => Err(Problem::of(&e)),
+    }
 }
 
 /// The shared profile Battle.net and its games launch under.

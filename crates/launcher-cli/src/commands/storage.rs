@@ -315,6 +315,46 @@ pub(crate) async fn prune(ctx: Ctx, path: Option<PathBuf>, yes: bool) -> Result<
     Ok(())
 }
 
+pub(crate) async fn drop_optional(
+    ctx: Ctx,
+    product: String,
+    tag: String,
+    keep: Vec<String>,
+    path: Option<PathBuf>,
+    yes: bool,
+) -> Result<()> {
+    let Ctx { layout, .. } = ctx;
+    use lightforge_core::net::Http;
+    use lightforge_core::tact::reclaim;
+
+    let install = path.unwrap_or_else(|| default_install(&layout));
+    let product: lightforge_core::product::ProductCode = product.parse()?;
+    let gib = |b: u64| b as f64 / 1024f64.powi(3);
+    let http = Http::new()?;
+    let plan = reclaim::plan_optional(&http, &install, &product, &tag, &keep).await?;
+    let files: u64 = plan.entries.iter().map(|e| u64::from(e.size)).sum();
+    println!("install         {}", install.display());
+    println!("option          {tag} of {product}");
+    println!("files           {} files, {:.2} GiB", plan.entries.len(), gib(files));
+    println!("archives        {} compacted or deleted", plan.archives.len());
+    println!("copies          {:.2} GiB still in use", gib(plan.moved));
+    println!("frees           {:.2} GiB", gib(plan.freed));
+    println!("stranded        {:.2} GiB left as dead space", gib(plan.stranded));
+
+    if !yes || plan.entries.is_empty() {
+        if !plan.entries.is_empty() {
+            println!("\nnothing changed. Re-run with --yes to go ahead.");
+        }
+        return Ok(());
+    }
+    if let Some(process) = lightforge_core::preflight::scan(&layout).first() {
+        anyhow::bail!("close {} first — the store is in use", process.name);
+    }
+    let freed = reclaim::execute(&install, &plan, copy_progress(plan.moved))?;
+    println!("\nfreed           {:.2} GiB", gib(freed));
+    Ok(())
+}
+
 pub(crate) fn compact(ctx: Ctx, path: Option<PathBuf>, yes: bool) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::tact::compact;

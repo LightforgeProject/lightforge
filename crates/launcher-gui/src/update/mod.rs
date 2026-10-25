@@ -16,8 +16,8 @@ mod storage;
 mod setup;
 mod settings;
 mod navigation;
-mod news;
 mod report;
+mod upgrade;
 mod app;
 
 /// What one area does with a message: a task when it is one of its own,
@@ -36,8 +36,8 @@ impl Lightforge {
             Lightforge::update_setup,
             Lightforge::update_settings,
             Lightforge::update_navigation,
-            Lightforge::update_news,
             Lightforge::update_report,
+            Lightforge::update_upgrade,
             Lightforge::update_app,
         ];
         let mut message = message;
@@ -65,8 +65,8 @@ mod tests {
         ("setup", include_str!("setup.rs")),
         ("settings", include_str!("settings.rs")),
         ("navigation", include_str!("navigation.rs")),
-        ("news", include_str!("news.rs")),
         ("report", include_str!("report.rs")),
+        ("upgrade", include_str!("upgrade.rs")),
         ("app", include_str!("app.rs")),
     ];
 

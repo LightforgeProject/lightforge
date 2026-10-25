@@ -1,9 +1,8 @@
 //! Addon descriptions and changelogs, as blocks rather than markup.
 //!
 //! CurseForge publishes both as HTML fragments. The proxy reduces them to a
-//! short list of blocks before they reach us, so this module holds no parser,
-//! the same division of labour as [`crate::news`], and for the same reason: a
-//! site changing its markup is a redeploy, not a release.
+//! short list of blocks before they reach us, so this module holds no parser:
+//! a site changing its markup is a redeploy, not a release.
 //!
 //! What arrives is deliberately lossy. Bold, italics, tables and inline
 //! styling are already flattened to text upstream; what survives is the

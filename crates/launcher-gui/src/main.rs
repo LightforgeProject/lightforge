@@ -43,6 +43,7 @@ use format::*;
 use icons::*;
 use message::*;
 use model::*;
+use wizard::LocaleChoice;
 use widgets::*;
 
 use std::collections::{HashMap, HashSet};
@@ -65,7 +66,6 @@ use lightforge_core::config::{Config, SteamOsUse};
 use lightforge_core::debug::DebugInfo;
 use lightforge_core::library;
 use lightforge_core::net::Http;
-use lightforge_core::news;
 use lightforge_core::paths::{AppDirs, Layout};
 use lightforge_core::product::{Branch, Catalog, Kind, Product, ProductCode, ProductLine};
 use lightforge_core::state::{self, ActionState, Local};
@@ -75,28 +75,13 @@ use lightforge_core::storage;
 use lightforge_core::tact::install::Offerings;
 use lightforge_core::transfers::{self, Saved, Standing};
 use lightforge_core::tact::download::Cancel;
-use lightforge_core::tweaks::{GraphicsApi, HostTools, Preset, Tweaks};
+use lightforge_core::tweaks::{HostTools, Tweaks};
 
 use art::Art;
 use tasks::{Problem, Refreshed, SharedDownloads, TransferState};
 
 /// Where a player manages their subscription, per the spec.
 const ACCOUNT_URL: &str = "https://account.battle.net/games";
-
-/// How far the News backdrop is darkened over the body of the page.
-///
-/// Higher than the dashboard's mid-page 0.35 because far more text sits over
-/// it: a hundred headline cards rather than a handful of controls. At 0.70
-/// the picture still reads as a picture between the cards while the muted
-/// summary text keeps the contrast it has on a plain page.
-const NEWS_SCRIM: f32 = 0.70;
-
-/// How far it is darkened across the header and the page title.
-///
-/// The navigation row has no backdrop of its own, and this artwork is pale
-/// sky across its top third, the one combination that leaves white text
-/// sitting on white. Held, not ramped, so the whole row is on even cover.
-const NEWS_SCRIM_TOP: f32 = 0.88;
 
 /// The desktop entry's basename, the Wayland `app_id` and the AppStream
 /// component id, which are required to be the same string, see
@@ -149,9 +134,9 @@ const SPLASH_BUDGET: Duration = Duration::from_secs(12);
 /// Decoding pictures makes big buffers that are freed correctly, but glibc
 /// raises its mmap threshold as it watches them (up to 32 MiB), so later ones
 /// come off the heap and freed pages stay resident, hundreds of MB across 48
-/// arenas. Measured on News with 97 images: 444 MB RSS as shipped, 149 MB with
-/// fixed trim and mmap thresholds. Pinning the threshold is what stops the
-/// drift. glibc only; musl would need measuring again.
+/// arenas. Measured on a page of 97 images: 444 MB RSS as shipped, 149 MB
+/// with fixed trim and mmap thresholds. Pinning the threshold is what stops
+/// the drift. glibc only; musl would need measuring again.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn tune_allocator() {
     // 128 KiB: large enough that ordinary small allocations are untouched,
@@ -335,29 +320,6 @@ struct Lightforge {
     /// handle: iced has no decoder of its own, and a handle rebuilt in `view`
     /// would be a fresh texture on every frame.
     bnet_icon: Option<image::Handle>,
-    /// The headlines, once the News page has asked for them.
-    ///
-    /// Fetched when that page is first opened rather than at startup: a
-    /// launcher's job on the first frame is to show the Play button, and a
-    /// feed nobody has looked at yet is not worth a request in front of it.
-    news: Option<news::Headlines>,
-    /// Whether a fetch is in flight, so the page says "loading" once and the
-    /// tab cannot start a second one by being clicked twice.
-    news_pending: bool,
-    /// Set once the first attempt has finished, so an empty result reads as
-    /// "nothing came back" rather than as "not asked yet".
-    news_asked: bool,
-    /// Headline pictures by their URL, decoded once.
-    ///
-    /// Keyed by URL rather than by index because the list is re-fetched: a
-    /// picture whose article is still in the feed keeps the handle it already
-    /// had, and a handle that does not change is a texture iced does not
-    /// re-upload.
-    news_images: HashMap<String, image::Handle>,
-    /// The page's backdrop, decoded once off the UI thread. Drawn when it
-    /// arrives; the page is perfectly readable in the instant before.
-    news_bg: Option<image::Handle>,
-
     /// Whether the cog menu beside the primary button is open.
     gear_open: bool,
     /// Live progress of a store scan, and whether one is running.
@@ -439,10 +401,15 @@ struct Lightforge {
     /// Editable copy of Battle.net's *own* cap, in MB/s. Empty means none.
     bnet_limit_input: String,
     proton_notice: Option<String>,
-    /// Stable releases that could be installed, newest first.
-    proton_available: Vec<String>,
-    /// The one picked in the install picker, if any.
-    proton_choice: Option<String>,
+    /// The tested Proton build has been asked for this session, so a failed
+    /// fetch (offline) is not retried on every status read.
+    tested_proton_asked: bool,
+    /// Stable releases that could be installed per family, newest first.
+    proton_available: Vec<(proton::ProtonFamily, Vec<String>)>,
+    /// Valve Protons this session asked Steam to install.
+    steam_proton_asked: HashSet<u32>,
+    /// The tab of the "Install Proton Version" window, while it is open.
+    proton_installer: Option<ProtonCategory>,
     /// Measured size of each installed build, keyed by its directory.
     proton_sizes: HashMap<PathBuf, u64>,
     /// The last Storage measurement; `None` until the section first asks.
@@ -456,8 +423,17 @@ struct Lightforge {
     uninstall_dialog: Option<UninstallDialog>,
     cancel_dialog: Option<CancelDialog>,
     /// A newer Lightforge on GitHub, found at start-up. Shown once per
-    /// release and never installed; see `core::update`.
+    /// release; see `core::update`, and `core::upgrade` for installing it.
     update_notice: Option<lightforge_core::update::Available>,
+    /// How this copy was installed, which decides what the notice offers.
+    /// Read at start, like `exe`: a package manager replacing the binary
+    /// leaves this process's own path reading `(deleted)`.
+    origin: lightforge_core::upgrade::Origin,
+    /// The binary this process started from, for a restart.
+    exe: Option<std::path::PathBuf>,
+    /// The update of Lightforge itself, once "Update" was pressed.
+    upgrade: Option<Upgrade>,
+    launcher_check: LauncherCheck,
     /// A cancelled transfer whose files go once the run has wound down.
     ///
     /// Deferred rather than done on the click: the downloader may still have
@@ -471,6 +447,14 @@ struct Lightforge {
     /// on the click, so the launch, and what follows it, cannot move to a
     /// tile selected in the meantime.
     launching: Option<ProductCode>,
+    /// A game process is up in the prefix during a launch of ours: PLAY
+    /// becomes STOP.
+    game_up: bool,
+    /// STOP was confirmed and the game has been told to go.
+    stopping: bool,
+    stop_dialog: Option<StopDialog>,
+    version_dialog: Option<VersionDialog>,
+    modify_dialog: Option<ModifyDialog>,
     /// A launch whose pre-flight is done, held until the download it paused
     /// has finished winding down: the client and a still-checkpointing
     /// downloader would share one store.
@@ -511,14 +495,11 @@ struct Lightforge {
     /// A toggle for a binary that is not installed is a launch failure waiting
     /// to happen, so the panel hides what is missing.
     tools: HostTools,
+    /// The environment-variable editors: Game Settings' and Battle.net's.
+    env_editor: iced::widget::text_editor::Content,
+    bnet_env_editor: iced::widget::text_editor::Content,
     /// Editable copies of the selected product's numeric tweaks, and the two
     /// fields of the environment escape hatch.
-    fps_input: String,
-    fps_bk_input: String,
-    monitor_input: String,
-    bnet_monitor_input: String,
-    env_key_input: String,
-    env_value_input: String,
 
     addons: addonwork::Listing,
     token_input: String,
@@ -549,8 +530,6 @@ struct Lightforge {
     /// start: a hand-off game has no client settings, so environment
     /// variables are not a last resort there but most of what the page is
     /// for, and hiding them behind a Show button reads as "nothing here".
-    env_open: bool,
-    bnet_env_open: bool,
     /// Game families, as Blizzard's own catalogue names them, read out of the
     /// client's cache at startup. Empty on a prefix whose client has never
     /// run, which falls the hand-off back to the compiled-in families.
@@ -636,7 +615,16 @@ impl Lightforge {
             .iter()
             .map(|p| Choice { code: p.code.clone(), label: p.display_name.clone() })
             .collect();
-        let selected = choices.first().cloned().unwrap_or(Choice {
+        // The retired beta never opens the app: the live build of its line
+        // does, or failing that the next game in the list.
+        let first = choices.first().filter(|c| c.code != ProductCode::ClassicBeta).or_else(|| {
+            choices
+                .iter()
+                .find(|c| c.code == ProductCode::Forever)
+                .or_else(|| choices.iter().find(|c| c.code != ProductCode::ClassicBeta))
+                .or_else(|| choices.first())
+        });
+        let selected = first.cloned().unwrap_or(Choice {
             code: ProductCode::Retail,
             label: "World of Warcraft".to_owned(),
         });
@@ -687,11 +675,6 @@ impl Lightforge {
             forward: Vec::new(),
             hints: false,
             bnet_icon,
-            news: None,
-            news_pending: false,
-            news_asked: false,
-            news_images: HashMap::new(),
-            news_bg: None,
             gear_open: false,
             scan_rx: None,
             scan_sample: lightforge_core::tact::verify::Progress::default(),
@@ -729,8 +712,10 @@ impl Lightforge {
             limit_input,
             bnet_limit_input: String::new(),
             proton_notice: None,
+            tested_proton_asked: false,
             proton_available: Vec::new(),
-            proton_choice: None,
+            steam_proton_asked: HashSet::new(),
+            proton_installer: None,
             proton_sizes: HashMap::new(),
             storage: None,
             storage_measuring: false,
@@ -740,9 +725,18 @@ impl Lightforge {
             uninstall_dialog: None,
             cancel_dialog: None,
             update_notice: None,
+            origin: lightforge_core::upgrade::Origin::detect(),
+            exe: std::env::current_exe().ok(),
+            upgrade: None,
+            launcher_check: LauncherCheck::default(),
             delete_after_cancel: Vec::new(),
             discarding: None,
             launching: None,
+            game_up: false,
+            stopping: false,
+            stop_dialog: None,
+            version_dialog: None,
+            modify_dialog: None,
             launch_when_quiet: None,
             report_dialog: None,
             system: None,
@@ -756,12 +750,8 @@ impl Lightforge {
             library_empty: false,
             drive_states: HashMap::new(),
             tools: HostTools::detect(),
-            fps_input: String::new(),
-            fps_bk_input: String::new(),
-            monitor_input: String::new(),
-            bnet_monitor_input: String::new(),
-            env_key_input: String::new(),
-            env_value_input: String::new(),
+            env_editor: iced::widget::text_editor::Content::new(),
+            bnet_env_editor: iced::widget::text_editor::Content::new(),
             addons: addonwork::Listing::default(),
             token_input: String::new(),
             addon_filter: String::new(),
@@ -770,8 +760,6 @@ impl Lightforge {
             version_picker: None,
             game_settings: None,
             addon_detail: None,
-            env_open: false,
-            bnet_env_open: true,
             families: lightforge_core::families::Families::default(),
             import_pinned: false,
             addon_auto_done: Vec::new(),
@@ -1006,6 +994,13 @@ impl Lightforge {
             true => iced::time::every(REGISTRY_POLL).map(|_| Message::RegistryPoll),
             false => Subscription::none(),
         };
+        let upgrade = self.upgrade_watch();
+        // Only during a launch of ours: asking the process table whether a
+        // game is up is what turns PLAY into STOP.
+        let game_watch = match self.busy && self.launching.is_some() {
+            true => iced::time::every(Duration::from_secs(2)).map(|_| Message::GameWatch),
+            false => Subscription::none(),
+        };
 
         // The splash's bar sweeps off the clock, so it needs the tick as much
         // as a live transfer does.
@@ -1014,6 +1009,7 @@ impl Lightforge {
             || self.setup_running
             || self.addons_busy
             || self.scanning
+            || self.upgrading()
             || self.uninstall_dialog.as_ref().is_some_and(|d| d.working)
             || self.unused.values().any(|u| matches!(u, UnusedData::Freeing { .. }))
         {
@@ -1026,10 +1022,13 @@ impl Lightforge {
                 dragging,
                 pointing,
                 registry,
+                upgrade,
+                game_watch,
                 iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),
             ]),
             false => Subscription::batch([
-                closing, hints, pads, window_focus, resizes, dragging, pointing, registry,
+                closing, hints, pads, window_focus, resizes, dragging, pointing, registry, upgrade,
+                game_watch,
             ]),
         }
     }
@@ -1072,11 +1071,9 @@ impl Lightforge {
         }
         let screen = match self.screen {
             Screen::Dashboard => self.dashboard(),
-            Screen::News => self.news_screen(),
             Screen::Updates => self.updates_screen(),
             Screen::Settings => self.settings(),
             Screen::Addons => self.addons_screen(),
-            Screen::Tweaks => self.tweaks_screen(),
         };
 
         // The manager hangs under its button on every screen, not just the
@@ -1134,7 +1131,11 @@ impl Lightforge {
             (_, _, _, _, Some(picker), ..) => Some(self.version_card(picker)),
             (_, _, _, _, _, Some(detail), ..) => Some(self.detail_card(detail)),
             (_, _, _, _, _, _, Some(dialog), ..) => Some(self.report_card(dialog)),
-            (_, _, _, _, _, _, _, Some(settings), ..) => Some(self.game_settings_card(settings)),
+            // Closes on a click outside it, so a click inside that no control
+            // wanted has to stop at the card rather than reach the scrim.
+            (_, _, _, _, _, _, _, Some(settings), ..) => Some(
+                mouse_area(self.game_settings_card(settings)).on_press(Message::MenuClick).into(),
+            ),
             // Last, so a dialog someone opened themselves is never buried
             // under the one the app opened for them. The notes come before
             // the update notice: they are about the build that is running,
@@ -1143,6 +1144,19 @@ impl Lightforge {
             (.., Some(available)) => Some(self.update_card(available)),
             _ => None,
         };
+        let card = card
+            .or_else(|| self.stop_dialog.as_ref().map(|d| self.stop_card(d)))
+            .or_else(|| self.version_dialog.as_ref().map(|d| self.version_card_info(d)))
+            .or_else(|| self.modify_dialog.as_ref().map(|d| self.modify_card(d)))
+            .or_else(|| self.proton_installer.map(|tab| self.proton_installer_card(tab)));
+        let settings_on_top = self.game_settings.is_some()
+            && self.install_dialog.is_none()
+            && self.uninstall_dialog.is_none()
+            && self.cancel_dialog.is_none()
+            && self.downgrade_dialog.is_none()
+            && self.version_picker.is_none()
+            && self.addon_detail.is_none()
+            && self.report_dialog.is_none();
         let screen = match card {
             Some(card) => stack![
                 screen,
@@ -1151,9 +1165,12 @@ impl Lightforge {
                         // A click no control in the dialog wanted closes a
                         // dropdown open in it, as a click on a page does;
                         // otherwise it only stops at the dialog.
-                        .on_press(match self.panel_open() {
-                            true => Message::Dismiss,
-                            false => Message::MenuClick,
+                        .on_press(match (self.panel_open(), settings_on_top) {
+                            (true, _) => Message::Dismiss,
+                            // Game Settings is the one card a click outside
+                            // closes: it holds no half-finished input.
+                            (false, true) => Message::CloseGameSettings,
+                            (false, false) => Message::MenuClick,
                         }),
                 ),
             ]
@@ -1200,9 +1217,6 @@ const SHOP_URL: &str = "https://shop.battle.net";
 const STEAM_KEYBOARD: &str = "steam://open/keyboard";
 /// And to put it away: the pair SDL uses, found in Steam's own libSDL3.
 const STEAM_KEYBOARD_CLOSE: &str = "steam://close/keyboard";
-
-/// Where the News page's headlines come from, and where its button goes.
-const WOWHEAD_URL: &str = "https://www.wowhead.com";
 
 /// Where the app menu's links point. `None` is a destination that does not
 /// exist yet: the entry draws dimmed and unclickable until it is filled in.

@@ -1,4 +1,4 @@
-//! The app around the pages: window, splash, menus, history, release notices, general switches.
+//! The app around the pages: window, splash, menus, history, release notes, general switches.
 
 use crate::*;
 
@@ -43,11 +43,6 @@ impl Lightforge {
                 }
                 Task::none()
             }
-            Message::NewsOnPlay(show) => {
-                self.config.news_on_play = show;
-                self.save_config();
-                Task::none()
-            }
             Message::ShowReleaseNotes(show) => {
                 self.config.patch_notes_muted = !show;
                 self.save_config();
@@ -62,35 +57,6 @@ impl Lightforge {
                     self.save_config();
                 }
                 Task::none()
-            }
-            Message::UpdateChecked(found) => {
-                let Some(available) = found else { return Ok(Task::none()) };
-                // Once per release. Someone who has read "beta.3 is out" and
-                // decided to stay on beta.2 should not be told again on every
-                // start until they give in.
-                if self.config.update_seen.as_deref() == Some(available.latest.as_str()) {
-                    return Ok(Task::none());
-                }
-                self.update_notice = Some(available);
-                Task::none()
-            }
-            Message::DismissUpdate => {
-                if let Some(available) = self.update_notice.take() {
-                    self.config.update_seen = Some(available.latest);
-                    self.save_config();
-                }
-                Task::none()
-            }
-            Message::OpenReleases => {
-                let url = self
-                    .update_notice
-                    .as_ref()
-                    .map(|a| a.url.clone())
-                    .unwrap_or_else(|| lightforge_core::update::RELEASES_PAGE.to_owned());
-                if let Err(e) = open::that_detached(&url) {
-                    self.error = Some(format!("{url}: {e}").into());
-                }
-                self.update(Message::DismissUpdate)
             }
             Message::CheckLauncherUpdates(on) => {
                 self.config.check_for_updates = on;
@@ -163,6 +129,11 @@ impl Lightforge {
             Message::Exit => iced::exit(),
             Message::MinimizeOnLaunch(on) => {
                 self.config.minimize_on_launch = on;
+                self.save_config();
+                Task::none()
+            }
+            Message::CloseBattleNetOnPlay(on) => {
+                self.config.close_battle_net_on_play = on;
                 self.save_config();
                 Task::none()
             }

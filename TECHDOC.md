@@ -115,16 +115,17 @@ one place rather than being rebuilt from string joins all over the tree:
 
 The split is not tidiness. Game files live on the native filesystem and are
 **symlinked** into the prefix, so the prefix stays disposable — you can delete
-and rebuild it without touching 120 GB of downloads. And because the game then
-executes from a path Wine believes is a normal Windows location, the in-game
-Chromium (the shop, the Token) stops rendering a grey rectangle.
+and rebuild it without touching 120 GB of downloads. The game is not started
+through that symlink, though: each library also gets its own drive letter,
+and the game runs from there, which is what the in-game shop needs (see
+[The in-game shop](#the-in-game-shop)).
 
 Lightforge's own data is XDG, and deliberately not under the games root:
 
 ```text
 ~/.config/lightforge/config.toml      settings, written atomically
 ~/.local/share/lightforge/            Proton builds, the addon ledger, the queue
-~/.cache/lightforge/                  artwork, news, catalogues — disposable
+~/.cache/lightforge/                  artwork, catalogues — disposable
 ```
 
 ## Getting a game: TACT / NGDP
@@ -291,9 +292,35 @@ single file.
   download writing to the CASC store paused first — two writers in one store
   is a real corruption risk, not a theoretical one.
 
+### The in-game shop
+
+The shop and the WoW Token are not Battle.net's browser. They are
+`Utils/BlizzardBrowser.exe`, a CEF 83 child process that `Wow.exe` starts
+itself, so nothing passed to Battle.net (`--in-process-gpu` included) reaches
+them, and they work from a direct launch with no Battle.net running at all.
+
+Started from `C:` (through the prefix symlink) or the catch-all `Z:`, the
+browser's GPU process dies on start, and its log in
+`_retail_/Logs/BlizzardBrowser/CEF-*.log` reads `The GPU process has crashed`
+three times before Chromium gives up and leaves a grey rectangle. With the
+install on a drive letter of its own (`dosdevices/d:` and up) and the game
+started by its native path, so Wine resolves it onto that drive, the same log
+reads `Exiting GPU process due to errors during initialization` once,
+Chromium falls back to software rendering, and the page draws. It was
+verified up to a completed checkout. Launching by the native path alone,
+without the drive letter, changes nothing.
+
+It also needs a recent enough Proton: on GE-Proton10-34 the support page
+rendered and the shop still hung on "Loading…"; GE-Proton11-7 works. Related
+upstream: Wine bug 47778.
+
+`WSALookupServiceBegin failed with: 0` appears in every one of those logs,
+working or not. It is Wine's unimplemented network-location API and has
+nothing to do with the shop.
+
 ## Battle.net and the hand-off
 
-`battlenet.rs` installs the client headlessly into the prefix and applies the
+`battlenet.rs` installs the client into the prefix unattended and applies the
 registry and config defaults that stop it fighting you.
 
 For games outside the WoW family, Lightforge is a pass-through, and the
@@ -381,7 +408,7 @@ The rest:
 - **Channels are a floor, not a filter**: choosing "beta" means beta *or
   better*, so an addon that ships a release after a beta still updates to it.
 
-## Assets, news and the catalogue
+## Assets and the catalogue
 
 `assets.rs` resolves a product's artwork through a hosted manifest, cached by
 URL and revalidated with ETags so a start-up check costs a `304`. The
@@ -400,9 +427,6 @@ derive wrongly**: 1.0.0-beta.3 would install a stated `wowf` into a literal
 branch borrows it. Reading the folder and executable from the product config
 would lift the limit, and is the planned fix.
 
-`news.rs` fetches headlines through the same backend and files each article
-against the game it belongs to.
-
 ## The GUI
 
 `crates/launcher-gui`, iced 0.14, Elm architecture: one `Message` enum, one
@@ -420,8 +444,8 @@ against the game it belongs to.
   buffer and a 0.5 MB one.
 - **The allocator is tuned at startup.** `mallopt` pins the mmap threshold, so
   large short-lived image buffers are returned to the OS instead of being
-  retained in glibc's per-thread arenas. Measured: it took the News page from
-  444 MB resident to 149 MB.
+  retained in glibc's per-thread arenas. Measured: it took the old News page
+  from 444 MB resident to 149 MB.
 - **Rendering** is wgpu with an automatic tiny-skia fallback;
   `ICED_BACKEND=tiny-skia` forces software.
 
@@ -429,7 +453,7 @@ against the game it belongs to.
 
 TOML at `~/.config/lightforge/config.toml`, written atomically. It holds
 settings a person edits — region, locale, libraries, per-product profiles,
-optimization choices. Two things that are *state* rather than settings live
+launch settings. Two things that are *state* rather than settings live
 beside it instead: the download queue (`transfers.rs`, rewritten on every
 pause and resume) and the addon ledger.
 

@@ -36,7 +36,7 @@ pub(crate) fn package_icon() -> image::Handle {
     PACKAGE.get_or_init(|| art::decode_bundled(PACKAGE_ICON)).clone()
 }
 
-/// Game Optimizations. Sliders rather than the cog: the cog is already the
+/// Game Settings. Sliders rather than the cog: the cog is already the
 /// split button's own mark for Lightforge's settings, and these are the
 /// game's.
 pub(crate) const SLIDERS_ICON: &[u8] = include_bytes!("../assets/sliders-horizontal.png");
@@ -118,15 +118,6 @@ bundled_icons! {
     kofi_icon => "kofi.png",
     paypal_icon => "paypal.png",
 }
-
-/// The News page's backdrop.
-///
-/// Bundled rather than fetched from the asset manifest, unlike every product
-/// background: that manifest is keyed by product, and this is chrome for one
-/// page that belongs to no game. Kept at [`art::BACKGROUND_MAX_WIDTH`]'s 2560,
-/// the same ceiling product art gets, which lands it at about half a megabyte;
-/// see `assets/README.md` for how it was prepared.
-pub(crate) const NEWS_BACKGROUND: &[u8] = include_bytes!("../assets/news-background.jpg");
 
 /// What Steam shows for Lightforge in its library, built by
 /// `assets/steam/make.sh` from the icon and the wordmark.

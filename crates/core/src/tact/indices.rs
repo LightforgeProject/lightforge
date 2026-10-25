@@ -34,13 +34,6 @@ use super::archive::{ArchiveError, ArchiveIndex};
 use super::cdn::{CdnError, Client};
 use crate::net::Http;
 
-/// How many indices to fetch at once by default.
-///
-/// Eight keeps the 119 MiB prelude short without opening enough connections
-/// to look like abuse; these are small files, so the win is in overlapping
-/// latency rather than in bandwidth.
-pub const DEFAULT_CONCURRENCY: usize = 8;
-
 /// A directory of `.index` files, fetched on demand and kept.
 #[derive(Debug, Clone)]
 pub struct IndexCache {

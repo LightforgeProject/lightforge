@@ -11,6 +11,7 @@ description = "UI-agnostic core: product models, path layout, .build.info engine
 blte.workspace = true
 directories.workspace = true
 flate2.workspace = true
+liblzma.workspace = true
 futures-util.workspace = true
 # statvfs, for free space in Settings > Storage.
 libc.workspace = true

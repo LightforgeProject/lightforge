@@ -45,7 +45,61 @@ impl Lightforge {
                     }
                 }
             }
+            Message::GameWatch => {
+                if !(self.busy && self.launching.is_some()) {
+                    return Ok(Task::none());
+                }
+                Task::perform(tasks::game_running(self.layout.clone()), Message::GameSeen)
+            }
+            Message::GameSeen(up) => {
+                // A scan that was out when the session ended must not bring
+                // the button back.
+                self.game_up = up && self.busy && self.launching.is_some();
+                Task::none()
+            }
+            Message::AskStopGame => {
+                if !self.game_up || self.stopping {
+                    return Ok(Task::none());
+                }
+                let code = self.launching.clone().unwrap_or_else(|| self.selected.code.clone());
+                let label = self
+                    .choices
+                    .iter()
+                    .find(|c| c.code == code)
+                    .map(|c| c.label.clone())
+                    .unwrap_or_else(|| code.as_str().to_owned());
+                self.stop_dialog = Some(StopDialog { label });
+                Task::none()
+            }
+            Message::StopGameDismiss => {
+                self.stop_dialog = None;
+                Task::none()
+            }
+            Message::StopGameConfirm => {
+                self.stop_dialog = None;
+                if !self.game_up || self.stopping {
+                    return Ok(Task::none());
+                }
+                self.stopping = true;
+                self.status = "stopping the game…".to_owned();
+                Task::perform(tasks::stop_game(self.layout.clone()), Message::GameStopped)
+            }
+            Message::GameStopped(result) => {
+                // The launch's own watcher sees the process go and sends
+                // `Launched`, which is what hands PLAY back; this only
+                // reports how the stop went.
+                self.stopping = false;
+                self.game_up = false;
+                match result {
+                    Ok(note) => self.status = note,
+                    Err(e) => self.error = Some(e),
+                }
+                Task::none()
+            }
             Message::Launched(result) => {
+                self.game_up = false;
+                self.stopping = false;
+                self.stop_dialog = None;
                 self.busy = false;
                 let launched = self.launching.take().unwrap_or_else(|| self.selected.code.clone());
                 match result {
@@ -227,10 +281,6 @@ impl Lightforge {
                 // straight past the guard it just answered.
                 self.downgrade_ok.insert(dialog.pick);
                 self.preflight(dialog.what)
-            }
-            Message::OptionalContent(name, on) => {
-                self.set_optional(&self.selected.code.clone(), &name, on);
-                Task::none()
             }
 
             other => return Err(other),

@@ -12,6 +12,40 @@ pub(crate) struct PatchNotes {
     pub(crate) mute: bool,
 }
 
+/// Where the "Check for updates" button in Settings stands.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) enum LauncherCheck {
+    #[default]
+    Idle,
+    Asking,
+    /// Asked, and this is the newest release.
+    Newest,
+    Failed(String),
+}
+
+/// An update of Lightforge itself, from "Update" on.
+#[derive(Debug)]
+pub(crate) struct Upgrade {
+    pub(crate) stage: UpgradeStage,
+    /// The download's progress while [`UpgradeStage::Fetching`].
+    pub(crate) rx: Option<tokio::sync::watch::Receiver<(u64, Option<u64>)>>,
+    pub(crate) sample: (u64, Option<u64>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum UpgradeStage {
+    /// Downloading and checking, and for the installer's copy installing.
+    Fetching,
+    /// A terminal runs the package manager. Over once the binary on disk is
+    /// no longer the one this process started from, `stamp`.
+    InTerminal { command: String, stamp: Option<crate::tasks::Stamp> },
+    /// No terminal could be opened: the command, to run by hand.
+    NoTerminal { command: String },
+    /// The new version is on disk; this process is still the old one.
+    Installed,
+    Failed(Problem),
+}
+
 /// What the splash window is waiting on.
 #[derive(Debug, Clone)]
 pub(crate) struct Splash {
@@ -207,6 +241,35 @@ pub(crate) struct DowngradeDialog {
     pub(crate) built_by: String,
     /// The game being started, for the sentence.
     pub(crate) label: String,
+}
+
+/// A tab of the "Install Proton Version" window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ProtonCategory {
+    Steam,
+    GloriousEggroll,
+    CachyOs,
+}
+
+impl ProtonCategory {
+    pub(crate) const ALL: [Self; 3] = [Self::Steam, Self::GloriousEggroll, Self::CachyOs];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Steam => "Steam Proton",
+            Self::GloriousEggroll => "Proton-GE",
+            Self::CachyOs => "Proton-CachyOS",
+        }
+    }
+
+    /// The downloadable family behind the tab, if there is one.
+    pub(crate) fn family(self) -> Option<proton::ProtonFamily> {
+        match self {
+            Self::GloriousEggroll => Some(proton::ProtonFamily::GloriousEggroll),
+            Self::CachyOs => Some(proton::ProtonFamily::CachyOs),
+            Self::Steam => None,
+        }
+    }
 }
 
 /// A section of the Settings page, and its entry in the index beside it.
@@ -443,35 +506,11 @@ impl RegistryWatch {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Screen {
     Dashboard,
-    /// Live news, once there is something to show. A placeholder for now: the
-    /// tab is in the ribbon so the shape of the app is settled, and what fills
-    /// it, Wowhead, sales, patch notes, is still being decided.
-    News,
-    /// Lightforge's own release notes. Placeholder, like [`Screen::News`], and
-    /// separate from it: what Lightforge changed is not what Blizzard did.
+    /// Lightforge's own release notes.
     Updates,
     /// Setup lives here too, as the first card.
     Settings,
     Addons,
-    /// Per-product performance settings.
-    Tweaks,
-}
-
-/// One switch on the Game Optimizations panel.
-///
-/// A single message with a discriminant rather than a variant each: the panel
-/// is a list of independent booleans, and fifteen near-identical messages would
-/// only obscure that.
-/// Which row of the Game Optimizations grid a height is for.
-///
-/// The two rows hold different amounts, so they are measured apart, see
-/// [`Lightforge::card_height`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CardRow {
-    /// Performance and Looks.
-    Top,
-    /// Input and feel, and Advanced.
-    Bottom,
 }
 
 /// The parts of a finished run the UI actually shows. `install::Summary` is not
@@ -594,6 +633,30 @@ pub(crate) struct Maintain {
     pub(crate) repair: bool,
 }
 
+/// What the cog's "Game Version" shows.
+#[derive(Debug, Clone)]
+pub(crate) struct VersionDialog {
+    pub(crate) label: String,
+    pub(crate) version: String,
+    pub(crate) location: String,
+}
+
+/// The cog's "Modify Install": the game's language, before it is changed.
+#[derive(Debug, Clone)]
+pub(crate) struct ModifyDialog {
+    pub(crate) code: ProductCode,
+    pub(crate) label: String,
+    /// What the game is installed in now.
+    pub(crate) current: String,
+    pub(crate) locale: String,
+}
+
+/// The question asked before a running game is stopped.
+#[derive(Debug, Clone)]
+pub(crate) struct StopDialog {
+    pub(crate) label: String,
+}
+
 /// The Game Settings popup, for the game that was selected when it opened.
 #[derive(Debug, Clone)]
 pub(crate) struct GameSettings {
@@ -608,6 +671,24 @@ pub(crate) struct GameSettings {
     pub(crate) confirm: Option<(PathBuf, BackupAction)>,
     /// The last outcome: a sentence, or what went wrong.
     pub(crate) note: Option<Result<String, String>>,
+    /// What the texture pack weighs, `None` until the manifest has said or
+    /// when this build has none behind the option.
+    pub(crate) textures_bytes: Option<u64>,
+    /// Where deleting the texture pack stands.
+    pub(crate) textures: TexturesStep,
+}
+
+/// The question asked when the high-resolution textures are switched off.
+#[derive(Debug, Clone, Default)]
+pub(crate) enum TexturesStep {
+    #[default]
+    Idle,
+    /// Working out what can be deleted.
+    Planning,
+    /// Waiting for the answer to "delete them too?".
+    Ask(Box<lightforge_core::tact::reclaim::Reclaim>),
+    /// Deleting, which rewrites archives and takes a while.
+    Removing,
 }
 
 /// One addon's builds, while the user chooses between them.

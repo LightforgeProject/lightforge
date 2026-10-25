@@ -9,11 +9,11 @@ impl Lightforge {
         let nav = |label: &'static str, screen: Screen| {
             let entry = button(text(label).size(theme::tap_text(TAB_LABEL)).font(theme::BOLD))
                 .padding(theme::tap([theme::SM, theme::SM]));
-            // Addons and Game Optimizations are a game's own pages, opened
+            // Addons is a game's own page, opened
             // from its panel, so Play stays lit on them, and stays clickable,
             // since it is the way back.
             let within = match screen {
-                Screen::Dashboard => matches!(self.screen, Screen::Addons | Screen::Tweaks),
+                Screen::Dashboard => matches!(self.screen, Screen::Addons),
                 _ => false,
             };
             match (self.screen == screen, within) {
@@ -123,11 +123,6 @@ impl Lightforge {
                     focus::Target::Tab(Screen::Dashboard),
                     Some(Message::Show(Screen::Dashboard)),
                     nav("Play", Screen::Dashboard),
-                ),
-                self.ring(
-                    focus::Target::Tab(Screen::News),
-                    Some(Message::Show(Screen::News)),
-                    nav("News", Screen::News),
                 ),
                 self.ring(
                     focus::Target::Shop,
@@ -718,14 +713,12 @@ impl Lightforge {
 
     /// Which screens wear the game band under the tabs.
     ///
-    /// The pages you move between freely, the dashboard and News, keep the
-    /// same chrome, so switching tabs changes the content under a header that
-    /// does not move. Settings and a game's own pages (Addons, Game
-    /// Optimizations) are somewhere you went *into*: they are about one thing,
+    /// Only the dashboard. Settings and a game's own page (Addons)
+    /// is somewhere you went *into*: they are about one thing,
     /// and a band offering to switch games above them invites a click that
     /// would throw away what you are doing.
     pub(crate) fn shows_band(&self) -> bool {
-        matches!(self.screen, Screen::Dashboard | Screen::News)
+        matches!(self.screen, Screen::Dashboard)
     }
 
     /// The hand-off into Battle.net, at the right-hand end of the game card.
@@ -778,6 +771,11 @@ impl Lightforge {
             .catalog
             .branches(&line)
             .into_iter()
+            // The retired beta is not offered. It is only listed while it is
+            // the selected branch, so nobody is left on one the picker hides.
+            .filter(|entry| {
+                entry.code != ProductCode::ClassicBeta || entry.code == self.selected.code
+            })
             .map(|entry| BranchChoice {
                 configured: self.choices.iter().any(|c| c.code == entry.code),
                 branch: entry.branch,

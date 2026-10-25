@@ -34,25 +34,6 @@ impl Lightforge {
     /// the runtime.
     pub(crate) fn arrived(&mut self) -> Task<Message> {
         match self.screen {
-            Screen::News => {
-                // Decoded on first arrival rather than at startup: half a
-                // megabyte of JPEG is not work the first frame should do for
-                // a page nobody has opened.
-                let backdrop = match self.news_bg.is_none() {
-                    true => Task::perform(
-                        tasks::news_background(NEWS_BACKGROUND),
-                        Message::NewsBackground,
-                    ),
-                    false => Task::none(),
-                };
-                Task::batch([backdrop, self.fetch_news(false)])
-            }
-            // The dashboard needs them too now that the rail is on it. The
-            // same once-per-session fetch, `fetch_news` is idempotent, so
-            // arriving here first and the News page second costs one request
-            // between them, not two. With the rail switched off there is
-            // nothing here to fill, and the News page asks for itself.
-            Screen::Dashboard if self.config.news_on_play => self.fetch_news(false),
             // Arriving back on Browse with nothing in it, by the back
             // button, or on a first visit, is the same question the tab
             // itself answers: what is there?
@@ -192,6 +173,9 @@ impl Lightforge {
     /// In the order the view stacks them, so Escape closes the one on top.
     pub(crate) fn dialog_dismissal(&self) -> Option<Message> {
         Some(match () {
+            _ if self.stop_dialog.is_some() => Message::StopGameDismiss,
+            _ if self.version_dialog.is_some() => Message::CloseGameVersion,
+            _ if self.modify_dialog.is_some() => Message::ModifyCancel,
             _ if self.install_dialog.is_some() => Message::InstallCancel,
             _ if self.uninstall_dialog.is_some() => Message::UninstallCancel,
             _ if self.cancel_dialog.is_some() => Message::CancelDownloadDismiss,
@@ -200,6 +184,7 @@ impl Lightforge {
             _ if self.addon_detail.is_some() => Message::CloseAddonDetail,
             _ if self.report_dialog.is_some() => Message::ReportCancel,
             _ if self.game_settings.is_some() => Message::CloseGameSettings,
+            _ if self.proton_installer.is_some() => Message::CloseProtonInstaller,
             _ if self.patch_notes.is_some() => Message::DismissPatchNotes,
             _ if self.update_notice.is_some() => Message::DismissUpdate,
             _ => return None,

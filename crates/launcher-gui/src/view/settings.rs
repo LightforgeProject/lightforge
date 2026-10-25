@@ -251,6 +251,15 @@ impl Lightforge {
             body = body.push(container(log).padding(theme::MD).style(theme::card));
         }
 
+        // Where the progress was, so a failed run says why. The Settings page
+        // shows its errors above every section; the wizard covers that, and a
+        // step that failed used to look like a button that did nothing.
+        if in_wizard && !self.setup_running {
+            if let Some(e) = &self.error {
+                body = body.push(problem(e));
+            }
+        }
+
         let ready = self.setup.as_ref().is_some_and(|s| s.is_ready());
         let label = match (self.setup_running, ready) {
             (true, _) => "Working…",
@@ -277,6 +286,14 @@ impl Lightforge {
                 .extend((!in_wizard).then(|| {
                     Element::from(
                         secondary("Run the setup wizard", Message::Wizard(wizard::Msg::Open))
+                            .enabled(!self.setup_running),
+                    )
+                }))
+                // Games installed after setup, by Lutris or another Battle.net,
+                // without walking through region and drives again.
+                .extend((!in_wizard).then(|| {
+                    Element::from(
+                        secondary("Look for games", Message::Wizard(wizard::Msg::Scan))
                             .enabled(!self.setup_running),
                     )
                 }))
@@ -331,16 +348,20 @@ impl Lightforge {
             // Warcraft: Forever, Beta", which is a paragraph where a row
             // wants a word. The names are still there on hover, because the
             // count alone does not tell you what to go and unpin.
+            // A button in every case, pressable or not, so the column on the
+            // right reads as one: what cannot be done is a greyed button that
+            // says why, not a loose line of text.
+            let idle = |label: String| {
+                secondary(&label, Message::RemoveProton(build.version.clone()))
+                    .keyed(format!("proton idle {}", build.version), false)
+            };
             let action: Element<Message> = match (managed, pinned_by.is_empty()) {
-                (false, _) => muted("not managed here".to_owned(), theme::CAPTION).into(),
+                (false, _) => idle("Not managed here".to_owned()),
                 (true, false) => tooltip(
-                    muted(
-                        match pinned_by.len() {
-                            1 => "in use by 1".to_owned(),
-                            n => format!("in use by {n}"),
-                        },
-                        theme::CAPTION,
-                    ),
+                    idle(match pinned_by.len() {
+                        1 => "In use by 1".to_owned(),
+                        n => format!("In use by {n}"),
+                    }),
                     container(text(pinned_by.join(", ")).size(theme::LABEL))
                         .padding([theme::XS, theme::SM])
                         .style(theme::floating),
@@ -367,60 +388,31 @@ impl Lightforge {
         // progress bar existed, pressing Install and landing on a different
         // page reads as a misclick.
         if self.setup_running {
-            let mut working = column![].spacing(theme::XS);
-            for line in &self.setup_sample.log {
-                working = working.push(muted(line.clone(), theme::CAPTION));
-            }
-            working = working.push(match self.setup_sample.fraction() {
-                Some(fraction) => Element::from(progress_bar(0.0..=1.0, fraction).girth(6)),
-                // No content-length: the bytes are the only honest figure.
-                None => mono(bytes_of(self.setup_sample.done, 0)).into(),
-            });
-            rows = rows.push(container(working).padding(theme::MD).style(theme::card));
+            rows = rows.push(self.install_progress());
         }
 
         rows.into()
     }
 
-    /// The control that adds a build, for the Builds card's header.
-    ///
-    /// The release list is fetched on the way into the page (see
-    /// [`Lightforge::arrived`]), so by the time anyone reads this it is
-    /// usually populated. The three states it can be in all say which one
-    /// they are rather than showing an empty dropdown.
-    pub(crate) fn proton_install(&self) -> Element<'_, Message> {
-        if self.proton_available.is_empty() {
-            return row![
-                muted(
-                    self.proton_notice.clone().unwrap_or_else(|| "checking…".to_owned()),
-                    theme::CAPTION,
-                ),
-                secondary("Check again", Message::CheckProton).enabled(!self.setup_running),
-            ]
-            .spacing(theme::SM)
-            .align_y(Alignment::Center)
-            .into();
+    /// The build being installed: what setup has said so far and a bar.
+    pub(crate) fn install_progress(&self) -> Element<'_, Message> {
+        let mut working = column![].spacing(theme::XS);
+        for line in &self.setup_sample.log {
+            working = working.push(muted(line.clone(), theme::CAPTION));
         }
+        working = working.push(match self.setup_sample.fraction() {
+            Some(fraction) => Element::from(progress_bar(0.0..=1.0, fraction).girth(6)),
+            // No content-length: the bytes are the only honest figure.
+            None => mono(bytes_of(self.setup_sample.done, 0)).into(),
+        });
+        container(working).padding(theme::MD).style(theme::card).into()
+    }
 
-        row![
-            self.picker(
-                "proton-install".to_owned(),
-                self.proton_available
-                    .iter()
-                    .map(|v| ProtonChoice(Some(v.clone()), Unpinned::Newest))
-                    .collect::<Vec<_>>(),
-                self.proton_choice.clone().map(|v| ProtonChoice(Some(v), Unpinned::Newest)),
-                "Install a version",
-                Message::ChooseProtonVersion,
-                Length::Fixed(220.0),
-                theme::BODY,
-            ),
-            secondary("Install", Message::InstallProton)
-                .enabled(self.proton_choice.is_some() && !self.setup_running),
-        ]
-        .spacing(theme::SM)
-        .align_y(Alignment::Center)
-        .into()
+    /// The control that adds a build, for the Builds card's header: one
+    /// button, the window behind it has the lists.
+    pub(crate) fn proton_install(&self) -> Element<'_, Message> {
+        secondary("Install Proton Version", Message::OpenProtonInstaller)
+            .enabled(!self.setup_running)
     }
 
     /// Settings: every section on one page, with an index down the left
@@ -834,17 +826,17 @@ impl Lightforge {
                     ),
                     switch("battle.net minimized", self.config.battle_net_minimized, Message::BattleNetMinimized),
                 ),
+                setting(
+                    "Close Battle.net when I press Play",
+                    "Off keeps it open beside the game.",
+                    self.hint(
+                        "Only for Play. Launching through Battle.net, and its own install \
+                         and repair flows, start the client afresh whatever this says.",
+                    ),
+                    switch("close battle.net on play", self.config.close_battle_net_on_play, Message::CloseBattleNetOnPlay),
+                ),
             ]),
             setting_group([
-                setting(
-                    "News on the Play page",
-                    "The newest articles beside the key art, for World of Warcraft.",
-                    self.hint(
-                        "Only the World of Warcraft family has a news source; the games \
-                         Battle.net launches never show one.",
-                    ),
-                    switch("news on play", self.config.news_on_play, Message::NewsOnPlay),
-                ),
                 setting(
                     "What's new after an update",
                     "Once per version. The notes are always under Lightforge Updates.",
@@ -887,93 +879,61 @@ impl Lightforge {
     /// One profile, not one per game: Lightforge only sets the environment of
     /// a client it starts cold, and a running client takes launches over its
     /// own IPC queue, so two games from one session cannot differ (see
-    /// `Config::battle_net_tweaks`). No preset row and no client settings: a
-    /// hand-off game has no `Config.wtf`.
+    /// `Config::battle_net_tweaks`).
     pub(crate) fn battle_net_section(&self) -> Element<'_, Message> {
         let tweaks = self.tweaks_of(Scope::BattleNet);
+        let tools = &self.tools;
         let scope = Scope::BattleNet;
-        let flip = |key: &'static str, which: Tweak, on: bool| -> Element<'_, Message> {
-            clickable(
-                key,
-                iced::widget::toggler(on)
-                    .on_toggle(move |on| Message::Tweak(scope, which, on))
-                    .size(theme::tap_text(20.0))
-                    .style(theme::switch),
-            )
-        };
 
-        let mut rows: Vec<Element<'_, Message>> = Vec::new();
-        if self.tools.game_performance.is_some() {
-            rows.push(setting(
+        let rows = vec![
+            setting(
                 "CPU performance profile",
-                "Holds the CPU on its performance profile while a game runs.",
+                match tools.game_performance {
+                    Some(_) => "Holds the CPU on its performance profile while a game runs.",
+                    None => "Needs CachyOS' game-performance, which is not installed.",
+                },
                 None,
-                flip("bnet game performance", Tweak::GamePerformance, tweaks.wants_game_performance()),
-            ));
-        }
-        if self.tools.gamemode.is_some() {
-            rows.push(setting(
-                "GameMode",
-                "Starts games through Feral's GameMode.",
-                None,
-                flip("bnet gamemode", Tweak::GameMode, tweaks.gamemode),
-            ));
-        }
-        if self.tools.mangohud.is_some() {
-            rows.push(setting(
+                self.tool_switch(
+                    "bnet game performance",
+                    tools.game_performance.is_some(),
+                    tweaks.wants_game_performance() && tools.game_performance.is_some(),
+                    scope,
+                    Tweak::GamePerformance,
+                ),
+            ),
+            setting(
                 "MangoHud overlay",
-                "Frame rate and frame times drawn over the game.",
+                match tools.mangohud {
+                    Some(_) => "Frame rate and frame times drawn over the game.",
+                    None => "Needs MangoHud, which is not installed.",
+                },
                 None,
-                flip("bnet mangohud", Tweak::MangoHud, tweaks.mangohud),
-            ));
-        }
-        rows.push(setting(
-            "Larger shader cache",
-            "Keeps more compiled shaders, so games stutter less after a while.",
-            None,
-            flip("bnet shader cache", Tweak::BigShaderCache, tweaks.big_shader_cache),
-        ));
-        if self.tools.wayland {
-            rows.push(setting(
+                self.tool_switch(
+                    "bnet mangohud",
+                    tools.mangohud.is_some(),
+                    tweaks.mangohud && tools.mangohud.is_some(),
+                    scope,
+                    Tweak::MangoHud,
+                ),
+            ),
+            setting(
                 "Wayland backend",
-                "Runs on Proton's Wayland backend instead of XWayland.",
+                match tools.wayland {
+                    true => "Runs on Proton's Wayland backend instead of XWayland.",
+                    false => "Only available in a Wayland session.",
+                },
                 self.hint(
                     "Newer and less travelled than the X11 path, so it is off until asked for.",
                 ),
-                flip("bnet wayland", Tweak::Wayland, tweaks.wayland),
-            ));
-            if tweaks.wayland {
-                rows.push(setting(
-                    "HDR output",
-                    "Asks the compositor for HDR.",
-                    None,
-                    flip("bnet hdr", Tweak::Hdr, tweaks.hdr),
-                ));
-                rows.push(setting(
-                    "Monitor",
-                    "A connector name such as DP-1. Empty lets Proton pick.",
-                    None,
-                    clickable(
-                        "bnet monitor",
-                        text_input("whichever Proton picks", &self.bnet_monitor_input)
-                            .on_input(move |v| Message::TweakWaylandMonitor(scope, v))
-                            .style(theme::field)
-                            .size(theme::BODY)
-                            .padding(theme::SM)
-                            .width(Length::Fixed(220.0)),
-                    ),
-                ));
-            }
-        }
-
-        let missing: Vec<&str> = [
-            self.tools.game_performance.is_none().then_some("game-performance"),
-            self.tools.gamemode.is_none().then_some("GameMode"),
-            self.tools.mangohud.is_none().then_some("MangoHud"),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
+                self.tool_switch(
+                    "bnet wayland",
+                    tools.wayland,
+                    tweaks.wayland && tools.wayland,
+                    scope,
+                    Tweak::Wayland,
+                ),
+            ),
+        ];
 
         column![muted(
             "These apply to Battle.net and every game it starts.".to_owned(),
@@ -988,16 +948,10 @@ impl Lightforge {
             .map(Element::from),
         )
         .push(setting_group(rows))
-        .extend((!missing.is_empty()).then(|| {
-            Element::from(muted(
-                format!("{} is not installed, so it is not offered.", missing.join(", ")),
-                theme::CAPTION,
-            ))
-        }))
         // The only way to tune a hand-off game beyond the switches above: it
         // has no client settings for Lightforge to write, so anything else
         // has to arrive as an environment variable.
-        .push(self.env_card(scope, &tweaks))
+        .push(self.environment_group(scope))
         .spacing(theme::SM)
         .into()
     }
@@ -1061,8 +1015,13 @@ impl Lightforge {
         match report {
             None => drives = drives.push(muted("measuring…".to_owned(), theme::LABEL)),
             Some(report) => {
-                for library in &report.libraries {
-                    drives = drives.push(self.drive_card(library));
+                for (index, library) in report.libraries.iter().enumerate() {
+                    // The first library on a disk speaks for its free space.
+                    let same_disk_as = report.libraries[..index]
+                        .iter()
+                        .find(|earlier| earlier.mount == library.mount)
+                        .map(|earlier| earlier.label.as_str());
+                    drives = drives.push(self.drive_card(library, same_disk_as));
                 }
                 drives = drives.spacing(theme::SM);
                 drives = drives.extend(self.hint("The default drive is where a game goes unless you pick another one, and \
@@ -1174,7 +1133,11 @@ impl Lightforge {
 
     /// One drive's card: how full it is, what Lightforge put there, and the
     /// three things you can do to it.
-    pub(crate) fn drive_card<'a>(&'a self, library: &'a storage::LibraryUsage) -> Element<'a, Message> {
+    pub(crate) fn drive_card<'a>(
+        &'a self,
+        library: &'a storage::LibraryUsage,
+        same_disk_as: Option<&'a str>,
+    ) -> Element<'a, Message> {
         let id = library.id.clone();
         let mut card = column![].spacing(theme::SM);
 
@@ -1205,6 +1168,17 @@ impl Lightforge {
         card = card.push(muted(tilde(&library.path), theme::LABEL));
 
         match library.disk {
+            // Already drawn on the card above: one bar per disk.
+            Some(_) if same_disk_as.is_some() => {
+                card = card.push(muted(
+                    format!(
+                        "Same disk as {} — {} is Lightforge's here",
+                        same_disk_as.unwrap_or_default(),
+                        size_of(library.total()),
+                    ),
+                    theme::CAPTION,
+                ));
+            }
             Some(disk) => {
                 let used = disk.total.saturating_sub(disk.free);
                 let fraction = match disk.total {
@@ -1352,12 +1326,26 @@ impl Lightforge {
 
     /// The version, and where its configuration lives.
     pub(crate) fn about_section(&self) -> Element<'_, Message> {
-        let mut rows = vec![setting(
-            "Version",
-            "",
-            None,
-            text(env!("CARGO_PKG_VERSION")).size(theme::BODY).font(theme::MONO),
-        )];
+        let (status, asking) = match &self.launcher_check {
+            LauncherCheck::Idle => (String::new(), false),
+            LauncherCheck::Asking => ("Asking GitHub.".to_owned(), true),
+            LauncherCheck::Newest => ("This is the newest version.".to_owned(), false),
+            LauncherCheck::Failed(why) => (format!("Could not check: {why}"), false),
+        };
+        let mut rows = vec![
+            setting(
+                "Version",
+                status,
+                None,
+                row![
+                    text(env!("CARGO_PKG_VERSION")).size(theme::BODY).font(theme::MONO),
+                    secondary(if asking { "Checking" } else { "Check for updates" }, Message::CheckLauncherNow)
+                        .enabled(!asking),
+                ]
+                .spacing(theme::MD)
+                .align_y(Alignment::Center),
+            ),
+        ];
         if let Some(dirs) = &self.dirs {
             rows.push(setting(
                 "Settings file",

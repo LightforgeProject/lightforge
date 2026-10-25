@@ -168,7 +168,12 @@ fn recognise(error: &(dyn Error + 'static)) -> Option<Advice> {
     if let Some(e) = error.downcast_ref::<crate::runtime::RuntimeError>() {
         use crate::runtime::RuntimeError as R;
         return match e {
-            R::NoLoader { .. } | R::WineFailed { .. } => Some(runtime()),
+            R::NoLoader { .. } | R::WineFailed { .. } | R::NoTls { install: None } => Some(runtime()),
+            R::NoTls { install: Some(appid) } => Some(Advice::with(
+                "Install the Steam Linux Runtime in Steam: Battle.net runs inside it, since this \
+                 system has no 32-bit gnutls of its own. Then try again.",
+                Fix::CopyCommand(format!("steam steam://install/{appid}")),
+            )),
             _ => None,
         };
     }
