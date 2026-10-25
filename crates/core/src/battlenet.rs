@@ -947,45 +947,9 @@ pub fn registry_tweaks() -> Vec<RegValue> {
             data: "",
             reason: "stop the installer writing Windows shortcuts into the desktop's app menu",
         },
-        // Subpixel font smoothing, the four values `winetricks fontsmooth=rgb`
-        // writes. Wine ships with smoothing off, and the storefront is a CEF
-        // browser rendering text under Wine's font stack, unsmoothed it is
-        // the thing that most obviously looks broken next to the same page in
-        // a native browser.
-        //
-        // Prefix-wide rather than Battle.net-only because the registry has no
-        // per-application scope for these. WoW draws its own text and is
-        // unaffected.
-        RegValue {
-            key: r"HKEY_CURRENT_USER\Control Panel\Desktop",
-            name: "FontSmoothing",
-            // A string, not a DWORD, Windows stores this one as text, and a
-            // DWORD here is silently ignored.
-            kind: "REG_SZ",
-            data: "2",
-            reason: "turn font smoothing on for the CEF storefront",
-        },
-        RegValue {
-            key: r"HKEY_CURRENT_USER\Control Panel\Desktop",
-            name: "FontSmoothingType",
-            kind: "REG_DWORD",
-            data: "2",
-            reason: "subpixel rather than greyscale smoothing",
-        },
-        RegValue {
-            key: r"HKEY_CURRENT_USER\Control Panel\Desktop",
-            name: "FontSmoothingOrientation",
-            kind: "REG_DWORD",
-            data: "1",
-            reason: "RGB subpixel order, which is what desktop panels use",
-        },
-        RegValue {
-            key: r"HKEY_CURRENT_USER\Control Panel\Desktop",
-            name: "FontSmoothingGamma",
-            kind: "REG_DWORD",
-            data: "1400",
-            reason: "the gamma winetricks pairs with subpixel smoothing",
-        },
+        // Deliberately no `FontSmoothing*`: Proton's prefix already smooths
+        // with greyscale, and the subpixel values `winetricks fontsmooth=rgb`
+        // writes make the CEF storefront's text look pixel-snapped and thin.
         // Deliberately no `LogPixels`: Wine's default of 96 is right at 1x,
         // writing 96 is a no-op, and any other value needs a display scale
         // that cannot be read from inside the prefix. A wrong one makes the
@@ -1769,25 +1733,12 @@ mod tests {
     }
 
     #[test]
-    fn font_smoothing_is_on_and_subpixel() {
-        let by_name = |name: &str| {
-            registry_tweaks()
-                .into_iter()
-                .find(|v| v.name == name)
-                .unwrap_or_else(|| panic!("{name} is not set"))
-        };
-
-        // The one that is a string rather than a DWORD. Getting this wrong
-        // leaves smoothing off with no error anywhere.
-        let on = by_name("FontSmoothing");
-        assert_eq!((on.kind, on.data), ("REG_SZ", "2"));
-
-        assert_eq!(by_name("FontSmoothingType").data, "2");
-        assert_eq!(by_name("FontSmoothingOrientation").data, "1");
-        assert_eq!(by_name("FontSmoothingGamma").data, "1400");
+    fn font_smoothing_is_left_at_protons_default() {
+        let tweaks = registry_tweaks();
+        assert!(tweaks.iter().all(|v| !v.name.starts_with("FontSmoothing")));
 
         // DPI is deliberately not written; see the comment beside the list.
-        assert!(registry_tweaks().iter().all(|v| v.name != "LogPixels"));
+        assert!(tweaks.iter().all(|v| v.name != "LogPixels"));
     }
 
     #[test]
