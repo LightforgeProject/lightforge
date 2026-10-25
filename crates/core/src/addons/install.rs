@@ -402,6 +402,14 @@ fn extract_within(
         let path = path.to_path_buf();
         move |source| InstallError::Io { path, source }
     };
+    // `AddOns` sits two levels below the client's own folder. Creating the
+    // whole chain would conjure a `_retail_` for a game that is not installed,
+    // and the library would then look like it holds one.
+    if let Some(client) = addons_dir.ancestors().nth(2) {
+        if !client.is_dir() {
+            return Err(InstallError::GameNotInstalled(client.to_path_buf()));
+        }
+    }
     std::fs::create_dir_all(addons_dir).map_err(io(addons_dir))?;
     // `Interface`, not `AddOns`: neither the client nor `scan` ever looks
     // at a folder there that is not an addon.
@@ -578,6 +586,9 @@ pub enum InstallError {
     #[error("the package expands past the {limit} byte limit")]
     TooLarge { limit: u64 },
 
+    #[error("the game is not installed ({0} does not exist)")]
+    GameNotInstalled(PathBuf),
+
     #[error("the package contains no addon folders")]
     NoAddonFolders,
 
@@ -734,6 +745,17 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("Addon/Addon.toc")).unwrap(), b"v1");
         assert_eq!(std::fs::read(dir.join("Addon/core.lua")).unwrap(), b"v1");
         assert!(!staging_left(&dir));
+    }
+
+    #[test]
+    fn nothing_is_created_for_a_game_that_is_not_installed() {
+        let client = tmpdir("no-game").join("_retail_");
+        let dir = client.join("Interface").join("AddOns");
+
+        let result = extract(&zip_with(&[("Addon/Addon.toc", b"v1")]), &dir, &[]);
+
+        assert!(matches!(result, Err(InstallError::GameNotInstalled(_))));
+        assert!(!client.exists());
     }
 
     #[test]

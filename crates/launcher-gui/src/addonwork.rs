@@ -497,14 +497,27 @@ pub async fn update(
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Report, Problem> {
     let dirs = AppDirs::discover().map_err(|e| Problem::of(&e))?;
-    let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
-        .map_err(|e| Problem::of(&e))?;
+    let ledger = installed_ledger(&dirs, &layout, &code)?;
     let requests = manage::update_requests(&ledger, channel);
 
     if requests.is_empty() {
         return Ok(Report::default());
     }
     run(http, layout, code, requests, Mode::default(), channel, tx).await
+}
+
+/// The ledger as far as it still describes what is on disk.
+///
+/// An update touches what is installed, so a record whose folders are gone is
+/// left out here, in memory only: the ledger file is the one record of what is
+/// ours and is pruned where the list is read. Without this a ledger that
+/// outlived its addons, or its whole game folder, had them fetched again.
+fn installed_ledger(dirs: &AppDirs, layout: &Layout, code: &ProductCode) -> Result<Ledger, Problem> {
+    let dir = layout.addons_dir(code);
+    let mut ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &dir, code))
+        .map_err(|e| Problem::of(&e))?;
+    ledger.prune_missing(&dir);
+    Ok(ledger)
 }
 
 /// Update the addons that update themselves, with nobody watching.
@@ -520,8 +533,7 @@ pub async fn auto_update(
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Option<Report>, Problem> {
     let dirs = AppDirs::discover().map_err(|e| Problem::of(&e))?;
-    let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
-        .map_err(|e| Problem::of(&e))?;
+    let ledger = installed_ledger(&dirs, &layout, &code)?;
     let requests = manage::auto_update_requests(&ledger, channel, default_auto);
 
     if requests.is_empty() {
