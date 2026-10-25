@@ -64,7 +64,7 @@ impl Step {
         match self {
             Self::Welcome => "Welcome to Lightforge",
             Self::Place => "Where things go",
-            Self::Found => "What is already here",
+            Self::Found => "Discover installed Battle.net games",
             Self::Install => "Setting up",
             Self::Games => "Your games",
             Self::Done => "Ready to play",
@@ -178,6 +178,10 @@ pub enum Msg {
     PointInput(String),
     /// Inspect the folder that was typed.
     Point,
+    /// Ask the desktop for a folder to inspect.
+    Browse,
+    /// The folder the desktop's dialog came back with; `None` when cancelled.
+    Browsed(Option<PathBuf>),
     /// Add the partition at this index as a drive for games.
     AddDrive(usize),
     /// Take a drive back off the list. Nothing on it is deleted.
@@ -357,6 +361,29 @@ pub fn update(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
                 wizard.point_error = None;
             }
             iced::Task::none()
+        }
+
+        Msg::Browse => iced::Task::perform(
+            // The XDG portal through `ashpd`, as the screenshot picker does;
+            // see `update/report.rs` for why not `rfd`.
+            async {
+                let request = ashpd::desktop::file_chooser::OpenFileRequest::default()
+                    .title("Choose a Wine prefix or a game folder")
+                    .modal(true)
+                    .directory(true)
+                    .multiple(false);
+                let files = request.send().await.ok()?.response().ok()?;
+                files.uris().first().and_then(|uri| uri.to_file_path().ok())
+            },
+            |path| Message::Wizard(Msg::Browsed(path)),
+        ),
+
+        Msg::Browsed(path) => {
+            let Some(path) = path else { return iced::Task::none() };
+            if let Some(wizard) = app.wizard.as_mut() {
+                wizard.pointed = path.display().to_string();
+            }
+            update(app, Msg::Point)
         }
 
         Msg::Point => {
@@ -1104,17 +1131,11 @@ fn found<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
         body = body.extend(wizard.adopted.iter().map(note));
     }
 
-    let takeable = wizard.rows.iter().any(|row| row.blocked.is_none());
     body = body.push(
-        text(match (wizard.rows.is_empty(), takeable) {
-            (true, _) => "No other Blizzard install found. Nothing is missing — Lightforge \
-                          downloads World of Warcraft itself."
-                .to_owned(),
-            (false, _) => format!(
-                "Found {} install(s) already on this machine. Anything you keep stays exactly \
-                 where it is — nothing is copied or moved.",
-                wizard.rows.len()
-            ),
+        text(match wizard.rows.len() {
+            0 => "No Battle.net games found".to_owned(),
+            1 => "1 Battle.net game found".to_owned(),
+            n => format!("{n} Battle.net games found"),
         })
         .size(theme::BODY),
     );
@@ -1193,6 +1214,14 @@ fn found<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
             .style(theme::scrollbar),
     ));
 
+    // A text box is one line of its text plus its padding; the buttons beside
+    // it are set to that, since `Fill` would take the whole page's height.
+    // A console's taller buttons are already the bigger of the two.
+    let box_height = theme::BODY * 1.3 + theme::SM * 2.0;
+    let beside = |label: &str, message: Message| match theme::console() {
+        true => secondary(label, message),
+        false => crate::widgets::secondary_tall(label, message, box_height),
+    };
     body = body.push(field_row(
         "Somewhere else".to_owned(),
         row![
@@ -1205,7 +1234,9 @@ fn found<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
                     .size(theme::BODY)
                     .padding(theme::SM),
             ),
-            secondary("Look here", Message::Wizard(Msg::Point)).enabled(!wizard.pointed.is_empty()),
+            beside("Browse…", Message::Wizard(Msg::Browse)).enabled(true),
+            beside("Look here", Message::Wizard(Msg::Point))
+                .enabled(!wizard.pointed.is_empty()),
         ]
         .spacing(theme::SM)
         .align_y(Alignment::Center)

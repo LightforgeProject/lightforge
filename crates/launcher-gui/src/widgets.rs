@@ -469,6 +469,24 @@ pub(crate) fn secondary(label: &str, message: Message) -> Action<'static> {
     }
 }
 
+/// [`secondary`] at a fixed height, the label centred in it: a button's
+/// content sits at the top of any height it was not sized to, so this one is
+/// told to fill and centre.
+pub(crate) fn secondary_tall(label: &str, message: Message, height: f32) -> Action<'static> {
+    Action {
+        inner: button(
+            text(label.to_owned())
+                .size(theme::tap_text(theme::LABEL))
+                .height(Length::Fill)
+                .align_y(Alignment::Center),
+        )
+        .style(theme::outlined)
+        .padding(theme::tap([0.0, theme::MD]))
+        .height(Length::Fixed(height)),
+        message,
+    }
+}
+
 /// An error as the user sees it: what went wrong, what to do about it, and
 /// the one button that does it, when there is one.
 pub(crate) fn problem(problem: &Problem) -> Element<'_, Message> {
