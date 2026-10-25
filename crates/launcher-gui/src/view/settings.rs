@@ -1011,8 +1011,13 @@ impl Lightforge {
         match report {
             None => drives = drives.push(muted("measuring…".to_owned(), theme::LABEL)),
             Some(report) => {
-                for library in &report.libraries {
-                    drives = drives.push(self.drive_card(library));
+                for (index, library) in report.libraries.iter().enumerate() {
+                    // The first library on a disk speaks for its free space.
+                    let same_disk_as = report.libraries[..index]
+                        .iter()
+                        .find(|earlier| earlier.mount == library.mount)
+                        .map(|earlier| earlier.label.as_str());
+                    drives = drives.push(self.drive_card(library, same_disk_as));
                 }
                 drives = drives.spacing(theme::SM);
                 drives = drives.extend(self.hint("The default drive is where a game goes unless you pick another one, and \
@@ -1124,7 +1129,11 @@ impl Lightforge {
 
     /// One drive's card: how full it is, what Lightforge put there, and the
     /// three things you can do to it.
-    pub(crate) fn drive_card<'a>(&'a self, library: &'a storage::LibraryUsage) -> Element<'a, Message> {
+    pub(crate) fn drive_card<'a>(
+        &'a self,
+        library: &'a storage::LibraryUsage,
+        same_disk_as: Option<&'a str>,
+    ) -> Element<'a, Message> {
         let id = library.id.clone();
         let mut card = column![].spacing(theme::SM);
 
@@ -1155,6 +1164,17 @@ impl Lightforge {
         card = card.push(muted(tilde(&library.path), theme::LABEL));
 
         match library.disk {
+            // Already drawn on the card above: one bar per disk.
+            Some(_) if same_disk_as.is_some() => {
+                card = card.push(muted(
+                    format!(
+                        "Same disk as {} — {} is Lightforge's here",
+                        same_disk_as.unwrap_or_default(),
+                        size_of(library.total()),
+                    ),
+                    theme::CAPTION,
+                ));
+            }
             Some(disk) => {
                 let used = disk.total.saturating_sub(disk.free);
                 let fraction = match disk.total {

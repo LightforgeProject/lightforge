@@ -393,7 +393,8 @@ pub fn plan(install: &WowInstall, existing: &[Library]) -> Result<Plan, AdoptErr
     }
     let (games_letter, wow_letter) =
         library::allocate_letters(existing).ok_or(library::LibraryError::NoLettersLeft)?;
-    let mut library = Library::adopted(parent.to_path_buf(), folder_name(parent));
+    let label = library::drive_label(parent).unwrap_or_else(|| folder_name(parent));
+    let mut library = Library::adopted(parent.to_path_buf(), label);
     library.games_letter = games_letter;
     library.wow_letter = wow_letter;
     library.probe();

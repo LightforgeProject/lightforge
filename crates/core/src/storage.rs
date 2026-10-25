@@ -48,6 +48,9 @@ pub struct LibraryUsage {
     pub label: String,
     /// The library's `games/` directory.
     pub path: PathBuf,
+    /// The mount point `path` is on. Two libraries with the same one share a
+    /// disk, and its free space is one number, not two.
+    pub mount: PathBuf,
     pub state: crate::library::State,
     /// The standard install target. The prefix is not here by implication,
     /// it is always at the Blizzard root.
@@ -214,6 +217,7 @@ pub fn report(layout: &Layout, dirs: &AppDirs) -> Report {
                 id: library.id.clone(),
                 label: library.label.clone(),
                 path: library.games().to_path_buf(),
+                mount: crate::library::mount_point_of(library.games()),
                 state,
                 is_default: library.is_default,
                 letters: (library.games_letter.clone(), library.wow_letter.clone()),
@@ -223,6 +227,17 @@ pub fn report(layout: &Layout, dirs: &AppDirs) -> Report {
         })
         .collect();
     libraries.sort_by_key(|l| !l.is_default);
+    // Libraries on one disk sit together, under whichever came first.
+    let mut grouped: Vec<LibraryUsage> = Vec::with_capacity(libraries.len());
+    while !libraries.is_empty() {
+        let first = libraries.remove(0);
+        let mount = first.mount.clone();
+        grouped.push(first);
+        let (same, rest): (Vec<_>, Vec<_>) = libraries.into_iter().partition(|l| l.mount == mount);
+        grouped.extend(same);
+        libraries = rest;
+    }
+    let libraries = grouped;
 
     Report {
         libraries,
