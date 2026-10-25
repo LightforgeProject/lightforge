@@ -388,7 +388,9 @@ impl Lightforge {
                 Task::none()
             }
             Message::OpenAddonsDir => {
-                if let Err(e) = tasks::open_path(self.addons.dir.clone()) {
+                // The layout, not the listing: the listing still names the
+                // previous product's folder until its own scan comes back.
+                if let Err(e) = tasks::open_path(self.layout.addons_dir(&self.selected.code)) {
                     self.error = Some(e.into());
                 }
                 Task::none()
