@@ -17,14 +17,13 @@ OUT=docs/CLI.md
 # Command groups, in the order they appear. A command in none of them stops
 # the run: a new subcommand should be filed deliberately, not dropped on the
 # floor because this list was not updated with it.
-group_names='Everyday|Setup, Proton and the prefix|Battle.net|Games: install, update, remove|Addons and settings backups|Catalogue and artwork|Digging into the CDN and CASC'
+group_names='Everyday|Setup, Proton and the prefix|Battle.net|Games: install, update, remove|Addons and settings backups|Catalogue and artwork'
 group_cmds='paths config status update-check play preflight
 setup proton proton-check proton-install prefix prefix-init prefix-link
-battlenet-fetch battlenet-setup battlenet-config battlenet-run product-db
-download plan verify reindex uninstall reclaim prune compact build-info build-info-set
-addons addon-search addon-install addon-import addon-update addon-remove addon-adopt addon-fingerprints addon-token backup-list backup-create backup-restore
-products assets
-cdn-fetch cdn-archive content casc idx casc-rebuild casc-verify'
+battlenet-fetch battlenet-setup battlenet-run
+download verify reindex uninstall prune compact build-info
+addons addon-search addon-install addon-import addon-update addon-remove addon-adopt backup-list backup-create backup-restore
+products assets'
 
 all=$("$BIN" --help | awk '/^  [a-z]/ { print $1 }' | grep -v '^help$')
 

@@ -78,6 +78,17 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.0.0-beta.7" date="2026-10-25">
+      <description>
+        <p>
+          Fixes the Battle.net install on SteamOS and the Wine prefix hang on
+          fresh setups. Adds a STOP button for running games, a Proton
+          installer window, a rebuilt Game Settings window, and updating
+          Lightforge from its own update notice.
+        </p>
+      </description>
+      <url>https://github.com/LightforgeProject/lightforge/blob/main/RELEASES.md</url>
+    </release>
     <release version="1.0.0-beta.6" date="2026-10-20">
       <description>
         <p>

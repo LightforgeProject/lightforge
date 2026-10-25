@@ -1192,6 +1192,36 @@ fn the_update_card_draws_for_every_route_and_stage() {
 }
 
 #[test]
+fn the_check_button_shows_a_release_that_was_dismissed_before() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    let found = lightforge_core::update::Available {
+        current: "1.0.0-beta.6".to_owned(),
+        latest: "1.0.0-beta.7".to_owned(),
+        url: lightforge_core::update::RELEASES_PAGE.to_owned(),
+    };
+    app.config.update_seen = Some(found.latest.clone());
+    let _ = app.update(Message::LauncherChecked(Ok(Some(found))));
+    assert!(app.update_notice.is_some(), "the button's answer was swallowed by update_seen");
+    assert_eq!(app.launcher_check, LauncherCheck::Idle);
+}
+
+#[test]
+fn the_check_button_says_what_it_found() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    let _ = app.update(Message::LauncherChecked(Ok(None)));
+    assert_eq!(app.launcher_check, LauncherCheck::Newest);
+    assert!(app.update_notice.is_none());
+    let _ = app.update(Message::LauncherChecked(Err("no network connection".to_owned())));
+    assert_eq!(app.launcher_check, LauncherCheck::Failed("no network connection".to_owned()));
+    for state in [LauncherCheck::Idle, LauncherCheck::Asking, LauncherCheck::Newest] {
+        app.launcher_check = state;
+        let _ = app.about_section();
+    }
+}
+
+#[test]
 fn the_update_notice_stays_while_files_are_being_replaced() {
     let mut app = update_notice_app();
     app.upgrade = Some(Upgrade { stage: UpgradeStage::Fetching, rx: None, sample: (0, None) });

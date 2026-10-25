@@ -20,6 +20,29 @@ impl Lightforge {
                 self.update_notice = Some(available);
                 Task::none()
             }
+            Message::CheckLauncherNow => {
+                if self.launcher_check == LauncherCheck::Asking || self.upgrading() {
+                    return Ok(Task::none());
+                }
+                self.launcher_check = LauncherCheck::Asking;
+                Task::perform(tasks::check_for_update_now(self.http.clone()), Message::LauncherChecked)
+            }
+            Message::LauncherChecked(answer) => {
+                self.launcher_check = match answer {
+                    // Shown even if this version was dismissed before: the
+                    // button is the request, so "once per release" no longer applies.
+                    Ok(Some(available)) => {
+                        if self.update_notice.is_none() {
+                            self.upgrade = None;
+                            self.update_notice = Some(available);
+                        }
+                        LauncherCheck::Idle
+                    }
+                    Ok(None) => LauncherCheck::Newest,
+                    Err(why) => LauncherCheck::Failed(why),
+                };
+                Task::none()
+            }
             Message::DismissUpdate => {
                 // Not halfway through replacing the files.
                 if self.upgrading() {

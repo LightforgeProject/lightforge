@@ -12,6 +12,17 @@ pub(crate) struct PatchNotes {
     pub(crate) mute: bool,
 }
 
+/// Where the "Check for updates" button in Settings stands.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) enum LauncherCheck {
+    #[default]
+    Idle,
+    Asking,
+    /// Asked, and this is the newest release.
+    Newest,
+    Failed(String),
+}
+
 /// An update of Lightforge itself, from "Update" on.
 #[derive(Debug)]
 pub(crate) struct Upgrade {

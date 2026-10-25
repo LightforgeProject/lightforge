@@ -433,6 +433,7 @@ struct Lightforge {
     exe: Option<std::path::PathBuf>,
     /// The update of Lightforge itself, once "Update" was pressed.
     upgrade: Option<Upgrade>,
+    launcher_check: LauncherCheck,
     /// A cancelled transfer whose files go once the run has wound down.
     ///
     /// Deferred rather than done on the click: the downloader may still have
@@ -727,6 +728,7 @@ impl Lightforge {
             origin: lightforge_core::upgrade::Origin::detect(),
             exe: std::env::current_exe().ok(),
             upgrade: None,
+            launcher_check: LauncherCheck::default(),
             delete_after_cancel: Vec::new(),
             discarding: None,
             launching: None,

@@ -47,6 +47,11 @@ pub(crate) enum Message {
     UpgradeWatch,
     /// Start the new version and close this one.
     UpgradeRestart,
+    /// "Check for updates" in Settings: ask now, whatever the start-up check
+    /// was told and whatever was dismissed before.
+    CheckLauncherNow,
+    /// The answer to [`Message::CheckLauncherNow`].
+    LauncherChecked(Result<Option<lightforge_core::update::Available>, String>),
     /// Turn the start-up check for a new Lightforge on or off, from Settings.
     /// Distinct from `CheckForUpdates`, which asks Blizzard about the game.
     CheckLauncherUpdates(bool),

@@ -1326,12 +1326,26 @@ impl Lightforge {
 
     /// The version, and where its configuration lives.
     pub(crate) fn about_section(&self) -> Element<'_, Message> {
-        let mut rows = vec![setting(
-            "Version",
-            "",
-            None,
-            text(env!("CARGO_PKG_VERSION")).size(theme::BODY).font(theme::MONO),
-        )];
+        let (status, asking) = match &self.launcher_check {
+            LauncherCheck::Idle => (String::new(), false),
+            LauncherCheck::Asking => ("Asking GitHub.".to_owned(), true),
+            LauncherCheck::Newest => ("This is the newest version.".to_owned(), false),
+            LauncherCheck::Failed(why) => (format!("Could not check: {why}"), false),
+        };
+        let mut rows = vec![
+            setting(
+                "Version",
+                status,
+                None,
+                row![
+                    text(env!("CARGO_PKG_VERSION")).size(theme::BODY).font(theme::MONO),
+                    secondary(if asking { "Checking" } else { "Check for updates" }, Message::CheckLauncherNow)
+                        .enabled(!asking),
+                ]
+                .spacing(theme::MD)
+                .align_y(Alignment::Center),
+            ),
+        ];
         if let Some(dirs) = &self.dirs {
             rows.push(setting(
                 "Settings file",
