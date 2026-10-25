@@ -348,16 +348,20 @@ impl Lightforge {
             // Warcraft: Forever, Beta", which is a paragraph where a row
             // wants a word. The names are still there on hover, because the
             // count alone does not tell you what to go and unpin.
+            // A button in every case, pressable or not, so the column on the
+            // right reads as one: what cannot be done is a greyed button that
+            // says why, not a loose line of text.
+            let idle = |label: String| {
+                secondary(&label, Message::RemoveProton(build.version.clone()))
+                    .keyed(format!("proton idle {}", build.version), false)
+            };
             let action: Element<Message> = match (managed, pinned_by.is_empty()) {
-                (false, _) => muted("not managed here".to_owned(), theme::CAPTION).into(),
+                (false, _) => idle("Not managed here".to_owned()),
                 (true, false) => tooltip(
-                    muted(
-                        match pinned_by.len() {
-                            1 => "in use by 1".to_owned(),
-                            n => format!("in use by {n}"),
-                        },
-                        theme::CAPTION,
-                    ),
+                    idle(match pinned_by.len() {
+                        1 => "In use by 1".to_owned(),
+                        n => format!("In use by {n}"),
+                    }),
                     container(text(pinned_by.join(", ")).size(theme::LABEL))
                         .padding([theme::XS, theme::SM])
                         .style(theme::floating),
