@@ -33,7 +33,7 @@ use crate::tact::download::{
 };
 use crate::tact::encoding::Encoding;
 use crate::tact::indices::{IndexCache, Locations, Step};
-use crate::tact::manifest::{DownloadEntry, DownloadManifest, InstallManifest, TagSet};
+use crate::tact::manifest::{DownloadEntry, DownloadManifest, InstallManifest, Tag, TagSet};
 use crate::tact::plan::{reverse_encoding, Options as PlanOptions, Plan};
 use crate::tact::storage::{EKey, Storage};
 use crate::tact::version::{self, Region};
@@ -149,11 +149,14 @@ impl Default for Options {
 impl Options {
     /// The tag expression a `.build.info` carries for this machine.
     pub fn tag_column(&self) -> String {
+        self.tag_column_for(&self.locale)
+    }
+
+    /// [`Options::tag_column`] for a locale other than the one asked for,
+    /// see [`shipped_locale`].
+    fn tag_column_for(&self, locale: &str) -> String {
         let r = self.region.as_str().to_uppercase();
-        format!(
-            "Windows x86_64 {r} {locale} speech:Windows x86_64 {r} {locale} text",
-            locale = self.locale
-        )
+        format!("Windows x86_64 {r} {locale} speech:Windows x86_64 {r} {locale} text")
     }
 
     /// True when any option deliberately truncates the plan.
@@ -161,6 +164,35 @@ impl Options {
         self.limit_archives.is_some() || self.limit_runs.is_some() || self.skip_loose
     }
 }
+
+/// The locale whose files to fetch for a client language.
+///
+/// A build ships a data pack per locale tag, and `enGB` (English (EU)) and
+/// `ptPT` are client languages with none: the English (EU) client reads the
+/// `enUS` files and takes its language from `Config.wtf`. Asking the manifest
+/// for a tag it does not define selects *nothing*, so the download "finished"
+/// with zero files and no error, which is how it looked like a hang.
+fn shipped_locale(wanted: &str, tags: &[Tag]) -> String {
+    let ships = |name: &str| tags.iter().any(|t| t.kind == LOCALE_TAG && t.name == name);
+    // A product with no locale tags at all has no packs to choose between.
+    if ships(wanted) || !tags.iter().any(|t| t.kind == LOCALE_TAG) {
+        return wanted.to_owned();
+    }
+    let nearest = match wanted {
+        "ptPT" => "ptBR",
+        _ => "enUS",
+    };
+    match [nearest, "enUS"].into_iter().find(|name| ships(name)) {
+        Some(name) => {
+            tracing::warn!("this build ships no {wanted} data; fetching {name} instead");
+            name.to_owned()
+        }
+        None => wanted.to_owned(),
+    }
+}
+
+/// The manifest's category number for locale tags.
+const LOCALE_TAG: u16 = 3;
 
 /// What the run is doing, as it happens.
 #[derive(Debug, Clone)]
@@ -377,9 +409,6 @@ pub async fn offerings(
     options: &Options,
     store: Option<&StoreProbe>,
 ) -> Result<Offerings, InstallError> {
-    let base_tags = TagSet::parse(&options.tag_column());
-    let tags = base_tags.clone().with_optional(options.optional_tags.clone());
-
     let versions = version::versions(http, options.region, code.as_str()).await?;
     let remote = version::for_region(&versions, options.region, |v| &v.region)
         .cloned()
@@ -395,6 +424,10 @@ pub async fn offerings(
     let ekey = pair.ekey.ok_or(InstallError::MissingManifest("download"))?;
     let manifest =
         DownloadManifest::parse(&client.fetch_loose(http, &ekey, &pair.ckey, None).await?)?;
+
+    let locale = shipped_locale(&options.locale, manifest.tags());
+    let base_tags = TagSet::parse(&options.tag_column_for(&locale));
+    let tags = base_tags.clone().with_optional(options.optional_tags.clone());
 
     let missing = |ekey: &EKey| store.is_none_or(|probe| !probe.has(ekey));
     let bytes = |tags: &TagSet| {
@@ -428,9 +461,6 @@ pub async fn prepare(
     options: &Options,
     on_event: &mut impl FnMut(Event),
 ) -> Result<Prepared, InstallError> {
-    let tag_column = options.tag_column();
-    let tags = TagSet::parse(&tag_column).with_optional(options.optional_tags.clone());
-
     let versions = version::versions(http, options.region, code.as_str()).await?;
     let remote = version::for_region(&versions, options.region, |v| &v.region)
         .cloned()
@@ -482,6 +512,9 @@ pub async fn prepare(
     let download_manifest =
         DownloadManifest::parse(&fetch_manifest(build.download, "download").await?)?;
     let install = InstallManifest::parse(&fetch_manifest(build.install, "install").await?)?;
+    let locale = shipped_locale(&options.locale, download_manifest.tags());
+    let tag_column = options.tag_column_for(&locale);
+    let tags = TagSet::parse(&tag_column).with_optional(options.optional_tags.clone());
     on_event(Event::Manifests {
         download: download_manifest.len(),
         install: install.len(),
@@ -959,6 +992,20 @@ mod tests {
             options.tag_column(),
             "Windows x86_64 EU enUS speech:Windows x86_64 EU enUS text"
         );
+    }
+
+    fn locale_tag(name: &str) -> Tag {
+        Tag::named(name, LOCALE_TAG)
+    }
+
+    #[test]
+    fn a_language_with_no_data_pack_reads_the_nearest_one() {
+        let tags = [locale_tag("enUS"), locale_tag("deDE"), locale_tag("ptBR")];
+        assert_eq!(shipped_locale("deDE", &tags), "deDE");
+        assert_eq!(shipped_locale("enGB", &tags), "enUS");
+        assert_eq!(shipped_locale("ptPT", &tags), "ptBR");
+        // Nothing to choose between: left as asked.
+        assert_eq!(shipped_locale("enGB", &[]), "enGB");
     }
 
     #[test]

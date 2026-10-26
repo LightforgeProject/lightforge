@@ -55,6 +55,12 @@ impl std::fmt::Debug for Tag {
 }
 
 impl Tag {
+    /// A tag covering nothing, for tests that only look at names and kinds.
+    #[cfg(test)]
+    pub(crate) fn named(name: &str, kind: u16) -> Self {
+        Self { name: name.to_owned(), kind, mask: Vec::new() }
+    }
+
     /// Whether entry `index` carries this tag.
     ///
     /// Bit 0 of a byte is its **high** bit. Out-of-range indices are `false`
