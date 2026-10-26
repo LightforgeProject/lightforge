@@ -220,19 +220,34 @@ impl ProtonRunner {
     {
         self.prepare()?;
         let program = program.as_ref().to_os_string();
-        let output = self
-            .command("run", &program, args)
-            .stdin(Stdio::null())
+        let mut command = self.command("run", &program, args);
+        command.stdin(Stdio::null());
+        tracing::info!("running in the prefix: {command:?}");
+        let started = std::time::Instant::now();
+        let output = command
             .output()
             .map_err(|e| PrefixError::Spawn { program: self.entry_point.clone(), source: e })?;
 
         if output.status.success() {
+            tracing::info!(
+                "{} finished in {:.1}s",
+                program.to_string_lossy(),
+                started.elapsed().as_secs_f64()
+            );
             return Ok(());
         }
+        let stderr = tail(&output.stderr);
+        tracing::error!(
+            "{} exited with {:?} after {:.1}s; stderr tail: {}",
+            program.to_string_lossy(),
+            output.status.code(),
+            started.elapsed().as_secs_f64(),
+            stderr.trim(),
+        );
         Err(PrefixError::Command {
             program: program.to_string_lossy().into_owned(),
             code: output.status.code(),
-            stderr: tail(&output.stderr),
+            stderr,
         })
     }
 
@@ -276,7 +291,7 @@ impl ProtonRunner {
 
         // A prefix with no running server exits non-zero; that is the desired
         // end state, not a failure, so the status is deliberately dropped.
-        drop(output);
+        tracing::debug!("wineserver -k -w exited with {:?}", output.status.code());
         Ok(())
     }
 

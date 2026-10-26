@@ -689,6 +689,7 @@ async fn main() -> std::process::ExitCode {
         // it, when that is known.
         Err(error) => {
             eprintln!("Error: {error:?}");
+            tracing::error!("{}", lightforge_core::error::chain(error.as_ref()));
             if let Some(advice) = advise(error.as_ref()) {
                 eprintln!("\nhint: {}", advice.todo);
                 match advice.fix {
@@ -726,6 +727,12 @@ async fn run() -> Result<()> {
         Some(root) => Layout::with_root(root),
         None => config.layout().context("resolving the Blizzard root")?,
     };
+
+    // Only to a file, never to the terminal the command is printing on. A
+    // missing log is not worth failing a command for.
+    if let Err(e) = lightforge_core::logging::init(&dirs, "lightforge-cli") {
+        eprintln!("warning: logging disabled: {}", lightforge_core::error::chain(&e));
+    }
 
     let ctx = Ctx { layout, config };
     match cli.command {

@@ -154,6 +154,17 @@ fn tune_allocator() {
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 fn tune_allocator() {}
 
+/// Log to a file, or carry on without one: a launcher that refuses to open
+/// because its log directory is read-only has made things worse.
+fn start_logging() {
+    let Ok(dirs) = AppDirs::discover() else {
+        return;
+    };
+    if let Err(e) = lightforge_core::logging::init(&dirs, "lightforge-gui") {
+        eprintln!("lightforge: logging disabled: {}", chain(&e));
+    }
+}
+
 fn main() -> iced::Result {
     // The one flag, answered before anything opens a window. Packaging checks
     // that a release ships the build it says it does by asking both binaries,
@@ -163,6 +174,7 @@ fn main() -> iced::Result {
         println!("lightforge-gui {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    start_logging();
     tune_allocator();
     fit::take_over_scale();
     trace::begin();
@@ -591,7 +603,10 @@ impl Lightforge {
         // point at the default library, and then saving those over it.
         let loaded = dirs.as_ref().map(|d| Config::load_or_default(&d.config_file()));
         let config_error = match (&loaded, dirs.as_ref()) {
-            (Some(Err(e)), Some(dirs)) => Some(broken_config(e, &dirs.config_file())),
+            (Some(Err(e)), Some(dirs)) => {
+                tracing::error!("{} will not load: {}", dirs.config_file().display(), chain(e));
+                Some(broken_config(e, &dirs.config_file()))
+            }
             _ => None,
         };
         let mut config = match loaded {
@@ -607,7 +622,16 @@ impl Lightforge {
         let _ = config.ensure_libraries();
         let config = config;
         // Honours `blizzard_root`, the same way the CLI does.
-        let layout = config.layout().unwrap_or_else(|_| Layout::with_root("."));
+        let layout = config.layout().unwrap_or_else(|e| {
+            tracing::error!("could not resolve the Blizzard root, using the current directory: {}", chain(&e));
+            Layout::with_root(".")
+        });
+        tracing::info!(
+            "config loaded: root {}, {} product(s), {} library(ies)",
+            layout.root().display(),
+            config.products.len(),
+            layout.libraries().all().len(),
+        );
         let bnet_icon = layout.battle_net_icon().and_then(|path| art::try_mark(&path));
 
         let choices: Vec<Choice> = config
@@ -866,9 +890,9 @@ impl Lightforge {
 
     /// Every message, with the status line watched on the way out.
     ///
-    /// Lightforge only traces to stdout, so the status line is the closest
-    /// thing to a log it has, and whatever it said in the minute before a
-    /// bug report is usually the whole story. Recording it here rather than at
+    /// Every change is also written to the log file, so the status line is the
+    /// thread through it, and whatever it said in the minute before a bug
+    /// report is usually the whole story. Recording it here rather than at
     /// the hundred-odd places that assign it means nothing can be forgotten.
     fn update(&mut self, message: Message) -> Task<Message> {
         let before = (self.status.clone(), self.error.clone());
@@ -887,10 +911,14 @@ impl Lightforge {
         };
 
         if self.status != before.0 && !self.status.is_empty() {
+            tracing::info!("status: {}", self.status);
             self.remember(self.status.clone());
         }
         if self.error != before.1 {
             if let Some(error) = self.error.clone() {
+                // Also written by `Problem::of` when the error had a type;
+                // this is the line for what the window actually showed.
+                tracing::error!("shown to the user: {error}");
                 self.remember(format!("error: {error}"));
             }
         }

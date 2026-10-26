@@ -130,6 +130,21 @@ impl Endpoint {
     }
 }
 
+/// One endpoint failed; the next is tried. Debug per request and a throttled
+/// warning, because an outage fails every request and a line each would drown
+/// the log. The error that finally escapes carries the last URL either way.
+fn endpoint_failed(url: String, source: NetError) -> CdnError {
+    static SLOT: crate::logging::Throttle = crate::logging::Throttle::new();
+    tracing::debug!("cdn request failed, trying the next host: {url}: {}", crate::error::chain(&source));
+    if let Some(held) = SLOT.pass(10) {
+        tracing::warn!(
+            "cdn request failed, trying the next host ({held} similar since the last note): {url}: {}",
+            crate::error::chain(&source)
+        );
+    }
+    CdnError::Fetch { url, source }
+}
+
 /// Scheme and host of a server URL, dropping path and query.
 fn origin_of(server: &str) -> String {
     let without_scheme = server.split_once("://").map(|(_, rest)| rest).unwrap_or(server);
@@ -176,7 +191,7 @@ impl Client {
             let url = endpoint.url(kind, hash)?;
             match http.get_bytes(&url).await {
                 Ok(bytes) => return Ok(bytes),
-                Err(source) => last = Some(CdnError::Fetch { url, source }),
+                Err(source) => last = Some(endpoint_failed(url, source)),
             }
         }
         Err(last.unwrap_or(CdnError::NoEndpoints))
@@ -211,7 +226,7 @@ impl Client {
                         found: to_hex(&actual),
                     });
                 }
-                Err(source) => last = Some(CdnError::Fetch { url, source }),
+                Err(source) => last = Some(endpoint_failed(url, source)),
             }
         }
 
@@ -248,7 +263,7 @@ impl Client {
                     }
                     _ => return Ok(bytes),
                 },
-                Err(source) => last = Some(CdnError::Fetch { url, source }),
+                Err(source) => last = Some(endpoint_failed(url, source)),
             }
         }
 
@@ -274,7 +289,7 @@ impl Client {
             let url = endpoint.url(Kind::Data, archive)?;
             match http.get_range(&url, range).await {
                 Ok(bytes) => return Ok(bytes),
-                Err(source) => last = Some(CdnError::Fetch { url, source }),
+                Err(source) => last = Some(endpoint_failed(url, source)),
             }
         }
 

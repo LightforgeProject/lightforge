@@ -510,6 +510,11 @@ impl AppDirs {
         self.config.join("config.toml")
     }
 
+    /// The launcher's own log files, see [`crate::logging`].
+    pub fn log_dir(&self) -> PathBuf {
+        self.data.join("logs")
+    }
+
     /// Cache for ETag'd theming assets (logos, backgrounds) and their manifest.
     pub fn asset_cache_dir(&self) -> PathBuf {
         self.cache.join("assets")

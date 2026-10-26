@@ -62,7 +62,9 @@ pub struct Problem {
 
 impl Problem {
     pub fn of(error: &(dyn std::error::Error + 'static)) -> Self {
-        Self { message: chain(error), advice: advise(error) }
+        let message = chain(error);
+        tracing::error!("{message}");
+        Self { message, advice: advise(error) }
     }
 }
 

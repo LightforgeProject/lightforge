@@ -30,6 +30,7 @@ pub async fn preflight(
             .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
             .unwrap_or_default();
         let started = Instant::now();
+        tracing::info!("preflight for {} ({runs:?})", code.as_str());
         let report = Preflight::new(config.prefix_user.clone())
             .with_managed(config.managed_products())
             // PLAY only: anything that goes through the client starts it afresh.
@@ -40,6 +41,12 @@ pub async fn preflight(
         // binary, the prefix is ready or the launch does not happen, but the
         // stage timings are worth tracing: a launch that feels stuck is one
         // of them, and this says which.
+        tracing::info!(
+            "preflight done in {} ms, {} process(es) found: {}",
+            started.elapsed().as_millis(),
+            report.processes.len(),
+            report.timings.iter().map(|t| format!("{} {} ms", t.stage, t.took.as_millis())).collect::<Vec<_>>().join(", "),
+        );
         crate::trace::mark(format!(
             "preflight: {} ms total, {} process(es)",
             started.elapsed().as_millis(),
@@ -98,7 +105,7 @@ pub(crate) fn back_up_before_launch(layout: &Layout, code: &ProductCode) {
     match settings_backup(layout, &dirs, code).before_launch() {
         Ok(Some(taken)) => crate::trace::mark(format!("launch: settings backed up to {}", taken.path.display())),
         Ok(None) => {}
-        Err(e) => eprintln!("lightforge: could not back up settings before launch: {}", chain(&e)),
+        Err(e) => tracing::warn!("could not back up settings before launch: {}", chain(&e)),
     }
 }
 
@@ -142,8 +149,12 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Probl
         // What the prefix held before the click, so a session already running
         // under another launcher is not mistaken for this one's.
         let before = lightforge_core::preflight::games_running(&layout);
+        // The whole command, environment included: what to reproduce a launch
+        // by hand with.
+        tracing::info!("launching {}: {launch:?}", code.as_str());
         let mut child = launch.spawn().map_err(|e| Problem::of(&e))?;
         crate::trace::mark(format!("launch: spawned {}", exe.display()));
+        let session = Instant::now();
 
         let watch = exe.file_name().map(|n| n.to_string_lossy().into_owned());
         let Some(watch) = watch else {
@@ -153,8 +164,10 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Probl
         match watch_for(&layout, &before, &watch, &mut child)? {
             Watched::Running(pid) => {
                 crate::trace::mark(format!("launch: {watch} is up (pid {pid})"));
+                tracing::info!("{watch} is up (pid {pid}) after {:.1}s", session.elapsed().as_secs_f64());
                 watch_until_gone(&layout, pid, &mut child);
                 crate::trace::mark(format!("launch: {watch} has exited"));
+                tracing::info!("{watch} exited after {:.0}s", session.elapsed().as_secs_f64());
                 // Reaped on its own thread so nothing is left a zombie. Settled
                 // first: the child is Proton's `steam.exe`, whose wait outlived
                 // the game by nine seconds on a measured retail session, a
@@ -170,8 +183,17 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Probl
             }
             // Either the game was never recognisable or it went down with the
             // tree. Both make the child's own status the honest answer.
-            Watched::TreeExited(status) => Ok(format!("game exited ({status})")),
-            Watched::NeverAppeared => reap(child),
+            Watched::TreeExited(status) => {
+                tracing::warn!(
+                    "Proton exited ({status}) after {:.1}s before {watch} was seen",
+                    session.elapsed().as_secs_f64()
+                );
+                Ok(format!("game exited ({status})"))
+            }
+            Watched::NeverAppeared => {
+                tracing::warn!("{watch} never appeared within {GAME_APPEAR_WITHIN:?}; waiting on Proton");
+                reap(child)
+            }
         }
     })
     .await
@@ -296,6 +318,7 @@ pub async fn launch_via_battle_net(
         use lightforge_core::battlenet::{self, Launch, Readiness};
         use lightforge_core::preflight;
 
+        tracing::info!("hand-off to Battle.net for {} (family {family:?})", code.as_str());
         let runner = client_runner(&layout, &code)?;
         back_up_before_launch(&layout, &code);
 
@@ -370,12 +393,17 @@ pub async fn launch_via_battle_net(
         let launch = Launch::Product { code: code.clone(), exec: family };
         battlenet::launch(&runner, &layout, &launch).map_err(|e| Problem::of(&e))?;
 
-        Ok(
-            match preflight::wait_for_game_start(&layout, &before, HANDOFF_TIMEOUT) {
-                Some(game) => Handoff::Playing(game),
-                None => Handoff::NothingStarted,
-            },
-        )
+        let handoff = match preflight::wait_for_game_start(&layout, &before, HANDOFF_TIMEOUT) {
+            Some(game) => Handoff::Playing(game),
+            None => Handoff::NothingStarted,
+        };
+        match &handoff {
+            Handoff::NothingStarted => {
+                tracing::warn!("Battle.net hand-off for {}: no game started within {HANDOFF_TIMEOUT:?}", code.as_str());
+            }
+            _ => tracing::info!("Battle.net hand-off for {}: game started", code.as_str()),
+        }
+        Ok(handoff)
     })
     .await
     .map_err(|e| Problem::of(&e))?

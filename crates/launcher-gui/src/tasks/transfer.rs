@@ -43,6 +43,7 @@ pub async fn download(
     tx: tokio::sync::watch::Sender<TransferState>,
 ) -> Result<Summary, Problem> {
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+    let stalls = tx.subscribe();
 
     // The download runs on its own thread with its own runtime, and the result
     // comes back over a channel.
@@ -64,6 +65,8 @@ pub async fn download(
             };
 
             let result = runtime.block_on(async move {
+                let watchdog = tokio::spawn(report_stalls(stalls));
+                let result = async move {
                 // Deliberately not the app's shared client: this runtime is
                 // built here and torn down with the thread, and a reqwest
                 // client's connections belong to the runtime that opened them.
@@ -145,12 +148,53 @@ pub async fn download(
                 install::run(&http, &dest, &code, &options, &cancel, on_event)
                     .await
                     .map_err(|e| Problem::of(&e))
+                }
+                .await;
+                watchdog.abort();
+                result
             });
             let _ = done_tx.send(result);
         })
         .map_err(|e| Problem::of(&e))?;
 
     done_rx.await.map_err(|_| "the download thread stopped unexpectedly".to_owned())?
+}
+
+/// Write to the log when a running transfer stops moving.
+///
+/// A stuck download raises no error, so without this the log would only
+/// say "progress" and then nothing, and nothing is not evidence. Sampled
+/// from the same channel the window reads, so it costs the transfer nothing.
+/// The first note comes after a minute without a byte, a request or a new
+/// stage; after that one every five minutes, so a download left stuck
+/// overnight adds a few lines, not a few hundred.
+async fn report_stalls(mut state: tokio::sync::watch::Receiver<TransferState>) {
+    const TICK: Duration = Duration::from_secs(15);
+    let key = |s: &TransferState| (s.stage.clone(), s.progress.bytes_stored, s.progress.requests_done);
+    let mut last = key(&state.borrow_and_update());
+    let mut still = Duration::ZERO;
+    loop {
+        tokio::time::sleep(TICK).await;
+        let now = key(&state.borrow_and_update());
+        if now != last {
+            last = now;
+            still = Duration::ZERO;
+            continue;
+        }
+        still += TICK;
+        if still == Duration::from_secs(60) || (still.as_secs() > 60 && still.as_secs().is_multiple_of(300)) {
+            let progress = state.borrow().progress;
+            tracing::warn!(
+                "transfer stalled for {}s at \"{}\": {}/{} B, {}/{} requests",
+                still.as_secs(),
+                last.0,
+                progress.bytes_stored,
+                progress.bytes_total,
+                progress.requests_done,
+                progress.requests_total,
+            );
+        }
+    }
 }
 
 /// One short line describing a non-progress event, for the status readout.

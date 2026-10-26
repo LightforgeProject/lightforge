@@ -81,7 +81,7 @@ fn read(send: tokio::sync::mpsc::UnboundedSender<Input>) {
     let mut gilrs = match Gilrs::new() {
         Ok(gilrs) => gilrs,
         Err(e) => {
-            eprintln!("lightforge: gamepads unavailable: {e}");
+            tracing::warn!("gamepads unavailable: {e}");
             return;
         }
     };

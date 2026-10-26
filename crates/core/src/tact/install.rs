@@ -26,7 +26,7 @@ use crate::net::Http;
 use crate::product::ProductCode;
 use crate::tact::archive::FileIndex;
 use crate::tact::cdn::Client;
-use crate::tact::config::{BuildConfig, CdnConfig, KeyPair};
+use crate::tact::config::{to_hex, BuildConfig, CdnConfig, KeyPair};
 use crate::tact::download::{
     self, extract_install, Cancel, Catalog, Downloader, Options as DownloadOptions, Progress,
     Source,
@@ -451,7 +451,7 @@ pub async fn prepare(
         [(&remote.build_config, &build_text), (&remote.cdn_config, &cdn_text)]
     {
         if let Err(e) = super::config::store(&data_dir, hash, text.as_bytes()) {
-            eprintln!("lightforge: could not seed {hash} into the store: {e}");
+            tracing::warn!("could not seed {hash} into the store: {e}");
         }
     }
     let build = BuildConfig::parse(&build_text)?;
@@ -660,6 +660,7 @@ pub async fn execute(
         }
     }
 
+    log_failures(&outcome.failed);
     let mut reasons = Vec::new();
     if !outcome.failed.is_empty() {
         reasons.push(format!("{} files failed", outcome.failed.len()));
@@ -754,8 +755,104 @@ pub async fn run(
     cancel: &Cancel,
     mut on_event: impl FnMut(Event),
 ) -> Result<Summary, InstallError> {
-    let prepared = prepare(http, dest, code, options, &mut on_event).await?;
-    execute(http, dest, code, options, prepared, cancel, &mut on_event).await
+    tracing::info!(
+        "install starting: {} region={} locale={} optional={:?} into {} (limit {} B/s)",
+        code.as_str(),
+        options.region.as_str(),
+        options.locale,
+        options.optional_tags,
+        dest.display(),
+        options.limit_bytes_per_second,
+    );
+    let started = std::time::Instant::now();
+    let mut heartbeat = Heartbeat::new();
+    let mut on_event = move |event: Event| {
+        log_event(&event, &mut heartbeat);
+        on_event(event);
+    };
+    let result = async {
+        let prepared = prepare(http, dest, code, options, &mut on_event).await?;
+        execute(http, dest, code, options, prepared, cancel, &mut on_event).await
+    }
+    .await;
+    match &result {
+        Ok(s) => tracing::info!(
+            "install ended after {:.0}s: complete={} stored={} files / {} B, failed={}, cancelled={}, unlocatable={}",
+            started.elapsed().as_secs_f64(),
+            s.complete,
+            s.outcome.files_stored,
+            s.outcome.bytes_stored,
+            s.outcome.failed.len(),
+            s.outcome.cancelled,
+            s.missing,
+        ),
+        Err(e) => tracing::error!(
+            "install failed after {:.0}s: {}",
+            started.elapsed().as_secs_f64(),
+            crate::error::chain(e)
+        ),
+    }
+    result
+}
+
+/// How often a running transfer writes a progress line.
+const HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Rate-limits the progress line, so a multi-hour download leaves a few
+/// hundred lines of "still going, this far" and not one per file.
+struct Heartbeat {
+    last: std::time::Instant,
+    bytes: u64,
+}
+
+impl Heartbeat {
+    fn new() -> Self {
+        Self { last: std::time::Instant::now(), bytes: 0 }
+    }
+}
+
+/// Write an event to the log. Per-file events are left out: a retail install
+/// has a million of them.
+fn log_event(event: &Event, heartbeat: &mut Heartbeat) {
+    match event {
+        Event::Progress(p) => {
+            let since = heartbeat.last.elapsed();
+            if since < HEARTBEAT {
+                return;
+            }
+            let rate = p.bytes_stored.saturating_sub(heartbeat.bytes) as f64 / since.as_secs_f64();
+            tracing::info!(
+                "progress: {}/{} B, {}/{} files, {}/{} requests, {:.1} MiB/s",
+                p.bytes_stored,
+                p.bytes_total,
+                p.files_stored,
+                p.files_total,
+                p.requests_done,
+                p.requests_total,
+                rate / (1024.0 * 1024.0),
+            );
+            *heartbeat = Heartbeat { last: std::time::Instant::now(), bytes: p.bytes_stored };
+        }
+        Event::InstallFile { .. } => {}
+        Event::Incomplete { reasons } => tracing::warn!("install incomplete: {}", reasons.join(", ")),
+        Event::Repaired { dir } => {
+            tracing::warn!("{} would not take a file; added owner write", dir.display());
+        }
+        other => tracing::info!("{other:?}"),
+    }
+}
+
+/// Write what a run could not fetch. The first few are named with their
+/// cause, the rest only counted: a dead mirror fails thousands of files for
+/// the same reason, and the reason is what matters.
+fn log_failures(failed: &[download::Failure]) {
+    const NAMED: usize = 20;
+    for failure in failed.iter().take(NAMED) {
+        tracing::warn!("failed {}: {}", to_hex(&failure.ekey), failure.reason);
+    }
+    if failed.len() > NAMED {
+        tracing::warn!("... and {} more failed files", failed.len() - NAMED);
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -28,7 +28,8 @@ sentry.workspace = true
 # Only for the one reply the launcher reads back from our own host: where the
 # screenshot it just uploaded now lives.
 serde.workspace = true
-tokio = { workspace = true, features = ["rt", "sync"] }
+tracing.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 
 # ---------------------------------------------------------------------------
 # Distribution packages.

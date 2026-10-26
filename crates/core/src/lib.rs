@@ -21,6 +21,7 @@ pub mod discover;
 pub mod error;
 pub mod families;
 pub mod library;
+pub mod logging;
 pub mod net;
 pub mod paths;
 pub mod prefix;

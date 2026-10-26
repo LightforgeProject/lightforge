@@ -101,7 +101,16 @@ pub async fn check_for_update(
     if !enabled || cfg!(debug_assertions) {
         return None;
     }
-    latest_release(http?).await.ok().flatten()
+    match latest_release(http?).await {
+        Ok(found) => {
+            tracing::info!("update check: {}", found.as_ref().map_or("up to date", |_| "a newer release exists"));
+            found
+        }
+        Err(e) => {
+            tracing::warn!("update check failed: {e}");
+            None
+        }
+    }
 }
 
 /// The same question, asked because someone pressed the button in Settings.

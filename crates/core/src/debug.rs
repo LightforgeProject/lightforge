@@ -304,6 +304,19 @@ fn nvidia_version() -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Write the machine's identity to the log: the first thing anyone reading it
+/// for a bug report needs, and cheap enough to repeat at every start.
+pub fn log_environment() {
+    tracing::info!(
+        "system: {}, kernel {}, session {}, gpu {}, nvidia {}",
+        os_release(),
+        kernel(),
+        session().as_deref().unwrap_or("unknown"),
+        gpu_driver().as_deref().unwrap_or("unknown"),
+        nvidia_version().as_deref().unwrap_or("none"),
+    );
+}
+
 fn os_release() -> String {
     std::fs::read_to_string("/etc/os-release")
         .ok()

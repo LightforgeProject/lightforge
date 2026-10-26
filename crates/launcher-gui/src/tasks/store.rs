@@ -41,10 +41,12 @@ pub async fn scan_and_repair(
         }
 
         let install = layout.wow_install(&code);
+        tracing::info!("scan and repair {} at {}", code.as_str(), install.display());
         let store = Storage::open(install.join("Data")).map_err(|e| chain(&e))?;
         let report = verify::scan(&store, |progress| {
             let _ = tx.send(progress);
         });
+        tracing::info!("scan checked {} entries, {} damaged", report.checked, report.damaged.len());
 
         let removed = match report.is_healthy() {
             true => 0,
@@ -73,10 +75,16 @@ pub async fn deep_scan(
     tx: tokio::sync::watch::Sender<lightforge_core::tact::verify::Progress>,
 ) -> Result<lightforge_core::tact::verify::Report, String> {
     tokio::task::spawn_blocking(move || {
-        lightforge_core::tact::verify::deep_scan(layout.wow_install(&code), &cancel, |progress| {
+        tracing::info!("deep scan of {} started", code.as_str());
+        let report = lightforge_core::tact::verify::deep_scan(layout.wow_install(&code), &cancel, |progress| {
             let _ = tx.send(progress);
         })
-        .map_err(|e| chain(&e))
+        .map_err(|e| chain(&e));
+        match &report {
+            Ok(r) => tracing::info!("deep scan of {} found {} damaged", code.as_str(), r.damaged.len()),
+            Err(e) => tracing::error!("deep scan of {} failed: {e}", code.as_str()),
+        }
+        report
     })
     .await
     .map_err(|e| chain(&e))?
@@ -104,8 +112,13 @@ pub async fn repair(
             return Err(Unrepaired::InUse);
         }
         let data_dir = layout.wow_install(&code).join("Data").join("data");
-        lightforge_core::tact::verify::repair_unchanged(&data_dir, &report)
-            .map_err(|e| Unrepaired::Failed(chain(&e)))
+        let repaired = lightforge_core::tact::verify::repair_unchanged(&data_dir, &report)
+            .map_err(|e| Unrepaired::Failed(chain(&e)));
+        match &repaired {
+            Ok(n) => tracing::info!("repair of {} removed {n} damaged entries", code.as_str()),
+            Err(e) => tracing::error!("repair of {} failed: {e:?}", code.as_str()),
+        }
+        repaired
     })
     .await
     .map_err(|e| Unrepaired::Failed(chain(&e)))?
@@ -197,6 +210,7 @@ pub async fn uninstall(
         .map(|library| library.windows_wow_path())
         .unwrap_or_else(|| lightforge_core::paths::WINDOWS_WOW_PATH.to_owned());
     let plan = uninstall::plan(&install, &code).map_err(|e| Problem::of(&e))?;
+    tracing::info!("uninstalling {} from {}", code.as_str(), install.display());
     // A reclaim that cannot be planned is skipped, not fatal: the uninstall
     // itself is still exactly what was asked for.
     let reclaim = match &http {
@@ -215,6 +229,7 @@ pub async fn uninstall(
             None => 0,
         };
         productdb::unregister(&layout.agent_dir(), code.as_str()).map_err(|e| Problem::of(&e))?;
+        tracing::info!("uninstalled {}: {} B removed, {reclaimed} B reclaimed", code.as_str(), removed.bytes);
         Ok(removed.bytes + reclaimed)
     })
     .await

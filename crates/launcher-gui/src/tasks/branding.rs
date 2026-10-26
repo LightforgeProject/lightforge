@@ -150,6 +150,7 @@ pub async fn prefetch(
         Ok(manifest) => manifest,
         Err(e) => {
             crate::trace::mark(format_args!("prefetch: no manifest ({e})"));
+            tracing::warn!("artwork: no asset manifest: {}", chain(&e));
             return 0;
         }
     };

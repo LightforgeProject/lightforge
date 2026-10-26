@@ -113,6 +113,13 @@ pub async fn install_all(
         .collect();
 
     on_event(Event::Resolving { count: requests.len() });
+    tracing::info!(
+        "addons: resolving {} for {} (reinstall {}, pinned {})",
+        requests.len(),
+        options.flavor,
+        options.reinstall,
+        options.pinned
+    );
     let resolved = resolve_everywhere(http, catalog, &requests, &options.flavor).await?;
     let unavailable = resolved.iter().filter(|(_, r)| r.downloadable().is_none()).count();
     on_event(Event::Resolved {
@@ -137,6 +144,7 @@ pub async fn install_all(
         let name = entry.name.clone().unwrap_or_else(|| entry.id.clone());
 
         if let Some(reason) = entry.unavailable_reason() {
+            tracing::warn!("addons: {name} ({provider}/{}) is unavailable: {reason}", entry.id);
             on_event(Event::Unavailable { name: name.clone(), reason: reason.clone() });
             report.unavailable.push(Unavailable {
                 name,
@@ -167,6 +175,7 @@ pub async fn install_all(
                 // be recorded, so the pass stops here rather than returning
                 // past the save below.
                 if let Err(e) = made {
+                    tracing::error!("addons: the settings backup before updating failed, stopping: {}", crate::error::chain(&e));
                     failed = Some(e);
                     break;
                 }
@@ -178,11 +187,17 @@ pub async fn install_all(
                 if let Some(record) = ledger.find(&provider, &entry.id) {
                     written.push((record.clone(), pin));
                 }
+                tracing::info!("addons: installed {name} ({provider}/{}): {folders:?}", entry.id);
                 on_event(Event::Installed { name: name.clone(), folders });
                 report.installed.push(name);
             }
             Err(e) => {
                 let reason = e.to_string();
+                tracing::error!(
+                    "addons: could not install {name} ({provider}/{}): {}",
+                    entry.id,
+                    crate::error::chain(&e)
+                );
                 on_event(Event::Unavailable { name: name.clone(), reason: reason.clone() });
                 report.unavailable.push(Unavailable {
                     name,
@@ -194,6 +209,12 @@ pub async fn install_all(
         }
     }
 
+    tracing::info!(
+        "addons: {} installed, {} up to date, {} unavailable",
+        report.installed.len(),
+        report.up_to_date.len(),
+        report.unavailable.len()
+    );
     save_merged(&options.ledger_path, written, options.pinned)?;
     match failed {
         Some(e) => Err(e),
@@ -497,6 +518,7 @@ pub async fn check_updates(
         return Ok(Vec::new());
     }
 
+    tracing::info!("addons: checking {} for updates ({})", requests.len(), options.flavor);
     let resolved = resolve_everywhere(http, catalog, &requests, &options.flavor).await?;
 
     Ok(ledger

@@ -131,10 +131,18 @@ pub async fn run(
     dirs: &AppDirs,
     config: &Config,
     proton_version: Option<&str>,
-    mut on_event: impl FnMut(Event),
+    on_event: impl FnMut(Event),
 ) -> Result<Status, SetupError> {
+    let mut on_event = logged(on_event);
     let http = Http::new()?;
     let mut status = Status::inspect(layout, dirs, config);
+    tracing::info!(
+        "setup: proton={:?} prefix_ready={} battle_net={} (wanted {}), pinned {proton_version:?}",
+        status.proton.as_ref().map(|b| b.version.as_str()),
+        status.prefix.is_ready(),
+        status.battle_net,
+        status.battle_net_wanted,
+    );
 
     // Before anything is downloaded. Battle.net's installer is 32-bit, and it
     // is the only 32-bit thing in this sequence, so a machine with no 32-bit
@@ -247,6 +255,21 @@ pub async fn run(
     Ok(status)
 }
 
+/// Write each step to the log on its way to the caller. Download progress is
+/// left out; the downloader reports its own.
+fn logged(mut on_event: impl FnMut(Event)) -> impl FnMut(Event) {
+    move |event| {
+        match &event {
+            Event::Progress { .. } => {}
+            Event::Started(step) => tracing::info!("setup: {} started", step.label()),
+            Event::Finished { step, skipped, note } => {
+                tracing::info!("setup: {} finished (skipped: {skipped}): {note}", step.label());
+            }
+        }
+        on_event(event);
+    }
+}
+
 /// Install one Proton build and nothing else.
 ///
 /// [`run`] also installs a build when one is missing, but it goes on to the
@@ -257,8 +280,9 @@ pub async fn run(
 pub async fn install_build(
     dirs: &AppDirs,
     version: &str,
-    mut on_event: impl FnMut(Event),
+    on_event: impl FnMut(Event),
 ) -> Result<ProtonRelease, SetupError> {
+    let mut on_event = logged(on_event);
     let http = Http::new()?;
     on_event(Event::Started(Step::Proton));
     let build = install_proton(&http, dirs, Some(version), &mut on_event).await?;

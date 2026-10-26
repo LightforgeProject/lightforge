@@ -192,6 +192,12 @@ impl Installer {
         }
 
         let started = Instant::now();
+        tracing::info!(
+            "running the Battle.net installer {} into {} (timeout {:?})",
+            self.installer.display(),
+            self.install_dir.display(),
+            self.timeout,
+        );
         let mut child = runner
             .command("run", &self.installer, self.args())
             .stdin(Stdio::null())
@@ -225,6 +231,15 @@ impl Installer {
         // reader cannot block.
         let stderr = drain.and_then(|handle| handle.join().ok()).unwrap_or_default();
 
+        match &waited {
+            Ok(_) => tracing::info!("Battle.net installer finished after {:.0}s", started.elapsed().as_secs_f64()),
+            Err(Wait::TimedOut) => tracing::error!("Battle.net installer timed out after {:?}", self.timeout),
+            Err(Wait::Exited(code)) => tracing::error!(
+                "Battle.net installer exited with {code:?} after {:.0}s; stderr tail: {}",
+                started.elapsed().as_secs_f64(),
+                stderr.trim(),
+            ),
+        }
         match waited {
             Ok(outcome) => Ok(outcome),
             Err(Wait::TimedOut) => Err(BattleNetError::InstallTimeout {
@@ -678,12 +693,17 @@ pub fn wait_until_ready(
                 if text.contains(SIGNED_IN) {
                     let seen = *signed_in_at.get_or_insert_with(Instant::now);
                     if client_ready(&text, seen.elapsed()) {
+                        tracing::info!("Battle.net is signed in and ready ({})", path.display());
                         return Readiness::SignedIn;
                     }
                 }
             }
         }
         if Instant::now() >= deadline {
+            tracing::warn!(
+                "Battle.net did not sign in within {within:?}; logs in {}",
+                dir.display()
+            );
             return Readiness::NeedsAttention;
         }
         std::thread::sleep(READY_POLL);
@@ -1152,6 +1172,7 @@ pub fn launch_wrapped(
 
     let (exe, args) = launch.command(&install_dir);
     let mut cmd = crate::tweaks::wrapped(runner.command("run", &exe, args), wrappers);
+    tracing::info!("starting Battle.net ({launch:?}): {cmd:?}");
     cmd.stdin(Stdio::null())
         .spawn()
         .map_err(|e| BattleNetError::Prefix(PrefixError::Spawn { program: exe, source: e }))

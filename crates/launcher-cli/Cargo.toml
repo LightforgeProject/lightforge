@@ -17,4 +17,5 @@ anyhow.workspace = true
 clap.workspace = true
 libc.workspace = true
 md5.workspace = true
+tracing.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

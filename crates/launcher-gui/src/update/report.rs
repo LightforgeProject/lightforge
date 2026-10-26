@@ -17,6 +17,13 @@ impl Lightforge {
                 iced::clipboard::write(info.render())
             }
             Message::SystemInfo(info) => {
+                tracing::info!(
+                    "renderer: {} over {}; {}, {} B RAM",
+                    info.graphics_adapter,
+                    info.graphics_backend,
+                    info.cpu_brand,
+                    info.memory_total,
+                );
                 self.system = Some(*info);
                 Task::none()
             }

@@ -464,12 +464,14 @@ fn check_status(url: &str, response: reqwest::Response) -> Result<reqwest::Respo
     if status.is_success() {
         return Ok(response);
     }
+    tracing::debug!("http {} for {url}", status.as_u16());
     // GitHub answers 403 with a rate-limit body; call it out by name, since
     // "forbidden" sends people hunting for a credentials problem they don't have.
     if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::TOO_MANY_REQUESTS
     {
         if let Some(reset) = response.headers().get("x-ratelimit-remaining") {
             if reset.to_str().ok() == Some("0") {
+                tracing::warn!("rate limited by {url} ({})", status.as_u16());
                 return Err(NetError::RateLimited {
                     url: url.to_owned(),
                 });

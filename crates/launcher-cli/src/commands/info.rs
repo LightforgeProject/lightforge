@@ -13,6 +13,7 @@ pub(crate) fn paths(ctx: Ctx) -> Result<()> {
     println!("config file     {}", dirs.config_file().display());
     println!("asset cache     {}", dirs.asset_cache_dir().display());
     println!("proton dir      {}", dirs.proton_dir().display());
+    println!("log dir         {}", dirs.log_dir().display());
 
     for library in layout.libraries().all() {
         let state = match library.state() {

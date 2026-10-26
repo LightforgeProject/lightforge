@@ -1280,6 +1280,12 @@ pub async fn install_release(
         .ok_or_else(|| ProtonError::NoTarball(release.tag_name.clone()))?;
 
     let archive = scratch.join(&tarball.name);
+    tracing::info!(
+        "installing {} from {} into {}",
+        release.tag_name,
+        tarball.browser_download_url,
+        dest_root.display()
+    );
     let digest = http
         .download(&tarball.browser_download_url, &archive, on_progress)
         .await?;
@@ -1316,6 +1322,10 @@ pub async fn install_release(
     }
     .await;
     let _ = std::fs::remove_file(&archive);
+    match &installed {
+        Ok(build) => tracing::info!("installed {} at {}", build.version, build.path.display()),
+        Err(e) => tracing::error!("installing {} failed: {}", release.tag_name, crate::error::chain(e)),
+    }
     installed
 }
 

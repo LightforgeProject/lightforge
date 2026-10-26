@@ -306,6 +306,11 @@ fn shutdown_timed(
     if found.is_empty() {
         return Ok(Vec::new());
     }
+    tracing::info!(
+        "preflight: stopping {} process(es) in the prefix: {}",
+        found.len(),
+        found.iter().map(|p| format!("{} ({})", p.name, p.pid)).collect::<Vec<_>>().join(", "),
+    );
 
     // `wineserver -k` below takes every process in the prefix with it, and a
     // running game is in the prefix too. The GUI never gets here mid-session,
@@ -359,6 +364,14 @@ fn shutdown_timed(
     }
 
     outcomes.sort_by_key(|o| o.process.pid);
+    for outcome in outcomes.iter().filter(|o| o.disposition != Disposition::Wineserver) {
+        tracing::warn!(
+            "preflight: {} ({}) needed more than wineserver -k: {:?}",
+            outcome.process.name,
+            outcome.process.pid,
+            outcome.disposition,
+        );
+    }
     Ok(outcomes)
 }
 

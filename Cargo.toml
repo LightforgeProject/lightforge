@@ -78,6 +78,10 @@ tact-parser = "0.4"
 tar = "0.4"
 tempfile = "3"
 tokio = { version = "1", default-features = false }
+# The log file. `fmt` and `tracing-log` only: `env-filter` would pull in a
+# regex engine for a filter that `Targets` and one environment variable cover.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "registry", "tracing-log"] }
 # Release ordering for the update check. Already in the lock as a build
 # dependency of `sentry-contexts`, pulls nothing of its own, and knows the
 # prerelease precedence rules a string compare gets wrong: `beta.10` is newer
