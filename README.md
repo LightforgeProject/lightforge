@@ -117,8 +117,8 @@ package Battle.net's installer needs, and how to remove Lightforge again.
 | EndeavourOS | 🟠 | Not tested yet but PKGBUILD should work |
 | Manjaro | 🟠 | Same as EndeavourOS |
 | Fedora | 🟢 | COPR repo / RPM install, Tested on hardware |
-| Bazzite | 🟢 | install-script, Desktop and ROG Ally X, reported by players. |
-| SteamOS | 🟠 | install-script, Tested in a VM; a real Steam Deck is next. |
+| Bazzite | 🟢 | dnf5 copr, Desktop and ROG Ally X, reported by players. |
+| SteamOS | 🟢 | install-script, Tested in a VM; a real Steam Deck is next. |
 | Nobara | 🟢 | COPR repo / RPM install, Tested on hardware |
 | Debian | 🟢 | deb file, Tested in a VM. |
 | Ubuntu | 🟠 | not tested yet but should work with deb file |
