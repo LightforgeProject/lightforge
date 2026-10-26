@@ -521,6 +521,8 @@ pub(crate) struct Complete {
     pub(crate) cancelled: bool,
     pub(crate) files: usize,
     pub(crate) version: Option<String>,
+    /// Why a finished run is not complete, see `Summary::reasons`.
+    pub(crate) reasons: Vec<String>,
 }
 
 /// Where one product's transfer has got to.

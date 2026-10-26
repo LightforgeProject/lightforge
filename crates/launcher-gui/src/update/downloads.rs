@@ -134,13 +134,20 @@ impl Lightforge {
                         note(self, "paused".to_owned());
                         self.pump()
                     }
-                    Ok(_) => {
+                    Ok(done) => {
                         if let Some(at) = entry {
                             let d = &self.queue[at];
                             let reached = job_progress(d.job, &d.sample, 0);
                             self.queue[at].stage = Stage::Paused(reached);
                         }
-                        note(self, "stopped — run again to continue".to_owned());
+                        // Said outright: "stopped" with no cause reads as a
+                        // hang, and the same run again fails the same way.
+                        let why = match done.reasons.is_empty() {
+                            true => String::new(),
+                            false => format!(": {}", done.reasons.join("; ")),
+                        };
+                        tracing::warn!("{} stopped without finishing{why}", code.as_str());
+                        note(self, format!("stopped{why} — run again to retry"));
                         Task::batch([self.pump(), self.reload_if_showing(&code)])
                     }
                     Err(e) => {

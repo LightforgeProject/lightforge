@@ -253,6 +253,9 @@ pub struct Summary {
     /// True only if this run produced a whole, launchable install, the same
     /// condition that gates `.build.info`.
     pub complete: bool,
+    /// Why the run is not complete, each with the first cause where there is
+    /// one, e.g. `3 files failed (first: connection reset)`. Empty when it is.
+    pub reasons: Vec<String>,
     /// Present when `complete`; the version `.build.info` now names.
     pub version: Option<String>,
 }
@@ -631,6 +634,7 @@ pub async fn execute(
         .await?;
 
     let mut install_complete = true;
+    let mut install_failed: Vec<(String, String)> = Vec::new();
     if options.install_files {
         let selected = install.select(&tags);
         let catalog = Catalog { encoding: &encoding, locations: &locations, loose: &loose };
@@ -645,6 +649,10 @@ pub async fn execute(
         .await?;
         on_event(Event::Extracted { files: report.written.len(), bytes: report.bytes() });
         install_complete = report.is_complete();
+        for (path, reason) in &report.failed {
+            tracing::warn!("install file {path} failed: {reason}");
+        }
+        install_failed = report.failed.clone();
 
         // Agent writes this and the install manifest does not list it; without
         // it the client cannot tell which product it is.
@@ -663,7 +671,11 @@ pub async fn execute(
     log_failures(&outcome.failed);
     let mut reasons = Vec::new();
     if !outcome.failed.is_empty() {
-        reasons.push(format!("{} files failed", outcome.failed.len()));
+        reasons.push(format!(
+            "{} files failed (first: {})",
+            outcome.failed.len(),
+            outcome.failed[0].reason
+        ));
     }
     if !plan.missing.is_empty() {
         reasons.push(format!("{} keys unlocatable", plan.missing.len()));
@@ -675,9 +687,16 @@ pub async fn execute(
         reasons.push("limit options truncated the plan".to_owned());
     }
     if options.install_files && !install_complete {
-        reasons.push("install files incomplete".to_owned());
+        reasons.push(match install_failed.first() {
+            Some((path, reason)) => format!(
+                "{} install files failed (first: {path}: {reason})",
+                install_failed.len()
+            ),
+            None => "install files incomplete".to_owned(),
+        });
     }
     let complete = reasons.is_empty();
+    let incomplete_because = reasons.clone();
 
     let version = if complete {
         let info_path = dest.join(".build.info");
@@ -743,7 +762,14 @@ pub async fn execute(
     };
 
     let store = writer.finish()?;
-    Ok(Summary { outcome, store, missing: plan.missing.len(), complete, version })
+    Ok(Summary {
+        outcome,
+        store,
+        missing: plan.missing.len(),
+        complete,
+        reasons: incomplete_because,
+        version,
+    })
 }
 
 /// Prepare and execute in one call, the ordinary path.

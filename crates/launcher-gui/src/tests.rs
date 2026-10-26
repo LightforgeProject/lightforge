@@ -790,7 +790,7 @@ fn a_resume_during_the_wind_down_is_not_swallowed() {
     });
     app.winding_down = Some(code.clone());
 
-    let stopped = Complete { complete: false, cancelled: true, files: 0, version: None };
+    let stopped = Complete { complete: false, cancelled: true, files: 0, version: None, reasons: Vec::new() };
     let _ = app.update(Message::Downloaded(code, Ok(stopped)));
 
     assert!(app.winding_down.is_none());
@@ -856,7 +856,7 @@ fn running(app: &mut Lightforge, code: &ProductCode) {
 }
 
 fn stopped(cancelled: bool) -> Result<Complete, Problem> {
-    Ok(Complete { complete: false, cancelled, files: 0, version: None })
+    Ok(Complete { complete: false, cancelled, files: 0, version: None, reasons: Vec::new() })
 }
 
 #[test]
@@ -1330,4 +1330,26 @@ fn stop_asks_first_and_play_comes_back_when_the_game_is_gone() {
     // A scan that was out when the session ended must not bring STOP back.
     let _ = app.update(Message::GameSeen(true));
     assert!(!app.game_up);
+}
+
+/// A run that ends short without an error used to say only "stopped", which
+/// read as a hang and gave nothing to report. The reasons are the status now.
+#[test]
+fn a_run_that_ends_incomplete_says_why() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.queue.clear();
+    let code = app.selected.code.clone();
+    running(&mut app, &code);
+
+    let done = Complete {
+        complete: false,
+        cancelled: false,
+        files: 0,
+        version: None,
+        reasons: vec!["3 files failed (first: connection reset)".to_owned()],
+    };
+    let _ = app.update(Message::Downloaded(code, Ok(done)));
+
+    assert!(app.status.contains("3 files failed (first: connection reset)"), "{}", app.status);
 }

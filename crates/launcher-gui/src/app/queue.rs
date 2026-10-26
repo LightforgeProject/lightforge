@@ -249,6 +249,7 @@ impl Lightforge {
                     cancelled: summary.outcome.cancelled,
                     files: summary.outcome.files_stored,
                     version: summary.version,
+                    reasons: summary.reasons,
                 });
                 Message::Downloaded(code.clone(), mapped)
             },
