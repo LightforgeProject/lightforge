@@ -347,9 +347,11 @@ impl Config {
 
     /// The language `code` is downloaded in: its own, else the setup choice.
     pub fn locale_for(&self, code: &ProductCode) -> &str {
-        self.product(code)
-            .and_then(|p| p.profile.locale.as_deref())
-            .unwrap_or(&self.locale)
+        crate::tact::install::current_locale(
+            self.product(code)
+                .and_then(|p| p.profile.locale.as_deref())
+                .unwrap_or(&self.locale),
+        )
     }
 
     /// Add a product, rejecting a duplicate code.

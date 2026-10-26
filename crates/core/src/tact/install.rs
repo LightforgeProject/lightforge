@@ -48,19 +48,31 @@ use crate::tact::writer::{StoreWriter, Summary as StoreSummary};
 /// is reading a manifest before the user can pick a language.
 pub const LOCALES: &[(&str, &str)] = &[
     ("enUS", "English (US)"),
-    ("enGB", "English (EU)"),
     ("deDE", "Deutsch"),
     ("frFR", "Français"),
     ("esES", "Español (EU)"),
     ("esMX", "Español (AL)"),
     ("itIT", "Italiano"),
     ("ptBR", "Português (BR)"),
-    ("ptPT", "Português (PT)"),
     ("ruRU", "Русский"),
     ("koKR", "한국어"),
     ("zhCN", "简体中文"),
     ("zhTW", "繁體中文"),
 ];
+
+/// The locale to use for a saved language that is not on the list.
+///
+/// `enGB` and `ptPT` used to be offered, but no build ships data for them (the
+/// English (EU) client reads `enUS`, Portuguese reads `ptBR`), so a download in
+/// either selected nothing. A config that still says so is read as the
+/// language it meant.
+pub fn current_locale(saved: &str) -> &str {
+    match saved {
+        "enGB" => "enUS",
+        "ptPT" => "ptBR",
+        other => other,
+    }
+}
 
 /// What a locale code is called, or the code itself when it is not one we know.
 pub fn locale_name(code: &str) -> &str {
@@ -996,6 +1008,14 @@ mod tests {
 
     fn locale_tag(name: &str) -> Tag {
         Tag::named(name, LOCALE_TAG)
+    }
+
+    #[test]
+    fn a_saved_language_that_is_no_longer_offered_reads_as_its_replacement() {
+        assert_eq!(current_locale("enGB"), "enUS");
+        assert_eq!(current_locale("ptPT"), "ptBR");
+        assert_eq!(current_locale("deDE"), "deDE");
+        assert!(LOCALES.iter().all(|(code, _)| current_locale(code) == *code));
     }
 
     #[test]

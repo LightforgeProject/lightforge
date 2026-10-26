@@ -961,7 +961,9 @@ fn welcome(app: &Lightforge) -> Element<'_, Message> {
         app.picker(
             "wizard language".to_owned(),
             locales,
-            Some(LocaleChoice(app.config.locale.clone())),
+            Some(LocaleChoice(
+                lightforge_core::tact::install::current_locale(&app.config.locale).to_owned(),
+            )),
             "",
             |choice| Message::Wizard(Msg::Locale(choice.0)),
             Length::Fixed(PICKER),

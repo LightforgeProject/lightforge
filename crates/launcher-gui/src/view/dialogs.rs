@@ -326,7 +326,9 @@ impl Lightforge {
             self.picker(
                 "modify locale".to_owned(),
                 locales,
-                Some(LocaleChoice(dialog.locale.clone())),
+                Some(LocaleChoice(
+                    lightforge_core::tact::install::current_locale(&dialog.locale).to_owned(),
+                )),
                 "Language",
                 |choice| Message::ModifyLocale(choice.0),
                 Length::Fixed(300.0),
