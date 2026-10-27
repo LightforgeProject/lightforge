@@ -489,14 +489,21 @@ pub fn link_hand_off(
     layout: &Layout,
     library: &Library,
 ) -> Result<bool, AdoptError> {
+    use crate::prefix::LinkState;
+
     let link = library.games().join(&game.label);
-    match std::fs::symlink_metadata(&link) {
+    let io = |source| AdoptError::Io { path: link.clone(), source };
+    match crate::prefix::inspect_link(&link, &game.path) {
         // Already linked, by us or by a previous run of this.
-        Ok(meta) if meta.is_symlink() => {}
-        Ok(_) => return Err(AdoptError::Occupied(link)),
-        Err(_) => std::os::unix::fs::symlink(&game.path, &link).map_err(|source| {
-            AdoptError::Io { path: link.clone(), source }
-        })?,
+        LinkState::Correct | LinkState::Pending(_) => {}
+        // Left by an earlier adoption of the same game from somewhere else.
+        // Only the symlink goes, never what it pointed at.
+        LinkState::Mislinked(_) => {
+            std::fs::remove_file(&link).map_err(io)?;
+            std::os::unix::fs::symlink(&game.path, &link).map_err(io)?;
+        }
+        LinkState::Missing => std::os::unix::fs::symlink(&game.path, &link).map_err(io)?,
+        LinkState::OccupiedEmpty | LinkState::Occupied => return Err(AdoptError::Occupied(link)),
     }
 
     let their_registry = paths::agent_dir_in(foreign).join("product.db");
@@ -844,6 +851,28 @@ mod tests {
 
         // Running it twice is not an error: the link is already there.
         assert!(link_hand_off(game, &prefix, &layout, &library).is_ok());
+    }
+
+    #[test]
+    fn a_hand_off_link_pointing_elsewhere_is_repointed() {
+        let dir = scratch("handoff-stale");
+        let games = dir.join("games");
+        let prefix = foreign_prefix(&dir, &games);
+        let found = inspect(&prefix, Origin::Lutris).unwrap();
+        let game = &found.hand_offs[0];
+
+        let mut library = Library::main_at(dir.join("Blizzard").join("games"), "Home");
+        library.claim().unwrap();
+        let layout = Layout::with_root(dir.join("Blizzard"));
+        let old = dir.join("moved-away");
+        std::fs::create_dir_all(&old).unwrap();
+        let link = library.games().join("Hearthstone");
+        std::os::unix::fs::symlink(&old, &link).unwrap();
+
+        link_hand_off(game, &prefix, &layout, &library).unwrap();
+
+        assert_eq!(std::fs::read_link(&link).unwrap(), game.path);
+        assert!(old.is_dir(), "the old target is left alone");
     }
 
     #[test]
