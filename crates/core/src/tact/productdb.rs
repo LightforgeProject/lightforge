@@ -583,6 +583,7 @@ fn locale_from_tags(tags: &str) -> Option<String> {
         .map(|tag| tag.trim_end_matches('?'))
         .find(|tag| {
             tag.len() == 4
+                && tag.is_ascii()
                 && tag[..2].chars().all(|c| c.is_ascii_lowercase())
                 && tag[2..].chars().all(|c| c.is_ascii_uppercase())
         })
@@ -839,6 +840,11 @@ mod tests {
             Some("deDE".to_owned())
         );
         assert_eq!(locale_from_tags("Windows x86_64"), None);
+    }
+
+    #[test]
+    fn a_non_ascii_tag_is_not_a_locale() {
+        assert_eq!(locale_from_tags("Windows a界"), None);
     }
 
     #[test]

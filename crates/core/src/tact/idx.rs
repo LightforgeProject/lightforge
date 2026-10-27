@@ -481,7 +481,8 @@ pub fn file_name(bucket: u8, sequence: u32) -> String {
 /// Parse `<bucket><sequence>.idx` back into its parts.
 pub fn parse_file_name(name: &str) -> Option<(u8, u32)> {
     let stem = name.strip_suffix(".idx")?;
-    if stem.len() != 10 {
+    // Byte slicing below, so a multi-byte character must not reach it.
+    if stem.len() != 10 || !stem.is_ascii() {
         return None;
     }
     let bucket = u8::from_str_radix(&stem[..2], 16).ok()?;
@@ -877,6 +878,11 @@ mod tests {
         assert_eq!(parse_file_name("0a00000032.idx"), Some((0x0a, 0x32)));
         assert_eq!(parse_file_name("data.027"), None);
         assert_eq!(parse_file_name("short.idx"), None);
+    }
+
+    #[test]
+    fn a_non_ascii_file_name_is_not_an_index() {
+        assert_eq!(parse_file_name("aé0000000.idx"), None);
     }
 
     #[test]
