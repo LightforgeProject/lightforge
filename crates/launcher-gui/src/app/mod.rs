@@ -7,3 +7,4 @@ mod library;
 mod nav;
 mod queue;
 mod splash;
+mod subscription;
