@@ -37,5 +37,4 @@ zip.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]
-semver.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "time"] }

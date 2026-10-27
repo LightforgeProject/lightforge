@@ -41,7 +41,7 @@ gilrs = "0.11"
 # of iced's own image 0.25, an AVIF encoder and OpenEXR among them, and was
 # 1.9 MB of the stripped release. iced never decodes for us, so it needs none
 # of them; it keeps 0.25 itself, codec-free, for its own types.
-iced = { version = "0.14", features = ["tokio", "image-without-codecs", "advanced", "lazy", "canvas", "sysinfo"] }
+iced = { version = "0.14", features = ["tokio", "image-without-codecs", "advanced", "canvas", "sysinfo"] }
 # The GUI's one decoder: every picture goes through `art.rs` into an RGBA
 # handle. Not the 0.25 iced carries, because only 0.24's JPEG decoder can
 # decode at a DCT scale. JPEG and PNG are all the asset manifest and
