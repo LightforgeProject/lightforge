@@ -567,13 +567,11 @@ pub async fn prepare(
         .file_index
         .clone()
         .ok_or(InstallError::MissingManifest("file index"))?;
-    if !cache.is_cached(&file_index_hash, cdn_config.file_index_size) {
+    if !cache.holds(&file_index_hash, cdn_config.file_index_size) {
         let bytes = client
             .fetch_index(http, &file_index_hash, cdn_config.file_index_size)
             .await?;
-        std::fs::write(cache.path_of(&file_index_hash), &bytes).map_err(|source| {
-            InstallError::Io { path: cache.path_of(&file_index_hash), source }
-        })?;
+        cache.store(&file_index_hash, &bytes)?;
     }
     let loose = FileIndex::parse(&std::fs::read(cache.path_of(&file_index_hash)).map_err(
         |source| InstallError::Io { path: cache.path_of(&file_index_hash), source },
@@ -584,8 +582,16 @@ pub async fn prepare(
     let ckeys = reverse_encoding(&encoding, &wanted_keys);
     let mut locations = Locations::default();
     for (archive, _) in &archives {
-        if cache.is_cached(archive, None) {
-            locations.absorb(&cache.load_archive(archive)?, &wanted_keys);
+        if !cache.is_cached(archive, None) {
+            continue;
+        }
+        // One archive that could not be fetched intact costs its own files,
+        // which then show up as unlocatable, not the whole download.
+        match cache.load_archive(archive) {
+            Ok(index) => {
+                locations.absorb(&index, &wanted_keys);
+            }
+            Err(e) => tracing::warn!("skipping archive index {archive}: {e}"),
         }
     }
     on_event(Event::Located { located: locations.len(), wanted: wanted.len() });

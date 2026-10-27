@@ -320,6 +320,7 @@ mod tests {
         footer.extend_from_slice(&(entries.len() as u32).to_le_bytes());
         footer.extend_from_slice(&[0u8; 8]);
         out.extend_from_slice(&footer);
+        super::super::archive::seal(&mut out);
         out
     }
 
@@ -344,6 +345,7 @@ mod tests {
         footer.extend_from_slice(&(entries.len() as u32).to_le_bytes());
         footer.extend_from_slice(&[0u8; 8]);
         out.extend_from_slice(&footer);
+        super::super::archive::seal(&mut out);
         out
     }
 

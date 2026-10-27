@@ -271,6 +271,7 @@ mod tests {
         footer.extend_from_slice(&[0u8; 8]);
         out.extend_from_slice(&footer);
         let _ = entry_size;
+        crate::tact::archive::seal(&mut out);
         FileIndex::parse(&out).unwrap()
     }
 

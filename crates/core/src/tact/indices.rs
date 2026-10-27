@@ -103,6 +103,16 @@ impl IndexCache {
         }
     }
 
+    /// Whether a copy of `hash` is cached and every checksum in it holds.
+    ///
+    /// Reads the whole file. A damaged copy of the right size passed the
+    /// size check forever, and every run after planned from the same bad
+    /// offsets; failing this fetches it again instead.
+    pub fn holds(&self, hash: &str, expect_size: Option<u64>) -> bool {
+        self.is_cached(hash, expect_size)
+            && std::fs::read(self.path_of(hash)).is_ok_and(|bytes| super::archive::verify(&bytes, hash).is_ok())
+    }
+
     pub fn load_archive(&self, hash: &str) -> Result<ArchiveIndex, IndexError> {
         let path = self.path_of(hash);
         let bytes = std::fs::read(&path).map_err(|source| IndexError::Io { path: path.clone(), source })?;
@@ -135,7 +145,7 @@ impl IndexCache {
 
         let mut stream = stream::iter(wanted.iter().copied())
             .map(|(hash, size)| async move {
-                if self.is_cached(hash, size) {
+                if self.holds(hash, size) {
                     return (hash, Fetched::Cached);
                 }
                 match client.fetch_index(http, hash, size).await {
@@ -168,7 +178,7 @@ impl IndexCache {
     ///
     /// A half-written index that happens to be the declared size would pass
     /// every later check, so the rename has to be the only way one appears.
-    fn store(&self, hash: &str, bytes: &[u8]) -> Result<(), IndexError> {
+    pub(crate) fn store(&self, hash: &str, bytes: &[u8]) -> Result<(), IndexError> {
         let path = self.path_of(hash);
         let mut temp = tempfile::NamedTempFile::new_in(&self.dir)
             .map_err(|source| IndexError::Io { path: self.dir.clone(), source })?;
@@ -325,6 +335,7 @@ mod tests {
         footer.extend_from_slice(&(entries.len() as u32).to_le_bytes());
         footer.extend_from_slice(&[0u8; 8]);
         out.extend_from_slice(&footer);
+        super::super::archive::seal(&mut out);
         out
     }
 
@@ -339,6 +350,21 @@ mod tests {
         // A truncated mirror is exactly what the declared size is there to catch.
         assert!(!cache.is_cached("abcd", Some(11)));
         assert!(!cache.is_cached("missing", None));
+    }
+
+    #[test]
+    fn a_damaged_cached_index_of_the_right_size_is_not_held() {
+        let dir = scratch("damaged");
+        let cache = IndexCache::new(&dir);
+        let mut bytes = index_bytes(&[(key(1), 100, 30)]);
+        let name = super::super::archive::seal(&mut bytes);
+        cache.store(&name, &bytes).unwrap();
+        assert!(cache.holds(&name, Some(bytes.len() as u64)));
+
+        bytes[20] ^= 0xff;
+        cache.store(&name, &bytes).unwrap();
+        assert!(cache.is_cached(&name, Some(bytes.len() as u64)), "the size alone still matches");
+        assert!(!cache.holds(&name, Some(bytes.len() as u64)));
     }
 
     #[test]

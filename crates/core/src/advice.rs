@@ -93,7 +93,9 @@ fn recognise(error: &(dyn Error + 'static)) -> Option<Advice> {
     }
     if let Some(e) = error.downcast_ref::<tact::cdn::CdnError>() {
         return match e {
-            tact::cdn::CdnError::HashMismatch { .. } | tact::cdn::CdnError::WrongSize { .. } => {
+            tact::cdn::CdnError::HashMismatch { .. }
+            | tact::cdn::CdnError::WrongSize { .. }
+            | tact::cdn::CdnError::BadIndex { .. } => {
                 Some(Advice::say(
                     "A download server sent a damaged file, and nothing was stored. Try again; \
                      if it keeps happening, the server is out of date and it usually passes \

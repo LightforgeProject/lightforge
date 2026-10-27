@@ -261,7 +261,10 @@ impl Client {
                     Some(want) if bytes.len() as u64 != want => {
                         last = Some(CdnError::WrongSize { url, expected: want, found: bytes.len() as u64 });
                     }
-                    _ => return Ok(bytes),
+                    _ => match super::archive::verify(&bytes, hash) {
+                        Ok(()) => return Ok(bytes),
+                        Err(source) => last = Some(CdnError::BadIndex { url, source }),
+                    },
                 },
                 Err(source) => last = Some(endpoint_failed(url, source)),
             }
@@ -420,6 +423,13 @@ pub enum CdnError {
 
     #[error("a zero-length range into archive {archive} cannot be requested")]
     EmptyRange { archive: String },
+
+    #[error("{url} is not the index it is named as")]
+    BadIndex {
+        url: String,
+        #[source]
+        source: super::archive::ArchiveError,
+    },
 
     #[error("{url} returned {found} bytes, but its config declares {expected}")]
     WrongSize { url: String, expected: u64, found: u64 },
