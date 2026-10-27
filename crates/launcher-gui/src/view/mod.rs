@@ -6,6 +6,7 @@ mod dialogs;
 mod header;
 mod menus;
 mod proton_installer;
+mod root;
 mod game_settings;
 mod settings;
 mod updates;
