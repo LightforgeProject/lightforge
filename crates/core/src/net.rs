@@ -106,14 +106,14 @@ impl Http {
 
         let body = bounded_body(url, response, MAX_DOCUMENT_BYTES).await?;
 
+        // Decoded before caching: a stored body that does not parse would be
+        // served back on every 304 until the server's ETag changes.
+        let value = serde_json::from_slice(&body).map_err(|e| NetError::Decode {
+            url: url.to_owned(),
+            source: e,
+        })?;
         cache.store(&body, etag.as_deref())?;
-
-        serde_json::from_slice(&body)
-            .map(Some)
-            .map_err(|e| NetError::Decode {
-                url: url.to_owned(),
-                source: e,
-            })
+        Ok(Some(value))
     }
 
     /// POST a body and read a small JSON answer back.
@@ -541,27 +541,30 @@ impl ETagCache {
     }
 
     fn store(&self, body: &[u8], etag: Option<&str>) -> Result<(), NetError> {
-        if let Some(parent) = self.body_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| NetError::Io {
-                path: parent.to_path_buf(),
-                source: e,
-            })?;
-        }
-        std::fs::write(&self.body_path, body).map_err(|e| NetError::Io {
-            path: self.body_path.clone(),
-            source: e,
-        })?;
+        use std::io::Write;
 
-        match etag {
-            Some(etag) => std::fs::write(self.etag_path(), etag).map_err(|e| NetError::Io {
-                path: self.etag_path(),
-                source: e,
-            })?,
-            // No ETag offered: drop any stale one so the next request is
-            // unconditional rather than validated against the wrong version.
-            None => {
-                let _ = std::fs::remove_file(self.etag_path());
-            }
+        let dir = self.body_path.parent().unwrap_or_else(|| Path::new("."));
+        let io = |p: &Path| {
+            let p = p.to_path_buf();
+            move |source| NetError::Io { path: p, source }
+        };
+        std::fs::create_dir_all(dir).map_err(io(dir))?;
+
+        // The old ETag goes first and the new one last, so an interruption
+        // anywhere in between leaves no ETag and the next request is
+        // unconditional, never a 304 validated against the wrong body.
+        match std::fs::remove_file(self.etag_path()) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(io(&self.etag_path())(e)),
+            _ => {}
+        }
+
+        let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(io(dir))?;
+        temp.write_all(body).map_err(io(temp.path()))?;
+        temp.as_file().sync_all().map_err(io(temp.path()))?;
+        temp.persist(&self.body_path).map_err(|e| io(&self.body_path)(e.error))?;
+
+        if let Some(etag) = etag {
+            std::fs::write(self.etag_path(), etag).map_err(io(&self.etag_path()))?;
         }
         Ok(())
     }
@@ -752,6 +755,28 @@ mod tests {
         assert!(!old.exists());
         assert!(live.exists(), "a download in progress beside this one was deleted");
         assert!(other.exists());
+    }
+
+    #[tokio::test]
+    async fn a_body_that_is_not_json_is_never_cached() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ETagCache::new(dir.path().join("releases.json"));
+        let head = "HTTP/1.1 200 OK\r\nContent-Length: 10\r\nETag: \"v1\"\r\nConnection: close\r\n\r\n";
+        let url = server(head.to_owned(), b"<html>oops".to_vec(), false);
+
+        let result = Http::new().unwrap().get_json_cached::<serde_json::Value>(&url, &cache).await;
+
+        assert!(matches!(result, Err(NetError::Decode { .. })), "{result:?}");
+        assert!(names(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn storing_leaves_no_temp_file_beside_the_body() {
+        let dir = tmpdir("atomic-store");
+        let cache = ETagCache::new(dir.join("doc.json"));
+        cache.store(b"{}", Some("\"v1\"")).unwrap();
+
+        assert_eq!(names(&dir), ["doc.json", "doc.json.etag"]);
     }
 
     #[tokio::test]
