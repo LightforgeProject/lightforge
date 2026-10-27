@@ -336,13 +336,19 @@ impl Downloader {
                     limit.acquire(item.bytes()).await;
                 }
                 match &item {
-                    Work::Run(run) => match client.fetch_range(http, &run.archive, &run.range()).await {
-                        Ok(body) => Fetched::Run { run, body },
-                        Err(source) => Fetched::Failed {
-                            ekeys: run.pieces.iter().map(|p| p.ekey).collect(),
-                            reason: source.to_string(),
-                        },
-                    },
+                    Work::Run(run) => {
+                        let ekeys = || run.pieces.iter().map(|p| p.ekey).collect();
+                        let Some(range) = run.range() else {
+                            return Fetched::Failed {
+                                ekeys: ekeys(),
+                                reason: format!("empty run in archive {}", run.archive),
+                            };
+                        };
+                        match client.fetch_range(http, &run.archive, &range).await {
+                            Ok(body) => Fetched::Run { run, body },
+                            Err(source) => Fetched::Failed { ekeys: ekeys(), reason: source.to_string() },
+                        }
+                    }
                     Work::Loose(loose) => {
                         match client.fetch(http, super::cdn::Kind::Data, &to_hex(&loose.ekey)).await {
                             Ok(body) => Fetched::Loose { ekey: loose.ekey, ckey: loose.ckey, body },
@@ -540,7 +546,11 @@ pub async fn extract_install(
         // The same dispatch the plan makes: archived keys come out of a range
         // request, loose ones whole.
         let encoded = if let Some((archive, located)) = locations.get(&ekey) {
-            client.fetch_range(http, archive, &located.range()).await
+            let Some(range) = located.range() else {
+                fail(&mut report, format!("encoding key {} has size 0 in archive {archive}", to_hex(&ekey)));
+                continue;
+            };
+            client.fetch_range(http, archive, &range).await
         } else if loose.contains(&ekey) {
             client.fetch(http, super::cdn::Kind::Data, &to_hex(&ekey)).await
         } else {

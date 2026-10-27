@@ -27,6 +27,7 @@
 //! u32 BE    offset of those bytes from the start of the archive
 //! ```
 
+use super::config::to_hex;
 use super::storage::EKey;
 
 /// Bytes of footer at the end of every archive index.
@@ -44,11 +45,14 @@ pub struct Located {
 
 impl Located {
     /// The value of an HTTP `Range` header that fetches exactly this file.
-    pub fn range(&self) -> String {
+    ///
+    /// `None` for a zero-size entry, which no range can express.
+    pub fn range(&self) -> Option<String> {
         // Inclusive on both ends, which is what RFC 9110 specifies and what
         // an off-by-one here would silently violate, a short read only shows
         // up later as a BLTE decode failure.
-        format!("bytes={}-{}", self.offset, self.offset as u64 + u64::from(self.size) - 1)
+        let last = u64::from(self.offset).checked_add(u64::from(self.size))?.checked_sub(1)?;
+        Some(format!("bytes={}-{last}", self.offset))
     }
 }
 
@@ -63,6 +67,7 @@ pub struct ArchiveIndex {
 
 impl ArchiveIndex {
     pub fn parse(bytes: &[u8], archive: impl Into<String>) -> Result<Self, ArchiveError> {
+        let archive = archive.into();
         let (footer, rows) = walk(bytes)?;
         if footer.offset_bytes == 0 {
             // The file index shares this container but has no offset column,
@@ -72,6 +77,14 @@ impl ArchiveIndex {
 
         let mut entries = rows
             .into_iter()
+            // A zero-size row cannot be range-requested. Dropping it costs one
+            // file, refusing the index would cost every file in the archive.
+            .filter(|&(ekey, size, _)| {
+                if size == 0 {
+                    tracing::warn!("archive {archive} lists {} with size 0, skipping it", to_hex(&ekey));
+                }
+                size != 0
+            })
             .map(|(ekey, size, offset)| {
                 Ok(Located { ekey, size: narrow(size)?, offset: narrow(offset)? })
             })
@@ -83,7 +96,7 @@ impl ArchiveIndex {
             entries.sort_unstable_by_key(|e| e.ekey);
         }
 
-        Ok(Self { archive: archive.into(), entries })
+        Ok(Self { archive, entries })
     }
 
     /// Hash of the archive this indexes.
@@ -482,10 +495,22 @@ mod tests {
         let located = Located { ekey: key(1), size: 100, offset: 1000 };
         // 1000..=1099 is 100 bytes. `bytes=1000-1100` would fetch 101 and
         // corrupt the following file's first byte into this one's payload.
-        assert_eq!(located.range(), "bytes=1000-1099");
+        assert_eq!(located.range().unwrap(), "bytes=1000-1099");
 
         let single = Located { ekey: key(2), size: 1, offset: 0 };
-        assert_eq!(single.range(), "bytes=0-0");
+        assert_eq!(single.range().unwrap(), "bytes=0-0");
+    }
+
+    #[test]
+    fn a_zero_size_entry_has_no_range() {
+        assert_eq!(Located { ekey: key(1), size: 0, offset: 0 }.range(), None);
+    }
+
+    #[test]
+    fn a_zero_size_row_is_skipped_not_fatal() {
+        let parsed = ArchiveIndex::parse(&index(&[(key(1), 0, 0), (key(2), 5, 0)], 4096), "x").unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert!(parsed.lookup(&key(1)).is_none());
     }
 
     #[test]

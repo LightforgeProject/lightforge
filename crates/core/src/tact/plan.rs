@@ -106,14 +106,17 @@ pub struct Run {
 }
 
 impl Run {
-    /// The value of an HTTP `Range` header that fetches this run.
-    pub fn range(&self) -> String {
-        format!("bytes={}-{}", self.offset, u64::from(self.offset) + u64::from(self.length) - 1)
+    /// The value of an HTTP `Range` header that fetches this run, `None` if
+    /// the run is empty.
+    pub fn range(&self) -> Option<String> {
+        let last = u64::from(self.offset).checked_add(u64::from(self.length))?.checked_sub(1)?;
+        Some(format!("bytes={}-{last}", self.offset))
     }
 
     /// Bytes transferred that no wanted file needs.
     pub fn padding(&self) -> u64 {
-        u64::from(self.length) - self.pieces.iter().map(|p| u64::from(p.size)).sum::<u64>()
+        // Overlapping pieces share bytes, so their sizes can sum past the run.
+        u64::from(self.length).saturating_sub(self.pieces.iter().map(|p| u64::from(p.size)).sum())
     }
 
     /// One piece's bytes out of a fetched run.
@@ -371,7 +374,7 @@ mod tests {
         assert_eq!(plan.runs[0].offset, 0);
         assert_eq!(plan.runs[0].length, 300);
         assert_eq!(plan.runs[0].padding(), 0);
-        assert_eq!(plan.runs[0].range(), "bytes=0-299");
+        assert_eq!(plan.runs[0].range().unwrap(), "bytes=0-299");
         assert_eq!(
             plan.runs[0].pieces.iter().map(|p| p.at).collect::<Vec<_>>(),
             [0, 100, 200]
@@ -392,6 +395,23 @@ mod tests {
         for piece in &plan.runs[0].pieces {
             assert!(plan.runs[0].slice(&body, piece).is_some());
         }
+    }
+
+    #[test]
+    fn overlapping_pieces_count_as_no_padding() {
+        // 1000 + 20 bytes of pieces in a 1000-byte run.
+        let keys = [key(1), key(2)];
+        let locations = located("a", &[(key(1), 1000, 0), (key(2), 20, 10)], &keys);
+
+        let plan = Plan::build(&want(&keys), &locations, &no_loose(), &HashMap::new(), |_| false, Options::default());
+
+        assert_eq!(plan.padding(), 0);
+    }
+
+    #[test]
+    fn an_empty_run_has_no_range() {
+        let run = Run { archive: "a".into(), offset: 0, length: 0, pieces: Vec::new() };
+        assert_eq!(run.range(), None);
     }
 
     #[test]

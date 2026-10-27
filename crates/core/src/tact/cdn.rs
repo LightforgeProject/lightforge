@@ -354,11 +354,12 @@ impl Client {
         expect_ckey: &super::config::CKey,
         keys: Option<&ngdp_crypto::KeyService>,
     ) -> Result<Vec<u8>, CdnError> {
+        let range = located.range().ok_or_else(|| CdnError::EmptyRange { archive: archive.to_owned() })?;
         let mut last: Option<CdnError> = None;
 
         for endpoint in &self.endpoints {
             let url = endpoint.url(Kind::Data, archive)?;
-            let raw = match http.get_range(&url, &located.range()).await {
+            let raw = match http.get_range(&url, &range).await {
                 Ok(bytes) => bytes,
                 Err(source) => {
                     last = Some(CdnError::Fetch { url, source });
@@ -416,6 +417,9 @@ pub enum CdnError {
 
     #[error("could not decode the BLTE payload from {url}: {detail}")]
     Decode { url: String, detail: String },
+
+    #[error("a zero-length range into archive {archive} cannot be requested")]
+    EmptyRange { archive: String },
 
     #[error("{url} returned {found} bytes, but its config declares {expected}")]
     WrongSize { url: String, expected: u64, found: u64 },
