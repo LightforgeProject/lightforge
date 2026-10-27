@@ -190,7 +190,7 @@ impl ProtonRunner {
         // (`unimplemented function win32u...`, aborting). Nothing a user sets
         // for their own wine means anything to a Proton build. The tweaks in
         // `self.env` below are applied after this and still win.
-        for var in FOREIGN_WINE_VARS {
+        for var in FOREIGN_WINE_VARS.iter().chain(&FOREIGN_PYTHON_VARS) {
             cmd.env_remove(var);
         }
         // The names the DXVK (3.1) and VKD3D-Proton in GE-Proton11-7 read.
@@ -319,6 +319,12 @@ impl ProtonRunner {
 /// Proton run. `WINEPREFIX` and the `WINEDLLOVERRIDES`/`WINEESYNC` family are
 /// deliberately not here: Proton sets the first itself and users tune the rest.
 const FOREIGN_WINE_VARS: [&str; 3] = ["WINEDLLPATH", "WINELOADER", "WINESERVER"];
+
+/// `proton` is a Python script: a conda or venv shell's interpreter settings
+/// make it import another Python's standard library and die before Wine
+/// starts. Only these three; the `LD_*` variables stay, overlays and
+/// capture tools are injected through them.
+const FOREIGN_PYTHON_VARS: [&str; 3] = ["PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP"];
 
 /// Every library's games folder, the default one first.
 ///
@@ -828,6 +834,17 @@ mod tests {
         }
         let overrides = cmd.get_envs().any(|(k, _)| k == OsStr::new("WINEDLLOVERRIDES"));
         assert!(!overrides, "user tuning is left alone, not listed");
+    }
+
+    #[test]
+    fn a_shells_python_is_not_handed_to_the_proton_script() {
+        let cmd = runner(Path::new("/scratch")).command("run", "wineboot", ["-u"]);
+        for var in ["PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP"] {
+            let seen: Vec<_> = cmd.get_envs().filter(|(k, _)| *k == OsStr::new(var)).collect();
+            assert_eq!(seen, [(OsStr::new(var), None)], "{var} removed");
+        }
+        let preload = cmd.get_envs().any(|(k, _)| k == OsStr::new("LD_PRELOAD") || k == OsStr::new("LD_LIBRARY_PATH"));
+        assert!(!preload, "overlays and capture tools still reach the game");
     }
 
     #[test]
