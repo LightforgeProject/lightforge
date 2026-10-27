@@ -1,5 +1,6 @@
 //! Checking, repairing and reclaiming the store.
 
+use super::{default_install, windows_wow_path};
 use crate::*;
 
 pub(crate) fn verify(ctx: Ctx, path: Option<PathBuf>, deep: bool, repair: bool, all: bool) -> Result<()> {
@@ -380,4 +381,20 @@ pub(crate) fn compact(ctx: Ctx, path: Option<PathBuf>, yes: bool) -> Result<()> 
     let freed = compact::execute(&install, &plan, &snapshot, copy_progress(plan.moved))?;
     println!("\nfreed           {:.2} GiB", gib(freed));
     Ok(())
+}
+
+/// A progress callback for a compaction copying `total` bytes: one line per
+/// whole percent, overwritten in place.
+fn copy_progress(total: u64) -> impl FnMut(u64) {
+    let mut shown = None;
+    move |copied| {
+        let percent = (copied * 100).checked_div(total).unwrap_or(100).min(100);
+        if shown != Some(percent) {
+            shown = Some(percent);
+            eprint!("\rcopying         {percent:3}%");
+            if percent == 100 {
+                eprintln!();
+            }
+        }
+    }
 }

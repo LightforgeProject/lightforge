@@ -1,5 +1,6 @@
 //! Battle.net: installing, configuring and running it, and Agent's registry.
 
+use super::{default_install, managed_products, print_preflight, proton_runner, windows_wow_path};
 use crate::*;
 
 pub(crate) async fn battlenet_fetch() -> Result<()> {
@@ -257,4 +258,56 @@ pub(crate) fn product_db(ctx: Ctx, path: Option<PathBuf>, products: Vec<String>,
         }
     }
     Ok(())
+}
+
+/// Render a config tweak list: key, value, and why it is set.
+fn print_tweaks(tweaks: &[lightforge_core::battlenet::Tweak]) {
+    for tweak in tweaks {
+        println!("  {:<40} {}\n    {}", tweak.key(), tweak.value, tweak.reason);
+    }
+}
+
+/// The build a Battle.net verb should use: `--proton` if given, else the pin
+/// from `config.toml`, else the newest installed.
+///
+/// With a product named, that product's own pin comes first, the client is
+/// being told to start that game, and a pin set for it means it. Without one,
+/// the verb is about the client itself and takes Battle.net's pin.
+///
+/// Leaks a `String` so the borrowed `&str` outlives the call. That is fine for
+/// a CLI process that is about to exec a game and exit, and beats threading a
+/// lifetime through every call site for one value read once.
+fn battle_net_pin<'a>(explicit: Option<&'a str>, code: Option<&ProductCode>) -> Option<&'a str> {
+    if explicit.is_some() {
+        return explicit;
+    }
+    let dirs = AppDirs::discover().ok()?;
+    let config = Config::load_or_default(&dirs.config_file()).ok()?;
+    let version = match code {
+        Some(code) => config.handoff_proton(code)?,
+        None => config.battle_net_proton_version()?,
+    }
+    .to_owned();
+    Some(Box::leak(version.into_boxed_str()))
+}
+
+/// Say so when the build about to run is older than the one that built the
+/// prefix every product shares.
+///
+/// A line on stderr rather than a refusal: the CLI is where an older build is
+/// deliberately tried, and `--proton` is how you try it. The GUI asks first.
+fn warn_on_downgrade(layout: &Layout, build: &lightforge_core::proton::ProtonRelease) {
+    use lightforge_core::proton;
+
+    let built_by = proton::prefix_build(&layout.compat_data());
+    if let proton::PrefixFit::Older { built_by } =
+        proton::prefix_fit(&build.version, built_by.as_deref())
+    {
+        eprintln!(
+            "warning: {} is older than {built_by}, which last upgraded this prefix.\n\
+             \x20        Proton migrates a prefix forward only; the shared prefix may not \
+             survive it.",
+            build.version,
+        );
+    }
 }

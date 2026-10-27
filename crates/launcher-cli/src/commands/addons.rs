@@ -1,5 +1,6 @@
 //! Addons and settings backups.
 
+use super::truncate;
 use crate::*;
 
 pub(crate) async fn addon_adopt(ctx: Ctx, product: String, path: Option<PathBuf>, ledger: Option<PathBuf>, catalog: Option<String>) -> Result<()> {
@@ -462,4 +463,85 @@ pub(crate) fn addon_token(token: String) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A token given inline, or `@path` to read it from a file, export strings
+/// are long enough that pasting one into a shell is its own hazard.
+fn read_token(token: &str) -> Result<String> {
+    match token.strip_prefix('@') {
+        Some(path) => std::fs::read_to_string(path)
+            .with_context(|| format!("reading {path}"))
+            .map(|s| s.trim().to_owned()),
+        None => Ok(token.trim().to_owned()),
+    }
+}
+
+/// The configured default addon channel, or stable when there is no config.
+///
+/// The CLI has no settings UI, so it reads the same `addon_channel` the GUI
+/// writes rather than inventing a second default.
+/// Where this game's settings backups go, and how many it keeps.
+fn settings_backup(layout: &Layout, dirs: &AppDirs, code: &ProductCode) -> backup::Plan {
+    let keep = Config::load_or_default(&dirs.config_file())
+        .map_or(backup::DEFAULT_KEEP, |config| config.backup_keep);
+    backup::Plan::for_product(layout, dirs, code, keep)
+}
+
+fn addon_channel(dirs: &AppDirs) -> lightforge_core::addons::Channel {
+    Config::load_or_default(&dirs.config_file())
+        .map(|config| config.addon_channel)
+        .unwrap_or_default()
+}
+
+/// Where the addon catalog lives: the flag, else config, else the public
+/// endpoint. A path without a scheme is a fixture directory.
+fn addon_origin(
+    flag: Option<&str>,
+    dirs: &AppDirs,
+) -> Option<lightforge_core::addons::catalog::Origin> {
+    use lightforge_core::addons::catalog::Origin;
+    use lightforge_core::config::Config;
+
+    // A `--catalog` flag wins; otherwise the config decides, and the config
+    // falls back to the built-in proxy rather than to nothing.
+    if let Some(source) = flag {
+        return Some(match source.contains("://") {
+            true => Origin::Http(source.to_owned()),
+            false => Origin::Dir(PathBuf::from(source)),
+        });
+    }
+    Some(
+        Config::load_or_default(&dirs.config_file())
+            .map(|c| c.catalog_origin())
+            .unwrap_or_else(|_| Origin::Http(
+                lightforge_core::config::DEFAULT_ADDON_CATALOG.to_owned(),
+            )),
+    )
+}
+
+fn print_addon_event(event: &lightforge_core::addons::manage::Event) {
+    use lightforge_core::addons::manage::Event;
+    match event {
+        Event::Resolving { count } => println!("resolving       {count} addons"),
+        Event::Resolved { ok, unavailable } => {
+            println!("resolved        {ok} available, {unavailable} not\n")
+        }
+        Event::Downloading { name } => println!("  fetching {name}"),
+        Event::Installed { name, folders } => {
+            println!("ok  {:<44} {}", truncate(name, 44), folders.join(", "))
+        }
+        Event::UpToDate { name } => println!("==  {:<44} up to date", truncate(name, 44)),
+        Event::Unavailable { name, reason } => {
+            println!("--  {:<44} {reason}", truncate(name, 44))
+        }
+    }
+}
+
+fn print_addon_report(report: &lightforge_core::addons::manage::Report) {
+    println!(
+        "\ninstalled       {}\nup to date      {}\nunavailable     {}",
+        report.installed.len(),
+        report.up_to_date.len(),
+        report.unavailable.len()
+    );
 }
