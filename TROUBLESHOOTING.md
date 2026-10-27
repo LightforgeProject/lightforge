@@ -201,6 +201,28 @@ ICED_BACKEND=tiny-skia lightforge-gui
 It tries Vulkan first and falls back on its own, so this is only for the cases
 where the driver says yes and then doesn't deliver.
 
+### NVIDIA on Wayland, driver older than 555
+
+Drivers before 555 have no explicit sync, which a Wayland compositor needs to
+show their frames cleanly. Check the one you have loaded:
+
+```bash
+cat /proc/driver/nvidia/version
+```
+
+**The launcher window flickers or freezes**: draw it in software.
+
+```bash
+ICED_BACKEND=tiny-skia lightforge-gui
+```
+
+**The game flickers with the Wayland backend on**: switch it off in
+**Game Settings** (or in **Settings › Battle.net** for the client and what it
+starts). The game goes back through XWayland. On these drivers the switch
+says so in its description.
+
+A 555 or newer driver fixes both.
+
 ### Where are the logs?
 
 There aren't any, deliberately — no log file growing in a corner of your disk.

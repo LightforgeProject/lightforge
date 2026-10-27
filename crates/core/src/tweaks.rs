@@ -95,6 +95,8 @@ pub struct HostTools {
     /// Whether this is a Wayland session, which is what decides whether
     /// Proton's Wayland backend can be offered at all.
     pub wayland: bool,
+    /// The proprietary NVIDIA driver's major version, when it is loaded.
+    pub nvidia: Option<u32>,
 }
 
 impl HostTools {
@@ -103,7 +105,15 @@ impl HostTools {
             game_performance: on_path("game-performance"),
             mangohud: on_path("mangohud"),
             wayland: std::env::var_os("WAYLAND_DISPLAY").is_some(),
+            nvidia: crate::debug::nvidia_version()
+                .and_then(|version| version.split('.').next()?.parse().ok()),
         }
+    }
+
+    /// An NVIDIA driver older than 555, the first with explicit sync, which
+    /// a Wayland compositor needs from it to present frames without flicker.
+    pub fn nvidia_lacks_explicit_sync(&self) -> bool {
+        self.nvidia.is_some_and(|major| major < 555)
     }
 }
 
@@ -267,6 +277,14 @@ mod tests {
             tweaks.environment(&tools),
             vec![(OsString::from("PROTON_ENABLE_WAYLAND"), OsString::from("1"))]
         );
+    }
+
+    #[test]
+    fn explicit_sync_starts_at_nvidia_555() {
+        let nvidia = |major| HostTools { nvidia: Some(major), ..HostTools::default() };
+        assert!(nvidia(550).nvidia_lacks_explicit_sync());
+        assert!(!nvidia(555).nvidia_lacks_explicit_sync());
+        assert!(!HostTools::default().nvidia_lacks_explicit_sync(), "no NVIDIA driver at all");
     }
 
     #[test]

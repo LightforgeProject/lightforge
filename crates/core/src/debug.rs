@@ -295,7 +295,7 @@ fn gpu_driver() -> Option<String> {
 
 /// The proprietary module's version, when it is the one loaded. Absent on an
 /// open-stack machine, which is itself the answer.
-fn nvidia_version() -> Option<String> {
+pub(crate) fn nvidia_version() -> Option<String> {
     let text = std::fs::read_to_string("/proc/driver/nvidia/version").ok()?;
     // "NVRM version: NVIDIA UNIX x86_64 Kernel Module  580.82.07  ...", the
     // first dotted number on the line is the one anybody quotes.

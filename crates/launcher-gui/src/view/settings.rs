@@ -918,10 +918,7 @@ impl Lightforge {
             ),
             setting(
                 "Wayland backend",
-                match tools.wayland {
-                    true => "Runs on Proton's Wayland backend instead of XWayland.",
-                    false => "Only available in a Wayland session.",
-                },
+                super::game_settings::wayland_about(tools),
                 self.hint(
                     "Newer and less travelled than the X11 path, so it is off until asked for.",
                 ),

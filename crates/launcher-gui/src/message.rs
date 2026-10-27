@@ -195,6 +195,8 @@ pub(crate) enum Message {
     EnvSettled(u64),
     /// Throw away this product's shader cache, e.g. after a Proton swap.
     ClearShaderCache,
+    /// `true` when there was a cache to delete.
+    ShaderCacheCleared(Result<bool, String>),
     /// Opt in or out of one optional download, by manifest tag name. On starts
     /// the download; off asks whether to delete what it fetched.
     OptionalContent(String, bool),

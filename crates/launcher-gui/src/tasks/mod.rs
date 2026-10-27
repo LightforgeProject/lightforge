@@ -158,10 +158,7 @@ fn runner_for(
 
     let target =
         std::fs::read_link(layout.wow_symlink()).unwrap_or_else(|_| layout.wow_install(code));
-    // Made here rather than trusting DXVK and VKD3D to create it. Failing
-    // only costs the cache, so the launch goes on either way.
     let shaders = dirs.shader_cache_dir(code);
-    let _ = std::fs::create_dir_all(&shaders);
     let mut runner =
         ProtonRunner::new(build, layout, ProtonRunner::steam_client_path(steam.as_ref(), &dirs))
             .with_compat_mount(&target)

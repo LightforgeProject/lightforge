@@ -530,8 +530,8 @@ impl AppDirs {
         self.data.join("proton")
     }
 
-    /// Shader caches for one product, passed as `DXVK_SHADER_CACHE_PATH` and
-    /// `VKD3D_SHADER_CACHE_PATH`.
+    /// Shader caches for one product: DXVK's and VKD3D's, and the NVIDIA and
+    /// Mesa drivers' below it, see [`crate::prefix::ProtonRunner::with_shader_cache`].
     ///
     /// Keyed per product deliberately. All products share a single prefix, so
     /// letting DXVK pool its cache there would mean clearing Retail's stale

@@ -371,6 +371,18 @@ pub async fn clear_cache(dirs: AppDirs) -> Result<u64, String> {
         .map_err(|e| chain(&e))
 }
 
+/// Delete one product's shader cache; `false` when it had none. Off the GUI
+/// thread because the NVIDIA cache in it has no size cap.
+pub async fn clear_shader_cache(dir: PathBuf) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || match std::fs::remove_dir_all(&dir) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(format!("{}: {e}", dir.display())),
+    })
+    .await
+    .map_err(|e| chain(&e))?
+}
+
 #[cfg(test)]
 mod uninstall_tests {
     use super::*;

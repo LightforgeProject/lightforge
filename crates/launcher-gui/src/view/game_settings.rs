@@ -137,10 +137,7 @@ impl Lightforge {
 
         let mut rows = vec![setting(
             "Wayland backend",
-            match self.tools.wayland {
-                true => "Runs on Proton's Wayland backend instead of XWayland.",
-                false => "Only available in a Wayland session.",
-            },
+            wayland_about(&self.tools),
             self.hint("Newer and less travelled than the X11 path, so it is off until asked for."),
             self.tool_switch(
                 "wayland",
@@ -426,5 +423,17 @@ impl Lightforge {
             });
         }
         body.into()
+    }
+}
+
+/// The Wayland backend row's description, in Game Settings and Settings ›
+/// Battle.net alike.
+pub(crate) fn wayland_about(tools: &HostTools) -> &'static str {
+    match tools.wayland {
+        false => "Only available in a Wayland session.",
+        true if tools.nvidia_lacks_explicit_sync() => {
+            "NVIDIA drivers before 555 lack explicit sync, so expect flicker."
+        }
+        true => "Runs on Proton's Wayland backend instead of XWayland.",
     }
 }

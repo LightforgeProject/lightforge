@@ -85,13 +85,21 @@ impl ProtonRunner {
         }
     }
 
-    /// Keep one product's DXVK and VKD3D shader caches in `dir`.
+    /// Keep one product's shader caches in `dir`: DXVK's and VKD3D's in it,
+    /// the NVIDIA and Mesa drivers' in `nvidia` and `mesa` under it.
     ///
-    /// Left alone, DXVK writes to `%LOCALAPPDATA%\dxvk` inside the prefix.
-    /// Here both sit beside Lightforge's other caches, where Storage can size
-    /// and clear them per product.
+    /// Left alone, DXVK writes to `%LOCALAPPDATA%\dxvk` inside the prefix and
+    /// the drivers into `~/.cache`, pooled with every other program. Here all
+    /// of them sit beside Lightforge's other caches, where Storage can size
+    /// and clear them per product. The directories are made here rather than
+    /// trusting each of those to create its own; failing only costs the
+    /// cache, so the launch goes on either way.
     pub fn with_shader_cache(mut self, dir: impl Into<PathBuf>) -> Self {
-        self.shader_cache = Some(dir.into());
+        let dir = dir.into();
+        for driver in [NVIDIA_CACHE, MESA_CACHE] {
+            let _ = std::fs::create_dir_all(dir.join(driver));
+        }
+        self.shader_cache = Some(dir);
         self
     }
 
@@ -199,6 +207,12 @@ impl ProtonRunner {
         if let Some(cache) = &self.shader_cache {
             cmd.env("DXVK_SHADER_CACHE_PATH", cache);
             cmd.env("VKD3D_SHADER_CACHE_PATH", cache);
+            cmd.env("__GL_SHADER_DISK_CACHE_PATH", cache.join(NVIDIA_CACHE));
+            // The NVIDIA driver otherwise trims its cache to a size cap, and
+            // a trimmed pipeline is a stutter the next time it is drawn. The
+            // per-product Clear button is the limit instead.
+            cmd.env("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP", "1");
+            cmd.env("MESA_SHADER_CACHE_DIR", cache.join(MESA_CACHE));
         }
         for (key, value) in &self.env {
             cmd.env(key, value);
@@ -325,6 +339,10 @@ const FOREIGN_WINE_VARS: [&str; 3] = ["WINEDLLPATH", "WINELOADER", "WINESERVER"]
 /// starts. Only these three; the `LD_*` variables stay, overlays and
 /// capture tools are injected through them.
 const FOREIGN_PYTHON_VARS: [&str; 3] = ["PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP"];
+
+/// The GL/Vulkan drivers' own caches, inside a product's shader cache.
+const NVIDIA_CACHE: &str = "nvidia";
+const MESA_CACHE: &str = "mesa";
 
 /// Every library's games folder, the default one first.
 ///
@@ -738,14 +756,30 @@ mod tests {
 
     #[test]
     fn shader_cache_is_only_set_when_a_product_asks_for_one() {
-        let root = Path::new("/scratch");
-        let plain = runner(root).command("run", "wineboot", ["-u"]);
-        let pinned = runner(root).with_shader_cache("/cache/dxvk/wow").command("run", "wineboot", ["-u"]);
-        for key in ["DXVK_SHADER_CACHE_PATH", "VKD3D_SHADER_CACHE_PATH"] {
+        let root = scratch("shader-cache");
+        let cache = root.join("cache/dxvk/wow");
+        let plain = runner(&root).command("run", "wineboot", ["-u"]);
+        let pinned = runner(&root).with_shader_cache(&cache).command("run", "wineboot", ["-u"]);
+        let expected = [
+            ("DXVK_SHADER_CACHE_PATH", cache.clone()),
+            ("VKD3D_SHADER_CACHE_PATH", cache.clone()),
+            ("__GL_SHADER_DISK_CACHE_PATH", cache.join("nvidia")),
+            ("MESA_SHADER_CACHE_DIR", cache.join("mesa")),
+        ];
+        for (key, dir) in expected {
             assert!(env_of(&plain, key).is_none(), "{key}");
-            assert_eq!(env_of(&pinned, key).as_deref(), Some("/cache/dxvk/wow"), "{key}");
+            assert_eq!(env_of(&pinned, key).map(PathBuf::from), Some(dir), "{key}");
         }
         assert!(env_of(&pinned, "DXVK_STATE_CACHE_PATH").is_none());
+    }
+
+    #[test]
+    fn driver_caches_exist_before_the_launch() {
+        let root = scratch("driver-caches");
+        let cache = root.join("cache/dxvk/wow");
+        let _ = runner(&root).with_shader_cache(&cache);
+        assert!(cache.join("nvidia").is_dir());
+        assert!(cache.join("mesa").is_dir());
     }
 
     #[test]

@@ -430,13 +430,14 @@ impl Lightforge {
                 // Per product, so this cannot take another product's shaders
                 // with it, the reason the cache is keyed that way at all.
                 let dir = dirs.shader_cache_dir(&self.selected.code);
-                match std::fs::remove_dir_all(&dir) {
-                    Ok(()) => self.status = "shader cache cleared".to_owned(),
+                Task::perform(tasks::clear_shader_cache(dir), Message::ShaderCacheCleared)
+            }
+            Message::ShaderCacheCleared(result) => {
+                match result {
+                    Ok(true) => self.status = "shader cache cleared".to_owned(),
                     // Nothing there is the desired end state, not a failure.
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        self.status = "no shader cache to clear".to_owned()
-                    }
-                    Err(e) => self.error = Some(format!("{}: {e}", dir.display()).into()),
+                    Ok(false) => self.status = "no shader cache to clear".to_owned(),
+                    Err(e) => self.error = Some(e.into()),
                 }
                 Task::none()
             }
