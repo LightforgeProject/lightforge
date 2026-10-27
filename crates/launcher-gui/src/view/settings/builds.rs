@@ -122,57 +122,57 @@ impl Lightforge {
     /// switched tiles read as a bug, correctly, since nothing on the page
     /// said which game it meant.
     pub(crate) fn proton_section(&self) -> Element<'_, Message> {
+        let games = self.installed_products();
+        // Two questions: which Proton each game runs, and which Protons are
+        // on this machine.
+        column![
+            group_label("Games", None),
+            setting_group(self.game_pins(&games)),
+            group_label("When a game has no pin", None),
+            setting_group(self.fallback_pins()),
+            self.pin_notes(&games),
+            group_label("Installed builds", Some(self.proton_install())),
+            setting_card(self.proton_builds()),
+        ]
+        .spacing(theme::SM)
+        .into()
+    }
+
+    /// A build picker for one row.
+    fn proton_picker(
+        &self,
+        key: String,
+        unpinned: Unpinned,
+        current: Option<String>,
+        on_pick: impl Fn(ProtonChoice) -> Message,
+    ) -> Element<'_, Message> {
         // Built per row rather than once: the first entry is "no pin of my
         // own", and what that falls through to is different on a title
         // Battle.net opens than on a game Lightforge launches itself.
-        let builds = |unpinned: Unpinned| -> Vec<ProtonChoice> {
-            std::iter::once(ProtonChoice(None, unpinned))
-                .chain(
-                    self.setup
-                        .iter()
-                        .flat_map(|s| s.installed.iter())
-                        .map(|build| ProtonChoice(Some(build.version.clone()), unpinned)),
-                )
-                .collect()
-        };
-
-        let picker = |key: String,
-                      unpinned: Unpinned,
-                      current: Option<String>,
-                      on_pick: Box<dyn Fn(ProtonChoice) -> Message>| {
-            self.picker(
-                key,
-                builds(unpinned),
-                Some(ProtonChoice(current, unpinned)),
-                "",
-                on_pick,
-                Length::Fixed(260.0),
-                theme::BODY,
+        let builds = std::iter::once(ProtonChoice(None, unpinned))
+            .chain(
+                self.setup
+                    .iter()
+                    .flat_map(|s| s.installed.iter())
+                    .map(|build| ProtonChoice(Some(build.version.clone()), unpinned)),
             )
-        };
+            .collect();
+        self.picker(
+            key,
+            builds,
+            Some(ProtonChoice(current, unpinned)),
+            "",
+            on_pick,
+            Length::Fixed(260.0),
+            theme::BODY,
+        )
+    }
 
-        // A row: the name and what starts it take the slack, then any signs,
-        // then the picker, a fixed width so every row's control lines up.
-        fn line<'a>(
-            label: String,
-            about: &'static str,
-            tags: Vec<Element<'a, Message>>,
-            control: Element<'a, Message>,
-        ) -> Element<'a, Message> {
-            setting(
-                label,
-                about,
-                None,
-                row![].extend(tags).push(control).spacing(theme::SM).align_y(Alignment::Center),
-            )
-        }
-
-        let games = self.installed_products();
+    /// One row per installed game, in the order the config lists them, the
+    /// same order as the Play page's tiles, so the two read alike.
+    fn game_pins(&self, games: &[(ProductCode, String)]) -> Vec<Element<'_, Message>> {
         let mut pins: Vec<Element<'_, Message>> = Vec::new();
-
-        // One row per installed game, in the order the config lists them,
-        // the same order as the Play page's tiles, so the two read alike.
-        for (code, label) in &games {
+        for (code, label) in games {
             // Every game, a title Battle.net launches included. Its pin is
             // honoured on the hand-off path too, so the control is not a lie,
             // the client is told to start *that* game, and that game is
@@ -201,21 +201,21 @@ impl Lightforge {
                 tags.push(tag("Older than this prefix".to_owned(), theme::UPDATE));
             }
 
-            pins.push(line(
+            pins.push(pin_line(
                 label.clone(),
                 match Kind::of(code) {
                     Kind::Managed => "Started by Lightforge",
                     Kind::HandOff => "Started by Battle.net",
                 },
                 tags,
-                picker(
+                self.proton_picker(
                     format!("proton {}", code.as_str()),
                     match Kind::of(code) {
                         Kind::Managed => Unpinned::Default,
                         Kind::HandOff => Unpinned::BattleNet,
                     },
                     pin,
-                    Box::new(move |choice| Message::PinProductProton(for_code.clone(), choice)),
+                    move |choice| Message::PinProductProton(for_code.clone(), choice),
                 ),
             ));
         }
@@ -225,39 +225,47 @@ impl Lightforge {
         if games.is_empty() {
             pins.push(setting("No games yet", "Games appear here once they are installed.", None, Space::new()));
         }
+        pins
+    }
 
+    /// The two rows the games fall back to: Lightforge's default and Battle.net's.
+    fn fallback_pins(&self) -> Vec<Element<'_, Message>> {
         // A group of their own, because they are not games. The rows above
         // are things you launch; these two are what they fall back to.
-        let mut fallbacks: Vec<Element<'_, Message>> = Vec::new();
-        fallbacks.push(line(
-            "Default".to_owned(),
-            "Every game Lightforge starts without a pin of its own.",
-            Vec::new(),
-            picker(
-                "proton default".to_owned(),
-                Unpinned::Newest,
-                self.config.default_proton.version().map(str::to_owned),
-                Box::new(Message::PinDefaultProton),
+        vec![
+            pin_line(
+                "Default".to_owned(),
+                "Every game Lightforge starts without a pin of its own.",
+                Vec::new(),
+                self.proton_picker(
+                    "proton default".to_owned(),
+                    Unpinned::Newest,
+                    self.config.default_proton.version().map(str::to_owned),
+                    Message::PinDefaultProton,
+                ),
             ),
-        ));
-        fallbacks.push(line(
-            "Battle.net".to_owned(),
-            "Battle.net, Agent, and the games it starts without a pin.",
-            // The prefix's own build, beside the pin that will next open it.
-            // The one fact that makes the signs above legible.
-            vec![match self.setup.as_ref().and_then(|s| s.prefix.built_by.as_deref()) {
-                Some(built_by) => muted(format!("prefix built by {built_by}"), theme::CAPTION),
-                None => muted("no prefix yet".to_owned(), theme::CAPTION),
-            }
-            .into()],
-            picker(
-                "proton battle.net".to_owned(),
-                Unpinned::Default,
-                self.config.battle_net_proton.version().map(str::to_owned),
-                Box::new(Message::PinBattleNetProton),
+            pin_line(
+                "Battle.net".to_owned(),
+                "Battle.net, Agent, and the games it starts without a pin.",
+                // The prefix's own build, beside the pin that will next open it.
+                // The one fact that makes the signs above legible.
+                vec![match self.setup.as_ref().and_then(|s| s.prefix.built_by.as_deref()) {
+                    Some(built_by) => muted(format!("prefix built by {built_by}"), theme::CAPTION),
+                    None => muted("no prefix yet".to_owned(), theme::CAPTION),
+                }
+                .into()],
+                self.proton_picker(
+                    "proton battle.net".to_owned(),
+                    Unpinned::Default,
+                    self.config.battle_net_proton.version().map(str::to_owned),
+                    Message::PinBattleNetProton,
+                ),
             ),
-        ));
+        ]
+    }
 
+    /// What the pins mean, a downgrade they cause, and the shop's build.
+    fn pin_notes(&self, games: &[(ProductCode, String)]) -> Element<'_, Message> {
         // One line for the whole list rather than one under each game: the
         // reason is the same every time it applies.
         let shop = games
@@ -271,8 +279,7 @@ impl Lightforge {
             .filter(|(code, _)| self.row_fit(code).is_downgrade())
             .map(|(_, label)| label.clone())
             .collect();
-
-        let notes = column![]
+        column![]
             .spacing(theme::SM)
             .extend(self.hint(
                 "A game with no pin of its own follows the default. Battle.net and Agent \
@@ -312,20 +319,23 @@ impl Lightforge {
                 })
                 .flatten()
                 .map(Element::from),
-            );
-
-        // Two questions: which Proton each game runs, and which Protons are
-        // on this machine.
-        column![
-            group_label("Games", None),
-            setting_group(pins),
-            group_label("When a game has no pin", None),
-            setting_group(fallbacks),
-            notes,
-            group_label("Installed builds", Some(self.proton_install())),
-            setting_card(self.proton_builds()),
-        ]
-        .spacing(theme::SM)
-        .into()
+            )
+            .into()
     }
+}
+
+/// A row: the name and what starts it take the slack, then any signs,
+/// then the picker, a fixed width so every row's control lines up.
+fn pin_line<'a>(
+    label: String,
+    about: &'static str,
+    tags: Vec<Element<'a, Message>>,
+    control: Element<'a, Message>,
+) -> Element<'a, Message> {
+    setting(
+        label,
+        about,
+        None,
+        row![].extend(tags).push(control).spacing(theme::SM).align_y(Alignment::Center),
+    )
 }

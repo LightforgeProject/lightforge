@@ -136,77 +136,9 @@ impl Lightforge {
         library: &'a storage::LibraryUsage,
         same_disk_as: Option<&'a str>,
     ) -> Element<'a, Message> {
-        let id = library.id.clone();
-        let mut card = column![].spacing(theme::SM);
-
-        let mut title = row![text(library.label.clone()).size(theme::HEADING)]
+        let mut card = column![drive_title(library), muted(tilde(&library.path), theme::LABEL)]
             .spacing(theme::SM)
-            .align_y(Alignment::Center);
-        if library.is_default {
-            title = title.push(
-                container(text("Default").size(theme::CAPTION).color(theme::ACCENT))
-                    .padding([2.0, theme::SM])
-                    .style(theme::tag(theme::ACCENT)),
-            );
-        }
-        if let Some(reason) = library.state.reason(&library.label) {
-            title = title.push(
-                container(text(reason).size(theme::CAPTION).color(theme::ERROR))
-                    .padding([2.0, theme::SM])
-                    .style(theme::tag(theme::ERROR)),
-            );
-        }
-        title = title.push(Space::new().width(Length::Fill));
-        title = title.push(mono(format!(
-            "{} → games   {} → wow",
-            library.letters.0.to_uppercase(),
-            library.letters.1.to_uppercase(),
-        )));
-        card = card.push(title);
-        card = card.push(muted(tilde(&library.path), theme::LABEL));
-
-        match library.disk {
-            // Already drawn on the card above: one bar per disk.
-            Some(_) if same_disk_as.is_some() => {
-                card = card.push(muted(
-                    format!(
-                        "Same disk as {} — {} is Lightforge's here",
-                        same_disk_as.unwrap_or_default(),
-                        size_of(library.total()),
-                    ),
-                    theme::CAPTION,
-                ));
-            }
-            Some(disk) => {
-                let used = disk.total.saturating_sub(disk.free);
-                let fraction = match disk.total {
-                    0 => 0.0,
-                    total => used as f32 / total as f32,
-                };
-                card = card
-                    .push(progress_bar(0.0..=1.0, fraction).girth(6))
-                    .push(muted(
-                        format!(
-                            "{} free of {} — {} is Lightforge's",
-                            size_of(disk.free),
-                            size_of(disk.total),
-                            size_of(library.total()),
-                        ),
-                        theme::CAPTION,
-                    ));
-            }
-            // A drive that is not here is not measured at all: walking its
-            // mount point would report whatever filesystem is *under* it as
-            // if the library's games were on it.
-            None => {
-                card = card.push(muted(
-                    "Nothing is measured while the drive is away. The games on it are \
-                     untouched, and come back with it."
-                        .to_owned(),
-                    theme::CAPTION,
-                ))
-            }
-        }
+            .extend(drive_space(library, same_disk_as));
         // Only where it is actually true: a library can be unclaimed and still
         // hold games, which is every install from before multi-drive storage,
         // and the drive holding the prefix always has Battle.net's own titles
@@ -218,6 +150,16 @@ impl Lightforge {
             ));
         }
 
+        card = card.extend(self.drive_usage(library));
+        card = card.extend(self.unused_rows(library));
+        card = card.push(self.drive_actions(library));
+        setting_card(card)
+    }
+
+    /// One row per kind of thing on the drive, with a Clear button where it
+    /// can be cleared, and what the last clear said.
+    fn drive_usage<'a>(&'a self, library: &'a storage::LibraryUsage) -> Vec<Element<'a, Message>> {
+        let mut rows = Vec::new();
         for item in &library.usage {
             // Nothing is a fact better told by absence than by a row of
             // zeroes with a dead button beside it.
@@ -231,10 +173,10 @@ impl Lightforge {
                 .map(|(_, note)| note.clone());
             let clearing = notice.as_deref() == Some("clearing…");
             let action = item.clearable.then(|| {
-                secondary("Clear", Message::ClearDrive(id.clone()))
+                secondary("Clear", Message::ClearDrive(library.id.clone()))
                     .enabled(item.bytes > 0 && !clearing)
             });
-            card = card.push(usage_row(
+            rows.push(usage_row(
                 text(item.label.clone()).size(theme::BODY).into(),
                 item.bytes,
                 action,
@@ -242,11 +184,15 @@ impl Lightforge {
         }
         if let Some((which, note)) = &self.drive_notice {
             if *which == library.id {
-                card = card.push(muted(note.clone(), theme::LABEL));
+                rows.push(muted(note.clone(), theme::LABEL).into());
             }
         }
-        card = card.extend(self.unused_rows(library));
+        rows
+    }
 
+    /// Open, make default, remove.
+    fn drive_actions<'a>(&'a self, library: &'a storage::LibraryUsage) -> Element<'a, Message> {
+        let id = &library.id;
         let mut actions = row![Space::new().width(Length::Fill)]
             .spacing(theme::SM)
             .align_y(Alignment::Center);
@@ -269,9 +215,7 @@ impl Lightforge {
             secondary("Remove", Message::RemoveDrive(id.clone()))
                 .enabled(!library.is_default && self.config.libraries.len() > 1),
         );
-        card = card.push(actions);
-
-        setting_card(card)
+        actions.into()
     }
 
     /// A drive card's "Unused game data" row and the line under it.
@@ -320,5 +264,82 @@ impl Lightforge {
             }
             UnusedData::Said(note) => vec![muted(note.clone(), theme::LABEL).into()],
         }
+    }
+}
+
+/// The drive's name, its signs, and the two letters Wine knows it by.
+fn drive_title(library: &storage::LibraryUsage) -> Element<'_, Message> {
+    let mut title = row![text(library.label.clone()).size(theme::HEADING)]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center);
+    if library.is_default {
+        title = title.push(
+            container(text("Default").size(theme::CAPTION).color(theme::ACCENT))
+                .padding([2.0, theme::SM])
+                .style(theme::tag(theme::ACCENT)),
+        );
+    }
+    if let Some(reason) = library.state.reason(&library.label) {
+        title = title.push(
+            container(text(reason).size(theme::CAPTION).color(theme::ERROR))
+                .padding([2.0, theme::SM])
+                .style(theme::tag(theme::ERROR)),
+        );
+    }
+    title = title.push(Space::new().width(Length::Fill));
+    title = title.push(mono(format!(
+        "{} → games   {} → wow",
+        library.letters.0.to_uppercase(),
+        library.letters.1.to_uppercase(),
+    )));
+    title.into()
+}
+
+/// How full the disk under the drive is, or why that is not shown.
+fn drive_space<'a>(
+    library: &'a storage::LibraryUsage,
+    same_disk_as: Option<&'a str>,
+) -> Vec<Element<'a, Message>> {
+    match library.disk {
+        // Already drawn on the card above: one bar per disk.
+        Some(_) if same_disk_as.is_some() => vec![muted(
+            format!(
+                "Same disk as {} — {} is Lightforge's here",
+                same_disk_as.unwrap_or_default(),
+                size_of(library.total()),
+            ),
+            theme::CAPTION,
+        )
+        .into()],
+        Some(disk) => {
+            let used = disk.total.saturating_sub(disk.free);
+            let fraction = match disk.total {
+                0 => 0.0,
+                total => used as f32 / total as f32,
+            };
+            vec![
+                progress_bar(0.0..=1.0, fraction).girth(6).into(),
+                muted(
+                    format!(
+                        "{} free of {} — {} is Lightforge's",
+                        size_of(disk.free),
+                        size_of(disk.total),
+                        size_of(library.total()),
+                    ),
+                    theme::CAPTION,
+                )
+                .into(),
+            ]
+        }
+        // A drive that is not here is not measured at all: walking its
+        // mount point would report whatever filesystem is *under* it as
+        // if the library's games were on it.
+        None => vec![muted(
+            "Nothing is measured while the drive is away. The games on it are \
+             untouched, and come back with it."
+                .to_owned(),
+            theme::CAPTION,
+        )
+        .into()],
     }
 }
