@@ -131,7 +131,7 @@ impl Content {
         // Encoding first, and by ekey. It is the only manifest that can be
         // found without already having encoding loaded.
         let ekey = build.encoding.ekey.ok_or(ContentError::EncodingHasNoEKey)?;
-        let raw = storage.read(&ekey).map_err(|source| ContentError::Read {
+        let raw = storage.read_verified(&ekey, &build.encoding.ckey).map_err(|source| ContentError::Read {
             what: "encoding manifest",
             source,
         })?;
@@ -141,7 +141,7 @@ impl Content {
         let root_ekey = encoding
             .ekey_for(&build.root.ckey)
             .ok_or(ContentError::UnknownContentKey { what: "root manifest", ckey: build.root.ckey })?;
-        let raw = storage.read(&root_ekey).map_err(|source| ContentError::Read {
+        let raw = storage.read_verified(&root_ekey, &build.root.ckey).map_err(|source| ContentError::Read {
             what: "root manifest",
             source,
         })?;
@@ -218,7 +218,7 @@ impl Content {
             .ekey_for_ckey(ckey)
             .ok_or(ContentError::UnknownContentKey { what: "file", ckey: *ckey })?;
         storage
-            .read(&ekey)
+            .read_verified(&ekey, ckey)
             .map_err(|source| ContentError::Read { what: "file", source })
     }
 

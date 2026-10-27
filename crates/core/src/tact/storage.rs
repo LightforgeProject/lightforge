@@ -122,6 +122,19 @@ impl Storage {
         self.read_entry(&entry)
     }
 
+    /// [`Storage::read`], and refuse bytes that do not hash to `ckey`.
+    ///
+    /// For anything a decision is made from. The index checks the encoded
+    /// bytes against nothing but their length, and the BLTE layer only its
+    /// own chunks, so a store that serves the wrong file decodes cleanly.
+    pub fn read_verified(&mut self, ekey: &EKey, ckey: &[u8; 16]) -> Result<Vec<u8>, StorageError> {
+        let bytes = self.read(ekey)?;
+        if *md5::compute(&bytes) != *ckey {
+            return Err(StorageError::ContentMismatch { ekey: *ekey, ckey: *ckey });
+        }
+        Ok(bytes)
+    }
+
     /// Read and decode the file an index entry points at.
     pub fn read_entry(&mut self, entry: &Entry) -> Result<Vec<u8>, StorageError> {
         if entry.is_archive_marker() {
@@ -271,6 +284,9 @@ pub enum StorageError {
     #[error("data.{archive_id:03} has no BLTE payload at offset {offset}")]
     NotBlte { archive_id: u16, offset: u32 },
 
+    #[error("the file stored as {} does not decode to its content key {}", hex(.ekey), hex(.ckey))]
+    ContentMismatch { ekey: EKey, ckey: [u8; 16] },
+
     #[error("data.{archive_id:03} is {len} bytes, too short for {size} bytes at offset {offset}")]
     OutOfBounds { archive_id: u16, offset: u32, size: u32, len: u64 },
 
@@ -367,6 +383,26 @@ mod tests {
 
         let stats = storage.stats();
         assert_eq!((stats.buckets, stats.files), (1, 1));
+    }
+
+    #[test]
+    fn a_file_that_decodes_to_the_wrong_content_is_refused() {
+        let dir = scratch("verified");
+        let data = dir.join("Data").join("data");
+        let payload = b"the encoding manifest, or so it says".to_vec();
+        let ekey: EKey = [0x5a; 16];
+        let mut writer = crate::tact::writer::StoreWriter::create(&data).unwrap();
+        writer
+            .write(&ekey, &blte::compress_data_single(payload.clone(), blte::CompressionMode::None, None).unwrap())
+            .unwrap();
+        writer.finish().unwrap();
+
+        let mut storage = Storage::open(&dir).unwrap();
+        assert_eq!(storage.read_verified(&ekey, &md5::compute(&payload)).unwrap(), payload);
+        assert!(matches!(
+            storage.read_verified(&ekey, &[0; 16]),
+            Err(StorageError::ContentMismatch { .. })
+        ));
     }
 
     #[test]

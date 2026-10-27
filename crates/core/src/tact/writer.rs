@@ -58,7 +58,18 @@ pub const FIRST_GENERATION: u32 = 0x32;
 /// they never see it.
 #[derive(Debug)]
 pub struct StoreLock {
-    _held: Option<File>,
+    held: Option<File>,
+}
+
+impl Drop for StoreLock {
+    // Explicit, not left to the close: a process forked in another thread
+    // shares this descriptor until it execs, and the lock would outlive us
+    // by that long.
+    fn drop(&mut self) {
+        if let Some(dir) = &self.held {
+            let _ = dir.unlock();
+        }
+    }
 }
 
 impl StoreLock {
@@ -70,11 +81,11 @@ impl StoreLock {
         let dir = File::open(data_dir)
             .map_err(|source| WriteError::Io { path: data_dir.to_path_buf(), source })?;
         match dir.try_lock() {
-            Ok(()) => Ok(Self { _held: Some(dir) }),
+            Ok(()) => Ok(Self { held: Some(dir) }),
             Err(std::fs::TryLockError::WouldBlock) => Err(WriteError::StoreBusy(data_dir.to_path_buf())),
             Err(std::fs::TryLockError::Error(e)) => {
                 tracing::warn!("cannot lock {}, writing without a lock: {e}", data_dir.display());
-                Ok(Self { _held: None })
+                Ok(Self { held: None })
             }
         }
     }

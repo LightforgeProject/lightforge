@@ -353,9 +353,11 @@ async fn keep_keys(
         product: product.clone(),
         reason: "no encoding key".to_owned(),
     })?;
-    let raw = store.read(&ekey).map_err(|_| ReclaimError::NotInStore {
-        product: product.clone(),
-        what: "encoding manifest",
+    // Verified: what is deleted is decided from this, and a damaged copy
+    // would list too little to keep.
+    let raw = store.read_verified(&ekey, &config.encoding.ckey).map_err(|e| match e {
+        StorageError::ContentMismatch { .. } => ReclaimError::Storage(e),
+        _ => ReclaimError::NotInStore { product: product.clone(), what: "encoding manifest" },
     })?;
     let encoding = Encoding::parse(&raw)
         .map_err(|e| ReclaimError::Manifest { product: product.clone(), reason: e.to_string() })?;
