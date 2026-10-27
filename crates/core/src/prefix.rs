@@ -289,9 +289,16 @@ impl ProtonRunner {
             .output()
             .map_err(|e| PrefixError::Spawn { program: wineserver.clone(), source: e })?;
 
-        // A prefix with no running server exits non-zero; that is the desired
-        // end state, not a failure, so the status is deliberately dropped.
-        tracing::debug!("wineserver -k -w exited with {:?}", output.status.code());
+        // Still `Ok`: nothing waits on this to proceed safely, the next
+        // pre-flight scans the prefix itself. But a refusal is worth a line in
+        // a bug report, and is easy to miss as the "no server" exit.
+        if !server_gone(output.status, &output.stderr) {
+            tracing::warn!(
+                "wineserver -k -w exited with {:?}: {}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
         Ok(())
     }
 
@@ -499,6 +506,15 @@ impl PrefixStatus {
     }
 }
 
+/// Whether `wineserver -k -w` left the prefix without a server.
+///
+/// Measured on GE-Proton11-7: a server it stopped exits 0, no server at all
+/// exits 1 and says nothing, and a refusal also exits 1 but says why on
+/// stderr (`wineserver: / is not owned by you`).
+fn server_gone(status: std::process::ExitStatus, stderr: &[u8]) -> bool {
+    status.success() || (status.code() == Some(1) && stderr.iter().all(u8::is_ascii_whitespace))
+}
+
 /// Create the prefix if needed and put the symlink in place.
 ///
 /// Ordering matters: the prefix has to exist before anything can be linked into
@@ -509,10 +525,19 @@ pub fn provision(runner: &ProtonRunner, layout: &Layout) -> Result<PrefixStatus,
     // one that stood there before, possibly another Proton build's: a deleted
     // directory does not stop its processes, and the new one can inherit the
     // old one's socket. The scan only matches processes whose environment
-    // names this prefix, so nobody else's Wine is touched. Best effort, and
-    // skipped on an existing prefix, where a running client is the user's.
+    // names this prefix, so nobody else's Wine is touched. Skipped on an
+    // existing prefix, where a running client is the user's.
     if !is_initialized(&runner.prefix()) {
-        let _ = crate::preflight::shutdown(runner, layout, crate::preflight::DEFAULT_GRACE);
+        if let Err(e) = crate::preflight::shutdown(runner, layout, crate::preflight::DEFAULT_GRACE) {
+            tracing::warn!("could not stop what the old prefix left running: {}", crate::error::chain(&e));
+        }
+        // What matters is the outcome, not whether the shutdown said it
+        // worked: wineboot beside a leftover server hangs or inherits it.
+        let left = crate::preflight::scan(layout);
+        if !left.is_empty() {
+            let names = left.into_iter().map(|p| format!("{} (pid {})", p.name, p.pid));
+            return Err(PrefixError::Busy(names.collect()));
+        }
     }
     runner.wineboot_update()?;
     runner.wineserver_kill()?;
@@ -584,6 +609,9 @@ pub enum PrefixError {
     #[error("Proton ran but left no usable prefix at {0}")]
     NotInitialized(PathBuf),
 
+    #[error("the old prefix still has processes running, so a new one cannot be built: {}", .0.join(", "))]
+    Busy(Vec<String>),
+
     #[error("{0} is a real directory with files in it, not a symlink — move or remove it first")]
     LinkOccupied(PathBuf),
 
@@ -599,6 +627,19 @@ pub enum PrefixError {
 mod tests {
     use super::*;
     use crate::proton::{ProtonFlavor, ProtonSource};
+
+    #[test]
+    fn only_a_silent_exit_1_from_wineserver_means_no_server() {
+        use std::os::unix::process::ExitStatusExt;
+        let exit = |code: i32| std::process::ExitStatus::from_raw(code << 8);
+
+        assert!(server_gone(exit(0), b""));
+        assert!(server_gone(exit(1), b""));
+        assert!(server_gone(exit(1), b"\n"));
+        assert!(!server_gone(exit(1), b"wineserver: / is not owned by you\n"));
+        assert!(!server_gone(exit(2), b""));
+        assert!(!server_gone(std::process::ExitStatus::from_raw(9), b""), "killed by a signal");
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("lightforge-prefix-{name}"));

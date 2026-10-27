@@ -166,6 +166,12 @@ fn recognise(error: &(dyn Error + 'static)) -> Option<Advice> {
             _ => None,
         };
     }
+    if let Some(crate::prefix::PrefixError::Busy(_)) = error.downcast_ref() {
+        return Some(Advice::say(
+            "A Wine process would not stop. Log out and back in, or restart the computer, \
+             then try again.",
+        ));
+    }
     if let Some(crate::prefix::PrefixError::MissingRuntime(_)) = error.downcast_ref() {
         return Some(Advice::with(
             "This Proton build is incomplete. Remove it and install it again, or pick another \
