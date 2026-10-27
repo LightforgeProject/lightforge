@@ -1353,3 +1353,55 @@ fn a_run_that_ends_incomplete_says_why() {
 
     assert!(app.status.contains("3 files failed (first: connection reset)"), "{}", app.status);
 }
+
+#[test]
+fn env_edits_are_saved_once_typing_pauses_not_per_keystroke() {
+    use iced::widget::text_editor::{Action, Content, Edit};
+    let dir = std::env::temp_dir().join(format!("lightforge-envsave-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let dirs = AppDirs::with_dirs(dir.join("config"), dir.join("cache"), dir.join("data"));
+    std::fs::create_dir_all(dirs.config_dir()).unwrap();
+
+    let (mut app, _) = Lightforge::new();
+    app.dirs = Some(dirs.clone());
+    app.config_error = None;
+    app.bnet_env_editor = Content::new();
+    app.config.battle_net_tweaks.env.clear();
+
+    for c in "DXVK_HUD=1".chars() {
+        let _ = app.update(Message::EnvEdit(Scope::BattleNet, Action::Edit(Edit::Insert(c))));
+    }
+    assert_eq!(app.config.battle_net_tweaks.env.get("DXVK_HUD").map(String::as_str), Some("1"), "in effect at once");
+    assert!(!dirs.config_file().exists(), "nothing written while typing");
+
+    let _ = app.update(Message::EnvSettled(1));
+    assert!(!dirs.config_file().exists(), "a pause after an older keystroke saves nothing");
+
+    let _ = app.update(Message::EnvSettled(app.env_edits));
+    let saved = Config::load_or_default(&dirs.config_file()).unwrap();
+    assert_eq!(saved.battle_net_tweaks.env.get("DXVK_HUD").map(String::as_str), Some("1"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_env_edit_still_waiting_is_saved_when_the_window_closes() {
+    use iced::widget::text_editor::{Action, Content, Edit};
+    let dir = std::env::temp_dir().join(format!("lightforge-envclose-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let dirs = AppDirs::with_dirs(dir.join("config"), dir.join("cache"), dir.join("data"));
+    std::fs::create_dir_all(dirs.config_dir()).unwrap();
+
+    let (mut app, _) = Lightforge::new();
+    app.dirs = Some(dirs.clone());
+    app.config_error = None;
+    app.queue.clear();
+    app.bnet_env_editor = Content::new();
+    for c in "A=1".chars() {
+        let _ = app.update(Message::EnvEdit(Scope::BattleNet, Action::Edit(Edit::Insert(c))));
+    }
+    let _ = app.update(Message::CloseRequested(iced::window::Id::unique()));
+
+    let saved = Config::load_or_default(&dirs.config_file()).unwrap();
+    assert_eq!(saved.battle_net_tweaks.env.get("A").map(String::as_str), Some("1"));
+    let _ = std::fs::remove_dir_all(&dir);
+}

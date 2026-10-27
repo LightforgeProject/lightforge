@@ -126,6 +126,9 @@ pub struct Wizard {
     /// A folder the user typed in themselves.
     pub pointed: String,
     pub point_error: Option<String>,
+    /// The typed folder is being looked through. Off the UI thread: sizing
+    /// every install found walks all of it.
+    pub pointing: bool,
     /// Why the last add or remove on the drive step was refused. The step is a
     /// layer over the app, so `Lightforge::error` is not on screen here.
     pub drive_error: Option<String>,
@@ -150,6 +153,7 @@ impl Default for Wizard {
             rows: Vec::new(),
             pointed: String::new(),
             point_error: None,
+            pointing: false,
             drive_error: None,
             battle_net: true,
             adopted: Vec::new(),
@@ -178,6 +182,8 @@ pub enum Msg {
     PointInput(String),
     /// Inspect the folder that was typed.
     Point,
+    /// What the typed folder turned out to hold.
+    Pointed(Option<Found>),
     /// Ask the desktop for a folder to inspect.
     Browse,
     /// The folder the desktop's dialog came back with; `None` when cancelled.
@@ -390,6 +396,9 @@ pub fn update(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
             let Some(wizard) = app.wizard.as_mut() else {
                 return iced::Task::none();
             };
+            if wizard.pointing {
+                return iced::Task::none();
+            }
             let path = match crate::parse_path(&wizard.pointed) {
                 Ok(path) => path,
                 Err(e) => {
@@ -397,7 +406,22 @@ pub fn update(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
                     return iced::Task::none();
                 }
             };
-            match discover::inspect_pointed(&path) {
+            wizard.pointing = true;
+            wizard.point_error = None;
+            iced::Task::perform(
+                async move {
+                    tokio::task::spawn_blocking(move || discover::inspect_pointed(&path)).await.ok().flatten()
+                },
+                |found| Message::Wizard(Msg::Pointed(found)),
+            )
+        }
+
+        Msg::Pointed(found) => {
+            let Some(wizard) = app.wizard.as_mut() else {
+                return iced::Task::none();
+            };
+            wizard.pointing = false;
+            match found {
                 Some(found) if !found.is_empty() => {
                     let fresh = rows_of(vec![found]);
                     // Only what is not already listed: pointing at a prefix the
@@ -1237,8 +1261,8 @@ fn found<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
                     .padding(theme::SM),
             ),
             beside("Browse…", Message::Wizard(Msg::Browse)).enabled(true),
-            beside("Look here", Message::Wizard(Msg::Point))
-                .enabled(!wizard.pointed.is_empty()),
+            beside(if wizard.pointing { "Looking…" } else { "Look here" }, Message::Wizard(Msg::Point))
+                .enabled(!wizard.pointed.is_empty() && !wizard.pointing),
         ]
         .spacing(theme::SM)
         .align_y(Alignment::Center)
@@ -1605,6 +1629,23 @@ mod tests {
         assert_eq!(had, [true, false, true, false]);
         assert!(rows[1].take && rows[3].take, "what is new is offered ticked");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_typed_folder_is_looked_through_once_and_off_the_ui_thread() {
+        let (mut app, _) = Lightforge::new();
+        app.dirs = None;
+        app.wizard = Some(Wizard { pointed: "/nowhere/World of Warcraft".to_owned(), ..Wizard::default() });
+
+        let _ = update(&mut app, Msg::Point);
+        assert!(app.wizard.as_ref().unwrap().pointing, "running in the background");
+        let _ = update(&mut app, Msg::Point);
+        assert!(app.wizard.as_ref().unwrap().pointing, "a second click starts nothing new");
+
+        let _ = update(&mut app, Msg::Pointed(None));
+        let wizard = app.wizard.as_ref().unwrap();
+        assert!(!wizard.pointing);
+        assert!(wizard.point_error.as_deref().is_some_and(|e| e.starts_with("nothing of Blizzard's")));
     }
 
     /// Opened from Settings, the slide closes on Back, and closing it is not

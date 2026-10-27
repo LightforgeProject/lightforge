@@ -49,6 +49,13 @@ impl Lightforge {
 
     /// Change them and persist, which is what every switch on a panel does.
     pub(crate) fn edit_tweaks(&mut self, scope: Scope, edit: impl FnOnce(&mut Tweaks)) {
+        self.change_tweaks(scope, edit);
+        self.save_config();
+    }
+
+    /// [`Self::edit_tweaks`] without the save, for an edit made keystroke by
+    /// keystroke.
+    pub(crate) fn change_tweaks(&mut self, scope: Scope, edit: impl FnOnce(&mut Tweaks)) {
         match scope {
             Scope::Product => {
                 if let Some(product) = self.config.product_mut(&self.selected.code) {
@@ -57,7 +64,6 @@ impl Lightforge {
             }
             Scope::BattleNet => edit(&mut self.config.battle_net_tweaks),
         }
-        self.save_config();
     }
 
     /// Refill the environment editors from the settings they edit.
@@ -297,8 +303,9 @@ impl Lightforge {
             self.error = Some("no config directory available".into());
             return;
         };
-        if let Err(e) = self.config.save(&dirs.config_file()) {
-            self.error = Some(Problem::of(&e));
+        match self.config.save(&dirs.config_file()) {
+            Ok(()) => self.env_unsaved = false,
+            Err(e) => self.error = Some(Problem::of(&e)),
         }
     }
 }

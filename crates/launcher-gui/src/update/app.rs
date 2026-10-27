@@ -10,6 +10,10 @@ impl Lightforge {
                 Task::none()
             }
             Message::CloseRequested(id) => {
+                // An env edit still waiting for typing to pause.
+                if self.env_unsaved {
+                    self.save_config();
+                }
                 // A deep scan only reads; there is nothing to wind down.
                 if let Some(cancel) = &self.deep_cancel {
                     cancel.cancel();

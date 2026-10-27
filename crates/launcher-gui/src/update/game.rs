@@ -2,6 +2,9 @@
 
 use crate::*;
 
+/// How long the env editor waits after the last keystroke before saving.
+const ENV_SAVE_AFTER: std::time::Duration = std::time::Duration::from_millis(750);
+
 impl Lightforge {
     pub(crate) fn update_game(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
@@ -333,12 +336,26 @@ impl Lightforge {
                 };
                 let edited = action.is_edit();
                 editor.perform(action);
-                // Saved as it is typed, the lines that parse. A bad line is
-                // shown under the editor and left out of the launch rather
+                if !edited {
+                    return Ok(Task::none());
+                }
+                // In effect as it is typed, the lines that parse. A bad line
+                // is shown under the editor and left out of the launch rather
                 // than refusing the rest, so a half-typed name costs nothing.
-                if edited {
-                    let (env, _) = lightforge_core::tweaks::parse_env(&editor.text());
-                    self.edit_tweaks(scope, |tweaks| tweaks.env = env);
+                let (env, _) = lightforge_core::tweaks::parse_env(&editor.text());
+                self.change_tweaks(scope, |tweaks| tweaks.env = env);
+                // On disk once typing pauses: a save is a full rewrite with
+                // two fsyncs, on this thread, and used to run per keystroke.
+                self.env_edits += 1;
+                self.env_unsaved = true;
+                let edit = self.env_edits;
+                Task::perform(async { tokio::time::sleep(ENV_SAVE_AFTER).await }, move |()| {
+                    Message::EnvSettled(edit)
+                })
+            }
+            Message::EnvSettled(edit) => {
+                if edit == self.env_edits && self.env_unsaved {
+                    self.save_config();
                 }
                 Task::none()
             }

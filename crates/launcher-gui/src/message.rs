@@ -191,6 +191,8 @@ pub(crate) enum Message {
     Tweak(Scope, Tweak, bool),
     /// The environment-variable editor was typed in.
     EnvEdit(Scope, iced::widget::text_editor::Action),
+    /// Typing in the env editor paused; the number says after which edit.
+    EnvSettled(u64),
     /// Throw away this product's shader cache, e.g. after a Proton swap.
     ClearShaderCache,
     /// Opt in or out of one optional download, by manifest tag name. On starts
