@@ -79,7 +79,7 @@ enum Command {
         #[arg(long)]
         proton: Option<String>,
         /// Product code to launch, e.g. `wow`. Omit to just open the client.
-        #[arg(long)]
+        #[arg(long, value_parser = commands::product_code)]
         product: Option<String>,
         /// Override the `--exec="launch <uid>"` verb Battle.net is given.
         #[arg(long, requires = "product")]
@@ -102,7 +102,7 @@ enum Command {
     /// Windows-visible path. Battle.net is not involved.
     Play {
         /// Product to launch, e.g. `wow` or `wow_classic`.
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
         /// Proton build to launch under.
         #[arg(long)]
@@ -117,7 +117,7 @@ enum Command {
         #[arg(long)]
         proton: Option<String>,
         /// Product the launch is for, so a download can be paused.
-        #[arg(long)]
+        #[arg(long, value_parser = commands::product_code)]
         product: Option<String>,
         /// Report what would be done without touching anything.
         #[arg(long)]
@@ -129,7 +129,7 @@ enum Command {
     /// Show the `.build.info` row for a product.
     BuildInfo {
         /// Product code, e.g. `wow` or `wow_classic`.
-        #[arg(default_value = "wow")]
+        #[arg(default_value = "wow", value_parser = commands::product_code)]
         product: String,
     },
     #[command(hide = true)]
@@ -162,7 +162,7 @@ enum Command {
     CdnArchive {
         /// Archive hash. Defaults to the first archive in the CDN config.
         archive: Option<String>,
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
         #[arg(long, default_value = "eu")]
         region: String,
@@ -178,7 +178,7 @@ enum Command {
     /// Fetch content from Blizzard's CDN and verify it by hash.
     CdnFetch {
         /// Product code, e.g. `wow`.
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
         #[arg(long, default_value = "eu")]
         region: String,
@@ -195,7 +195,7 @@ enum Command {
     Download {
         /// Install root to build. Created if absent.
         dest: PathBuf,
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
         #[arg(long, default_value = "eu")]
         region: String,
@@ -251,7 +251,7 @@ enum Command {
     Plan {
         /// Install root to explain against.
         dest: PathBuf,
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
         #[arg(long, default_value = "eu")]
         region: String,
@@ -281,7 +281,7 @@ enum Command {
     /// mismatch means we hash the wrong bytes, which is indistinguishable
     /// from "unknown addon" once matching starts.
     AddonFingerprints {
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
         /// Read this AddOns directory instead of the product's own.
         #[arg(long)]
@@ -292,7 +292,7 @@ enum Command {
     },
     /// Recognise hand-installed addons by their contents and manage them.
     AddonAdopt {
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
         /// Read this AddOns directory instead of the product's own.
         #[arg(long)]
@@ -306,7 +306,7 @@ enum Command {
     },
     /// List the addons installed for a product.
     Addons {
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
         /// Read this AddOns directory instead of the product's own.
         #[arg(long)]
@@ -319,7 +319,7 @@ enum Command {
     AddonSearch {
         /// What to search for, or `owner/repo` for a GitHub addon.
         query: String,
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
         #[arg(long, default_value_t = 15)]
         limit: usize,
@@ -332,7 +332,7 @@ enum Command {
         id: String,
         #[arg(long, default_value = "wowinterface")]
         provider: String,
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
         #[arg(long)]
         catalog: Option<String>,
@@ -341,7 +341,7 @@ enum Command {
     AddonImport {
         /// The token, or `@path` to read it from a file.
         token: String,
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
         /// Catalog base URL, or a fixture directory. Defaults to config.
         #[arg(long)]
@@ -355,7 +355,7 @@ enum Command {
     },
     /// Update every addon Lightforge installed for a product.
     AddonUpdate {
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
         #[arg(long)]
         catalog: Option<String>,
@@ -366,17 +366,17 @@ enum Command {
         id: String,
         #[arg(long, default_value = "curse")]
         provider: String,
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
     },
     /// List a game's `WTF/Account` backups, newest first.
     BackupList {
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
     },
     /// Back up a game's `WTF/Account` now. Skipped when nothing changed.
     BackupCreate {
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
     },
     /// Restore a backup over `WTF/Account`. The current state is backed up
@@ -384,7 +384,7 @@ enum Command {
     BackupRestore {
         /// The number `backup-list` shows (1 is the newest), or the file name.
         backup: String,
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
     },
     #[command(hide = true)]
@@ -421,7 +421,7 @@ enum Command {
     },
     /// Remove an installed product. Prints the plan unless `--yes` is given.
     Uninstall {
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
         /// Install root. Defaults to the managed WoW install.
         #[arg(long)]
@@ -437,7 +437,7 @@ enum Command {
     /// Uninstalling from the GUI does this itself. This is for a product
     /// removed before it could, pass the `--build-key` it had installed.
     Reclaim {
-        #[arg(long)]
+        #[arg(long, value_parser = commands::product_code)]
         product: String,
         /// Build config hash of the departing build. Defaults to the one
         /// `.build.info` lists for `--product`.
@@ -460,7 +460,7 @@ enum Command {
     /// Only files that option alone brought in and no installed build needs.
     /// It does not change what is opted in to: the GUI does both together.
     DropOptional {
-        #[arg(long)]
+        #[arg(long, value_parser = commands::product_code)]
         product: String,
         /// The optional tag's name, as the manifest spells it.
         #[arg(long, default_value = "HighRes")]
@@ -511,7 +511,7 @@ enum Command {
         /// Install root. Defaults to the managed WoW install.
         path: Option<PathBuf>,
         /// Products to record. Defaults to every row in `.build.info`.
-        #[arg(long = "product", value_name = "CODE")]
+        #[arg(long = "product", value_name = "CODE", value_parser = commands::product_code)]
         products: Vec<String>,
         /// Account country as Battle.net reports it, e.g. `AUT`.
         #[arg(long, default_value = "")]
@@ -556,7 +556,7 @@ enum Command {
     /// Resolve a product's themed branding through the asset pipeline.
     Assets {
         /// Product code to theme, e.g. `wow`.
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
         /// Base URL or fixture directory. Defaults to `assets_source` in
         /// config.toml, else the built-in source.
@@ -566,7 +566,7 @@ enum Command {
     /// Resolve the primary action button's state for a product.
     Status {
         /// Product code, e.g. `wow` or `wow_classic_era`.
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
         #[arg(long, default_value = "eu")]
         region: String,
@@ -579,7 +579,7 @@ enum Command {
         /// Install root. Defaults to the configured games directory.
         path: Option<PathBuf>,
         /// Product code, e.g. `wow`.
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
         /// Blizzard region to ask.
         #[arg(long, default_value = "eu")]
@@ -591,7 +591,7 @@ enum Command {
         /// A WoW install root.
         path: PathBuf,
         /// Product whose build key to take from `.build.info`.
-        #[arg(long, default_value = "wow")]
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
         /// Locale to filter the root manifest to (`any`, `enUS`, `deDE`, …).
         #[arg(long, default_value = "any")]
@@ -623,6 +623,7 @@ enum Command {
     /// Atomically rewrite one product's build keys in `.build.info`.
     BuildInfoSet {
         /// Product code, e.g. `wow`.
+        #[arg(value_parser = commands::product_code)]
         product: String,
         #[arg(long)]
         build_key: String,

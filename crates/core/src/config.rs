@@ -301,7 +301,22 @@ impl Config {
     }
 
     pub fn from_toml(s: &str) -> Result<Self, ConfigError> {
-        toml::from_str(s).map_err(ConfigError::Deserialize)
+        let mut config: Self = toml::from_str(s).map_err(ConfigError::Deserialize)?;
+        // Skipped rather than refused: one hand-typed code should not cost
+        // every other setting, and a refused config is a launcher that does
+        // not start.
+        config.products.retain(|p| {
+            let keep = p.code.is_well_formed();
+            if !keep {
+                tracing::warn!(
+                    "ignoring product `{}` in the config: a code is letters, digits and `_` only; \
+                     it goes on the next save",
+                    p.code.as_str()
+                );
+            }
+            keep
+        });
+        Ok(config)
     }
 
     /// Write `config.toml` atomically: temp file in the same directory,
@@ -704,6 +719,16 @@ mod tests {
         let config = Config::with_default_products();
         let parsed = Config::from_toml(&config.to_toml().unwrap()).unwrap();
         assert_eq!(config, parsed);
+    }
+
+    #[test]
+    fn a_product_code_that_is_not_a_folder_name_is_skipped_not_fatal() {
+        let mut config = Config::with_default_products();
+        config.products.push(Product::new(ProductCode::Custom("../../outside".into()), "Escape"));
+        let parsed = Config::from_toml(&config.to_toml().unwrap()).unwrap();
+
+        assert!(parsed.product(&ProductCode::Custom("../../outside".into())).is_none());
+        assert_eq!(parsed.products.len(), config.products.len() - 1, "every other product kept");
     }
 
     #[test]

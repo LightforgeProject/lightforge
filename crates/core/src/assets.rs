@@ -239,7 +239,15 @@ impl Manifest {
     /// Where its files go and what runs stays derived from the code, so a bad
     /// publish can mislabel a product but never install one over another.
     pub fn catalog(&self) -> Catalog {
-        Catalog::with(self.products.iter().map(|(code, theme)| {
+        // A published code is a folder name on every machine that reads it.
+        let published = self.products.iter().filter(|(code, _)| {
+            let keep = crate::product::is_well_formed(code);
+            if !keep {
+                tracing::warn!("ignoring product `{code}` in the manifest: not a usable product code");
+            }
+            keep
+        });
+        Catalog::with(published.map(|(code, theme)| {
             let code = ProductCode::from(code.clone());
             CatalogEntry {
                 line: match theme.line.as_deref() {
@@ -1112,6 +1120,21 @@ mod tests {
 
         // Everything the binary knows is still there, unmentioned.
         assert!(catalog.get(&ProductCode::ClassicEra).is_some());
+    }
+
+    #[test]
+    fn a_published_code_that_is_not_a_folder_name_is_left_out() {
+        let body = r#"{
+            "schema": 1,
+            "products": {
+              "../wow": { "label": "Escape", "logo": { "url": "l.png" }, "background": { "url": "b.jpg" } },
+              "wow_midnight_ptr": { "label": "Midnight PTR", "logo": { "url": "l.png" }, "background": { "url": "b.jpg" } }
+            }
+        }"#;
+        let catalog = Manifest::parse(body.as_bytes()).unwrap().catalog();
+
+        assert!(catalog.get(&ProductCode::Custom("../wow".into())).is_none());
+        assert!(catalog.get(&ProductCode::Custom("wow_midnight_ptr".into())).is_some());
     }
 
     #[test]

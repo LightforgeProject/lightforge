@@ -167,6 +167,24 @@ impl ProductCode {
     }
 }
 
+impl ProductCode {
+    /// Whether a code can be used as a folder name: a custom code becomes one
+    /// (see [`Self::install_dir`]), so `../x` or `a/b` would install outside
+    /// the game folder. Every code Blizzard uses is ASCII letters, digits and
+    /// `_`.
+    pub fn is_well_formed(&self) -> bool {
+        match self {
+            Self::Custom(code) => is_well_formed(code),
+            _ => true,
+        }
+    }
+}
+
+/// The rule behind [`ProductCode::is_well_formed`], for text not yet parsed.
+pub fn is_well_formed(code: &str) -> bool {
+    !code.is_empty() && code.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
 impl FromStr for ProductCode {
     type Err = std::convert::Infallible;
 
@@ -658,6 +676,17 @@ pub enum ProductError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_code_is_well_formed_only_as_a_plain_folder_name() {
+        for good in ["wow", "wow_classic_era", "d4", "Pro", "hs_beta"] {
+            assert!(is_well_formed(good), "{good}");
+        }
+        for bad in ["", "../wow", "a/b", "wow.ptr", "wow-ptr", "wöw", " wow"] {
+            assert!(!is_well_formed(bad), "{bad:?}");
+        }
+        assert!(ProductCode::Retail.is_well_formed());
+    }
 
     #[test]
     fn official_codes_round_trip() {
