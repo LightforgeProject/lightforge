@@ -30,6 +30,11 @@ const MAX_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
 /// Ceiling on a cached picture, key art the largest of them.
 const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 
+/// Ceiling on one CDN file read whole: an encoding table, an index or a loose
+/// file. Measured on 12.1.5, the encoding table is 191 MiB and the largest
+/// loose file 200 MiB.
+pub const MAX_CDN_BYTES: usize = 1024 * 1024 * 1024;
+
 /// Name prefix of an unfinished [`Http::download`].
 const DOWNLOAD_PREFIX: &str = ".lightforge-download-";
 
@@ -275,30 +280,19 @@ impl Http {
         Ok(String::from_utf8_lossy(&body).into_owned())
     }
 
-    /// Stream a download to `dest`, reporting progress and returning its
-    /// SHA-512 digest.
-    ///
-    /// The digest is computed during the transfer rather than by re-reading the
-    /// file afterwards, for a 400 MB tarball that saves a full pass over disk.
-    /// `on_progress` is called as bytes arrive; keep it cheap.
-    /// Fetch a whole response into memory.
+    /// Fetch a whole response into memory, refusing one past `max` bytes.
     ///
     /// For manifests and configs, which are read whole and hashed whole.
     /// Bulk content goes through [`Http::download`] instead, which streams to
     /// disk rather than holding a multi-gigabyte archive in memory.
-    pub async fn get_bytes(&self, url: &str) -> Result<Vec<u8>, NetError> {
+    pub async fn get_bytes(&self, url: &str, max: usize) -> Result<Vec<u8>, NetError> {
         let response = self
             .client
             .get(url)
             .send()
             .await
             .map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
-        let response = check_status(url, response)?;
-        response
-            .bytes()
-            .await
-            .map(|b| b.to_vec())
-            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })
+        bounded_body(url, check_status(url, response)?, max).await
     }
 
     /// Fetch a byte range. `range` is a `Range` header value such as
@@ -309,6 +303,7 @@ impl Http {
     /// expensive way to get one file and worth failing on rather than
     /// silently accepting.
     pub async fn get_range(&self, url: &str, range: &str) -> Result<Vec<u8>, NetError> {
+        let want = range_len(range).ok_or_else(|| NetError::BadRange(range.to_owned()))?;
         let response = self
             .client
             .get(url)
@@ -323,11 +318,13 @@ impl Http {
             drop(response);
             return Err(NetError::Status { url: url.to_owned(), status: status.as_u16() });
         }
-        response
-            .bytes()
-            .await
-            .map(|b| b.to_vec())
-            .map_err(|e| NetError::Request { url: url.to_owned(), source: e })
+        // Exactly the bytes asked for: a short body would be split into
+        // pieces that fail their checksums one by one, far from the cause.
+        let body = bounded_body(url, response, usize::try_from(want).unwrap_or(usize::MAX)).await?;
+        if body.len() as u64 != want {
+            return Err(NetError::Truncated { url: url.to_owned(), expected: want, got: body.len() as u64 });
+        }
+        Ok(body)
     }
 
     /// Stream `url` to `dest`, returning the SHA-512 of what was written.
@@ -424,10 +421,13 @@ impl Http {
 /// chunked response declares nothing, and a declared one can be wrong.
 async fn bounded_body(url: &str, response: reqwest::Response, max: usize) -> Result<Vec<u8>, NetError> {
     let too_large = || NetError::TooLarge { url: url.to_owned(), max };
-    if response.content_length().is_some_and(|len| len > max as u64) {
+    let declared = response.content_length();
+    if declared.is_some_and(|len| len > max as u64) {
         return Err(too_large());
     }
-    let mut body = Vec::new();
+    // Sized up front when declared: growing a 200 MiB body by doubling
+    // copies it several times over.
+    let mut body = Vec::with_capacity(declared.map_or(0, |len| len as usize));
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| NetError::Request { url: url.to_owned(), source: e })?;
@@ -437,6 +437,13 @@ async fn bounded_body(url: &str, response: reqwest::Response, max: usize) -> Res
         body.extend_from_slice(&chunk);
     }
     Ok(body)
+}
+
+/// Bytes covered by a `bytes=first-last` header value.
+fn range_len(range: &str) -> Option<u64> {
+    let (first, last) = range.strip_prefix("bytes=")?.split_once('-')?;
+    let (first, last): (u64, u64) = (first.parse().ok()?, last.parse().ok()?);
+    last.checked_sub(first)?.checked_add(1)
 }
 
 /// Delete unfinished downloads a crash or a kill left in `dir`.
@@ -590,6 +597,9 @@ pub enum NetError {
 
     #[error("{url} ended after {got} of {expected} bytes")]
     Truncated { url: String, expected: u64, got: u64 },
+
+    #[error("`{0}` is not a single byte range")]
+    BadRange(String),
 
     #[error("GitHub API rate limit reached for {url} — retry within the hour")]
     RateLimited { url: String },
@@ -755,6 +765,44 @@ mod tests {
         assert!(!old.exists());
         assert!(live.exists(), "a download in progress beside this one was deleted");
         assert!(other.exists());
+    }
+
+    fn partial(body: &[u8], declared: usize) -> String {
+        let head = format!("HTTP/1.1 206 Partial Content\r\nContent-Length: {declared}\r\nConnection: close\r\n\r\n");
+        server(head, body.to_vec(), false)
+    }
+
+    #[test]
+    fn a_range_header_is_measured_inclusively() {
+        assert_eq!(range_len("bytes=0-0"), Some(1));
+        assert_eq!(range_len("bytes=1000-1099"), Some(100));
+        assert_eq!(range_len("bytes=5-4"), None);
+        assert_eq!(range_len("bytes=0-"), None);
+        assert_eq!(range_len("0-9"), None);
+    }
+
+    #[tokio::test]
+    async fn a_range_answered_in_full_is_returned() {
+        let body = Http::new().unwrap().get_range(&partial(b"0123456789", 10), "bytes=0-9").await.unwrap();
+        assert_eq!(body, b"0123456789");
+    }
+
+    #[tokio::test]
+    async fn a_range_answered_short_is_truncated_not_accepted() {
+        let result = Http::new().unwrap().get_range(&partial(b"0123", 4), "bytes=0-9").await;
+        assert!(matches!(result, Err(NetError::Truncated { expected: 10, got: 4, .. })), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn a_range_answered_long_is_refused() {
+        let result = Http::new().unwrap().get_range(&partial(&[0; 20], 20), "bytes=0-9").await;
+        assert!(matches!(result, Err(NetError::TooLarge { max: 10, .. })), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn a_whole_fetch_past_its_limit_is_refused() {
+        let result = Http::new().unwrap().get_bytes(&sized(&[0; 64], 64), 63).await;
+        assert!(matches!(result, Err(NetError::TooLarge { max: 63, .. })), "{result:?}");
     }
 
     #[tokio::test]

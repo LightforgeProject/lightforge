@@ -312,7 +312,7 @@ async fn fetch_and_install(
     ledger: &mut Ledger,
 ) -> Result<Vec<String>, ManageError> {
     let url = entry.downloadable().ok_or(ManageError::NoDownload)?;
-    let package = http.get_bytes(url).await?;
+    let package = http.get_bytes(url, install::MAX_PACKAGE_BYTES).await?;
 
     verify_md5(&package, entry.md5.as_deref(), name)?;
 

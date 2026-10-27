@@ -221,7 +221,10 @@ pub(crate) async fn cdn_archive(archive: Option<String>, product: String, region
     // suffix, and is not itself content-addressed by that name.
     let endpoint = &client.endpoints()[0];
     let url = format!("{}.index", endpoint.url(Kind::Data, &archive)?);
-    let raw = http.get_bytes(&url).await.context("fetching the archive index")?;
+    let raw = http
+        .get_bytes(&url, lightforge_core::net::MAX_CDN_BYTES)
+        .await
+        .context("fetching the archive index")?;
     println!("index           {} bytes from {url}", raw.len());
 
     let index = ArchiveIndex::parse(&raw, &archive).context("parsing the archive index")?;

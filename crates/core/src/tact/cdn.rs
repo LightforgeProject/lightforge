@@ -35,7 +35,7 @@
 //! matches a content key that came from a manifest chain rooted in the build
 //! config.
 
-use crate::net::{Http, NetError};
+use crate::net::{Http, NetError, MAX_CDN_BYTES};
 
 use super::config::to_hex;
 use super::version::Cdn;
@@ -189,7 +189,7 @@ impl Client {
         let mut last: Option<CdnError> = None;
         for endpoint in &self.endpoints {
             let url = endpoint.url(kind, hash)?;
-            match http.get_bytes(&url).await {
+            match http.get_bytes(&url, MAX_CDN_BYTES).await {
                 Ok(bytes) => return Ok(bytes),
                 Err(source) => last = Some(endpoint_failed(url, source)),
             }
@@ -214,7 +214,7 @@ impl Client {
 
         for endpoint in &self.endpoints {
             let url = endpoint.url(kind, hash)?;
-            match http.get_bytes(&url).await {
+            match http.get_bytes(&url, MAX_CDN_BYTES).await {
                 Ok(bytes) => {
                     let actual = *md5::compute(&bytes);
                     if actual == expected {
@@ -256,7 +256,7 @@ impl Client {
 
         for endpoint in &self.endpoints {
             let url = endpoint.index_url(hash)?;
-            match http.get_bytes(&url).await {
+            match http.get_bytes(&url, MAX_CDN_BYTES).await {
                 Ok(bytes) => match expect_size {
                     Some(want) if bytes.len() as u64 != want => {
                         last = Some(CdnError::WrongSize { url, expected: want, found: bytes.len() as u64 });
@@ -313,7 +313,7 @@ impl Client {
 
         for endpoint in &self.endpoints {
             let url = endpoint.url(Kind::Data, &hash)?;
-            let raw = match http.get_bytes(&url).await {
+            let raw = match http.get_bytes(&url, MAX_CDN_BYTES).await {
                 Ok(bytes) => bytes,
                 Err(source) => {
                     last = Some(CdnError::Fetch { url, source });

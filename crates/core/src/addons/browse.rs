@@ -34,6 +34,9 @@ pub const CATALOGUE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const WOWI_FILELIST: &str = "https://api.mmoui.com/v4/game/WOW/filelist.json";
 const TUKUI_ADDONS: &str = "https://api.tukui.org/v1/addons";
 
+/// WoWInterface's whole file list is 2.7 MB.
+const MAX_CATALOGUE_BYTES: usize = 32 * 1024 * 1024;
+
 /// One search result, provider-agnostic.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Listing {
@@ -469,7 +472,7 @@ async fn cached_json<T: serde::de::DeserializeOwned>(
         }
     }
 
-    let body = http.get_bytes(url).await?;
+    let body = http.get_bytes(url, MAX_CATALOGUE_BYTES).await?;
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }

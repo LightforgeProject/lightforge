@@ -26,6 +26,9 @@ use crate::product::ProductCode;
 /// that fills a disk; no real addon is anywhere near this size.
 pub const MAX_UNCOMPRESSED: u64 = 512 * 1024 * 1024;
 
+/// Refuse a package download past this, half of [`MAX_UNCOMPRESSED`].
+pub const MAX_PACKAGE_BYTES: usize = 256 * 1024 * 1024;
+
 /// What Lightforge installed, so it can be updated and removed again.
 ///
 /// Kept in Lightforge's own data directory rather than inside the game, so a
