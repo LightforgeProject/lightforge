@@ -238,58 +238,7 @@ impl Lightforge {
             body = body.push(text(note).size(theme::LABEL).color(color));
         }
 
-        let choice = |label: &'static str| {
-            button(text(label).size(theme::LABEL).width(Length::Fill).center())
-                .width(Length::Fixed(150.0))
-                .padding(theme::tap([theme::SM, theme::MD]))
-        };
-        // Once it has arrived there is nothing left to cancel, so the card
-        // offers one button that says what it does.
-        let actions = match dialog.stage {
-            ReportStage::Sent => row![
-                Space::new().width(Length::Fill),
-                tappable(
-                    "close",
-                    Some(Message::ReportCancel),
-                    choice("Close").style(theme::filled(theme::ACCENT)),
-                ),
-            ],
-            _ => row![
-                Space::new().width(Length::Fill),
-                // Only once there is something to lose. The screenshot is not
-                // in it, the clipboard carries text, which the Discord
-                // route solves on its own, since an image is pasted there.
-                match dialog.stage {
-                    ReportStage::Failed => tappable(
-                        "copy report",
-                        Some(Message::ReportCopy),
-                        choice("Copy report").style(theme::outlined),
-                    ),
-                    _ => Element::from(Space::new().width(Length::Shrink)),
-                },
-                tappable("cancel", Some(Message::ReportCancel), choice("Cancel").style(theme::outlined)),
-                tappable(
-                    "send",
-                    // Nothing is sent without a description, a category, and
-                    // for a bug a way back: each one missing is an issue
-                    // nobody can act on.
-                    (writing && dialog.stage != ReportStage::TooSoon && dialog.can_send())
-                        .then_some(Message::ReportSend),
-                    choice(match dialog.stage {
-                        ReportStage::Sending => "Sending…",
-                        ReportStage::Failed => "Try again",
-                        ReportStage::TooSoon => "Just sent",
-                        _ => match dialog.kind {
-                            ReportKind::Bug => "Send Bug Report",
-                            ReportKind::Feedback => "Send Feedback",
-                        },
-                    })
-                    .style(theme::filled(theme::ACCENT)),
-                ),
-            ],
-        }
-        .spacing(theme::SM)
-        .align_y(Alignment::Center);
+        let actions = report_actions(dialog, writing);
 
         container(column![section(title, body.into()), actions].spacing(theme::LG))
             .width(Length::Fixed(560.0))
@@ -352,4 +301,61 @@ impl Lightforge {
         .align_y(Alignment::Center)
         .into()
     }
+}
+
+/// Cancel, Send, and Copy once a send has failed; Close once it has arrived.
+fn report_actions(dialog: &ReportDialog, writing: bool) -> Element<'_, Message> {
+    let choice = |label: &'static str| {
+        button(text(label).size(theme::LABEL).width(Length::Fill).center())
+            .width(Length::Fixed(150.0))
+            .padding(theme::tap([theme::SM, theme::MD]))
+    };
+    // Once it has arrived there is nothing left to cancel, so the card
+    // offers one button that says what it does.
+    match dialog.stage {
+        ReportStage::Sent => row![
+            Space::new().width(Length::Fill),
+            tappable(
+                "close",
+                Some(Message::ReportCancel),
+                choice("Close").style(theme::filled(theme::ACCENT)),
+            ),
+        ],
+        _ => row![
+            Space::new().width(Length::Fill),
+            // Only once there is something to lose. The screenshot is not
+            // in it, the clipboard carries text, which the Discord
+            // route solves on its own, since an image is pasted there.
+            match dialog.stage {
+                ReportStage::Failed => tappable(
+                    "copy report",
+                    Some(Message::ReportCopy),
+                    choice("Copy report").style(theme::outlined),
+                ),
+                _ => Element::from(Space::new().width(Length::Shrink)),
+            },
+            tappable("cancel", Some(Message::ReportCancel), choice("Cancel").style(theme::outlined)),
+            tappable(
+                "send",
+                // Nothing is sent without a description, a category, and
+                // for a bug a way back: each one missing is an issue
+                // nobody can act on.
+                (writing && dialog.stage != ReportStage::TooSoon && dialog.can_send())
+                    .then_some(Message::ReportSend),
+                choice(match dialog.stage {
+                    ReportStage::Sending => "Sending…",
+                    ReportStage::Failed => "Try again",
+                    ReportStage::TooSoon => "Just sent",
+                    _ => match dialog.kind {
+                        ReportKind::Bug => "Send Bug Report",
+                        ReportKind::Feedback => "Send Feedback",
+                    },
+                })
+                .style(theme::filled(theme::ACCENT)),
+            ),
+        ],
+    }
+    .spacing(theme::SM)
+    .align_y(Alignment::Center)
+    .into()
 }

@@ -8,57 +8,7 @@ impl Lightforge {
     pub(crate) fn install_card<'a>(&'a self, dialog: &'a InstallDialog) -> Element<'a, Message> {
         let mut drives = column![].spacing(theme::SM);
         for (index, target) in dialog.targets.iter().enumerate() {
-            let chosen = index == dialog.chosen;
-            // Fixed, and wide enough for the longest thing that goes in it.
-            // Left to shrink it was squeezed by the path beside it until
-            // "1.37 TiB free" came out as three stacked words.
-            let mut right = column![]
-                .spacing(2)
-                .width(Length::Fixed(110.0))
-                .align_x(Alignment::End);
-            right = match target.disk {
-                Some(disk) => right.push(mono(format!("{} free", size_of(disk.free)))),
-                None => right.push(muted("—".to_owned(), theme::LABEL)),
-            };
-            // Battle.net's own wording and colour for the same fact: a second
-            // WoW version in a folder that already has one shares its data
-            // store, so what is already downloaded is not fetched twice.
-            if target.shares {
-                right = right.push(text("Sharing data").size(theme::CAPTION).color(theme::OK));
-            }
-
-            let mut left = column![row![
-                text(target.label.clone()).size(theme::BODY),
-                Space::new().width(Length::Fixed(theme::SM)),
-            ]
-            .align_y(Alignment::Center)]
-            .spacing(2);
-            // `~/Games/...` rather than `/home/<name>/Games/...`: the home
-            // prefix is the longest and least informative part of the path,
-            // and this row is where the width is tightest.
-            left = left.push(muted(home_relative(&target.install), theme::CAPTION));
-            if let Some(reason) = target.state.reason(&target.label) {
-                left = left.push(text(reason).size(theme::CAPTION).color(theme::ERROR));
-            }
-
-            let usable = target.state != library::State::Missing;
-            drives = drives.push(tappable(
-                format!("install target {index}"),
-                usable.then_some(Message::InstallTarget(index)),
-                button(
-                    // The left column takes what the right one does not, so
-                    // the path is the only thing that ever wraps.
-                    row![left.width(Length::Fill), right]
-                        .spacing(theme::MD)
-                        .align_y(Alignment::Center),
-                )
-                .width(Length::Fill)
-                .padding([theme::SM, theme::MD])
-                .style(match chosen {
-                    true => theme::selected,
-                    false => theme::card_button,
-                }),
-            ));
+            drives = drives.push(install_target_row(index, target, index == dialog.chosen));
         }
         let location: Element<Message> = column![drives]
             .extend(
@@ -433,4 +383,59 @@ impl Lightforge {
         .style(theme::dialog)
         .into()
     }
+}
+
+/// One drive the install can go on: its name and path, its free space, and
+/// whether it would share a data store with what is already there.
+fn install_target_row(index: usize, target: &InstallTarget, chosen: bool) -> Element<'_, Message> {
+    // Fixed, and wide enough for the longest thing that goes in it.
+    // Left to shrink it was squeezed by the path beside it until
+    // "1.37 TiB free" came out as three stacked words.
+    let mut right = column![]
+        .spacing(2)
+        .width(Length::Fixed(110.0))
+        .align_x(Alignment::End);
+    right = match target.disk {
+        Some(disk) => right.push(mono(format!("{} free", size_of(disk.free)))),
+        None => right.push(muted("—".to_owned(), theme::LABEL)),
+    };
+    // Battle.net's own wording and colour for the same fact: a second
+    // WoW version in a folder that already has one shares its data
+    // store, so what is already downloaded is not fetched twice.
+    if target.shares {
+        right = right.push(text("Sharing data").size(theme::CAPTION).color(theme::OK));
+    }
+
+    let mut left = column![row![
+        text(target.label.clone()).size(theme::BODY),
+        Space::new().width(Length::Fixed(theme::SM)),
+    ]
+    .align_y(Alignment::Center)]
+    .spacing(2);
+    // `~/Games/...` rather than `/home/<name>/Games/...`: the home
+    // prefix is the longest and least informative part of the path,
+    // and this row is where the width is tightest.
+    left = left.push(muted(home_relative(&target.install), theme::CAPTION));
+    if let Some(reason) = target.state.reason(&target.label) {
+        left = left.push(text(reason).size(theme::CAPTION).color(theme::ERROR));
+    }
+
+    let usable = target.state != library::State::Missing;
+    tappable(
+        format!("install target {index}"),
+        usable.then_some(Message::InstallTarget(index)),
+        button(
+            // The left column takes what the right one does not, so
+            // the path is the only thing that ever wraps.
+            row![left.width(Length::Fill), right]
+                .spacing(theme::MD)
+                .align_y(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .padding([theme::SM, theme::MD])
+        .style(match chosen {
+            true => theme::selected,
+            false => theme::card_button,
+        }),
+    )
 }
