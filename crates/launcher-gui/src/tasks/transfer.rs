@@ -244,38 +244,37 @@ pub(crate) fn gib(bytes: u64) -> f64 {
 pub struct SharedDownloads(pub Arc<Mutex<Downloads>>);
 
 impl SharedDownloads {
+    /// Every `Downloads` method is a single map insert or remove, so a panic
+    /// elsewhere cannot leave it half-updated. Skipping on poison instead
+    /// would stop registering downloads, and a launch would then never pause
+    /// one.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Downloads> {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub fn register(&self, code: ProductCode, cancel: Cancel) {
-        if let Ok(mut guard) = self.0.lock() {
-            guard.register(code, cancel);
-        }
+        self.lock().register(code, cancel);
     }
 
     pub fn finished(&self, code: &ProductCode) {
-        if let Ok(mut guard) = self.0.lock() {
-            guard.finished(code);
-        }
+        self.lock().finished(code);
     }
 
     /// Products a launch paused and owes a restart.
     pub fn pending(&self) -> Vec<ProductCode> {
-        self.0
-            .lock()
-            .map(|g| g.pending().cloned().collect())
-            .unwrap_or_default()
+        self.lock().pending().cloned().collect()
     }
 }
 
 impl DownloadGuard for SharedDownloads {
     fn pause(&mut self, code: &ProductCode) -> Result<bool, PreflightError> {
-        let mut guard = self.0.lock().expect("downloads lock");
-        guard.pause(code)
+        self.lock().pause(code)
     }
 
     fn resume(&mut self, code: &ProductCode) -> Result<bool, PreflightError> {
         // The GUI restarts the transfer itself, since resuming means building
         // a fresh plan against what the store now holds.
-        let mut guard = self.0.lock().expect("downloads lock");
-        guard.resume(code)
+        self.lock().resume(code)
     }
 }
 
@@ -348,4 +347,25 @@ pub async fn discard_download(
     .map_err(|e| chain(&e))??;
 
     Ok(removed + freed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_poisoned_lock_still_pauses_the_download() {
+        let mut downloads = SharedDownloads::default();
+        let poisoner = downloads.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.0.lock().unwrap();
+            panic!("poison the downloads lock");
+        })
+        .join();
+        assert!(downloads.0.is_poisoned());
+
+        downloads.register(ProductCode::Classic, Cancel::new());
+        assert!(downloads.pause(&ProductCode::Classic).unwrap());
+        assert_eq!(downloads.pending(), [ProductCode::Classic]);
+    }
 }
