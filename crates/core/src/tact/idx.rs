@@ -37,6 +37,8 @@ use std::path::{Path, PathBuf};
 
 use tact_parser::jenkins3::{hashlittle, hashlittle2};
 
+use super::writer::MAX_ARCHIVE_ID;
+
 /// Number of buckets a CASC store spreads its keys across.
 pub const BUCKETS: u8 = 16;
 
@@ -341,9 +343,13 @@ impl Index {
             });
         }
 
-        let blocks = body[8..]
-            .as_chunks::<8>()
-            .0
+        // Every real header has exactly one block (data_size 16, 97 of 97
+        // files Agent wrote); a remainder means the size field is wrong.
+        let (blocks, rest) = body[8..].as_chunks::<8>();
+        if !rest.is_empty() {
+            return Err(IdxError::RaggedBlockTable { size: body.len() - 8 });
+        }
+        let blocks = blocks
             .iter()
             .map(|c| (u32::from_be_bytes(c[..4].try_into().unwrap()), u32::from_be_bytes(c[4..].try_into().unwrap())))
             .collect::<Vec<_>>();
@@ -397,6 +403,11 @@ impl Index {
 
         let mut entries = Vec::with_capacity(self.entries.len() * ENTRY_SIZE);
         for entry in &self.entries {
+            // `write` keeps 30 bits of offset and 10 of archive id; anything
+            // wider would land the entry on some other file's bytes.
+            if entry.offset > OFFSET_MASK || entry.archive_id > MAX_ARCHIVE_ID {
+                return Err(IdxError::Unaddressable { archive_id: entry.archive_id, offset: entry.offset });
+            }
             entry.write(&mut entries);
         }
 
@@ -600,6 +611,12 @@ pub enum IdxError {
     #[error(".idx data section is {size} bytes, not a whole number of {entry_size}-byte entries")]
     RaggedSection { size: usize, entry_size: usize },
 
+    #[error(".idx block table is {size} bytes, not a whole number of 8-byte blocks")]
+    RaggedBlockTable { size: usize },
+
+    #[error("data.{archive_id:03} at offset {offset} cannot be addressed by an index entry")]
+    Unaddressable { archive_id: u16, offset: u32 },
+
     #[error("bucket {bucket:02x} holds {entries} entries but only {capacity} fit in an index file")]
     BucketFull { bucket: u8, entries: usize, capacity: usize },
 
@@ -674,6 +691,31 @@ mod tests {
         let bytes = idx.to_bytes().unwrap();
         assert_eq!(bytes.len(), DEFAULT_FILE_SIZE);
         assert_eq!(Index::parse(&bytes).unwrap(), idx);
+    }
+
+    #[test]
+    fn a_header_with_a_partial_block_is_refused() {
+        let bytes = Index::new(0).to_bytes().unwrap();
+        let mut body = bytes[8..24].to_vec();
+        body.push(0);
+        let mut ragged = Vec::new();
+        ragged.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        ragged.extend_from_slice(&hashlittle(&body, 0).to_le_bytes());
+        ragged.extend_from_slice(&body);
+        ragged.extend_from_slice(&bytes[24..]);
+
+        assert!(matches!(Index::parse(&ragged), Err(IdxError::RaggedBlockTable { size: 9 })));
+    }
+
+    #[test]
+    fn an_entry_past_the_addressable_range_is_not_written() {
+        let mut idx = Index::new(0);
+        idx.insert(entry([1; 9], 0, 1 << 30, 10));
+        assert!(matches!(idx.to_bytes(), Err(IdxError::Unaddressable { offset: 0x4000_0000, .. })));
+
+        let mut idx = Index::new(0);
+        idx.insert(entry([1; 9], 1024, 0, 10));
+        assert!(matches!(idx.to_bytes(), Err(IdxError::Unaddressable { archive_id: 1024, .. })));
     }
 
     #[test]
