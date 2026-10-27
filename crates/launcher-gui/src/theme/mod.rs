@@ -15,31 +15,47 @@
 //! iced gives no cascade, so "restraint" here means type, spacing and one
 //! accent rather than effects.
 
-use iced::widget::{button, container, scrollable, text_editor, text_input};
-use iced::{border, gradient, Background, Border, Color, Font, Radians, Shadow, Theme, Vector};
+use iced::{Color, Font, Shadow, Theme, Vector};
+
+mod buttons;
+mod containers;
+mod inputs;
+
+#[cfg(test)]
+mod tests;
+
+pub use buttons::*;
+pub use containers::*;
+pub use inputs::*;
 
 // ---------------------------------------------------------------- palette --
 
 /// Page background, near black, slightly blue, so art laid behind it reads as
 /// part of the page rather than a picture on a grey wall.
 pub const BG: Color = rgb(0x0B, 0x0D, 0x10);
+
 /// A panel sitting on the page.
 pub const SURFACE: Color = rgb(0x14, 0x17, 0x1C);
+
 /// A panel on a panel, list rows, inputs.
 pub const RAISED: Color = rgb(0x1B, 0x20, 0x27);
+
 /// Hairline. Always a translucent white so it works over art too.
 pub const BORDER: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.08);
+
 /// Hairline for a panel laid over artwork, where a hairline meant for a flat
 /// surface disappears. Draws the edge that [`LIFT`]'s shadow cannot, see
 /// [`floating`].
 pub const BORDER_OVER_ART: Color = Color::from_rgba(1.0, 1.0, 1.0, 0.16);
 
 pub const TEXT: Color = rgb(0xE8, 0xED, 0xF2);
+
 /// Secondary text. Contrast-checked against [`SURFACE`], not against black.
 pub const MUTED: Color = rgb(0x8A, 0x94, 0xA3);
 
 /// Blizzard blue, the single accent, and the Battle.net hand-off colour.
 pub const ACCENT: Color = rgb(0x00, 0xB4, 0xFF);
+
 pub const INSTALL: Color = rgb(0x4F, 0xC3, 0xF7);
 
 /// An update waiting. Violet rather than the orange it used to be: orange and
@@ -63,6 +79,7 @@ pub const PLAY: Color = rgb(0xE9, 0xAB, 0x28);
 pub const OK: Color = rgb(0x4C, 0xAF, 0x50);
 
 pub const PAUSE: Color = rgb(0x78, 0x86, 0x96);
+
 pub const ERROR: Color = rgb(0xE5, 0x73, 0x73);
 
 /// Panel over artwork. Opaque enough to read against a bright background,
@@ -81,17 +98,26 @@ pub const PANEL: Color = Color::from_rgba(0.043, 0.055, 0.070, 0.88);
 pub const CONTROL_HEIGHT: f32 = 56.0;
 
 pub const XS: f32 = 4.0;
+
 pub const SM: f32 = 8.0;
+
 pub const MD: f32 = 16.0;
+
 pub const LG: f32 = 24.0;
+
 pub const XL: f32 = 32.0;
 
 /// Type scale.
 pub const DISPLAY: f32 = 34.0;
+
 pub const TITLE: f32 = 22.0;
+
 pub const HEADING: f32 = 16.0;
+
 pub const BODY: f32 = 14.0;
+
 pub const LABEL: f32 = 12.0;
+
 pub const CAPTION: f32 = 11.0;
 
 /// The box a product's wordmark is drawn in, under the app title.
@@ -101,6 +127,7 @@ pub const CAPTION: f32 = 11.0;
 /// against Retail's 349, which reads as louder). Nothing reaches the height;
 /// Retail's, the tallest, is 270.
 pub const LOGO_BOX_WIDTH: f32 = 450.0;
+
 pub const LOGO_BOX_HEIGHT: f32 = 280.0;
 
 /// The width a wordmark is centred against before it is left-aligned.
@@ -234,6 +261,7 @@ pub fn tap_text(size: f32) -> f32 {
 
 /// Corner radius. One value for panels, one for controls.
 pub const RADIUS: f32 = 10.0;
+
 pub const RADIUS_SM: f32 = 6.0;
 
 /// The one drop shadow, for a surface that floats above the page.
@@ -269,9 +297,10 @@ pub const BOLD: Font = Font {
 // The scales are invariants, so they are checked when the crate compiles
 // rather than when a test happens to run.
 const _: () = assert!(XS < SM && SM < MD && MD < LG && LG < XL);
-const _: () = assert!(CAPTION < LABEL && LABEL < BODY && BODY < HEADING);
-const _: () = assert!(HEADING < TITLE && TITLE < DISPLAY);
 
+const _: () = assert!(CAPTION < LABEL && LABEL < BODY && BODY < HEADING);
+
+const _: () = assert!(HEADING < TITLE && TITLE < DISPLAY);
 
 const fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::from_rgb(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0)
@@ -309,499 +338,6 @@ const fn mix(a: Color, b: Color, amount: f32) -> Color {
     }
 }
 
-/// The window's own background: [`BG`] with a wash of [`ACCENT`] in the
-/// bottom right, the one corner nothing else stands in. It fades out a third
-/// of the way across. Linear because iced has no radial gradient, and a
-/// diagonal fade reads the same at this strength.
-pub fn backdrop(_theme: &Theme) -> container::Style {
-    const LIT: Color = mix(ACCENT, BG, 0.09);
-    container::Style {
-        background: Some(Background::Gradient(
-            // 315° clockwise from north: out of the bottom right corner,
-            // towards the top left.
-            gradient::Linear::new(Radians(std::f32::consts::FRAC_PI_4 * 7.0))
-                .add_stop(0.0, LIT)
-                .add_stop(0.32, BG)
-                .into(),
-        )),
-        ..container::Style::default()
-    }
-}
-
-// -------------------------------------------------------------- containers --
-
-/// A panel: the default home for a group of controls.
-pub fn card(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(SURFACE)),
-        border: Border { color: BORDER, width: 1.0, radius: RADIUS.into() },
-        ..container::Style::default()
-    }
-}
-
-/// A panel that sits over artwork.
-///
-/// Carries [`LIFT`]. Through 0.13 it could not: the software renderer sized a
-/// dirty region from the quad's bounds expanded by a single pixel, with no
-/// account of a shadow's blur radius or offset, so the area under a shadow
-/// never got cleared and the shadow composited over itself on every hover
-/// until it went black (iced-rs/iced#2712). #2715 fixed it, and 0.14 has it.
-///
-/// The brighter hairline stays alongside it. The two do different jobs, the
-/// hairline draws the edge, the shadow separates the panel from what is
-/// behind it, and over bright artwork a shadow alone leaves the top edge
-/// indistinct, which is the case [`BORDER_OVER_ART`] exists for.
-pub fn floating(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(PANEL)),
-        border: Border {
-            color: BORDER_OVER_ART,
-            width: 1.0,
-            radius: RADIUS.into(),
-        },
-        shadow: LIFT,
-        ..container::Style::default()
-    }
-}
-
-/// A dropdown's own surface, the app menu, the overflow list, an addon row's
-/// menu.
-///
-/// Opaque, where [`floating`] is not. The translucency is right for a panel
-/// that occupies the page: it keeps the artwork readable underneath and the
-/// panel is large enough that the text still has contrast. A dropdown is the
-/// opposite case, a small list of short words, drawn over whatever happens to
-/// be behind it, read once and dismissed. At [`PANEL`]'s alpha a bright patch
-/// of key art shows straight through a four-word entry.
-///
-/// Same hairline and lift as [`floating`], so the two still read as the same
-/// material; only the background is solid.
-pub fn menu(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(SURFACE)),
-        border: Border {
-            color: BORDER_OVER_ART,
-            width: 1.0,
-            radius: RADIUS.into(),
-        },
-        shadow: LIFT,
-        ..container::Style::default()
-    }
-}
-
-/// The dimmed window behind a dialog: the page stays visible, but plainly
-/// not the thing to interact with.
-pub fn scrim(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(Color { a: 0.72, ..BG })),
-        ..container::Style::default()
-    }
-}
-
-/// A dialog's own card: opaque, unlike [`floating`], since nothing behind it
-/// should show through the text.
-pub fn dialog(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(SURFACE)),
-        border: Border { color: BORDER_OVER_ART, width: 1.0, radius: RADIUS.into() },
-        ..container::Style::default()
-    }
-}
-
-/// The hairline closing the header off from the content below it.
-///
-/// Only on the screens without the game band: on the dashboard the band's own
-/// card does the separating. Its own element because a [`Border`] applies to
-/// all four sides and only the bottom edge wants a line here.
-///
-/// (There was a `ribbon` here, an edge-to-edge panel behind the whole header.
-/// It went when the band moved out into a card of its own: the bar existed to
-/// give the band and the title a readable ground, and the card now carries its
-/// own. Worth remembering why it was there, though, the header sits directly
-/// on product artwork, and loose text over a bright sky is the thing to watch.)
-pub fn ribbon_edge(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(BORDER_OVER_ART)),
-        ..container::Style::default()
-    }
-}
-
-/// An on/off switch, for a setting that takes effect the moment it is
-/// flipped. Accent when on, a quiet track when off, the knob always light.
-pub fn switch(_theme: &Theme, status: iced::widget::toggler::Status) -> iced::widget::toggler::Style {
-    use iced::widget::toggler::Status;
-
-    let (on, hovered, disabled) = match status {
-        Status::Active { is_toggled } => (is_toggled, false, false),
-        Status::Hovered { is_toggled } => (is_toggled, true, false),
-        Status::Disabled { is_toggled } => (is_toggled, false, true),
-    };
-    let track = match (on, hovered) {
-        (true, false) => ACCENT,
-        (true, true) => Color { a: 0.85, ..ACCENT },
-        (false, false) => Color::from_rgba(1.0, 1.0, 1.0, 0.14),
-        (false, true) => Color::from_rgba(1.0, 1.0, 1.0, 0.22),
-    };
-    let fade = |c: Color| match disabled {
-        true => Color { a: c.a * 0.4, ..c },
-        false => c,
-    };
-    iced::widget::toggler::Style {
-        background: Background::Color(fade(track)),
-        background_border_width: 0.0,
-        background_border_color: Color::TRANSPARENT,
-        foreground: Background::Color(fade(TEXT)),
-        foreground_border_width: 0.0,
-        foreground_border_color: Color::TRANSPARENT,
-        text_color: None,
-        border_radius: None,
-        padding_ratio: 0.12,
-    }
-}
-
-/// A hairline between sections, and between Settings' list and its page.
-pub fn divider(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(BORDER)),
-        ..container::Style::default()
-    }
-}
-
-/// One row in a list. Quiet enough to repeat forty times.
-pub fn row(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(RAISED)),
-        border: Border { color: BORDER, width: 1.0, radius: RADIUS_SM.into() },
-        ..container::Style::default()
-    }
-}
-
-/// [`row`] as a button, for a row that is itself the click target, the
-/// games in All Games. The hover lights the whole row, for the reason
-/// [`card_button`] gives: a highlight inside a static row says only part of
-/// it is pressable. Buttons inside it still take their own clicks first.
-pub fn row_button(_theme: &Theme, status: button::Status) -> button::Style {
-    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-    // A twentieth of the way to the text colour: the same small lift as
-    // `ghost`'s hover wash, mixed in because a row is opaque.
-    let lift = |c: f32, t: f32| c + (t - c) * 0.05;
-    button::Style {
-        background: Some(Background::Color(match hovered {
-            true => Color {
-                r: lift(RAISED.r, TEXT.r),
-                g: lift(RAISED.g, TEXT.g),
-                b: lift(RAISED.b, TEXT.b),
-                a: RAISED.a,
-            },
-            false => RAISED,
-        })),
-        text_color: TEXT,
-        border: Border {
-            color: match hovered {
-                true => Color { a: 0.24, ..TEXT },
-                false => BORDER,
-            },
-            width: 1.0,
-            radius: RADIUS_SM.into(),
-        },
-        ..button::Style::default()
-    }
-}
-
-/// The shape of a scrollbar: narrow, and embedded rather than floating.
-///
-/// iced's default is 10pt wide and drawn *over* the content, which on a list
-/// whose rows end in a button puts the scroller on top of the button. Giving
-/// it [`SM`] of spacing makes it take layout space of its own, so it sits
-/// beside the rows and the list below is simply that much narrower.
-pub fn scrollbar_shape() -> scrollable::Scrollbar {
-    scrollable::Scrollbar::new().width(6.0).scroller_width(6.0).spacing(SM)
-}
-
-/// A scrollbar: no rail, and a scroller that is a hairline made solid.
-///
-/// Unstyled, iced draws a light grey rail that belongs to a light theme. The
-/// rail is dropped entirely, the gutter is already empty space, and the
-/// scroller is [`BORDER`]'s white at an alpha that reads over both a panel and
-/// artwork, brightening under the pointer the way the buttons do.
-pub fn scrollbar(_theme: &Theme, status: scrollable::Status) -> scrollable::Style {
-    let hovered = matches!(
-        status,
-        scrollable::Status::Hovered { is_vertical_scrollbar_hovered: true, .. }
-            | scrollable::Status::Dragged { is_vertical_scrollbar_dragged: true, .. }
-    );
-    let rail = scrollable::Rail {
-        background: None,
-        border: Border::default(),
-        scroller: scrollable::Scroller {
-            background: Background::Color(Color {
-                a: match hovered {
-                    true => 0.34,
-                    false => 0.18,
-                },
-                ..TEXT
-            }),
-            border: Border { radius: 999.0.into(), ..Border::default() },
-        },
-    };
-    scrollable::Style {
-        container: container::Style::default(),
-        vertical_rail: rail,
-        horizontal_rail: rail,
-        gap: None,
-        ..scrollable::default(_theme, status)
-    }
-}
-
-/// A pill carrying one word of status.
-pub fn badge(color: Color) -> impl Fn(&Theme) -> container::Style {
-    move |_theme| container::Style {
-        background: Some(Background::Color(Color { a: 0.16, ..color })),
-        text_color: Some(color),
-        border: Border { radius: 999.0.into(), ..Border::default() },
-        ..container::Style::default()
-    }
-}
-
-/// A state worn at a button's size: same height, same corners, no press.
-///
-/// [`badge`] is for a mark inside a line of text, a provider name beside an
-/// addon's title. This is for a state that stands where a button would and has
-/// to hold that space: "installed" next to Install, a build recommendation
-/// beside the picker that sets it. A pill in that position reads as a stray
-/// label rather than as the answer to the button next to it.
-///
-/// Deliberately not a disabled button: iced greys a button out by status, and
-/// grey is the one thing this must not be, the colour is the message.
-pub fn tag(color: Color) -> impl Fn(&Theme) -> container::Style {
-    move |_theme| container::Style {
-        background: Some(Background::Color(Color { a: 0.18, ..color })),
-        text_color: Some(color),
-        border: Border {
-            color: Color { a: 0.45, ..color },
-            width: 1.0,
-            radius: RADIUS_SM.into(),
-        },
-        ..container::Style::default()
-    }
-}
-
-/// A solid round mark, for a status a glyph can't carry: the UI font has no
-/// check mark, and renders U+2713 as a tofu box.
-pub fn dot(color: Color) -> impl Fn(&Theme) -> container::Style {
-    move |_theme| container::Style {
-        background: Some(Background::Color(color)),
-        border: Border { radius: 999.0.into(), ..Border::default() },
-        ..container::Style::default()
-    }
-}
-
-// ----------------------------------------------------------------- buttons --
-
-/// Solid button in one of the state colours. The primary action, at most once
-/// per screen.
-pub fn filled(color: Color) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |_theme, status| button::Style {
-        border: Border { radius: RADIUS_SM.into(), ..Border::default() },
-        ..filled_base(color, status)
-    }
-}
-
-/// The two halves of a split button: a wide primary action and a narrow menu
-/// tab welded to its right, the way Battle.net's Play control is built.
-///
-/// Rounded on their outer edges only, so the pair reads as one control rather
-/// than as two buttons that happen to touch. The tab is shaded a little darker
-/// than the action so the divide is visible without a border between them,
-/// a border would read as a seam, which is exactly what a split button is
-/// trying not to be.
-pub fn filled_left(color: Color) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |_theme, status| button::Style {
-        border: Border {
-            radius: border::radius(RADIUS_SM).top_right(0).bottom_right(0),
-            ..Border::default()
-        },
-        ..filled_base(color, status)
-    }
-}
-
-pub fn filled_right(color: Color) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |_theme, status| {
-        let tab = lighten(color, -0.10);
-        button::Style {
-            border: Border {
-                radius: border::radius(RADIUS_SM).top_left(0).bottom_left(0),
-                ..Border::default()
-            },
-            ..filled_base(tab, status)
-        }
-    }
-}
-
-/// Fill and text for a solid button, without committing to a corner radius.
-fn filled_base(color: Color, status: button::Status) -> button::Style {
-    let base = match status {
-        button::Status::Hovered => lighten(color, 0.08),
-        button::Status::Pressed => lighten(color, -0.06),
-        button::Status::Disabled => Color { a: 0.35, ..color },
-        button::Status::Active => color,
-    };
-    button::Style {
-        background: Some(Background::Color(base)),
-        text_color: on(color),
-        ..button::Style::default()
-    }
-}
-
-/// Outlined button, secondary actions that still deserve a border.
-pub fn outlined(_theme: &Theme, status: button::Status) -> button::Style {
-    let (fill, border) = match status {
-        button::Status::Hovered | button::Status::Pressed => {
-            (Color { a: 0.10, ..TEXT }, Color { a: 0.24, ..TEXT })
-        }
-        button::Status::Disabled => (Color::TRANSPARENT, Color { a: 0.05, ..TEXT }),
-        button::Status::Active => (Color::TRANSPARENT, BORDER),
-    };
-    button::Style {
-        background: Some(Background::Color(fill)),
-        text_color: match status {
-            button::Status::Disabled => MUTED,
-            _ => TEXT,
-        },
-        border: Border { color: border, width: 1.0, radius: RADIUS_SM.into() },
-        ..button::Style::default()
-    }
-}
-
-/// Borderless button, navigation and low-stakes actions.
-pub fn ghost(_theme: &Theme, status: button::Status) -> button::Style {
-    let alpha = match status {
-        button::Status::Hovered | button::Status::Pressed => 0.10,
-        _ => 0.0,
-    };
-    button::Style {
-        background: Some(Background::Color(Color { a: alpha, ..TEXT })),
-        text_color: match status {
-            button::Status::Disabled => MUTED,
-            _ => TEXT,
-        },
-        border: Border { radius: RADIUS_SM.into(), ..Border::default() },
-        ..button::Style::default()
-    }
-}
-
-/// A whole card that is also a button.
-///
-/// [`card`] as a button rather than a container: the card *is* the click
-/// target, so the hover has to happen on the card itself. A row-sized hover
-/// highlight inside a static card would say the row is pressable and leave
-/// the rest of the card looking like it is not.
-///
-/// Translucent, and wearing [`BORDER_OVER_ART`], the same pair [`floating`]
-/// uses, so it can sit over artwork without covering it.
-pub fn card_button(_theme: &Theme, status: button::Status) -> button::Style {
-    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-    button::Style {
-        // [`RAISED`] on hover, the existing "a panel on a panel" step, so a
-        // hovered card lifts by the same amount as every other surface in the
-        // app rather than by a brightness invented here. Both carry PANEL's
-        // alpha, so hovering changes the colour and not the transparency.
-        background: Some(Background::Color(match hovered {
-            true => Color { a: PANEL.a, ..RAISED },
-            false => Color { a: PANEL.a, ..SURFACE },
-        })),
-        text_color: TEXT,
-        border: Border {
-            color: match hovered {
-                true => Color { a: 0.24, ..TEXT },
-                false => BORDER_OVER_ART,
-            },
-            width: 1.0,
-            radius: RADIUS.into(),
-        },
-        ..button::Style::default()
-    }
-}
-
-/// The selected tab or nav entry: filled quietly, never with the accent, so it
-/// does not compete with the primary action.
-pub fn selected(_theme: &Theme, status: button::Status) -> button::Style {
-    // Only a lit tab that is also a way back (Play, from a game's own pages)
-    // can be hovered; the current tab has no action and reports `Disabled`.
-    let a = match status {
-        button::Status::Hovered | button::Status::Pressed => 0.22,
-        _ => 0.14,
-    };
-    button::Style {
-        background: Some(Background::Color(Color { a, ..ACCENT })),
-        text_color: ACCENT,
-        border: Border { radius: RADIUS_SM.into(), ..Border::default() },
-        ..button::Style::default()
-    }
-}
-
-/// A dropdown's face: the button of a picker whose list is a menu of our own,
-/// since a `pick_list` keeps its open state to itself and a keyboard can
-/// neither open it nor move through it.
-pub fn picker_button(_theme: &Theme, status: button::Status) -> button::Style {
-    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-    button::Style {
-        background: Some(Background::Color(match hovered {
-            true => RAISED,
-            false => SURFACE,
-        })),
-        text_color: TEXT,
-        border: Border {
-            color: match hovered {
-                true => BORDER_OVER_ART,
-                false => BORDER,
-            },
-            width: 1.0,
-            radius: RADIUS_SM.into(),
-        },
-        ..button::Style::default()
-    }
-}
-
-// ------------------------------------------------------------------ inputs --
-
-pub fn field(_theme: &Theme, status: text_input::Status) -> text_input::Style {
-    let border = match status {
-        text_input::Status::Focused { .. } => ACCENT,
-        text_input::Status::Hovered => Color { a: 0.18, ..TEXT },
-        _ => BORDER,
-    };
-    text_input::Style {
-        background: Background::Color(RAISED),
-        border: Border { color: border, width: 1.0, radius: RADIUS_SM.into() },
-        icon: MUTED,
-        placeholder: MUTED,
-        value: TEXT,
-        selection: Color { a: 0.30, ..ACCENT },
-    }
-}
-
-/// The multi-line twin of [`field`], for prose rather than a value.
-///
-/// Same surface, same border states, a report's description should look like
-/// the field above it and simply be taller.
-pub fn editor(_theme: &Theme, status: text_editor::Status) -> text_editor::Style {
-    let border = match status {
-        text_editor::Status::Focused { .. } => ACCENT,
-        text_editor::Status::Hovered => Color { a: 0.18, ..TEXT },
-        _ => BORDER,
-    };
-    text_editor::Style {
-        background: Background::Color(RAISED),
-        border: Border { color: border, width: 1.0, radius: RADIUS_SM.into() },
-        placeholder: MUTED,
-        value: TEXT,
-        selection: Color { a: 0.30, ..ACCENT },
-    }
-}
-
-// ------------------------------------------------------------------ helpers --
-
 /// Black or white text, whichever the background can carry.
 fn on(background: Color) -> Color {
     let luma = 0.299 * background.r + 0.587 * background.g + 0.114 * background.b;
@@ -819,102 +355,3 @@ fn lighten(color: Color, amount: f32) -> Color {
         a: color.a,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn text_on_a_state_colour_stays_readable() {
-        // Install, Play and Update are all light enough to need dark text;
-        // green OK is the one that needs white. Getting this backwards makes
-        // the one button that matters unreadable.
-        assert!(on(INSTALL).r < 0.5, "light backgrounds need dark text");
-        assert!(on(PLAY).r < 0.5, "the wordmark's gold needs dark text");
-        assert!(on(UPDATE).r < 0.5, "violet is light enough for dark text");
-        assert_eq!(on(OK), Color::WHITE);
-    }
-
-    /// The point of the whole exercise: marks of wildly different shape come
-    /// out covering the same amount of page.
-    #[test]
-    fn marks_of_any_shape_are_given_the_same_area() {
-        // Mists' trimmed ink against Forever's: 2.0:1 and 1.2:1, the widest
-        // and the narrowest the box does not cut back.
-        let (mw, mh) = logo_size(704.0 / 353.0, 1.0);
-        let (fw, fh) = logo_size(538.0 / 440.0, 1.0);
-        let (wide, square) = (mw * mh, fw * fh);
-        assert!((wide - square).abs() / square < 0.01, "{wide} vs {square}");
-        for (w, h) in [(mw, mh), (fw, fh)] {
-            assert!(w <= LOGO_BOX_WIDTH && h <= LOGO_BOX_HEIGHT, "{w}x{h}");
-        }
-    }
-
-    /// Equal area is the rule; the box is the exception to it, and StarCraft
-    /// is the one mark that meets the exception; see [`LOGO_BOX_WIDTH`].
-    #[test]
-    fn the_one_mark_too_wide_for_the_page_is_cut_back() {
-        let (sw, sh) = logo_size(704.0 / 127.0, 1.0);
-        assert_eq!(sw, LOGO_BOX_WIDTH);
-        assert!(sw * sh < LOGO_AREA * 0.8, "{}", sw * sh);
-        // The next widest is not touched: cutting a second mark back would
-        // make this a rule about wide marks rather than about this one.
-        let (w2, h2) = logo_size(704.0 / 202.0, 1.0);
-        assert!(w2 < LOGO_BOX_WIDTH);
-        assert!((w2 * h2 - LOGO_AREA).abs() / LOGO_AREA < 0.01);
-    }
-
-    /// Shape nobody has published: made smaller, never pushed off the page.
-    #[test]
-    fn an_extreme_shape_is_clamped_into_the_box() {
-        let (w, h) = logo_size(20.0, 1.0);
-        assert!(w <= LOGO_BOX_WIDTH && h <= LOGO_BOX_HEIGHT, "{w}x{h}");
-        assert!(w * h < LOGO_AREA, "a clamped mark is smaller, not larger");
-    }
-
-    /// An aspect that is not a number at all is a square, not a panic.
-    #[test]
-    fn a_nonsense_aspect_is_treated_as_square() {
-        for nonsense in [f32::NAN, 0.0, -3.0, f32::INFINITY] {
-            let (w, h) = logo_size(nonsense, 1.0);
-            assert!((w - h).abs() < 0.5, "{nonsense}: {w}x{h}");
-        }
-    }
-
-    /// Retail's mark sits in a halo a third as wide again as itself. Measured
-    /// by its outer bounds it comes out visibly smaller than the rest; measured
-    /// by the mark, it matches them.
-    #[test]
-    fn a_mark_inside_a_halo_is_sized_by_the_mark() {
-        // Retail: 570x440 trimmed, 431x346 of it solid.
-        let ink = (431.0 * 346.0) / (570.0 * 440.0);
-        let (haloed, _) = logo_size(570.0 / 440.0, ink);
-        let (plain, _) = logo_size(570.0 / 440.0, 1.0);
-        assert!(haloed > plain * 1.2, "{haloed} vs {plain}");
-
-        // And what is left once the halo is discounted is the standard area.
-        let (w, h) = logo_size(570.0 / 440.0, ink);
-        let mark = (w * h) * ink;
-        assert!((mark - LOGO_AREA).abs() / LOGO_AREA < 0.01, "{mark}");
-    }
-
-    /// A narrow mark is nudged in; a wide one is left where it is.
-    #[test]
-    fn only_the_narrow_marks_are_nudged_off_the_edge() {
-        assert_eq!(logo_offset(LOGO_BOX_WIDTH), 0.0);
-        assert_eq!(logo_offset(LOGO_ANCHOR_WIDTH), 0.0);
-        // Forever, the narrowest, by half what it is short of the anchor.
-        assert_eq!(logo_offset(263.0), (LOGO_ANCHOR_WIDTH - 263.0) / 2.0);
-    }
-
-    /// A reading of almost-all-halo would ask for a wordmark several times
-    /// everyone else's. The floor is what stops that.
-    #[test]
-    fn an_impossible_ink_reading_is_floored() {
-        let (w, h) = logo_size(2.0, 0.01);
-        let (floored, _) = logo_size(2.0, LOGO_MIN_INK);
-        assert_eq!(w, floored);
-        assert!(w <= LOGO_BOX_WIDTH && h <= LOGO_BOX_HEIGHT);
-    }
-}
-
