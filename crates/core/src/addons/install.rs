@@ -14,6 +14,7 @@
 //!    and addons from another manager are never touched, because Lightforge did
 //!    not put them there.
 
+use std::ffi::OsString;
 use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
 
@@ -346,6 +347,10 @@ fn extract_within(
     // Validate everything *before* writing anything, so a malicious entry
     // halfway through cannot leave a half-installed addon behind.
     let mut planned: Vec<(usize, PathBuf, String)> = Vec::new();
+    // In first-seen order. The client sees `BigWigs` and `bigwigs` as one
+    // folder, so they are one here too, under the spelling met first, and
+    // every entry is filed under it.
+    let mut folders: Vec<String> = Vec::new();
     let mut total = 0u64;
     for index in 0..archive.len() {
         let entry = archive.by_index(index).map_err(InstallError::Archive)?;
@@ -372,6 +377,16 @@ fn extract_within(
         if relative.components().count() < 2 {
             continue;
         }
+        let (folder, relative) = match folders.iter().find(|f| f.eq_ignore_ascii_case(&folder)) {
+            Some(first) if *first != folder => {
+                (first.clone(), Path::new(first).join(relative.components().skip(1).collect::<PathBuf>()))
+            }
+            Some(_) => (folder, relative),
+            None => {
+                folders.push(folder.clone());
+                (folder, relative)
+            }
+        };
 
         // What the archive claims, a cheap early refusal. The sizes are the
         // packager's word, so the limit is enforced again below on the bytes
@@ -383,12 +398,6 @@ fn extract_within(
         planned.push((index, relative, folder));
     }
 
-    let mut folders: Vec<String> = Vec::new();
-    for (_, _, folder) in &planned {
-        if !folders.contains(folder) {
-            folders.push(folder.clone());
-        }
-    }
     if folders.is_empty() {
         return Err(InstallError::NoAddonFolders);
     }
@@ -450,7 +459,8 @@ fn extract_within(
         bytes += written;
     }
 
-    let retired: Vec<&String> = retire.iter().filter(|f| !folders.contains(f)).collect();
+    let retired: Vec<&String> =
+        retire.iter().filter(|f| !folders.iter().any(|g| g.eq_ignore_ascii_case(f))).collect();
     swap(addons_dir, &fresh, &old, &folders, &retired)?;
     Ok(Extracted { folders, files, bytes })
 }
@@ -465,7 +475,7 @@ fn swap(
     retired: &[&String],
 ) -> Result<(), InstallError> {
     std::fs::create_dir_all(old).map_err(|source| InstallError::Io { path: old.to_path_buf(), source })?;
-    let mut moved_out: Vec<&str> = Vec::new();
+    let mut moved_out: Vec<OsString> = Vec::new();
     let mut moved_in: Vec<&str> = Vec::new();
 
     let result = swap_steps(addons_dir, fresh, old, folders, retired, &mut moved_out, &mut moved_in);
@@ -486,17 +496,20 @@ fn swap_steps<'a>(
     old: &Path,
     folders: &'a [String],
     retired: &[&'a String],
-    moved_out: &mut Vec<&'a str>,
+    moved_out: &mut Vec<OsString>,
     moved_in: &mut Vec<&'a str>,
 ) -> Result<(), InstallError> {
     for name in folders.iter().chain(retired.iter().copied()) {
-        let target = addons_dir.join(name);
-        match std::fs::rename(&target, old.join(name)) {
-            Ok(()) => moved_out.push(name),
+        // Found ignoring case: an update that ships `bigwigs` replaces the
+        // installed `BigWigs` rather than landing beside it.
+        let Some(existing) = on_disk(addons_dir, name) else {
             // Not installed yet, or already removed by hand.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(source) => return Err(InstallError::Io { path: target, source }),
-        }
+            continue;
+        };
+        let target = addons_dir.join(&existing);
+        std::fs::rename(&target, old.join(&existing))
+            .map_err(|source| InstallError::Io { path: target, source })?;
+        moved_out.push(existing);
     }
     for name in folders {
         let target = addons_dir.join(name);
@@ -507,6 +520,19 @@ fn swap_steps<'a>(
     Ok(())
 }
 
+
+/// How `name` is spelled in `dir`, matching ASCII case-insensitively as Wine
+/// does. An exact match is taken without listing the directory.
+fn on_disk(dir: &Path, name: &str) -> Option<OsString> {
+    if dir.join(name).symlink_metadata().is_ok() {
+        return Some(name.into());
+    }
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.file_name())
+        .find(|existing| existing.as_encoded_bytes().eq_ignore_ascii_case(name.as_bytes()))
+}
 
 /// Delete the folders an install wrote, and forget it.
 ///
@@ -687,6 +713,37 @@ mod tests {
         assert_eq!(extracted.files, 3);
         assert!(dir.join("BigWigs/BigWigs.toc").is_file());
         assert!(dir.join("BigWigs_Options/BigWigs_Options.toc").is_file());
+    }
+
+    #[test]
+    fn an_update_spelled_in_another_case_replaces_the_installed_folder() {
+        let dir = tmpdir("case-update");
+        std::fs::create_dir_all(dir.join("BigWigs")).unwrap();
+        std::fs::write(dir.join("BigWigs/old.lua"), b"-- old").unwrap();
+        let package = zip_with(&[("bigwigs/bigwigs.toc", b"## Title: BigWigs")]);
+
+        let extracted = extract(&package, &dir, &[]).unwrap();
+
+        assert_eq!(extracted.folders, ["bigwigs"]);
+        let names: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, ["bigwigs"], "the old spelling is not left beside the new one");
+        assert!(!dir.join("bigwigs/old.lua").exists());
+    }
+
+    #[test]
+    fn one_folder_spelled_two_ways_in_a_package_is_installed_once() {
+        let dir = tmpdir("case-package");
+        let package = zip_with(&[
+            ("BigWigs/BigWigs.toc", b"## Title: BigWigs"),
+            ("bigwigs/core.lua", b"-- core"),
+        ]);
+
+        let extracted = extract(&package, &dir, &[]).unwrap();
+
+        assert_eq!(extracted.folders, ["BigWigs"]);
+        assert!(dir.join("BigWigs/BigWigs.toc").is_file());
+        assert!(dir.join("BigWigs/core.lua").is_file(), "filed under the first spelling");
+        assert!(!dir.join("bigwigs").exists());
     }
 
     #[test]
