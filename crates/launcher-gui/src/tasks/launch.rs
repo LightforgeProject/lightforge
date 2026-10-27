@@ -307,6 +307,14 @@ pub(crate) fn reap(mut child: std::process::Child) -> Result<String, Problem> {
     Ok(format!("game exited ({status})"))
 }
 
+/// Wait on a Battle.net invocation off-thread. A dropped `Child` is never
+/// waited on, and each hand-off would stay a `<defunct>` until the GUI exits.
+fn reap_later(mut child: std::process::Child) {
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+}
+
 pub async fn launch_via_battle_net(
     layout: Layout,
     code: ProductCode,
@@ -364,8 +372,9 @@ pub async fn launch_via_battle_net(
             // The launch below only hands arguments to it over IPC.
             let tools = HostTools::detect();
             let wrappers = config_tweaks().wrappers(&tools);
-            battlenet::launch_wrapped(&runner, &layout, &how, &wrappers)
+            let client = battlenet::launch_wrapped(&runner, &layout, &how, &wrappers)
                 .map_err(|e| Problem::of(&e))?;
+            reap_later(client);
 
             if battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT)
                 == Readiness::NeedsAttention
@@ -391,7 +400,7 @@ pub async fn launch_via_battle_net(
         // anything but WoW came out of the client's own catalogue;
         // `Launch::command` falls back to the compiled-in table without one.
         let launch = Launch::Product { code: code.clone(), exec: family };
-        battlenet::launch(&runner, &layout, &launch).map_err(|e| Problem::of(&e))?;
+        reap_later(battlenet::launch(&runner, &layout, &launch).map_err(|e| Problem::of(&e))?);
 
         let handoff = match preflight::wait_for_game_start(&layout, &before, HANDOFF_TIMEOUT) {
             Some(game) => Handoff::Playing(game),
@@ -435,8 +444,9 @@ pub async fn install_via_battle_net(
             &battlenet::window_state_tweaks(false),
         );
 
-        battlenet::launch(&runner, &layout, &Launch::InstallFlow { uid })
+        let child = battlenet::launch(&runner, &layout, &Launch::InstallFlow { uid })
             .map_err(|e| Problem::of(&e))?;
+        reap_later(child);
 
         Ok(format!("Battle.net is asking where to install {label}"))
     })
@@ -572,7 +582,7 @@ pub async fn open_battle_net(
             &user,
             &battlenet::window_state_tweaks(false),
         );
-        battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| Problem::of(&e))?;
+        reap_later(battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| Problem::of(&e))?);
         Ok("Battle.net opening".to_owned())
     })
     .await
