@@ -82,12 +82,11 @@ impl Queue {
         let text = toml::to_string_pretty(self)?;
         let dir = path.parent().unwrap_or(Path::new("."));
         std::fs::create_dir_all(dir).map_err(write)?;
-        let temp = dir.join(".queue.toml.tmp");
-        let mut file = std::fs::File::create(&temp).map_err(write)?;
-        std::io::Write::write_all(&mut file, text.as_bytes()).map_err(write)?;
-        file.sync_all().map_err(write)?;
-        drop(file);
-        std::fs::rename(&temp, path).map_err(write)?;
+        // A unique temp name: the GUI and the CLI can both save at once.
+        let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(write)?;
+        std::io::Write::write_all(&mut temp, text.as_bytes()).map_err(write)?;
+        temp.as_file().sync_all().map_err(write)?;
+        temp.persist(path).map_err(|e| write(e.error))?;
         // Durability of the rename, not of the contents.
         if let Ok(handle) = std::fs::File::open(dir) {
             let _ = handle.sync_all();
@@ -131,5 +130,32 @@ mod tests {
         Queue::default().save(&path).unwrap();
         assert!(!path.exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn concurrent_saves_all_succeed_and_leave_one_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("queue.toml");
+        let queue = Queue {
+            entries: vec![Saved {
+                code: ProductCode::Classic,
+                standing: Standing::Queued,
+                job_bytes: None,
+                reached: 0,
+            }],
+        };
+
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                s.spawn(|| {
+                    for _ in 0..25 {
+                        queue.save(&path).unwrap();
+                    }
+                });
+            }
+        });
+
+        assert_eq!(Queue::load(&path).unwrap(), queue);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }
