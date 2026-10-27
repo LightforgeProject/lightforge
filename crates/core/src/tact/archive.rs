@@ -70,10 +70,12 @@ impl ArchiveIndex {
             return Err(ArchiveError::NotAnArchiveIndex);
         }
 
-        let mut entries: Vec<Located> = rows
+        let mut entries = rows
             .into_iter()
-            .map(|(ekey, size, offset)| Located { ekey, size: size as u32, offset: offset as u32 })
-            .collect();
+            .map(|(ekey, size, offset)| {
+                Ok(Located { ekey, size: narrow(size)?, offset: narrow(offset)? })
+            })
+            .collect::<Result<Vec<_>, ArchiveError>>()?;
 
         // Lookups binary search, so ordering is a correctness requirement
         // rather than an optimisation.
@@ -140,10 +142,10 @@ impl FileIndex {
             return Err(ArchiveError::NotAFileIndex { offset_bytes: footer.offset_bytes });
         }
 
-        let mut entries: Vec<Loose> = rows
+        let mut entries = rows
             .into_iter()
-            .map(|(ekey, size, _)| Loose { ekey, size: size as u32 })
-            .collect();
+            .map(|(ekey, size, _)| Ok(Loose { ekey, size: narrow(size)? }))
+            .collect::<Result<Vec<_>, ArchiveError>>()?;
         if !entries.windows(2).all(|w| w[0].ekey <= w[1].ekey) {
             entries.sort_unstable_by_key(|e| e.ekey);
         }
@@ -279,6 +281,11 @@ impl Footer {
     }
 }
 
+/// The footer allows columns up to 8 bytes wide, entries are stored as `u32`.
+fn narrow(value: u64) -> Result<u32, ArchiveError> {
+    u32::try_from(value).map_err(|_| ArchiveError::Overflow(value))
+}
+
 /// Big-endian integer of 1..=8 bytes.
 fn be_uint(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0u64, |acc, b| (acc << 8) | u64::from(*b))
@@ -300,6 +307,9 @@ pub enum ArchiveError {
 
     #[error("archive index should be {expected} bytes by its own footer but is {actual}")]
     SizeMismatch { expected: usize, actual: usize },
+
+    #[error("archive index entry value {0} does not fit in 32 bits")]
+    Overflow(u64),
 
     #[error("this is the file index, not an archive index: it has no offset column")]
     NotAnArchiveIndex,
@@ -518,6 +528,26 @@ mod tests {
         assert!(matches!(
             ArchiveIndex::parse(&bytes, "x"),
             Err(ArchiveError::SizeMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn an_offset_past_four_gib_is_refused_not_truncated() {
+        // A 5-byte offset column: one 25-byte entry at offset 2^32 + 7.
+        let mut bytes = vec![0u8; 4096];
+        bytes[..16].copy_from_slice(&key(1));
+        bytes[16..20].copy_from_slice(&10u32.to_be_bytes());
+        bytes[20..25].copy_from_slice(&(u64::from(u32::MAX) + 8).to_be_bytes()[3..]);
+        bytes.extend_from_slice(&key(1));
+        bytes.extend_from_slice(&[0u8; 8]);
+        bytes.extend_from_slice(&[0u8; 8]);
+        bytes.extend_from_slice(&[1, 0, 0, 4, 5, 4, 16, 8]);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 8]);
+
+        assert!(matches!(
+            ArchiveIndex::parse(&bytes, "x"),
+            Err(ArchiveError::Overflow(v)) if v == u64::from(u32::MAX) + 8
         ));
     }
 
