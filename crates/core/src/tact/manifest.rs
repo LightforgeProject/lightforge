@@ -318,7 +318,8 @@ impl InstallManifest {
 
         let tags = r.tags(tag_count, entry_count)?;
 
-        let mut entries = Vec::with_capacity(entry_count);
+        // Smallest entry: an empty path's terminator, a key and a size.
+        let mut entries = Vec::with_capacity(entry_count.min(r.remaining() / (1 + 16 + 4)));
         for _ in 0..entry_count {
             let path = r.cstring()?;
             let ckey: CKey = r.take(16)?.try_into().expect("16 bytes");
@@ -402,7 +403,8 @@ impl DownloadManifest {
             0
         };
 
-        let mut entries = Vec::with_capacity(entry_count);
+        // Smallest entry: a key, a 40-bit size and a priority.
+        let mut entries = Vec::with_capacity(entry_count.min(r.remaining() / (16 + 5 + 1)));
         for _ in 0..entry_count {
             let ekey: EKey = r.take(16)?.try_into().expect("16 bytes");
             let size = r.u40()?;
@@ -535,6 +537,10 @@ impl<'a> Reader<'a> {
         let slice = &self.bytes[self.at..end];
         self.at = end;
         Ok(slice)
+    }
+
+    fn remaining(&self) -> usize {
+        self.bytes.len().saturating_sub(self.at)
     }
 
     fn u8(&mut self) -> Result<u8, ManifestError> {
@@ -972,6 +978,18 @@ mod tests {
         bytes[5..9].copy_from_slice(&9000u32.to_be_bytes());
         assert!(matches!(
             DownloadManifest::parse(&bytes),
+            Err(ManifestError::Truncated { .. })
+        ));
+    }
+
+    #[test]
+    fn a_huge_entry_count_is_truncation_not_an_allocation() {
+        assert!(matches!(
+            InstallManifest::parse(b"IN\x01\x10\x00\x00\xff\xff\xff\xff"),
+            Err(ManifestError::Truncated { .. } | ManifestError::UnterminatedString { .. })
+        ));
+        assert!(matches!(
+            DownloadManifest::parse(b"DL\x01\x10\x00\xff\xff\xff\xff\x00\x00"),
             Err(ManifestError::Truncated { .. })
         ));
     }

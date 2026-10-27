@@ -158,6 +158,16 @@ impl Storage {
         };
 
         let path = || data_dir.join(archive_name(entry.archive_id));
+        // A corrupt .idx can claim up to 4 GiB; check before allocating it.
+        let len = file.metadata().map_err(|source| StorageError::Io { path: path(), source })?.len();
+        if u64::from(entry.offset) + u64::from(entry.size) > len {
+            return Err(StorageError::OutOfBounds {
+                archive_id: entry.archive_id,
+                offset: entry.offset,
+                size: entry.size,
+                len,
+            });
+        }
         file.seek(SeekFrom::Start(u64::from(entry.offset)))
             .map_err(|source| StorageError::Io { path: path(), source })?;
         let mut raw = vec![0u8; entry.size as usize];
@@ -260,6 +270,9 @@ pub enum StorageError {
 
     #[error("data.{archive_id:03} has no BLTE payload at offset {offset}")]
     NotBlte { archive_id: u16, offset: u32 },
+
+    #[error("data.{archive_id:03} is {len} bytes, too short for {size} bytes at offset {offset}")]
+    OutOfBounds { archive_id: u16, offset: u32, size: u32, len: u64 },
 
     #[error("could not decode the file in data.{archive_id:03} at offset {offset}")]
     Decode {
@@ -378,6 +391,25 @@ mod tests {
         assert!(matches!(
             storage.read_entry(&marker),
             Err(StorageError::IsArchiveMarker { archive_id: 7 })
+        ));
+    }
+
+    #[test]
+    fn an_entry_past_the_end_of_its_archive_is_refused_before_reading() {
+        let dir = scratch("bounds");
+        let data = dir.join("Data").join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join(archive_name(2)), [0u8; 100]).unwrap();
+
+        let entry = Entry { key: [0x11; 9], archive_id: 2, offset: 64, size: u32::MAX };
+        let mut index = Index::new(entry.bucket());
+        index.insert(entry);
+        index.save_new_generation(&data).unwrap();
+
+        let mut storage = Storage::open(&dir).unwrap();
+        assert!(matches!(
+            storage.read_raw(&entry),
+            Err(StorageError::OutOfBounds { archive_id: 2, len: 100, .. })
         ));
     }
 
