@@ -295,17 +295,19 @@ impl Lightforge {
 
     /// Status, progress, and every action for the selected product.
     pub(crate) fn action_panel(&self, action: &ActionState) -> Element<'_, Message> {
-        let color = match action {
-            ActionState::Install => theme::INSTALL,
-            ActionState::Update { .. } => theme::UPDATE,
-            ActionState::Play => theme::PLAY,
-            ActionState::Downloading(_) | ActionState::Paused(_) | ActionState::Queued => {
-                theme::PAUSE
-            }
-            ActionState::Error { .. } => theme::ERROR,
-            ActionState::Unknown | ActionState::Offline { .. } => theme::PAUSE,
-        };
+        container(
+            row![self.action_details(action), self.action_buttons(action)]
+                .spacing(theme::XL)
+                .align_y(Alignment::Center),
+        )
+        .padding(theme::LG)
+        .style(theme::floating)
+        .into()
+    }
 
+    /// The left of the panel: branch, status, progress or the installed
+    /// version, optional content, and the links under them.
+    fn action_details(&self, action: &ActionState) -> Element<'_, Message> {
         let mut left = column![].spacing(theme::SM).width(Length::Fill);
 
         // The branch belongs here rather than in the header: it is not
@@ -400,6 +402,11 @@ impl Lightforge {
             ));
         }
 
+        left.push(self.product_links()).into()
+    }
+
+    /// Manage Addons, Game Settings, Manage Subscription.
+    fn product_links(&self) -> Element<'_, Message> {
         // Three words in a row with nothing on them read as a caption, not as
         // somewhere to go. A mark in front of each says "this is a control"
         // before the word is read at all.
@@ -429,39 +436,52 @@ impl Lightforge {
             .style(theme::ghost)
             .padding(theme::tap([theme::XS, theme::SM]))
         };
-
-        left = left.push(
-            row![
-                // Addons are already per-product, the screen titles itself
-                // with the selection and every task takes its code, so this
-                // is navigation, not a second copy of it. Disabled until
-                // there is an install to put an addon into.
-                self.ring(
-                    focus::Target::Addons,
+        row![
+            // Addons are already per-product, the screen titles itself
+            // with the selection and every task takes its code, so this
+            // is navigation, not a second copy of it. Disabled until
+            // there is an install to put an addon into.
+            self.ring(
+                focus::Target::Addons,
+                self.local.version.is_some().then_some(Message::Show(Screen::Addons)),
+                link(
+                    package_icon(),
+                    "Manage Addons",
                     self.local.version.is_some().then_some(Message::Show(Screen::Addons)),
-                    link(
-                        package_icon(),
-                        "Manage Addons",
-                        self.local.version.is_some().then_some(Message::Show(Screen::Addons)),
-                    ),
                 ),
-                self.ring(
-                    focus::Target::GameSettings,
-                    Some(Message::OpenGameSettings),
-                    link(sliders_icon(), "Game Settings", Some(Message::OpenGameSettings)),
-                ),
-                self.ring(
-                    focus::Target::Subscription,
-                    Some(Message::ManageSubscription),
-                    link(card_icon(), "Manage Subscription", Some(Message::ManageSubscription)),
-                ),
-            ]
-            // Each link now carries its own air, so the row's gap only has to
-            // keep two hover fills from touching; [`theme::MD`] on top of that
-            // padding would read as three separate groups.
-            .spacing(theme::XS)
-            .align_y(Alignment::Center),
-        );
+            ),
+            self.ring(
+                focus::Target::GameSettings,
+                Some(Message::OpenGameSettings),
+                link(sliders_icon(), "Game Settings", Some(Message::OpenGameSettings)),
+            ),
+            self.ring(
+                focus::Target::Subscription,
+                Some(Message::ManageSubscription),
+                link(card_icon(), "Manage Subscription", Some(Message::ManageSubscription)),
+            ),
+        ]
+        // Each link now carries its own air, so the row's gap only has to
+        // keep two hover fills from touching; [`theme::MD`] on top of that
+        // padding would read as three separate groups.
+        .spacing(theme::XS)
+        .align_y(Alignment::Center)
+        .into()
+    }
+
+    /// The right of the panel: the primary action with its cog, Battle.net
+    /// under it, and the release date when there is one.
+    fn action_buttons(&self, action: &ActionState) -> Element<'_, Message> {
+        let color = match action {
+            ActionState::Install => theme::INSTALL,
+            ActionState::Update { .. } => theme::UPDATE,
+            ActionState::Play => theme::PLAY,
+            ActionState::Downloading(_) | ActionState::Paused(_) | ActionState::Queued => {
+                theme::PAUSE
+            }
+            ActionState::Error { .. } => theme::ERROR,
+            ActionState::Unknown | ActionState::Offline { .. } => theme::PAUSE,
+        };
 
         // Battle.net's own words for a game that downloads before it opens.
         // A caption and a label only: PLAY stays PLAY, because whether the
@@ -540,7 +560,7 @@ impl Lightforge {
             self.gear_open.then(|| self.gear_menu()),
         );
 
-        let right = column![
+        column![
             control,
             self.ring(
                 focus::Target::LaunchViaBattleNet,
@@ -554,11 +574,7 @@ impl Lightforge {
         .push(release_date.map(|date| muted(servers_open(date), theme::CAPTION)))
         .spacing(theme::SM)
         .align_x(Alignment::Center)
-        .width(Length::Shrink);
-
-        container(row![left, right].spacing(theme::XL).align_y(Alignment::Center))
-            .padding(theme::LG)
-            .style(theme::floating)
-            .into()
+        .width(Length::Shrink)
+        .into()
     }
 }

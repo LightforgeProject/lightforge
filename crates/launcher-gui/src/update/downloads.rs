@@ -4,6 +4,14 @@ use crate::*;
 
 impl Lightforge {
     pub(crate) fn update_downloads(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        self.update_transfer(message)
+            .or_else(|m| self.update_transfer_ended(m))
+            .or_else(|m| self.update_transfer_cancel(m))
+            .or_else(|m| self.update_download_limits(m))
+    }
+
+    /// A transfer under way: its progress, pausing and resuming, and the update check that starts one.
+    fn update_transfer(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
             Message::Tick => {
                 if let Some(rx) = &self.setup_rx {
@@ -55,6 +63,89 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
+            Message::PauseDownload(code) => {
+                self.pause(&code);
+                Task::none()
+            }
+
+            Message::ResumeDownload(code) => {
+                // Its game is running and has the store open: it goes back in
+                // the queue when the game exits, as pre-flight arranged.
+                if self.busy && self.launching.as_ref() == Some(&code) {
+                    if !self.resume_after_play.contains(&code) {
+                        self.resume_after_play.push(code);
+                    }
+                    self.status = "resumes when the game closes".to_owned();
+                    return Ok(Task::none());
+                }
+                // Back to the end of the queue rather than jumping the line:
+                // whatever is running was started first.
+                if let Some(at) = self.queue.iter().position(|d| d.code == code) {
+                    self.queue[at].stage = Stage::Queued;
+                    self.queue[at].sample.stage = "queued".to_owned();
+                }
+                self.pump()
+            }
+
+            Message::PauseWhilePlaying(on) => {
+                self.config.pause_downloads_while_playing = on;
+                self.save_config();
+                Task::none()
+            }
+
+            Message::CheckForUpdates => {
+                self.gear_open = false;
+                self.busy = true;
+                self.error = None;
+                self.status = "checking for updates…".to_owned();
+                let code = self.selected.code.clone();
+                Task::perform(
+                    tasks::offerings(
+                        self.http.clone(),
+                        code.clone(),
+                        self.config.region,
+                        self.opted_optional(&code),
+                        None,
+                    ),
+                    move |result| Message::CheckedForUpdates(code.clone(), Box::new(result)),
+                )
+            }
+
+            Message::CheckedForUpdates(code, result) => {
+                self.busy = false;
+                match *result {
+                    Ok(offerings) => {
+                        // The point of the round trip: the optional list is
+                        // only knowable from the manifest, and this is the
+                        // cheap way to learn it. Kept whichever product is
+                        // showing by now; the rest only describes this one.
+                        self.remember_optional(&code, offerings.optional.clone());
+                        if code != self.selected.code {
+                            return Ok(Task::none());
+                        }
+                        let current = self.local.version.as_deref() == Some(
+                            offerings.remote.versions_name.as_str(),
+                        );
+                        self.remote = Some(offerings.remote.clone());
+                        self.status = match current {
+                            true => format!("up to date on {}", offerings.remote.versions_name),
+                            false => {
+                                format!("{} is available", offerings.remote.versions_name)
+                            }
+                        };
+                    }
+                    Err(e) => self.error = Some(e.into()),
+                }
+                Task::none()
+            }
+            other => return Err(other),
+        })
+    }
+
+    /// A transfer ending, however it ended.
+    fn update_transfer_ended(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::Downloaded(code, result) => {
                 // A run a launch paused stops as cancelled, and is still owed
                 // its restart when the game exits: `finished` would forget
@@ -161,32 +252,18 @@ impl Lightforge {
                     }
                 }
             }
-            Message::PauseDownload(code) => {
-                self.pause(&code);
-                Task::none()
-            }
-            Message::ResumeDownload(code) => {
-                // Its game is running and has the store open: it goes back in
-                // the queue when the game exits, as pre-flight arranged.
-                if self.busy && self.launching.as_ref() == Some(&code) {
-                    if !self.resume_after_play.contains(&code) {
-                        self.resume_after_play.push(code);
-                    }
-                    self.status = "resumes when the game closes".to_owned();
-                    return Ok(Task::none());
-                }
-                // Back to the end of the queue rather than jumping the line:
-                // whatever is running was started first.
-                if let Some(at) = self.queue.iter().position(|d| d.code == code) {
-                    self.queue[at].stage = Stage::Queued;
-                    self.queue[at].sample.stage = "queued".to_owned();
-                }
-                self.pump()
-            }
+            other => return Err(other),
+        })
+    }
+
+    /// Cancelling a transfer, and the cleanup after it.
+    fn update_transfer_cancel(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::CancelDownload(code) => {
                 self.drop_transfer(&code);
                 self.pump()
             }
+
             Message::AskCancelDownload(code) => {
                 self.gear_open = false;
                 if !self.queue.iter().any(|d| d.code == code) {
@@ -209,10 +286,12 @@ impl Lightforge {
                 self.cancel_dialog = Some(CancelDialog { code, label, installed });
                 Task::none()
             }
+
             Message::CancelDownloadDismiss => {
                 self.cancel_dialog = None;
                 Task::none()
             }
+
             Message::CancelCleaned(code, result) => {
                 self.discarding = None;
                 let label = self
@@ -246,6 +325,7 @@ impl Lightforge {
                     self.pump(),
                 ])
             }
+
             Message::CancelDownloadConfirm { delete } => {
                 let Some(dialog) = self.cancel_dialog.take() else {
                     return Ok(Task::none());
@@ -272,6 +352,13 @@ impl Lightforge {
                 self.delete_after_cancel.push(code);
                 self.pump()
             }
+            other => return Err(other),
+        })
+    }
+
+    /// Lightforge's own download limit, and Battle.net's.
+    fn update_download_limits(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::DownloadLimitChanged(value) => {
                 // Digits only, so the field cannot hold something that is not
                 // a speed. Clearing it is how you say "unlimited".
@@ -284,10 +371,12 @@ impl Lightforge {
                 self.save_config();
                 Task::none()
             }
+
             Message::BattleNetLimitRead(mbps) => {
                 self.bnet_limit_input = mbps.map(|v| v.to_string()).unwrap_or_default();
                 Task::none()
             }
+
             Message::BattleNetLimitChanged(value) => {
                 self.bnet_limit_input = value.chars().filter(char::is_ascii_digit).collect();
                 let mbps = self.bnet_limit_input.trim().parse::<u64>().ok().filter(|v| *v > 0);
@@ -300,62 +389,13 @@ impl Lightforge {
                     Message::BattleNetLimitWritten,
                 )
             }
+
             Message::BattleNetLimitWritten(result) => {
                 if let Err(e) = result {
                     self.error = Some(e.into());
                 }
                 Task::none()
             }
-            Message::PauseWhilePlaying(on) => {
-                self.config.pause_downloads_while_playing = on;
-                self.save_config();
-                Task::none()
-            }
-            Message::CheckForUpdates => {
-                self.gear_open = false;
-                self.busy = true;
-                self.error = None;
-                self.status = "checking for updates…".to_owned();
-                let code = self.selected.code.clone();
-                Task::perform(
-                    tasks::offerings(
-                        self.http.clone(),
-                        code.clone(),
-                        self.config.region,
-                        self.opted_optional(&code),
-                        None,
-                    ),
-                    move |result| Message::CheckedForUpdates(code.clone(), Box::new(result)),
-                )
-            }
-            Message::CheckedForUpdates(code, result) => {
-                self.busy = false;
-                match *result {
-                    Ok(offerings) => {
-                        // The point of the round trip: the optional list is
-                        // only knowable from the manifest, and this is the
-                        // cheap way to learn it. Kept whichever product is
-                        // showing by now; the rest only describes this one.
-                        self.remember_optional(&code, offerings.optional.clone());
-                        if code != self.selected.code {
-                            return Ok(Task::none());
-                        }
-                        let current = self.local.version.as_deref() == Some(
-                            offerings.remote.versions_name.as_str(),
-                        );
-                        self.remote = Some(offerings.remote.clone());
-                        self.status = match current {
-                            true => format!("up to date on {}", offerings.remote.versions_name),
-                            false => {
-                                format!("{} is available", offerings.remote.versions_name)
-                            }
-                        };
-                    }
-                    Err(e) => self.error = Some(e.into()),
-                }
-                Task::none()
-            }
-
             other => return Err(other),
         })
     }

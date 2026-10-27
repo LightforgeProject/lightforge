@@ -61,7 +61,15 @@ mod tests {
         ("downloads", include_str!("downloads.rs")),
         ("addons", include_str!("addons.rs")),
         ("game", include_str!("game.rs")),
-        ("storage", include_str!("storage.rs")),
+        (
+            "storage",
+            concat!(
+                include_str!("storage/drives.rs"),
+                include_str!("storage/uninstall.rs"),
+                include_str!("storage/repair.rs"),
+                include_str!("storage/caches.rs"),
+            ),
+        ),
         ("setup", include_str!("setup.rs")),
         ("settings", include_str!("settings.rs")),
         ("navigation", include_str!("navigation.rs")),

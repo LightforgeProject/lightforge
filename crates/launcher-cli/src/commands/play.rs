@@ -1,5 +1,6 @@
 //! Starting a game, and the pre-flight in front of it.
 
+use super::{managed_products, print_preflight, proton_runner};
 use crate::*;
 
 pub(crate) fn play(ctx: Ctx, product: String, proton: Option<String>, dry_run: bool) -> Result<()> {

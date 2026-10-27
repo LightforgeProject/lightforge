@@ -4,6 +4,13 @@ use crate::*;
 
 impl Lightforge {
     pub(crate) fn update_launch(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        self.update_play(message)
+            .or_else(|m| self.update_battle_net_launch(m))
+            .or_else(|m| self.update_install_dialog(m))
+    }
+
+    /// Play and Stop, and watching the game in between.
+    fn update_play(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
             Message::Primary => {
                 // Pressed on a game only being looked at: it joins the band.
@@ -45,18 +52,21 @@ impl Lightforge {
                     }
                 }
             }
+
             Message::GameWatch => {
                 if !(self.busy && self.launching.is_some()) {
                     return Ok(Task::none());
                 }
                 Task::perform(tasks::game_running(self.layout.clone()), Message::GameSeen)
             }
+
             Message::GameSeen(up) => {
                 // A scan that was out when the session ended must not bring
                 // the button back.
                 self.game_up = up && self.busy && self.launching.is_some();
                 Task::none()
             }
+
             Message::AskStopGame => {
                 if !self.game_up || self.stopping {
                     return Ok(Task::none());
@@ -71,10 +81,12 @@ impl Lightforge {
                 self.stop_dialog = Some(StopDialog { label });
                 Task::none()
             }
+
             Message::StopGameDismiss => {
                 self.stop_dialog = None;
                 Task::none()
             }
+
             Message::StopGameConfirm => {
                 self.stop_dialog = None;
                 if !self.game_up || self.stopping {
@@ -84,6 +96,7 @@ impl Lightforge {
                 self.status = "stopping the game…".to_owned();
                 Task::perform(tasks::stop_game(self.layout.clone()), Message::GameStopped)
             }
+
             Message::GameStopped(result) => {
                 // The launch's own watcher sees the process go and sends
                 // `Launched`, which is what hands PLAY back; this only
@@ -96,6 +109,7 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::Launched(result) => {
                 self.game_up = false;
                 self.stopping = false;
@@ -146,6 +160,13 @@ impl Lightforge {
                     ),
                 ])
             }
+            other => return Err(other),
+        })
+    }
+
+    /// Going through Battle.net: hand-offs, the client itself, and the pre-flight before it.
+    fn update_battle_net_launch(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::HandoffStarted(result) => {
                 match result {
                     // Found it. `busy` stays set and the queue stays paused
@@ -194,18 +215,22 @@ impl Lightforge {
                     Err(e) => self.update(Message::Launched(Err(e))),
                 }
             }
+
             Message::BattleNet => {
                 self.track_selected();
                 self.preflight(Launch::BattleNet)
             }
+
             Message::InstallViaBattleNet => {
                 self.track_selected();
                 self.preflight(Launch::Install)
             }
+
             Message::OpenBattleNet => {
                 self.track_selected();
                 self.preflight(Launch::Client)
             }
+
             Message::PreflightDone(what, result) => {
                 if let Err(e) = result {
                     self.busy = false;
@@ -224,12 +249,14 @@ impl Lightforge {
                 }
                 self.start_launch(what)
             }
+
             Message::ManageSubscription => {
                 if let Err(e) = tasks::open_url(ACCOUNT_URL) {
                     self.error = Some(e.into());
                 }
                 Task::none()
             }
+
             Message::OpenFiles => {
                 let dir = self.layout.product_dir(&self.selected.code);
                 let dir = if dir.is_dir() { dir } else { self.layout.games_root() };
@@ -238,6 +265,13 @@ impl Lightforge {
                 }
                 Task::none()
             }
+            other => return Err(other),
+        })
+    }
+
+    /// The install dialog, and the downgrade warning in front of a launch.
+    fn update_install_dialog(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::InstallOffered(code, result) => {
                 if let Ok(offerings) = result.as_ref() {
                     self.remember_optional(&code, offerings.optional.clone());
@@ -250,12 +284,14 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::InstallHighRes(on) => {
                 if let Some(dialog) = self.install_dialog.as_mut() {
                     dialog.high_res = on;
                 }
                 Task::none()
             }
+
             Message::InstallTarget(index) => {
                 if let Some(dialog) = self.install_dialog.as_mut() {
                     if index < dialog.targets.len() {
@@ -264,15 +300,19 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::InstallCancel => {
                 self.install_dialog = None;
                 Task::none()
             }
+
             Message::InstallStart => self.start_install(),
+
             Message::DowngradeCancel => {
                 self.downgrade_dialog = None;
                 Task::none()
             }
+
             Message::DowngradeConfirm => {
                 let Some(dialog) = self.downgrade_dialog.take() else {
                     return Ok(Task::none());
@@ -282,7 +322,6 @@ impl Lightforge {
                 self.downgrade_ok.insert(dialog.pick);
                 self.preflight(dialog.what)
             }
-
             other => return Err(other),
         })
     }

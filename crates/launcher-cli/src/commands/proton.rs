@@ -1,5 +1,6 @@
 //! Proton builds, the prefix and first-run setup.
 
+use super::proton_runner;
 use crate::*;
 
 pub(crate) fn proton() -> Result<()> {
@@ -264,4 +265,16 @@ pub(crate) async fn setup(ctx: Ctx, status: bool, proton: Option<String>) -> Res
 
     println!("\nready           {}", final_status.is_ready());
     Ok(())
+}
+
+/// One-line rendering of the symlink's state for the CLI.
+fn describe_link(state: &LinkState) -> String {
+    match state {
+        LinkState::Correct => "ok".to_owned(),
+        LinkState::Missing => "missing".to_owned(),
+        LinkState::Pending(t) => format!("ok -> {} (not downloaded yet)", t.display()),
+        LinkState::Mislinked(t) => format!("points at {}", t.display()),
+        LinkState::OccupiedEmpty => "empty directory in the way".to_owned(),
+        LinkState::Occupied => "a real directory with files in it".to_owned(),
+    }
 }
