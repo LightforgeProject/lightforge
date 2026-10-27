@@ -73,3 +73,27 @@ jobs:
 
       - name: Check
         run: cargo check --workspace --locked
+
+  cli-doc:
+    name: docs/CLI.md matches the binary
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install libudev
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libudev-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check
+        run: make check-cli-doc
+
+  deny:
+    name: Advisories, licenses and sources
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: EmbarkStudios/cargo-deny-action@v2

@@ -1,0 +1,28 @@
+name: glibc ceiling
+
+# What `make release` asserts, run ahead of a release instead of during one:
+# a dependency that starts demanding a newer glibc shows up here first.
+on:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+jobs:
+  glibc:
+    name: Release build stays within glibc 2.36
+    runs-on: ubuntu-24.04
+    # The image `make release` builds in. Its glibc is the ceiling.
+    container: docker.io/library/rust:bookworm
+    env:
+      CARGO_TARGET_DIR: target/container
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install libudev
+        run: apt-get update && apt-get install --yes --no-install-recommends pkg-config libudev-dev
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Check
+        run: make check-glibc
