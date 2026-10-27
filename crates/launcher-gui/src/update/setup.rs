@@ -4,12 +4,21 @@ use crate::*;
 
 impl Lightforge {
     pub(crate) fn update_setup(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        self.update_setup_run(message)
+            .or_else(|m| self.update_setup_choices(m))
+            .or_else(|m| self.update_proton_builds(m))
+    }
+
+    /// What setup found, and running it.
+    fn update_setup_run(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
             Message::CopyRuntimeCommand(command) => iced::clipboard::write(command),
+
             Message::RecheckRuntime => Task::perform(
                 provision::status(self.layout.clone(), self.config.clone()),
                 |status| Message::SetupStatus(status.map(Box::new)),
             ),
+
             Message::SetupStatus(status) => {
                 let status = status.map(|boxed| *boxed);
                 let measure = match &status {
@@ -76,6 +85,7 @@ impl Lightforge {
                 self.setup = status;
                 Task::batch([measure, opened, fetch])
             }
+
             // Quiet either way: it was nobody's request. A failure leaves the
             // build they have, and the next start asks again.
             Message::TestedProtonFetched(result) => match result {
@@ -85,7 +95,9 @@ impl Lightforge {
                 ),
                 Err(_) => Task::none(),
             },
+
             Message::Wizard(msg) => wizard::update(self, msg),
+
             Message::InstallBattleNet => {
                 self.config.battle_net_declined = false;
                 self.save_config();
@@ -93,6 +105,7 @@ impl Lightforge {
                 // steps before it are already done, so this is the one step.
                 Task::done(Message::RunSetup)
             }
+
             Message::RunSetup => {
                 let (tx, rx) = tokio::sync::watch::channel(provision::Progress::default());
                 self.setup_rx = Some(rx);
@@ -110,6 +123,7 @@ impl Lightforge {
                     |result| Message::SetupFinished(result.map(Box::new)),
                 )
             }
+
             Message::SetupFinished(result) => {
                 self.setup_running = false;
                 self.setup_rx = None;
@@ -130,16 +144,25 @@ impl Lightforge {
                     }
                 }
             }
+            other => return Err(other),
+        })
+    }
+
+    /// The Proton pins and the install location.
+    fn update_setup_choices(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::PinBattleNetProton(choice) => {
                 self.config.battle_net_proton = ProtonPin::from(choice.0);
                 self.save_config();
                 Task::none()
             }
+
             Message::PinDefaultProton(choice) => {
                 self.config.default_proton = ProtonPin::from(choice.0);
                 self.save_config();
                 Task::none()
             }
+
             Message::PinProductProton(code, choice) => {
                 if let Some(product) = self.config.product_mut(&code) {
                     product.profile.proton_ge_version = choice.0;
@@ -147,6 +170,61 @@ impl Lightforge {
                 self.save_config();
                 Task::none()
             }
+
+            Message::OpenConfigFolder => {
+                if let Some(dirs) = &self.dirs {
+                    if let Err(e) = tasks::open_path(dirs.config_dir().to_path_buf()) {
+                        self.status = e;
+                    }
+                }
+                Task::none()
+            }
+
+            Message::OpenLibrary => {
+                let root = self.layout.root().to_path_buf();
+                let dir = match root.is_dir() {
+                    true => root,
+                    // Not created yet: show where it would go.
+                    false => root
+                        .ancestors()
+                        .find(|p| p.is_dir())
+                        .map(Path::to_path_buf)
+                        .unwrap_or(root),
+                };
+                if let Err(e) = tasks::open_path(dir) {
+                    self.error = Some(e.into());
+                }
+                Task::none()
+            }
+
+            Message::LocationChanged(value) => {
+                self.location_input = value;
+                Task::none()
+            }
+
+            Message::UseLocation => {
+                match self.relocate() {
+                    Ok(()) => Task::batch([
+                        Task::perform(
+                            provision::status(self.layout.clone(), self.config.clone()),
+                            |status| Message::SetupStatus(status.map(Box::new)),
+                        ),
+                        self.measure_storage(),
+                        self.reload(self.selected.code.clone()),
+                    ]),
+                    Err(e) => {
+                        self.error = Some(e.into());
+                        Task::none()
+                    }
+                }
+            }
+            other => return Err(other),
+        })
+    }
+
+    /// Proton builds: checking for new ones, installing and removing them.
+    fn update_proton_builds(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::CheckProton => {
                 // Runs with no build installed too: the release list is what
                 // fills the install picker, and needing a build before you can
@@ -162,6 +240,7 @@ impl Lightforge {
                     Message::ProtonChecked,
                 )
             }
+
             Message::ProtonChecked(result) => {
                 match result {
                     Ok(releases) => {
@@ -179,6 +258,7 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::OpenProtonInstaller => {
                 self.close_panels();
                 self.proton_installer = Some(ProtonCategory::GloriousEggroll);
@@ -187,14 +267,17 @@ impl Lightforge {
                     false => Task::none(),
                 }
             }
+
             Message::CloseProtonInstaller => {
                 self.proton_installer = None;
                 Task::none()
             }
+
             Message::ProtonInstallerTab(tab) => {
                 self.proton_installer = Some(tab);
                 Task::none()
             }
+
             Message::InstallSteamProton(app_id) => {
                 let Some(tool) = proton::STEAM_TOOLS.iter().find(|t| t.app_id == app_id) else {
                     return Ok(Task::none());
@@ -209,6 +292,7 @@ impl Lightforge {
                 self.steam_proton_asked.insert(app_id);
                 Task::none()
             }
+
             Message::InstallProton(version) => {
                 if self.setup_running {
                     return Ok(Task::none());
@@ -230,6 +314,7 @@ impl Lightforge {
                 // a Proton build would quietly provision the whole thing.
                 Task::perform(provision::install_build(version, tx), Message::ProtonInstalled)
             }
+
             Message::ProtonInstalled(result) => {
                 self.setup_running = false;
                 self.setup_rx = None;
@@ -249,6 +334,7 @@ impl Lightforge {
                     }
                 }
             }
+
             Message::RemoveProton(version) => {
                 let Some(build) = self
                     .setup
@@ -264,6 +350,7 @@ impl Lightforge {
                     Message::ProtonRemoved,
                 )
             }
+
             Message::ProtonRemoved(result) => {
                 match result {
                     Ok(note) => {
@@ -279,55 +366,11 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::ProtonSizes(sizes) => {
                 self.proton_sizes = sizes.into_iter().collect();
                 Task::none()
             }
-            Message::OpenConfigFolder => {
-                if let Some(dirs) = &self.dirs {
-                    if let Err(e) = tasks::open_path(dirs.config_dir().to_path_buf()) {
-                        self.status = e;
-                    }
-                }
-                Task::none()
-            }
-            Message::OpenLibrary => {
-                let root = self.layout.root().to_path_buf();
-                let dir = match root.is_dir() {
-                    true => root,
-                    // Not created yet: show where it would go.
-                    false => root
-                        .ancestors()
-                        .find(|p| p.is_dir())
-                        .map(Path::to_path_buf)
-                        .unwrap_or(root),
-                };
-                if let Err(e) = tasks::open_path(dir) {
-                    self.error = Some(e.into());
-                }
-                Task::none()
-            }
-            Message::LocationChanged(value) => {
-                self.location_input = value;
-                Task::none()
-            }
-            Message::UseLocation => {
-                match self.relocate() {
-                    Ok(()) => Task::batch([
-                        Task::perform(
-                            provision::status(self.layout.clone(), self.config.clone()),
-                            |status| Message::SetupStatus(status.map(Box::new)),
-                        ),
-                        self.measure_storage(),
-                        self.reload(self.selected.code.clone()),
-                    ]),
-                    Err(e) => {
-                        self.error = Some(e.into());
-                        Task::none()
-                    }
-                }
-            }
-
             other => return Err(other),
         })
     }

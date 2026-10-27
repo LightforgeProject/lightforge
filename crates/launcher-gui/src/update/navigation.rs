@@ -4,6 +4,12 @@ use crate::*;
 
 impl Lightforge {
     pub(crate) fn update_navigation(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        self.update_focus_moves(message)
+            .or_else(|m| self.update_focus_settle(m))
+    }
+
+    /// An arrow, a press, or typing finishing: where the ring goes.
+    fn update_focus_moves(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
             Message::Nav(from, input) => {
                 let now = Instant::now();
@@ -61,11 +67,13 @@ impl Lightforge {
                     pad::Input::Back => Message::FocusBack,
                 })
             }
+
             Message::TypingDone(field) => {
                 self.focus = Some(field);
                 self.steam_keyboard_closed();
                 Task::none()
             }
+
             Message::FocusStep(step) => {
                 if self.keys_belong_elsewhere() {
                     return Ok(Task::none());
@@ -102,6 +110,7 @@ impl Lightforge {
                     None => self.scroll_page(step, Some(&current)),
                 }
             }
+
             Message::FocusPress => {
                 if self.keys_belong_elsewhere() {
                     return Ok(Task::none());
@@ -137,6 +146,13 @@ impl Lightforge {
                 self.focus_entering = FOCUS_ENTER_FRAMES;
                 Task::batch([pressed, focus_settle()])
             }
+            other => return Err(other),
+        })
+    }
+
+    /// Where the ring lands after the page has moved, Back, and hiding it.
+    fn update_focus_settle(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::FocusSettle => {
                 if self.focus_entering == 0 {
                     return Ok(Task::none());
@@ -200,6 +216,7 @@ impl Lightforge {
                     None => Task::none(),
                 }
             }
+
             Message::FocusBack => {
                 if self.keys_belong_elsewhere() {
                     return Ok(Task::none());
@@ -239,6 +256,7 @@ impl Lightforge {
                 self.focus_entering = FOCUS_ENTER_FRAMES;
                 Task::batch([closed, focus_settle()])
             }
+
             Message::FocusHidden => {
                 if let Some(was) = self.focus.take() {
                     self.focus_resume = Some(was);
@@ -247,7 +265,6 @@ impl Lightforge {
                 self.focus_entering = 0;
                 Task::none()
             }
-
             other => return Err(other),
         })
     }

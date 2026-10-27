@@ -4,6 +4,15 @@ use crate::*;
 
 impl Lightforge {
     pub(crate) fn update_addons(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        self.update_addon_choices(message)
+            .or_else(|m| self.update_addon_sharing(m))
+            .or_else(|m| self.update_addon_one(m))
+            .or_else(|m| self.update_addon_updates(m))
+            .or_else(|m| self.update_addon_list(m))
+    }
+
+    /// Per-addon choices: channel, ignore, auto-update, pin, and their defaults.
+    fn update_addon_choices(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
             Message::DismissUnavailable(name) => {
                 if let Some(report) = &mut self.addon_report {
@@ -11,6 +20,7 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::AddonChannelDefault(choice) => {
                 self.config.addon_channel = choice.0;
                 self.save_config();
@@ -18,6 +28,7 @@ impl Lightforge {
                 // check or update, which is also when it could matter.
                 Task::none()
             }
+
             Message::AddonChannelFor(provider, id, choice) => {
                 let Some(options) = addonwork::manage_options(
                     &self.layout,
@@ -34,10 +45,12 @@ impl Lightforge {
                     |listing| Message::AddonsListed(Box::new(listing)),
                 )
             }
+
             Message::AddonMenu(which) => {
                 self.addon_menu_open = which;
                 Task::none()
             }
+
             Message::AddonIgnore(provider, id, ignored) => {
                 self.addon_menu_open = None;
                 let Some(options) = addonwork::manage_options(
@@ -57,6 +70,7 @@ impl Lightforge {
                     |listing| Message::AddonsListed(Box::new(listing)),
                 )
             }
+
             Message::AddonAutoUpdate(provider, id, choice) => {
                 self.addon_menu_open = None;
                 let Some(options) = addonwork::manage_options(
@@ -74,10 +88,47 @@ impl Lightforge {
                     |listing| Message::AddonsListed(Box::new(listing)),
                 )
             }
+
+            Message::AddonPin(provider, id, file_id) => {
+                self.addon_menu_open = None;
+                let Some(options) = addonwork::manage_options(
+                    &self.layout,
+                    &self.selected.code,
+                    self.config.addon_channel,
+                ) else {
+                    return Ok(Task::none());
+                };
+                if let Err(e) = manage::set_pinned(&options, &provider, &id, file_id) {
+                    self.error = Some(Problem::of(&e));
+                }
+                Task::perform(
+                    addonwork::list(self.layout.clone(), self.selected.code.clone()),
+                    |listing| Message::AddonsListed(Box::new(listing)),
+                )
+            }
+
+            Message::AddonAutoUpdateDefault(on) => {
+                self.config.addon_auto_update = on;
+                self.save_config();
+                // Nothing is fetched here: the new default applies at the next
+                // pass, which is also the first time it could matter.
+                Task::perform(
+                    addonwork::list(self.layout.clone(), self.selected.code.clone()),
+                    |listing| Message::AddonsListed(Box::new(listing)),
+                )
+            }
+            other => return Err(other),
+        })
+    }
+
+    /// Taking in hand-installed addons, and importing or exporting a list.
+    fn update_addon_sharing(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::ImportPinned(on) => {
                 self.import_pinned = on;
                 Task::none()
             }
+
             Message::AdoptAddons => {
                 if self.addons_locked() {
                     return Ok(Task::none());
@@ -95,6 +146,7 @@ impl Lightforge {
                     |result| Message::AdoptFinished(Box::new(result)),
                 )
             }
+
             Message::AdoptFinished(result) => {
                 self.addons_busy = false;
                 match *result {
@@ -117,6 +169,65 @@ impl Lightforge {
                     }
                 }
             }
+
+            Message::TokenChanged(value) => {
+                self.token_input = value;
+                Task::none()
+            }
+
+            Message::ImportToken => {
+                if self.addons_locked() {
+                    return Ok(Task::none());
+                }
+                let token = self.token_input.trim().to_owned();
+                if token.is_empty() {
+                    return Ok(Task::none());
+                }
+                let (tx, rx) = tokio::sync::watch::channel(addonwork::Progress::default());
+                self.addon_rx = Some(rx);
+                self.addons_busy = true;
+                self.addon_report = None;
+                self.addon_report_tab = AddonTab::Import;
+                self.error = None;
+
+                Task::perform(
+                    addonwork::import(
+                        self.http.clone(),
+                        self.layout.clone(),
+                        self.selected.code.clone(),
+                        token,
+                        self.config.addon_channel,
+                        self.import_pinned,
+                        tx,
+                    ),
+                    |result| Message::AddonsFinished(result.map(Box::new)),
+                )
+            }
+
+            Message::ExportAddons => {
+                match addonwork::export(&self.layout, &self.selected.code) {
+                    Ok(token) => {
+                        self.export_token = token;
+                        self.status = "export ready".to_owned();
+                    }
+                    Err(e) => self.error = Some(e.into()),
+                }
+                Task::none()
+            }
+
+            Message::CopyExport => iced::clipboard::write(self.export_token.clone()),
+
+            Message::ExportEdited(text) => {
+                self.export_token = text;
+                Task::none()
+            }
+            other => return Err(other),
+        })
+    }
+
+    /// One addon: its detail card, and installing, reinstalling or picking a version of it.
+    fn update_addon_one(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::ShowAddonDetail(provider, id, name) => {
                 self.addon_menu_open = None;
                 // Changelog first for something already installed, About for
@@ -139,6 +250,7 @@ impl Lightforge {
                     |result| Message::AddonDetailLoaded(Box::new(result)),
                 )
             }
+
             Message::AddonDetailLoaded(result) => {
                 // Dropped if the card was closed while the request was out,
                 // the same as the version picker: an answer to a question
@@ -151,16 +263,19 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::AddonDetailTab(tab) => {
                 if let Some(detail) = self.addon_detail.as_mut() {
                     detail.tab = tab;
                 }
                 Task::none()
             }
+
             Message::CloseAddonDetail => {
                 self.addon_detail = None;
                 Task::none()
             }
+
             Message::InstallVersion(provider, id, file_id) => {
                 if self.addons_locked() {
                     return Ok(Task::none());
@@ -186,33 +301,64 @@ impl Lightforge {
                     |result| Message::AddonsFinished(result.map(Box::new)),
                 )
             }
-            Message::AddonPin(provider, id, file_id) => {
-                self.addon_menu_open = None;
-                let Some(options) = addonwork::manage_options(
-                    &self.layout,
-                    &self.selected.code,
-                    self.config.addon_channel,
-                ) else {
+
+            Message::InstallAddon(provider, id) => {
+                if self.addons_locked() {
                     return Ok(Task::none());
-                };
-                if let Err(e) = manage::set_pinned(&options, &provider, &id, file_id) {
-                    self.error = Some(Problem::of(&e));
                 }
+                let (tx, rx) = tokio::sync::watch::channel(addonwork::Progress::default());
+                self.addon_rx = Some(rx);
+                self.addons_busy = true;
+                self.addon_report = None;
+                self.addon_report_tab = self.addon_tab;
+                self.error = None;
+
                 Task::perform(
-                    addonwork::list(self.layout.clone(), self.selected.code.clone()),
-                    |listing| Message::AddonsListed(Box::new(listing)),
+                    addonwork::install_one(
+                        self.http.clone(),
+                        self.layout.clone(),
+                        self.selected.code.clone(),
+                        provider,
+                        id,
+                        self.config.addon_channel,
+                        tx,
+                    ),
+                    |result| Message::AddonsFinished(result.map(Box::new)),
                 )
             }
-            Message::AddonAutoUpdateDefault(on) => {
-                self.config.addon_auto_update = on;
-                self.save_config();
-                // Nothing is fetched here: the new default applies at the next
-                // pass, which is also the first time it could matter.
+
+            Message::ReinstallAddon(provider, id) => {
+                if self.addons_locked() {
+                    return Ok(Task::none());
+                }
+                self.addon_menu_open = None;
+                let (tx, rx) = tokio::sync::watch::channel(addonwork::Progress::default());
+                self.addon_rx = Some(rx);
+                self.addons_busy = true;
+                self.addon_report = None;
+                self.addon_report_tab = AddonTab::Mine;
+                self.error = None;
+
                 Task::perform(
-                    addonwork::list(self.layout.clone(), self.selected.code.clone()),
-                    |listing| Message::AddonsListed(Box::new(listing)),
+                    addonwork::reinstall_one(
+                        self.http.clone(),
+                        self.layout.clone(),
+                        self.selected.code.clone(),
+                        provider,
+                        id,
+                        self.config.addon_channel,
+                        tx,
+                    ),
+                    |result| Message::AddonsFinished(result.map(Box::new)),
                 )
             }
+            other => return Err(other),
+        })
+    }
+
+    /// Updating: checking, the bulk update, and the unattended pass before Play.
+    fn update_addon_updates(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::AutoUpdateAddons => {
                 // Never against a running game, which writes SavedVariables
                 // beside the addons and loads them, and never on top of work
@@ -241,6 +387,7 @@ impl Lightforge {
                     |result| Message::AutoUpdateFinished(result.map(|r| r.map(Box::new))),
                 )
             }
+
             Message::AutoUpdateFinished(result) => {
                 self.addon_auto_running = false;
                 let mut tasks = Vec::new();
@@ -274,6 +421,7 @@ impl Lightforge {
                 }
                 Task::batch(tasks)
             }
+
             Message::AddonsListed(listing) => {
                 // A slow listing for the product shown before a switch.
                 if listing.dir != self.layout.addons_dir(&self.selected.code) {
@@ -285,38 +433,7 @@ impl Lightforge {
                 self.addons = *listing;
                 Task::none()
             }
-            Message::TokenChanged(value) => {
-                self.token_input = value;
-                Task::none()
-            }
-            Message::ImportToken => {
-                if self.addons_locked() {
-                    return Ok(Task::none());
-                }
-                let token = self.token_input.trim().to_owned();
-                if token.is_empty() {
-                    return Ok(Task::none());
-                }
-                let (tx, rx) = tokio::sync::watch::channel(addonwork::Progress::default());
-                self.addon_rx = Some(rx);
-                self.addons_busy = true;
-                self.addon_report = None;
-                self.addon_report_tab = AddonTab::Import;
-                self.error = None;
 
-                Task::perform(
-                    addonwork::import(
-                        self.http.clone(),
-                        self.layout.clone(),
-                        self.selected.code.clone(),
-                        token,
-                        self.config.addon_channel,
-                        self.import_pinned,
-                        tx,
-                    ),
-                    |result| Message::AddonsFinished(result.map(Box::new)),
-                )
-            }
             Message::UpdateAddons => {
                 if self.addons_locked() {
                     return Ok(Task::none());
@@ -339,6 +456,7 @@ impl Lightforge {
                     |result| Message::AddonsFinished(result.map(Box::new)),
                 )
             }
+
             Message::AddonsFinished(result) => {
                 self.addons_busy = false;
                 self.addon_rx = None;
@@ -360,33 +478,52 @@ impl Lightforge {
                     }
                 }
             }
-            Message::ArmRemoveAddon(provider, id) => {
-                self.addon_remove_armed = Some((provider, id));
-                Task::none()
+
+            Message::CheckAddonUpdates => {
+                let code = self.selected.code.clone();
+                Task::perform(
+                    addonwork::check_updates(
+                        self.http.clone(),
+                        self.layout.clone(),
+                        code.clone(),
+                        self.config.addon_channel,
+                    ),
+                    move |result| Message::AddonUpdatesChecked(code.clone(), result),
+                )
             }
-            Message::ExportAddons => {
-                match addonwork::export(&self.layout, &self.selected.code) {
-                    Ok(token) => {
-                        self.export_token = token;
-                        self.status = "export ready".to_owned();
-                    }
+
+            Message::AddonUpdatesChecked(code, result) => {
+                if code != self.selected.code {
+                    return Ok(Task::none());
+                }
+                match result {
+                    Ok(statuses) => self.updates = statuses,
                     Err(e) => self.error = Some(e.into()),
                 }
                 Task::none()
             }
-            Message::CopyExport => iced::clipboard::write(self.export_token.clone()),
-            Message::ExportEdited(text) => {
-                self.export_token = text;
+            other => return Err(other),
+        })
+    }
+
+    /// The installed list and the search: filtering, tabs, removing.
+    fn update_addon_list(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
+            Message::ArmRemoveAddon(provider, id) => {
+                self.addon_remove_armed = Some((provider, id));
                 Task::none()
             }
+
             Message::CancelRemoveAddon => {
                 self.addon_remove_armed = None;
                 Task::none()
             }
+
             Message::AddonFilterChanged(text) => {
                 self.addon_filter = text;
                 Task::none()
             }
+
             Message::OpenAddonsDir => {
                 // The layout, not the listing: the listing still names the
                 // previous product's folder until its own scan comes back.
@@ -395,6 +532,7 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::RemoveAddon(provider, id) => {
                 if self.addons_locked() {
                     return Ok(Task::none());
@@ -410,6 +548,7 @@ impl Lightforge {
                     Message::AddonRemoved,
                 )
             }
+
             Message::AddonRemoved(result) => {
                 match result {
                     Ok(folders) => self.status = format!("removed {}", folders.join(", ")),
@@ -420,6 +559,7 @@ impl Lightforge {
                     |listing| Message::AddonsListed(Box::new(listing)),
                 )
             }
+
             Message::AddonTab(tab) => {
                 self.addon_tab = tab;
                 self.error = None;
@@ -436,6 +576,7 @@ impl Lightforge {
                     false => Task::none(),
                 }
             }
+
             Message::SearchChanged(value) => {
                 self.search_input = value;
                 self.search_seq += 1;
@@ -464,6 +605,7 @@ impl Lightforge {
                     Message::SearchSettled,
                 )
             }
+
             Message::SearchSettled(seq) => {
                 // A later keystroke has already scheduled its own search.
                 match seq == self.search_seq && !self.searching {
@@ -471,6 +613,7 @@ impl Lightforge {
                     false => Task::none(),
                 }
             }
+
             Message::RunSearch => {
                 // An empty query is not a no-op: it asks for the most
                 // downloaded addons, which is what the tab shows before the
@@ -487,6 +630,7 @@ impl Lightforge {
                     |outcome| Message::SearchDone(Box::new(outcome)),
                 )
             }
+
             Message::SearchDone(outcome) => {
                 self.searching = false;
                 // Ignore a reply for a query the user has already moved past.
@@ -495,78 +639,6 @@ impl Lightforge {
                 }
                 Task::none()
             }
-            Message::InstallAddon(provider, id) => {
-                if self.addons_locked() {
-                    return Ok(Task::none());
-                }
-                let (tx, rx) = tokio::sync::watch::channel(addonwork::Progress::default());
-                self.addon_rx = Some(rx);
-                self.addons_busy = true;
-                self.addon_report = None;
-                self.addon_report_tab = self.addon_tab;
-                self.error = None;
-
-                Task::perform(
-                    addonwork::install_one(
-                        self.http.clone(),
-                        self.layout.clone(),
-                        self.selected.code.clone(),
-                        provider,
-                        id,
-                        self.config.addon_channel,
-                        tx,
-                    ),
-                    |result| Message::AddonsFinished(result.map(Box::new)),
-                )
-            }
-            Message::ReinstallAddon(provider, id) => {
-                if self.addons_locked() {
-                    return Ok(Task::none());
-                }
-                self.addon_menu_open = None;
-                let (tx, rx) = tokio::sync::watch::channel(addonwork::Progress::default());
-                self.addon_rx = Some(rx);
-                self.addons_busy = true;
-                self.addon_report = None;
-                self.addon_report_tab = AddonTab::Mine;
-                self.error = None;
-
-                Task::perform(
-                    addonwork::reinstall_one(
-                        self.http.clone(),
-                        self.layout.clone(),
-                        self.selected.code.clone(),
-                        provider,
-                        id,
-                        self.config.addon_channel,
-                        tx,
-                    ),
-                    |result| Message::AddonsFinished(result.map(Box::new)),
-                )
-            }
-            Message::CheckAddonUpdates => {
-                let code = self.selected.code.clone();
-                Task::perform(
-                    addonwork::check_updates(
-                        self.http.clone(),
-                        self.layout.clone(),
-                        code.clone(),
-                        self.config.addon_channel,
-                    ),
-                    move |result| Message::AddonUpdatesChecked(code.clone(), result),
-                )
-            }
-            Message::AddonUpdatesChecked(code, result) => {
-                if code != self.selected.code {
-                    return Ok(Task::none());
-                }
-                match result {
-                    Ok(statuses) => self.updates = statuses,
-                    Err(e) => self.error = Some(e.into()),
-                }
-                Task::none()
-            }
-
             other => return Err(other),
         })
     }

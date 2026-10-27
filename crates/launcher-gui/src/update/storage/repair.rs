@@ -4,6 +4,12 @@ use crate::*;
 
 impl Lightforge {
     pub(super) fn update_repair(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        self.update_quick_scan(message)
+            .or_else(|m| self.update_deep_scan(m))
+    }
+
+    /// The scan against the stored headers, and repairing what it drops.
+    fn update_quick_scan(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
             Message::ScanAndRepair => {
                 self.gear_open = false;
@@ -32,6 +38,43 @@ impl Lightforge {
                     |result| Message::Scanned(Box::new(result)),
                 )
             }
+
+            Message::Scanned(result) => {
+                self.scanning = false;
+                self.busy = false;
+                self.scan_rx = None;
+                let scanned = self.scan_for.take().unwrap_or_else(|| self.selected.code.clone());
+                match *result {
+                    Err(e) => {
+                        self.error = Some(e.into());
+                        self.pump()
+                    }
+                    Ok(scan) => {
+                        // Either way the download path runs: repair works by
+                        // removing damaged entries so the planner counts them
+                        // missing, and the same plan also covers whatever was
+                        // never fetched in the first place.
+                        self.status = match scan.damaged {
+                            0 => format!(
+                                "{} files verified — none damaged; checking for anything missing",
+                                scan.checked
+                            ),
+                            n => format!(
+                                "{n} damaged of {} — {} dropped, fetching them again",
+                                scan.checked, scan.removed
+                            ),
+                        };
+                        self.enqueue_for(scanned)
+                    }
+                }
+            }
+            other => return Err(other),
+        })
+    }
+
+    /// The deep scan of every stored byte, and the repair it can lead to.
+    fn update_deep_scan(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::DeepScan => {
                 self.gear_open = false;
                 if let Some(cancel) = &self.deep_cancel {
@@ -72,6 +115,7 @@ impl Lightforge {
                     Message::DeepScanned(Box::new(result))
                 })
             }
+
             Message::DeepScanned(result) => {
                 self.scanning = false;
                 let scanned = self.scan_for.take().unwrap_or_else(|| self.selected.code.clone());
@@ -107,6 +151,7 @@ impl Lightforge {
                     }
                 }
             }
+
             Message::RepairDamaged => {
                 self.gear_open = false;
                 let Some((code, report)) = self.owed_repair.clone() else {
@@ -131,6 +176,7 @@ impl Lightforge {
                 self.repairing = Some(code.clone());
                 Task::perform(tasks::repair(self.layout.clone(), code, *report), Message::Repaired)
             }
+
             Message::Repaired(result) => {
                 let code = self.repairing.take().unwrap_or_else(|| self.selected.code.clone());
                 match result {
@@ -154,35 +200,6 @@ impl Lightforge {
                         self.owed_repair = None;
                         self.error = Some(e.into());
                         self.pump()
-                    }
-                }
-            }
-            Message::Scanned(result) => {
-                self.scanning = false;
-                self.busy = false;
-                self.scan_rx = None;
-                let scanned = self.scan_for.take().unwrap_or_else(|| self.selected.code.clone());
-                match *result {
-                    Err(e) => {
-                        self.error = Some(e.into());
-                        self.pump()
-                    }
-                    Ok(scan) => {
-                        // Either way the download path runs: repair works by
-                        // removing damaged entries so the planner counts them
-                        // missing, and the same plan also covers whatever was
-                        // never fetched in the first place.
-                        self.status = match scan.damaged {
-                            0 => format!(
-                                "{} files verified — none damaged; checking for anything missing",
-                                scan.checked
-                            ),
-                            n => format!(
-                                "{n} damaged of {} — {} dropped, fetching them again",
-                                scan.checked, scan.removed
-                            ),
-                        };
-                        self.enqueue_for(scanned)
                     }
                 }
             }

@@ -4,6 +4,13 @@ use crate::*;
 
 impl Lightforge {
     pub(crate) fn update_report(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        self.update_report_form(message)
+            .or_else(|m| self.update_report_screenshot(m))
+            .or_else(|m| self.update_report_send(m))
+    }
+
+    /// The debug info and the report form itself.
+    fn update_report_form(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
             Message::CopyDebug => {
                 let action = self.action();
@@ -16,6 +23,7 @@ impl Lightforge {
                 self.status = "debug info copied".to_owned();
                 iced::clipboard::write(info.render())
             }
+
             Message::SystemInfo(info) => {
                 tracing::info!(
                     "renderer: {} over {}; {}, {} B RAM",
@@ -27,6 +35,7 @@ impl Lightforge {
                 self.system = Some(*info);
                 Task::none()
             }
+
             Message::OpenReport(kind) => {
                 self.close_panels();
                 // Gathered here because this is where the four things
@@ -90,6 +99,7 @@ impl Lightforge {
                 });
                 Task::none()
             }
+
             Message::ReportNote(action) => {
                 // `text_editor` has no "read only" of its own, so a report on
                 // its way out is held here instead.
@@ -107,6 +117,49 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
+            Message::ReportContact(contact) => {
+                let Some(dialog) = self.report_dialog.as_mut() else {
+                    return Ok(Task::none());
+                };
+                dialog.contact = contact;
+                let contact = dialog.contact.trim().to_owned();
+                self.config.contact = (!contact.is_empty()).then_some(contact);
+                self.save_config();
+                Task::none()
+            }
+
+            Message::ReportCategory(category) => {
+                // Gathered before the dialog is borrowed: the attachment reads
+                // the addon folder, the queue and the config off `self`.
+                let attached = match self.report_dialog.as_ref().map(|d| d.kind) {
+                    Some(ReportKind::Bug) => self.report_attachment(category),
+                    _ => String::new(),
+                };
+                if let Some(dialog) = self
+                    .report_dialog
+                    .as_mut()
+                    .filter(|d| !matches!(d.stage, ReportStage::Sending | ReportStage::Sent))
+                {
+                    dialog.category = Some(category);
+                    if dialog.kind == ReportKind::Bug {
+                        dialog.debug = format!("{}{attached}", dialog.base);
+                    }
+                }
+                Task::none()
+            }
+
+            Message::ReportCancel => {
+                self.report_dialog = None;
+                Task::none()
+            }
+            other => return Err(other),
+        })
+    }
+
+    /// The screenshot attached to a report.
+    fn update_report_screenshot(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::ReportShotPick => Task::perform(
                 // The desktop's own dialog, asked for over the XDG portal.
                 //
@@ -139,6 +192,7 @@ impl Lightforge {
                 },
                 Message::ReportShotPicked,
             ),
+
             Message::ReportShotPicked(path) => {
                 // Cancelling is the common answer and means nothing happened.
                 let Some(path) = path else { return Ok(Task::none()) };
@@ -152,6 +206,7 @@ impl Lightforge {
                     Message::ReportShotLoaded,
                 )
             }
+
             Message::ReportShotLoaded(result) => {
                 match result {
                     Ok(shot) => {
@@ -163,6 +218,20 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
+            Message::ReportShotCleared => {
+                if let Some(dialog) = self.report_dialog.as_mut() {
+                    dialog.shot = None;
+                }
+                Task::none()
+            }
+            other => return Err(other),
+        })
+    }
+
+    /// Getting the report out: copied, or sent.
+    fn update_report_send(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::ReportCopy => {
                 let Some(dialog) = self.report_dialog.as_ref() else {
                     return Ok(Task::none());
@@ -177,41 +246,7 @@ impl Lightforge {
                 self.status = "report copied".to_owned();
                 iced::clipboard::write(text)
             }
-            Message::ReportShotCleared => {
-                if let Some(dialog) = self.report_dialog.as_mut() {
-                    dialog.shot = None;
-                }
-                Task::none()
-            }
-            Message::ReportContact(contact) => {
-                let Some(dialog) = self.report_dialog.as_mut() else {
-                    return Ok(Task::none());
-                };
-                dialog.contact = contact;
-                let contact = dialog.contact.trim().to_owned();
-                self.config.contact = (!contact.is_empty()).then_some(contact);
-                self.save_config();
-                Task::none()
-            }
-            Message::ReportCategory(category) => {
-                // Gathered before the dialog is borrowed: the attachment reads
-                // the addon folder, the queue and the config off `self`.
-                let attached = match self.report_dialog.as_ref().map(|d| d.kind) {
-                    Some(ReportKind::Bug) => self.report_attachment(category),
-                    _ => String::new(),
-                };
-                if let Some(dialog) = self
-                    .report_dialog
-                    .as_mut()
-                    .filter(|d| !matches!(d.stage, ReportStage::Sending | ReportStage::Sent))
-                {
-                    dialog.category = Some(category);
-                    if dialog.kind == ReportKind::Bug {
-                        dialog.debug = format!("{}{attached}", dialog.base);
-                    }
-                }
-                Task::none()
-            }
+
             Message::ReportSend => {
                 let Some(dialog) = self.report_dialog.as_mut() else {
                     return Ok(Task::none());
@@ -252,6 +287,7 @@ impl Lightforge {
                 };
                 Task::perform(report::send(report, self.http.clone()), Message::ReportSent)
             }
+
             Message::ReportSent(arrived) => {
                 if let Some(dialog) = self.report_dialog.as_mut() {
                     dialog.stage = match arrived {
@@ -270,11 +306,6 @@ impl Lightforge {
                 };
                 Task::none()
             }
-            Message::ReportCancel => {
-                self.report_dialog = None;
-                Task::none()
-            }
-
             other => return Err(other),
         })
     }

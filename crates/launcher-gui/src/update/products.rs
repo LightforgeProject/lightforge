@@ -4,6 +4,13 @@ use crate::*;
 
 impl Lightforge {
     pub(crate) fn update_products(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        self.update_selection(message)
+            .or_else(|m| self.update_band(m))
+            .or_else(|m| self.update_product_list(m))
+    }
+
+    /// Picking a game or a branch, and the data and theme that follow it.
+    fn update_selection(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
             Message::LineSelected(line) => {
                 // Picking from the overflow menu closes it: the tile is in the
@@ -14,6 +21,7 @@ impl Lightforge {
                 self.go_to(Screen::Dashboard);
                 self.select_line(&line)
             }
+
             Message::BranchSelected(pick) => {
                 // An unconfigured branch is offered, not hidden, picking it
                 // is how it gets added, which beats hand-editing config.toml
@@ -31,6 +39,7 @@ impl Lightforge {
                 };
                 self.select(choice)
             }
+
             Message::Refreshed(code, refreshed) => {
                 if code != self.selected.code {
                     return Ok(Task::none());
@@ -52,6 +61,7 @@ impl Lightforge {
                 };
                 Task::none()
             }
+
             Message::CachedTheme(code, themed) => {
                 trace::mark(format_args!(
                     "cache-first theme for {}: {}, {} icon(s)",
@@ -80,6 +90,7 @@ impl Lightforge {
                     false => Task::none(),
                 }
             }
+
             Message::Themed(code, themed) => {
                 trace::mark(format_args!(
                     "revalidated theme for {}: manifest {}, branding {}",
@@ -122,6 +133,13 @@ impl Lightforge {
                 }
                 Task::none()
             }
+            other => return Err(other),
+        })
+    }
+
+    /// The band of tiles and the panels that open from it.
+    fn update_band(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::ToggleManager => {
                 self.manager_open = !self.manager_open;
                 if self.manager_open {
@@ -130,6 +148,7 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::ToggleStrip => {
                 self.strip_open = !self.strip_open;
                 if self.strip_open {
@@ -138,6 +157,7 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::OpenProduct(code) => {
                 self.close_panels();
                 self.go_to(Screen::Dashboard);
@@ -151,16 +171,19 @@ impl Lightforge {
                 });
                 self.select(choice)
             }
+
             Message::TileMenu(line) => {
                 let open = self.tile_menu.as_ref() != Some(&line);
                 self.close_panels();
                 self.tile_menu = open.then_some(line);
                 Task::none()
             }
+
             Message::TileEntered(line) => {
                 self.tile_hover = Some(line);
                 Task::none()
             }
+
             Message::TileLeft(line) => {
                 // Only if it is still the one recorded: entering the next tile
                 // can arrive before leaving the last.
@@ -169,10 +192,12 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::TileGrabbed(line) => {
                 self.tile_drag = Some(TileDrag { line, origin: None, last: 0.0, moving: false });
                 Task::none()
             }
+
             Message::TileDragged(x) => {
                 let Some(drag) = &mut self.tile_drag else {
                     return Ok(Task::none());
@@ -209,6 +234,7 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::TileDropped => {
                 let Some(drag) = self.tile_drag.take() else {
                     return Ok(Task::none());
@@ -229,6 +255,7 @@ impl Lightforge {
                     false => Task::none(),
                 }
             }
+
             Message::ToggleBrowse => {
                 self.browse_open = !self.browse_open;
                 self.strip_open = false;
@@ -243,10 +270,18 @@ impl Lightforge {
                     Message::InstalledVersions,
                 )
             }
+            other => return Err(other),
+        })
+    }
+
+    /// What is installed and known: Agent's registry, the codes and families it reports, adding and removing games.
+    fn update_product_list(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::InstalledVersions(found) => {
                 self.installed_versions = found;
                 Task::none()
             }
+
             Message::RegistryPoll => {
                 let Some(watch) = &mut self.registry_watch else { return Ok(Task::none()) };
                 watch.polls += 1;
@@ -255,6 +290,7 @@ impl Lightforge {
                     Message::RegistryPolled(stamp, running)
                 })
             }
+
             Message::RegistryPolled(stamp, running) => {
                 let Some(watch) = &mut self.registry_watch else { return Ok(Task::none()) };
                 let changed = watch.stamp != stamp;
@@ -286,11 +322,13 @@ impl Lightforge {
                     false => Task::none(),
                 }
             }
+
             Message::KnownCodes(codes) => {
                 self.known_codes = codes;
                 self.refresh_catalog();
                 Task::none()
             }
+
             Message::RemoveProduct(code) => {
                 // A tile is a *line*, and its PTR and beta are branches behind
                 // its version picker rather than games of their own, so
@@ -339,6 +377,7 @@ impl Lightforge {
                     false => Task::none(),
                 }
             }
+
             Message::AddProduct(code) => {
                 if self.choices.iter().any(|c| c.code == code) {
                     return Ok(Task::none());
@@ -354,11 +393,11 @@ impl Lightforge {
                 self.choices.push(Choice { code, label });
                 Task::none()
             }
+
             Message::FamiliesRead(families) => {
                 self.families = *families;
                 Task::none()
             }
-
             other => return Err(other),
         })
     }
