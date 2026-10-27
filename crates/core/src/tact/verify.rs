@@ -52,6 +52,7 @@ use super::download::Cancel;
 use super::entry::Header;
 use super::idx::{Entry, Index, CASC_ENTRY_HEADER, KEY_SIZE};
 use super::storage::{archive_name, blte_payload, resolve_data_dir, Storage, StorageError};
+use super::writer::StoreLock;
 
 /// Why one entry failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -555,10 +556,11 @@ impl Snapshot {
 /// archive changed since, those positions may name healthy files now, and
 /// dropping them would throw away good data.
 pub fn repair_unchanged(data_dir: &Path, report: &Report) -> Result<usize, VerifyError> {
+    let _lock = StoreLock::acquire(data_dir)?;
     if Snapshot::take(data_dir)? != report.snapshot {
         return Err(VerifyError::StoreChanged);
     }
-    repair(data_dir, &report.damaged)
+    remove_entries(data_dir, report.damaged.iter().map(|d| d.entry))
 }
 
 /// Remove damaged entries from the store's indices.
@@ -573,6 +575,7 @@ pub fn repair_unchanged(data_dir: &Path, report: &Report) -> Result<usize, Verif
 /// it rewrites the files the client memory-maps, which is what pre-flight
 /// exists to prevent.
 pub fn repair(data_dir: &Path, damaged: &[Damage]) -> Result<usize, VerifyError> {
+    let _lock = StoreLock::acquire(data_dir)?;
     remove_entries(data_dir, damaged.iter().map(|d| d.entry))
 }
 
@@ -580,7 +583,7 @@ pub fn repair(data_dir: &Path, damaged: &[Damage]) -> Result<usize, VerifyError>
 /// a new generation per bucket touched. Returns how many were removed.
 ///
 /// The archives are not touched. Same rule as [`repair`]: never against a
-/// live client.
+/// live client. The caller holds the store's [`StoreLock`].
 pub fn remove_entries(
     data_dir: &Path,
     entries: impl IntoIterator<Item = Entry>,
@@ -619,6 +622,9 @@ pub enum VerifyError {
 
     #[error("the scan was cancelled")]
     Cancelled,
+
+    #[error(transparent)]
+    Write(#[from] super::writer::WriteError),
 
     /// Something wrote to the store while it was being read, so what the scan
     /// saw may not be what is on disk. Run it again once the writer is done.

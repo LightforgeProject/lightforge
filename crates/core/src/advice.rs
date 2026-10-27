@@ -125,6 +125,12 @@ fn recognise(error: &(dyn Error + 'static)) -> Option<Advice> {
             _ => None,
         };
     }
+    if let Some(tact::writer::WriteError::StoreBusy(_)) = error.downcast_ref() {
+        return Some(Advice::say(
+            "Another Lightforge window or command is changing this game's files. Wait for it \
+             to finish, then try again.",
+        ));
+    }
     if let Some(crate::storage::StorageError::PrefixBusy) = error.downcast_ref() {
         return Some(running());
     }
@@ -216,6 +222,7 @@ fn transparent<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a (dyn Error + 
     use tact::install::InstallError;
     use tact::reclaim::ReclaimError;
     use tact::storage::StorageError;
+    use tact::uninstall::UninstallError;
     use tact::verify::VerifyError;
     use tact::version::VersionError;
     use tact::writer::WriteError;
@@ -235,9 +242,10 @@ fn transparent<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a (dyn Error + 
         VersionError => [VersionError::Net],
         WriteError => [WriteError::Idx],
         StorageError => [StorageError::Idx],
-        VerifyError => [VerifyError::Index, VerifyError::Storage],
+        VerifyError => [VerifyError::Index, VerifyError::Storage, VerifyError::Write],
         CompactError => [CompactError::Storage, CompactError::Write, CompactError::Verify],
         ReclaimError => [ReclaimError::Storage, ReclaimError::Verify, ReclaimError::Compact],
+        UninstallError => [UninstallError::Write],
         ManageError => [ManageError::Catalog, ManageError::Net],
         CatalogError => [CatalogError::Net],
     }
@@ -357,6 +365,19 @@ mod tests {
             },
         ));
         assert_eq!(advise(&error).unwrap().fix, Some(Fix::StorageSettings));
+    }
+
+    #[test]
+    fn a_busy_store_says_who_has_it_however_it_is_wrapped() {
+        let busy = || tact::writer::WriteError::StoreBusy("/games/Data/data".into());
+        for error in [
+            Box::new(tact::compact::CompactError::Write(busy())) as Box<dyn Error>,
+            Box::new(tact::verify::VerifyError::Write(busy())),
+            Box::new(tact::uninstall::UninstallError::Write(busy())),
+            Box::new(tact::install::InstallError::Writer(busy())),
+        ] {
+            assert!(advise(error.as_ref()).unwrap().todo.starts_with("Another Lightforge"), "{error}");
+        }
     }
 
     #[test]

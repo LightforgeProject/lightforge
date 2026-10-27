@@ -120,6 +120,13 @@ pub fn execute(
 ) -> Result<Removed, UninstallError> {
     let mut removed = Removed { bytes: plan.bytes, ..Removed::default() };
 
+    // Held until the files are gone, so nothing is deleted under a download.
+    let data_dir = super::storage::resolve_data_dir(install);
+    let _lock = match data_dir.is_dir() {
+        true => Some(super::writer::StoreLock::acquire(&data_dir)?),
+        false => None,
+    };
+
     for path in plan.flavor_dir.iter().chain(plan.store.iter()) {
         if !is_plain_child(install, path) {
             return Err(UninstallError::Outside(path.clone()));
@@ -244,6 +251,9 @@ pub enum UninstallError {
 
     #[error(transparent)]
     ProductDb(#[from] productdb::ProductDbError),
+
+    #[error(transparent)]
+    Write(#[from] super::writer::WriteError),
 
     #[error("i/o error at {path}")]
     Io {

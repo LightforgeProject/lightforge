@@ -45,6 +45,41 @@ pub const MAX_ARCHIVE_ID: u16 = (1 << 10) - 1;
 /// whichever caller happens to remember.
 pub const FIRST_GENERATION: u32 = 0x32;
 
+/// Exclusive hold on a CASC store against other Lightforge processes, released
+/// on drop.
+///
+/// Two writers pick the same next `data.NNN`, and the second `File::create`
+/// empties the first one's archive; whichever rewrites the indices last drops
+/// the other's files. Within one process the GUI already runs one writer per
+/// store at a time, this covers the CLI and a second GUI.
+///
+/// An `flock` on the data directory itself, so nothing new appears among the
+/// files Agent and the client own. Wine takes POSIX locks, not `flock`, so
+/// they never see it.
+#[derive(Debug)]
+pub struct StoreLock {
+    _held: Option<File>,
+}
+
+impl StoreLock {
+    /// Take the lock on `data_dir`, which must exist.
+    ///
+    /// A filesystem without `flock` (some NFS and SMB mounts) gets a warning
+    /// and no lock rather than a store that cannot be written at all.
+    pub fn acquire(data_dir: &Path) -> Result<Self, WriteError> {
+        let dir = File::open(data_dir)
+            .map_err(|source| WriteError::Io { path: data_dir.to_path_buf(), source })?;
+        match dir.try_lock() {
+            Ok(()) => Ok(Self { _held: Some(dir) }),
+            Err(std::fs::TryLockError::WouldBlock) => Err(WriteError::StoreBusy(data_dir.to_path_buf())),
+            Err(std::fs::TryLockError::Error(e)) => {
+                tracing::warn!("cannot lock {}, writing without a lock: {e}", data_dir.display());
+                Ok(Self { _held: None })
+            }
+        }
+    }
+}
+
 /// Writes files into a CASC store.
 ///
 /// Nothing is durable until [`StoreWriter::finish`] runs. It is what writes
@@ -52,6 +87,7 @@ pub const FIRST_GENERATION: u32 = 0x32;
 #[derive(Debug)]
 pub struct StoreWriter {
     data_dir: PathBuf,
+    _lock: StoreLock,
     indices: HashMap<u8, Index>,
     archive_id: u16,
     archive: Option<BufWriter<File>>,
@@ -81,7 +117,14 @@ impl StoreWriter {
         let data_dir = data_dir.into();
         std::fs::create_dir_all(&data_dir)
             .map_err(|source| WriteError::Io { path: data_dir.clone(), source })?;
+        let lock = StoreLock::acquire(&data_dir)?;
+        Self::create_locked(data_dir, lock)
+    }
 
+    /// [`StoreWriter::create`] under a lock the caller already holds, for an
+    /// operation that checks or changes the store before writing to it.
+    pub fn create_locked(data_dir: impl Into<PathBuf>, lock: StoreLock) -> Result<Self, WriteError> {
+        let data_dir = data_dir.into();
         let archive_id = next_archive_id(&data_dir)?;
 
         let mut indices: HashMap<u8, Index> = (0..BUCKETS).map(|b| (b, Index::new(b))).collect();
@@ -92,6 +135,7 @@ impl StoreWriter {
 
         Ok(Self {
             data_dir,
+            _lock: lock,
             indices,
             archive_id,
             archive: None,
@@ -464,6 +508,9 @@ pub enum WriteError {
     #[error("every archive number an index can address (0-{MAX_ARCHIVE_ID}) is taken")]
     OutOfArchiveNumbers,
 
+    #[error("{0} is being changed by another Lightforge process")]
+    StoreBusy(PathBuf),
+
     #[error(transparent)]
     Idx(#[from] IdxError),
 
@@ -654,6 +701,19 @@ mod tests {
         assert_eq!(store.read(&ekey(2)).unwrap(), b"also the first run");
         assert_eq!(store.read(&ekey(3)).unwrap(), b"from the second run");
         assert_eq!(store.stats().files, 3);
+    }
+
+    #[test]
+    fn a_second_writer_on_a_held_store_is_refused() {
+        let dir = scratch("busy");
+        let data = dir.join("Data").join("data");
+
+        let first = StoreWriter::create(&data).unwrap();
+        assert!(matches!(StoreWriter::create(&data), Err(WriteError::StoreBusy(_))));
+        assert!(matches!(StoreLock::acquire(&data), Err(WriteError::StoreBusy(_))));
+
+        first.finish().unwrap();
+        assert!(StoreWriter::create(&data).is_ok(), "finishing releases the lock");
     }
 
     #[test]

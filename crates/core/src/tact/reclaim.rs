@@ -46,6 +46,7 @@ use super::storage::{Storage, StorageError};
 #[cfg(test)]
 use super::storage::archive_name;
 use super::verify::{self, Snapshot, VerifyError};
+use super::writer::StoreLock;
 use super::version::Cdn;
 
 #[derive(Debug, thiserror::Error)]
@@ -298,12 +299,13 @@ pub fn execute(
         return Ok(0);
     }
     let data_dir = super::storage::resolve_data_dir(install);
+    let lock = StoreLock::acquire(&data_dir).map_err(CompactError::from)?;
     if Snapshot::take(&data_dir)? != reclaim.snapshot {
         return Err(VerifyError::StoreChanged.into());
     }
 
     verify::remove_entries(&data_dir, reclaim.entries.iter().copied())?;
-    Ok(compact::rewrite(install, &reclaim.archives, progress)?)
+    Ok(compact::rewrite(install, &reclaim.archives, progress, lock)?)
 }
 
 /// A build's config: from the store's own `Data/config` when it is there,

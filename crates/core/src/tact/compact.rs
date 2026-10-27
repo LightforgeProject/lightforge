@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use super::idx::{Entry, ARCHIVE_RESERVED};
 use super::storage::{archive_name, Storage, StorageError};
 use super::verify::{Snapshot, VerifyError};
-use super::writer::{StoreWriter, WriteError};
+use super::writer::{StoreLock, StoreWriter, WriteError};
 
 /// Publish the indices and delete what has been emptied at least this often,
 /// which is also roughly the extra disk space a pass needs at its peak.
@@ -170,10 +170,13 @@ pub fn execute(
     progress: impl FnMut(u64),
 ) -> Result<u64, CompactError> {
     let data_dir = super::storage::resolve_data_dir(install);
+    // Taken before the comparison: a writer slipping in after it would make
+    // the plan's positions name different files.
+    let lock = StoreLock::acquire(&data_dir)?;
     if Snapshot::take(&data_dir)? != *snapshot {
         return Err(VerifyError::StoreChanged.into());
     }
-    rewrite(install, &compaction.archives, progress)
+    rewrite(install, &compaction.archives, progress, lock)
 }
 
 /// The unchecked half of [`execute`], for a caller that just changed the
@@ -186,6 +189,7 @@ pub(crate) fn rewrite(
     install: &Path,
     archives: &[u16],
     mut progress: impl FnMut(u64),
+    lock: StoreLock,
 ) -> Result<u64, CompactError> {
     if archives.is_empty() {
         return Ok(0);
@@ -200,7 +204,7 @@ pub(crate) fn rewrite(
         files.entry(entry.archive_id).or_default().push(*entry);
     }
 
-    let mut writer = StoreWriter::create(&data_dir)?.filling_gaps();
+    let mut writer = StoreWriter::create_locked(&data_dir, lock)?.filling_gaps();
     let mut pending = Vec::new();
     let (mut copied, mut since_checkpoint, mut deleted) = (0u64, 0u64, 0u64);
 
