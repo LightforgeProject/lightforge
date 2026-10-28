@@ -9,3 +9,8 @@
 
 # docs: trim prefix, proton and preflight comments
 253e470a1872757be5ad86ee24b7b40beec6192e
+
+# docs: trim tact writer, idx, storage, archive and download comments
+b9cddf789b602dbba594522ef535e7d089cd0ea2
+1c0a10be8016a1db39d245bfa52cca64e5e499f0
+52fec03d80398cf38147df171221d7da4e6a5dd5
