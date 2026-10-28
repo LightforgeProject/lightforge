@@ -9,15 +9,12 @@
 //! - **A WoWUp import token**, which is base64 over a JSON object listing the
 //!   provider ids of someone else's addon list.
 //!
-//! Because both sides speak provider ids, an import can be reconciled against
-//! an install **without asking any API anything**: what is already there, what
-//! is missing, and what is a different version. Only actually fetching an addon
-//! needs the network.
+//! Both speak provider ids, so an import reconciles against an install with
+//! no API call; only fetching needs the network.
 //!
-//! The token format here was read off a real WoWUp export rather than assumed:
-//! it is an object (not an array), its keys are snake_case, its provider string
-//! is `Curse` rather than `curseforge`, its ids are strings, and every entry
-//! pins an exact `version_id`: a *file* id, not just a project.
+//! The token format is read off a real WoWUp export: an object, snake_case
+//! keys, provider `Curse`, ids as strings, and each entry pins a `version_id`
+//! (a file id).
 
 pub mod browse;
 pub mod catalog;
@@ -39,22 +36,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::product::ProductCode;
 
-/// Which builds of an addon are acceptable.
-///
-/// A **floor, not a filter**: the same semantics WoWUp settled on. Asking for
-/// [`Channel::Alpha`] does not mean "only alphas": it means alphas are
-/// allowed, and the newest acceptable build still wins, which is usually the
-/// stable one. Anything else would pin a user to a stale alpha the day the
-/// author shipped a release.
-///
-/// Only providers that publish pre-release builds can honour this, of ours,
-/// CurseForge and GitHub. WoWInterface and Tukui publish one build, so a
-/// channel there is inert rather than wrong.
+/// Which builds of an addon are acceptable: a **floor, not a filter**, as in
+/// WoWUp. [`Channel::Alpha`] allows alphas, and the newest acceptable build
+/// still wins. Only CurseForge and GitHub publish pre-releases.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Channel {
-    /// Releases only. The default, because an addon manager that quietly
-    /// installs alphas is a bug report waiting to happen.
+    /// Releases only, the default.
     #[default]
     Stable,
     Beta,
@@ -90,9 +78,7 @@ impl Channel {
 
 /// Where an addon came from.
 ///
-/// [`Provider::Other`] keeps an unrecognised name rather than dropping the
-/// entry: a token from a newer WoWUp should list what it could not resolve, not
-/// silently shrink.
+/// [`Provider::Other`] keeps an unrecognised name, so it can be reported.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Provider {
     Curse,
@@ -127,10 +113,7 @@ impl Provider {
         }
     }
 
-    /// Whether Lightforge can resolve this provider at all today.
-    ///
-    /// Wago is the exception: its API needs a key nobody has arranged, so a
-    /// Wago entry is listed and skipped rather than silently attempted.
+    /// Whether Lightforge can resolve this provider. Not Wago: its API needs a key.
     pub fn is_supported(&self) -> bool {
         matches!(
             self,
@@ -147,9 +130,7 @@ pub struct Entry {
     pub name: String,
     #[serde(rename = "provider_name")]
     pub provider: String,
-    /// The exact file the exporter had installed. A pin, not a requirement:
-    /// importing the *latest* is usually what someone sharing a list means,
-    /// but the pin is what makes reproducing their exact setup possible.
+    /// The exact file the exporter had installed, for reproducing their setup.
     #[serde(default)]
     pub version_id: Option<String>,
 }
@@ -180,21 +161,14 @@ impl Collection {
         serde_json::from_slice(&json).map_err(AddonError::Token)
     }
 
-    /// Encode this list as a token, in the same shape [`Collection::parse`]
-    /// reads: base64 over JSON.
-    ///
-    /// The point is that it travels, to WoWUp, to another machine, to someone
-    /// being handed a setup, so it is the format other tools already read
-    /// rather than one of Lightforge's own.
+    /// Encode this list as a token, the shape [`Collection::parse`] reads and
+    /// WoWUp imports.
     pub fn to_token(&self) -> Result<String, AddonError> {
         let json = serde_json::to_vec(self).map_err(AddonError::Token)?;
         Ok(base64_encode(&json))
     }
 
-    /// WoWUp's name for a product, for the `client_type` an export carries.
-    ///
-    /// The inverse of what [`Collection::product`] reads. A product WoWUp has
-    /// no name for exports as retail, which is what it runs addons for.
+    /// WoWUp's name for a product (`client_type`); unknown ones export as retail.
     pub fn client_type_of(code: &ProductCode) -> &'static str {
         match code {
             ProductCode::Classic | ProductCode::ClassicPtr => "Classic",
@@ -208,10 +182,7 @@ impl Collection {
         }
     }
 
-    /// The product this list was exported from, as far as it can be told.
-    ///
-    /// WoWUp's names are its own; anything unrecognised is left to the caller
-    /// to decide about rather than guessed into the wrong product.
+    /// The product this list was exported from; `None` when unrecognised.
     pub fn product(&self) -> Option<ProductCode> {
         match self.client_type.trim().to_ascii_lowercase().as_str() {
             "retail" => Some(ProductCode::Retail),
@@ -234,17 +205,9 @@ impl Collection {
         grouped
     }
 
-    /// Reconcile against what is on disk. No network involved: both sides
-    /// carry provider ids.
-    ///
-    /// Ids are tried first because they are exact, but plenty of addons omit
-    /// them, on a real 84-addon install, `!BugGrabber` and
-    /// `HandyNotes_Midnight` were both present with no `X-Curse-Project-ID` in
-    /// their `.toc` at all, and an id-only match reported them missing. So the
-    /// title and then the folder name are tried after, each requiring an exact
-    /// match after normalisation. [`Reconciled::matched_by`] says which rule
-    /// fired, so a UI can show an id match as certain and a name match as a
-    /// guess rather than pretending they are the same thing.
+    /// Reconcile against what is on disk, by provider id first, then title,
+    /// then folder name (on a real install, `!BugGrabber` carries no
+    /// `X-Curse-Project-ID`). [`Reconciled::matched_by`] says which rule matched.
     pub fn reconcile(&self, installed: &[Installed]) -> Vec<Reconciled> {
         self.addons
             .iter()
@@ -324,11 +287,8 @@ impl Reconciled {
     }
 }
 
-/// Compare two addon names for equality, ignoring case, surrounding space, and
-/// the `!` prefix authors use to sort themselves to the top of the list.
-///
-/// Exact after normalisation, never a substring: "BigWigs" must not match
-/// "BigWigs_Options".
+/// Compare two addon names, ignoring case, surrounding space and a leading
+/// `!`. Never a substring: "BigWigs" is not "BigWigs_Options".
 fn same_name(a: &str, b: &str) -> bool {
     let normalise = |s: &str| {
         s.trim()
@@ -350,10 +310,8 @@ pub fn flavor_of(code: &ProductCode) -> &'static str {
         }
         ProductCode::Classic | ProductCode::ClassicPtr => "classic",
         ProductCode::ClassicEra | ProductCode::EraPtr => "classic_era",
-        // Its own flavor: CurseForge files Forever-only addons under a version
-        // type of their own, which asking for Era never reached. Forever runs
-        // the 1.x line, so the proxy falls back to Era addons per addon, and
-        // most of what a Forever player installs still comes from there.
+        // CurseForge files Forever addons under their own version type; the
+        // proxy falls back to Era per addon.
         ProductCode::ClassicBeta | ProductCode::Forever => "forever",
         // An unknown or custom product is almost always a retail-line server.
         ProductCode::Custom(_) => "retail",
@@ -362,8 +320,7 @@ pub fn flavor_of(code: &ProductCode) -> &'static str {
 
 /// A parsed `.toc` file: the `## Key: value` header block.
 ///
-/// Keys are kept as written but looked up case-insensitively, because real
-/// addons disagree about capitalisation.
+/// Keys are looked up case-insensitively; addons disagree on capitals.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Toc {
     fields: Vec<(String, String)>,
@@ -421,8 +378,7 @@ impl Installed {
 
 /// Scan a product's `AddOns` directory.
 ///
-/// Folders without a readable `.toc` are skipped rather than reported: WoW
-/// itself ignores them, and `Blizzard_*` stubs and leftover junk are common.
+/// Folders without a readable `.toc` are skipped, as WoW skips them.
 pub fn scan(addons_dir: &Path) -> Result<Vec<Installed>, AddonError> {
     let entries = std::fs::read_dir(addons_dir).map_err(io(addons_dir))?;
 
@@ -466,10 +422,8 @@ pub fn scan(addons_dir: &Path) -> Result<Vec<Installed>, AddonError> {
 
 /// Pick the `.toc` for a folder.
 ///
-/// Modern addons ship one per flavor, `BigWigs.toc`, `BigWigs_Vanilla.toc`,
-/// `BigWigs_Mists.toc`: where the bare name is the mainline (retail) one. The
-/// bare file is preferred, then an explicit `_Mainline`, then any `.toc` at
-/// all, since the metadata we read is the same across them.
+/// Modern addons ship one per flavor (`BigWigs.toc`, `BigWigs_Vanilla.toc`).
+/// The bare name first, then `_Mainline`, then any: the metadata is the same.
 fn toc_for(dir: &Path, folder: &str) -> Option<PathBuf> {
     let exact = dir.join(format!("{folder}.toc"));
     if exact.is_file() {
@@ -486,11 +440,8 @@ fn toc_for(dir: &Path, folder: &str) -> Option<PathBuf> {
         .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("toc")))
 }
 
-/// Read a `.toc`, tolerating the encodings addons actually ship.
-///
-/// Some are UTF-8 with a BOM and a few older ones are not valid UTF-8 at all;
-/// the header fields are ASCII either way, so lossy decoding loses nothing that
-/// matters here and keeps one bad addon from hiding the other eighty.
+/// Read a `.toc` lossily: some have a BOM or are not UTF-8, and the header
+/// fields are ASCII anyway.
 fn read_toc(path: &Path) -> Result<String, std::io::Error> {
     let bytes = std::fs::read(path)?;
     let text = String::from_utf8_lossy(&bytes).into_owned();
@@ -527,8 +478,7 @@ fn strip_color_codes(text: &str) -> String {
     out.trim().to_owned()
 }
 
-/// Standard base64, padded. The inverse of [`base64_decode`], and padded
-/// because that is what WoWUp writes and what other tools expect to read.
+/// Standard base64, padded, as WoWUp writes it.
 fn base64_encode(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -546,8 +496,7 @@ fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
-/// Standard base64 with or without padding. Kept here rather than pulling in a
-/// crate for forty lines of table lookup.
+/// Standard base64 with or without padding.
 fn base64_decode(input: &str) -> Option<Vec<u8>> {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -622,10 +571,7 @@ mod tests {
 
     #[test]
     fn a_channel_is_a_floor_not_a_filter() {
-        // Asking for alpha accepts a stable build; asking for stable does not
-        // accept an alpha. This is WoWUp's rule, and the reason for it is that
-        // "alpha" means "I'll take risky builds", not "never give me a
-        // release", the newest acceptable build still wins.
+        // Alpha accepts a stable build; stable does not accept an alpha.
         assert!(Channel::Alpha.accepts(Channel::Stable));
         assert!(Channel::Alpha.accepts(Channel::Beta));
         assert!(Channel::Alpha.accepts(Channel::Alpha));
@@ -682,8 +628,7 @@ mod tests {
         assert!(matches!(Collection::parse("aGVsbG8="), Err(AddonError::Token(_))));
     }
 
-    /// The point of an export is that something else can read it back, so the
-    /// test is the round trip rather than the bytes.
+    /// A round trip, not the bytes.
     #[test]
     fn a_token_survives_the_round_trip() {
         let collection = Collection {

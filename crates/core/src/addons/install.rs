@@ -1,18 +1,13 @@
 //! Installing, updating and removing addons.
 //!
-//! An addon package is a zip whose top level is one or more addon folders,
-//! which are extracted straight into `Interface/AddOns`. Several folders per
-//! package is normal, not exotic, BigWigs ships eleven, so an install is
-//! tracked as a *set* of folders, and removing it removes exactly that set.
+//! A package is a zip of one or more addon folders (BigWigs ships eleven),
+//! extracted into `Interface/AddOns` and tracked as a set of folders.
 //!
-//! Two rules here are safety rather than bookkeeping:
+//! Two safety rules:
 //!
-//! 1. **Nothing is written outside the AddOns directory.** A zip entry may name
-//!    `../../../.bashrc` or an absolute path, and extracting it verbatim is the
-//!    classic zip-slip. Every path is validated before a byte is written.
-//! 2. **Only what the ledger records is ever deleted.** Hand-installed addons
-//!    and addons from another manager are never touched, because Lightforge did
-//!    not put them there.
+//! 1. **Nothing is written outside the AddOns directory**: every path is
+//!    validated against zip-slip before a byte is written.
+//! 2. **Only what the ledger records is ever deleted.**
 
 use std::ffi::OsString;
 use std::io::{Cursor, Read};
@@ -23,18 +18,14 @@ use serde::{Deserialize, Serialize};
 use super::catalog::Resolved;
 use crate::product::ProductCode;
 
-/// Refuse a package that expands beyond this. A zip bomb is a 40 KB download
-/// that fills a disk; no real addon is anywhere near this size.
+/// Refuse a package that expands beyond this (zip bombs); no real addon comes close.
 pub const MAX_UNCOMPRESSED: u64 = 512 * 1024 * 1024;
 
 /// Refuse a package download past this, half of [`MAX_UNCOMPRESSED`].
 pub const MAX_PACKAGE_BYTES: usize = 256 * 1024 * 1024;
 
-/// What Lightforge installed, so it can be updated and removed again.
-///
-/// Kept in Lightforge's own data directory rather than inside the game, so a
-/// reinstall of the game does not silently orphan it and Agent never sees a
-/// file it did not write.
+/// What Lightforge installed, so it can be updated and removed again. Kept in
+/// Lightforge's data directory, out of the game's.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ledger {
     #[serde(default)]
@@ -42,9 +33,6 @@ pub struct Ledger {
 }
 
 /// One installed addon.
-///
-/// `Default` exists for tests and for growing the struct: a new per-addon
-/// setting should not mean editing every literal that never cared about it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record {
     pub provider: String,
@@ -54,58 +42,30 @@ pub struct Record {
     pub file_id: Option<String>,
     /// Every folder the package wrote. Removal deletes exactly these.
     pub folders: Vec<String>,
-    /// Which builds this addon accepts, overriding the global default.
-    ///
-    /// `None` means "follow the default", not "stable", so changing the
-    /// default moves every addon that was never given an opinion of its own.
+    /// Which builds this addon accepts. `None` follows the global default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<super::Channel>,
-    /// What kind of build is actually installed, a *fact*, where
-    /// [`Record::channel`] is a *preference*.
-    ///
-    /// Without it, moving an addon from alpha back to stable looks exactly
-    /// like an update, because the only thing to compare is two opaque file
-    /// ids. `None` means it was installed before this was recorded.
+    /// What kind of build is installed, a fact, where [`Record::channel`] is
+    /// a preference. Lets alpha-to-stable read as a switch, not an update.
+    /// `None` for older records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<super::Channel>,
-    /// Left alone by anything that updates in bulk.
-    ///
-    /// For an addon kept at a version on purpose, or one a parent package
-    /// drags along: without it, every "Update all" quietly undoes the choice.
-    /// An explicit Update on the addon itself still works. This is about what
-    /// happens *without* being asked.
+    /// Left alone by anything that updates in bulk; its own Update still works.
     #[serde(default, skip_serializing_if = "is_false")]
     pub ignored: bool,
-    /// Updated without being asked, when Lightforge makes its own pass.
-    ///
-    /// `None` means "follow the app-wide default", the way [`Record::channel`]
-    /// does, so changing that default moves every addon that was never given
-    /// an opinion of its own.
+    /// Updated by Lightforge's own pass. `None` follows the app-wide default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_update: Option<bool>,
-    /// Held at this catalog file id, whatever is newer.
-    ///
-    /// A file id rather than a version string, because that is what both
-    /// providers and [`Record::file_id`] trade in: a version string would
-    /// have to be matched back to a file to be acted on, and two files can
-    /// carry the same one.
+    /// Held at this catalog file id, whatever is newer. Not a version string:
+    /// two files can carry the same one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned: Option<String>,
-    /// The day this build was installed, `YYYY-MM-DD`.
-    ///
-    /// Ours to record, because no provider knows it: the catalogue can say
-    /// when a build was *published*, which is a different question from when
-    /// this machine took it. `None` on anything installed before this was
-    /// recorded, an absent fact, not a zero.
+    /// The day this build was installed here, `YYYY-MM-DD`; providers only
+    /// know when it was published. `None` for older records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed_at: Option<String>,
-    /// The project page at its provider.
-    ///
-    /// Recorded here rather than read from an update check, because
-    /// [`crate::addons::manage::check_updates`] deliberately asks nothing
-    /// for a pinned or ignored addon, and those rows want the link as much
-    /// as any other. `None` on anything installed before this was recorded,
-    /// which only costs the menu entry.
+    /// The project page at its provider. Recorded: the update check skips
+    /// pinned and ignored addons. `None` for older records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub website_url: Option<String>,
     /// The author's page at the provider, when it names one.
@@ -116,11 +76,7 @@ pub struct Record {
     pub source_url: Option<String>,
 }
 
-/// Today, as `YYYY-MM-DD` in UTC.
-///
-/// UTC rather than local time because the string is stored and compared, not
-/// announced: a ledger written in one timezone and read in another should not
-/// disagree with itself about what day it was.
+/// Today, as `YYYY-MM-DD` in UTC: stored and compared, so timezone-free.
 pub fn today() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -131,10 +87,6 @@ pub fn today() -> String {
 }
 
 /// Days since the epoch to a civil date, by Howard Hinnant's `civil_from_days`.
-///
-/// Written out rather than pulled in: one date, one direction, no timezones
-/// and no formatting, a calendar crate for this would be a dependency to
-/// audit and update forever in exchange for nine lines.
 fn civil_from_unix(secs: u64) -> (i64, u32, u32) {
     let z = (secs / 86_400) as i64 + 719_468;
     let era = z.div_euclid(146_097);
@@ -152,21 +104,14 @@ fn civil_from_unix(secs: u64) -> (i64, u32, u32) {
 }
 
 impl Record {
-    /// Whether an unattended pass should update this addon.
-    ///
-    /// Ignoring wins over auto-updating, and is not a contradiction to be
-    /// resolved: "leave this alone" is the stronger of the two statements,
-    /// and an addon can carry an auto-update choice from before it was
-    /// ignored that should come back if it stops being ignored.
+    /// Whether an unattended pass should update this addon. Ignoring wins;
+    /// the auto-update choice survives for when it stops being ignored.
     pub fn updates_itself(&self, default: bool) -> bool {
         self.tracks_updates() && self.auto_update.unwrap_or(default)
     }
 
-    /// Whether this addon moves with its channel at all.
-    ///
-    /// Two different statements, both ending here: ignoring means "not in any
-    /// pass", pinning means "not to any other version". Either one makes an
-    /// update request for this addon pointless.
+    /// Whether this addon moves with its channel at all: not when ignored
+    /// (no pass) or pinned (no other version).
     pub fn tracks_updates(&self) -> bool {
         !self.ignored && self.pinned.is_none()
     }
@@ -178,12 +123,8 @@ fn is_false(value: &bool) -> bool {
 }
 
 impl Ledger {
-    /// Where a product's ledger lives.
-    ///
-    /// Keyed by the AddOns directory as well as the product, because a product
-    /// code alone is not an install: a second install of the same product (a
-    /// test root, a second copy of the game) would otherwise share one ledger
-    /// and each would be told it manages the other's addons.
+    /// Where a product's ledger lives, keyed by the AddOns directory too: a
+    /// second install of the same product gets its own.
     pub fn path_for(data_dir: &Path, addons_dir: &Path, code: &ProductCode) -> PathBuf {
         use sha2::{Digest, Sha256};
 
@@ -194,11 +135,8 @@ impl Ledger {
             .join(format!("{}-{tag}.json", code.as_str()))
     }
 
-    /// Load a ledger, treating a missing file as an empty one.
-    ///
-    /// A corrupt ledger is an error rather than a silent reset: it is the only
-    /// record of what may be deleted, and guessing would mean either orphaning
-    /// addons or deleting someone else's.
+    /// Load a ledger; a missing file is empty, a corrupt one an error: it is
+    /// the only record of what may be deleted.
     pub fn load(path: &Path) -> Result<Self, InstallError> {
         match std::fs::read(path) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|source| InstallError::Ledger {
@@ -210,9 +148,8 @@ impl Ledger {
         }
     }
 
-    /// Write atomically: a temp file of its own beside it, fsynced, then
-    /// renamed. Every product's ledger lives in one directory, so a shared
-    /// temp name let two saves rename each other's contents into place.
+    /// Write atomically, with a temp name of its own: every ledger shares one
+    /// directory.
     pub fn save(&self, path: &Path) -> Result<(), InstallError> {
         let json = serde_json::to_vec_pretty(self).expect("ledger serializes");
         crate::fsutil::write_atomic(path, &json).map_err(io(path))
@@ -227,12 +164,9 @@ impl Ledger {
     }
 
     /// Record an install, replacing any previous record of the same addon.
-    ///
-    /// A folder belongs to one record. The package just extracted replaced
-    /// these folders on disk, so another record claiming them, the same addon
-    /// from a different provider most often, loses them, and goes once it
-    /// has none left. Two owners meant removing either deleted folders the
-    /// other was still counting on. Returns the names of records dropped.
+    /// A folder has one owner: another record claiming these folders (the
+    /// same addon from another provider) loses them, and goes once it has
+    /// none left. Returns the names of records dropped.
     pub fn record(&mut self, record: Record) -> Vec<String> {
         self.addons
             .retain(|r| !(r.id == record.id && r.provider == record.provider));
@@ -252,16 +186,9 @@ impl Ledger {
         dropped
     }
 
-    /// Drop records whose folders have all vanished from disk.
-    ///
-    /// Addons deleted by hand, or lost to a reinstall of the game, would
-    /// otherwise be offered for update and remove forever. A record keeping
-    /// even one of its folders is left alone: a partly deleted package is
-    /// still ours to repair.
-    ///
-    /// Callers must only reconcile against a directory they can actually read,
-    /// an AddOns directory that is missing because the library is offline
-    /// says nothing about what is installed.
+    /// Drop records whose folders have all vanished from disk (deleted by
+    /// hand, lost to a reinstall). One folder left keeps the record. Only
+    /// against a directory that can be read: an offline library says nothing.
     pub fn prune_missing(&mut self, addons_dir: &Path) -> Vec<String> {
         let mut dropped = Vec::new();
         self.addons.retain(|record| {
@@ -285,10 +212,8 @@ impl Ledger {
         Some(self.addons.remove(index))
     }
 
-    /// Whether a resolved addon is newer than what is recorded.
-    ///
-    /// An addon with no recorded file id is treated as needing an update: it
-    /// was installed before we tracked versions, and refreshing it is harmless.
+    /// Whether a resolved addon is newer than what is recorded. No recorded
+    /// file id counts as newer.
     pub fn needs_update(&self, resolved: &Resolved, provider: &str) -> bool {
         match self.find(provider, &resolved.id) {
             None => true,
@@ -311,17 +236,14 @@ pub struct Extracted {
 
 /// Extract an addon package into `addons_dir`.
 ///
-/// Replaces whole folders, since a stale `.lua` left from the last version
-/// breaks an addon more confusingly than a missing one; `retire` names extra
-/// folders to remove in the same step. The package is written to a staging
-/// folder beside `AddOns` first, then swapped in by rename, so a full disk
-/// leaves the old addon intact and a failed rename puts back what it swapped.
+/// Replaces whole folders (a stale `.lua` still loads); `retire` names extra
+/// folders to remove. Staged beside `AddOns`, then swapped in by rename, so a
+/// full disk leaves the old addon and a failed rename is undone.
 pub fn extract(package: &[u8], addons_dir: &Path, retire: &[String]) -> Result<Extracted, InstallError> {
     extract_within(package, addons_dir, retire, MAX_UNCOMPRESSED)
 }
 
-/// [`extract`] with the size limit as a parameter, so a test can trip it
-/// without writing half a gigabyte.
+/// [`extract`] with the size limit as a parameter, for tests.
 fn extract_within(
     package: &[u8],
     addons_dir: &Path,
@@ -331,12 +253,10 @@ fn extract_within(
     let mut archive =
         zip::ZipArchive::new(Cursor::new(package)).map_err(InstallError::Archive)?;
 
-    // Validate everything *before* writing anything, so a malicious entry
-    // halfway through cannot leave a half-installed addon behind.
+    // Validate everything before writing anything.
     let mut planned: Vec<(usize, PathBuf, String)> = Vec::new();
-    // In first-seen order. The client sees `BigWigs` and `bigwigs` as one
-    // folder, so they are one here too, under the spelling met first, and
-    // every entry is filed under it.
+    // In first-seen order. `BigWigs` and `bigwigs` are one folder to the
+    // client, so one here, spelled as first met.
     let mut folders: Vec<String> = Vec::new();
     let mut total = 0u64;
     for index in 0..archive.len() {
@@ -359,8 +279,7 @@ fn extract_within(
             })
             .ok_or_else(|| InstallError::UnsafePath(raw.display().to_string()))?;
 
-        // A file at the zip's top level belongs to no addon folder; WoW would
-        // ignore it and we have nowhere sensible to put it.
+        // A top-level file belongs to no addon; WoW would ignore it.
         if relative.components().count() < 2 {
             continue;
         }
@@ -375,9 +294,7 @@ fn extract_within(
             }
         };
 
-        // What the archive claims, a cheap early refusal. The sizes are the
-        // packager's word, so the limit is enforced again below on the bytes
-        // that actually come out.
+        // The archive's own claim, an early refusal; enforced again on real bytes.
         total = total.saturating_add(entry.size());
         if total > limit {
             return Err(InstallError::TooLarge { limit });
@@ -389,25 +306,22 @@ fn extract_within(
         return Err(InstallError::NoAddonFolders);
     }
 
-    // A retired folder is replaced wholesale like the others, so it has to be
-    // one plain name inside `AddOns`, the same rule the ledger's are held to.
+    // A retired folder must be one plain name inside `AddOns` too.
     for folder in retire {
         if Path::new(folder).components().count() != 1 || safe_relative(Path::new(folder)).is_none() {
             return Err(InstallError::UnsafePath(folder.clone()));
         }
     }
 
-    // `AddOns` sits two levels below the client's own folder. Creating the
-    // whole chain would conjure a `_retail_` for a game that is not installed,
-    // and the library would then look like it holds one.
+    // Creating the whole chain would conjure a `_retail_` for a game that is
+    // not installed.
     if let Some(client) = addons_dir.ancestors().nth(2) {
         if !client.is_dir() {
             return Err(InstallError::GameNotInstalled(client.to_path_buf()));
         }
     }
     std::fs::create_dir_all(addons_dir).map_err(io(addons_dir))?;
-    // `Interface`, not `AddOns`: neither the client nor `scan` ever looks
-    // at a folder there that is not an addon.
+    // In `Interface`: nothing there is read as an addon.
     let interface = addons_dir.parent().unwrap_or(addons_dir);
     // Dropped at the end either way, taking the replaced copies with it.
     let staging = crate::staging::create_in(interface).map_err(io(interface))?;
@@ -423,10 +337,8 @@ fn extract_within(
             std::fs::create_dir_all(parent).map_err(io(parent))?;
         }
 
-        // Streamed, and capped at what is left of the budget plus one byte so
-        // going over is detectable. A header that says 1 byte in front of a
-        // deflate stream that inflates to gigabytes is otherwise read to the
-        // end: the zip reader bounds the compressed bytes, not the output.
+        // Capped at the budget plus one byte: the zip reader bounds compressed
+        // bytes, not output, and a header can claim 1 byte for gigabytes.
         let remaining = limit - bytes;
         let mut file = std::fs::File::create(&dest).map_err(io(&dest))?;
         let written =
@@ -480,8 +392,7 @@ fn swap_steps<'a>(
     moved_in: &mut Vec<&'a str>,
 ) -> Result<(), InstallError> {
     for name in folders.iter().chain(retired.iter().copied()) {
-        // Found ignoring case: an update that ships `bigwigs` replaces the
-        // installed `BigWigs` rather than landing beside it.
+        // Ignoring case: `bigwigs` replaces an installed `BigWigs`.
         let Some(existing) = on_disk(addons_dir, name) else {
             // Not installed yet, or already removed by hand.
             continue;
@@ -511,10 +422,8 @@ fn on_disk(dir: &Path, name: &str) -> Option<OsString> {
         .find(|existing| existing.as_encoded_bytes().eq_ignore_ascii_case(name.as_bytes()))
 }
 
-/// Delete the folders an install wrote, and forget it.
-///
-/// Only folders the ledger records are removed, and each is checked to be
-/// inside `addons_dir` before anything is deleted.
+/// Delete the folders an install wrote, each checked to be inside
+/// `addons_dir`, and forget it.
 pub fn remove(
     ledger: &mut Ledger,
     addons_dir: &Path,
@@ -525,8 +434,7 @@ pub fn remove(
         .forget(provider, id)
         .ok_or_else(|| InstallError::NotTracked(id.to_owned()))?;
 
-    // Never a folder another record still names. `record` keeps that from
-    // arising now, but ledgers written before it can hold one folder twice.
+    // Never a folder another record names; older ledgers can share one.
     let own: Vec<String> = record
         .folders
         .into_iter()
@@ -535,11 +443,8 @@ pub fn remove(
     delete_folders(addons_dir, &own)
 }
 
-/// Delete addon folders, and report which were actually there.
-///
-/// Only ever called with folders a [`Record`] names, the rule that nothing
-/// Lightforge did not install is ever deleted lives in the callers, and the
-/// path check here is the second lock on it.
+/// Delete addon folders a [`Record`] names, and report which were there. The
+/// path check is a second lock on "only what we installed".
 pub fn delete_folders(addons_dir: &Path, folders: &[String]) -> Result<Vec<String>, InstallError> {
     let mut removed = Vec::new();
     for folder in folders {
@@ -559,16 +464,14 @@ pub fn delete_folders(addons_dir: &Path, folders: &[String]) -> Result<Vec<Strin
 
 /// Normalise a zip path and refuse anything that escapes the destination.
 ///
-/// Rejects absolute paths, `..`, Windows drive prefixes, and empty results;
-/// accepts a plain relative path, dropping any `./` segments.
+/// Rejects absolute paths, `..`, drive prefixes and empty results; drops `./`.
 fn safe_relative(path: &Path) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {
             Component::Normal(part) => {
                 let text = part.to_str()?;
-                // A backslash survives as a literal on Unix, so a Windows-style
-                // path would otherwise become one giant file name.
+                // On Unix a backslash is a literal, not a separator.
                 if text.contains('\\') || text.contains('/') {
                     return None;
                 }
@@ -919,9 +822,7 @@ mod tests {
 
     #[test]
     fn the_civil_date_matches_known_epochs() {
-        // Dates nobody can argue with, including the two the algorithm is
-        // easiest to get wrong on: a leap day, and the century that is not a
-        // leap year's exception.
+        // Including a leap day and 2000, the century that is a leap year.
         assert_eq!(civil_from_unix(0), (1970, 1, 1));
         assert_eq!(civil_from_unix(951_782_400), (2000, 2, 29), "a leap day");
         assert_eq!(civil_from_unix(1_709_164_800), (2024, 2, 29));
