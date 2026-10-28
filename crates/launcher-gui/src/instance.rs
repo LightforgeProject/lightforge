@@ -22,8 +22,10 @@ use futures_util::Stream;
 
 pub const AFTER_UPDATE: &str = "--after-update";
 
-/// How long a restarted instance waits for the old one to let go.
-const RESTART_WAIT: Duration = Duration::from_secs(5);
+/// How long a restarted instance waits for the old one to let go. Past it,
+/// the restart pokes the old one and exits; if that one was on its way out,
+/// no window is left.
+const RESTART_WAIT: Duration = Duration::from_secs(15);
 
 /// Kept until the process exits, which is what releases the lock.
 static INSTANCE: OnceLock<Instance> = OnceLock::new();
@@ -81,6 +83,9 @@ fn claim_in(dir: &Path, id: &str, wait: Duration) -> io::Result<Option<Instance>
                 std::thread::sleep(Duration::from_millis(100));
             }
             Err(TryLockError::WouldBlock) => {
+                if !wait.is_zero() {
+                    tracing::warn!("the previous Lightforge still held the lock after {}s", wait.as_secs());
+                }
                 if let Err(e) = UnixStream::connect(&socket) {
                     tracing::warn!("the running Lightforge did not answer at {}: {e}", socket.display());
                 }
