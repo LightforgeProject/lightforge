@@ -215,8 +215,7 @@ impl Ledger {
     /// temp name let two saves rename each other's contents into place.
     pub fn save(&self, path: &Path) -> Result<(), InstallError> {
         let json = serde_json::to_vec_pretty(self).expect("ledger serializes");
-        crate::fsutil::write_atomic(path, &json)
-            .map_err(|source| InstallError::Io { path: path.to_path_buf(), source })
+        crate::fsutil::write_atomic(path, &json).map_err(io(path))
     }
 
     pub fn find(&self, provider: &str, id: &str) -> Option<&Record> {
@@ -398,10 +397,6 @@ fn extract_within(
         }
     }
 
-    let io = |path: &Path| {
-        let path = path.to_path_buf();
-        move |source| InstallError::Io { path, source }
-    };
     // `AddOns` sits two levels below the client's own folder. Creating the
     // whole chain would conjure a `_retail_` for a game that is not installed,
     // and the library would then look like it holds one.
@@ -425,10 +420,7 @@ fn extract_within(
         let mut entry = archive.by_index(*index).map_err(InstallError::Archive)?;
         let dest = fresh.join(relative);
         if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent).map_err(|source| InstallError::Io {
-                path: parent.to_path_buf(),
-                source,
-            })?;
+            std::fs::create_dir_all(parent).map_err(io(parent))?;
         }
 
         // Streamed, and capped at what is left of the budget plus one byte so
@@ -436,9 +428,9 @@ fn extract_within(
         // deflate stream that inflates to gigabytes is otherwise read to the
         // end: the zip reader bounds the compressed bytes, not the output.
         let remaining = limit - bytes;
-        let io = |source| InstallError::Io { path: dest.clone(), source };
-        let mut file = std::fs::File::create(&dest).map_err(io)?;
-        let written = std::io::copy(&mut (&mut entry).take(remaining + 1), &mut file).map_err(io)?;
+        let mut file = std::fs::File::create(&dest).map_err(io(&dest))?;
+        let written =
+            std::io::copy(&mut (&mut entry).take(remaining + 1), &mut file).map_err(io(&dest))?;
         if written > remaining {
             return Err(InstallError::TooLarge { limit });
         }
@@ -462,7 +454,7 @@ fn swap(
     folders: &[String],
     retired: &[&String],
 ) -> Result<(), InstallError> {
-    std::fs::create_dir_all(old).map_err(|source| InstallError::Io { path: old.to_path_buf(), source })?;
+    std::fs::create_dir_all(old).map_err(io(old))?;
     let mut moved_out: Vec<OsString> = Vec::new();
     let mut moved_in: Vec<&str> = Vec::new();
 
@@ -495,14 +487,12 @@ fn swap_steps<'a>(
             continue;
         };
         let target = addons_dir.join(&existing);
-        std::fs::rename(&target, old.join(&existing))
-            .map_err(|source| InstallError::Io { path: target, source })?;
+        std::fs::rename(&target, old.join(&existing)).map_err(io(&target))?;
         moved_out.push(existing);
     }
     for name in folders {
         let target = addons_dir.join(name);
-        std::fs::rename(fresh.join(name), &target)
-            .map_err(|source| InstallError::Io { path: target, source })?;
+        std::fs::rename(fresh.join(name), &target).map_err(io(&target))?;
         moved_in.push(name);
     }
     Ok(())
@@ -625,6 +615,11 @@ pub enum InstallError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> InstallError + '_ {
+    move |source| InstallError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {

@@ -1,5 +1,5 @@
 use super::updates::{effective_channel, update_requests};
-use super::{Event, ManageError, Options, Report, Unavailable};
+use super::{io, Event, ManageError, Options, Report, Unavailable};
 use crate::addons::catalog::{Catalog, Request, Resolved};
 use crate::addons::install::{self, Ledger, Record};
 use crate::addons::providers;
@@ -49,10 +49,7 @@ pub async fn install_all(
         unavailable,
     });
 
-    std::fs::create_dir_all(&options.addons_dir).map_err(|source| ManageError::Io {
-        path: options.addons_dir.clone(),
-        source,
-    })?;
+    std::fs::create_dir_all(&options.addons_dir).map_err(io(&options.addons_dir))?;
 
     let mut backup = options.backup.clone();
     let mut failed = None;

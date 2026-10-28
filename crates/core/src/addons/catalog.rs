@@ -20,7 +20,7 @@
 //! proxy returns; they never transit Tuxcore.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -318,10 +318,7 @@ impl Catalog {
             unreachable!("fixture read on an http origin")
         };
         let path = dir.join(name);
-        let bytes = std::fs::read(&path).map_err(|source| CatalogError::Io {
-            path: path.clone(),
-            source,
-        })?;
+        let bytes = std::fs::read(&path).map_err(io(&path))?;
         serde_json::from_slice(&bytes).map_err(|source| CatalogError::Fixture { path, source })
     }
 
@@ -530,6 +527,11 @@ pub enum CatalogError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> CatalogError + '_ {
+    move |source| CatalogError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {

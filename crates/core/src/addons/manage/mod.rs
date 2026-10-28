@@ -138,3 +138,7 @@ pub enum ManageError {
     #[error("the settings backup stopped unexpectedly: {0}")]
     Join(String),
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> ManageError + '_ {
+    move |source| ManageError::Io { path: path.to_path_buf(), source }
+}

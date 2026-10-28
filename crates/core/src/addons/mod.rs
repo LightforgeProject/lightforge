@@ -424,10 +424,7 @@ impl Installed {
 /// Folders without a readable `.toc` are skipped rather than reported: WoW
 /// itself ignores them, and `Blizzard_*` stubs and leftover junk are common.
 pub fn scan(addons_dir: &Path) -> Result<Vec<Installed>, AddonError> {
-    let entries = std::fs::read_dir(addons_dir).map_err(|source| AddonError::Io {
-        path: addons_dir.to_path_buf(),
-        source,
-    })?;
+    let entries = std::fs::read_dir(addons_dir).map_err(io(addons_dir))?;
 
     let mut found = Vec::new();
     for entry in entries.flatten() {
@@ -594,6 +591,11 @@ pub enum AddonError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> AddonError + '_ {
+    move |source| AddonError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {
