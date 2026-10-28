@@ -158,6 +158,12 @@ impl ProtonRunner {
             }
         };
         cmd.arg(verb).arg(program).args(args);
+        // In the program's own folder, as Windows starts it: the client
+        // writes `Logs/cpu.log` relative to it, which otherwise lands in
+        // whatever directory the launcher was started from.
+        if let Some(dir) = Path::new(program).parent().filter(|dir| dir.is_absolute() && dir.is_dir()) {
+            cmd.current_dir(dir);
+        }
 
         cmd.env("STEAM_COMPAT_DATA_PATH", &self.compat_data);
         cmd.env("STEAM_COMPAT_CLIENT_INSTALL_PATH", &self.steam_client);
@@ -783,6 +789,21 @@ mod tests {
                 "--exec=launch WoW",
             ]
         );
+    }
+
+    #[test]
+    fn a_program_runs_in_its_own_folder() {
+        // The client writes `Logs/cpu.log` relative to it; issue #3 found one
+        // in a user's home directory.
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("World of Warcraft/_classic_era_");
+        std::fs::create_dir_all(&game).unwrap();
+
+        let cmd = runner(root.path()).command("run", game.join("WowClassic.exe"), Vec::<String>::new());
+        assert_eq!(cmd.get_current_dir(), Some(game.as_path()));
+
+        let bare = runner(root.path()).command("run", "wineboot", ["-u"]);
+        assert_eq!(bare.get_current_dir(), None, "a bare name has no folder to run in");
     }
 
     #[test]
