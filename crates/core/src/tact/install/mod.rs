@@ -49,6 +49,10 @@ pub struct Options {
     pub checkpoint_bytes: u64,
     /// Extract the install manifest's files (the game executable and friends).
     pub install_files: bool,
+    /// Pre-download: the build `/bgdl` lists, into the store only. No install
+    /// files, no `.build.info` and no `.product.db`, so the installed build
+    /// stays what launches; a complete run is recorded in [`crate::tact::staged`].
+    pub stage: bool,
     /// Stop after this many archive indices, development only.
     pub limit_archives: Option<usize>,
     /// Truncate the plan to this many coalesced runs, development only.
@@ -81,6 +85,7 @@ impl Default for Options {
             gap_bytes: 64 * 1024,
             checkpoint_bytes: 4096 * 1024 * 1024,
             install_files: true,
+            stage: false,
             limit_archives: None,
             limit_runs: None,
             skip_loose: false,
@@ -176,6 +181,10 @@ pub enum Event {
         path: PathBuf,
         version: String,
     },
+    /// A pre-download finished: `version` is in the store, waiting for release.
+    Staged {
+        version: String,
+    },
     ProductDb {
         path: PathBuf,
     },
@@ -203,7 +212,8 @@ pub struct Summary {
     /// Why the run is not complete, each with the first cause where there is
     /// one, e.g. `3 files failed (first: connection reset)`. Empty when it is.
     pub reasons: Vec<String>,
-    /// Present when `complete`; the version `.build.info` now names.
+    /// Present when `complete`; the version `.build.info` now names. `None`
+    /// after a pre-download, which names none.
     pub version: Option<String>,
 }
 
@@ -242,8 +252,14 @@ pub enum InstallError {
     #[error(transparent)]
     ProductDb(#[from] crate::tact::productdb::ProductDbError),
 
+    #[error(transparent)]
+    Staged(#[from] crate::tact::staged::StagedError),
+
     #[error("the {0} table is empty for this region")]
     EmptyTable(&'static str),
+
+    #[error("Blizzard lists no build to pre-download in this region")]
+    NothingStaged,
 
     #[error("the build config has no {0} manifest")]
     MissingManifest(&'static str),

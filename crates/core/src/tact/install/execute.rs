@@ -48,9 +48,12 @@ pub async fn execute(
         .run(source, &plan, &mut writer, cancel, |p| on_event(Event::Progress(p)))
         .await?;
 
+    // A staged build is only data: its install files would replace the
+    // executable of the build that is being played.
+    let install_files = options.install_files && !options.stage;
     let mut install_complete = true;
     let mut install_failed: Vec<(String, String)> = Vec::new();
-    if options.install_files {
+    if install_files {
         let selected = install.select(&tags);
         let catalog = Catalog { encoding: &encoding, locations: &locations, loose: &loose };
         let report = extract_install(
@@ -95,7 +98,7 @@ pub async fn execute(
     if options.limited() {
         reasons.push("limit options truncated the plan".to_owned());
     }
-    if options.install_files && !install_complete {
+    if install_files && !install_complete {
         reasons.push(match install_failed.first() {
             Some((path, reason)) => format!(
                 "{} install files failed (first: {path}: {reason})",
@@ -107,7 +110,21 @@ pub async fn execute(
     let complete = reasons.is_empty();
     let incomplete_because = reasons.clone();
 
-    let version = if complete {
+    let version = if complete && options.stage {
+        crate::tact::staged::record(
+            dest,
+            crate::tact::staged::Staged {
+                product: code.clone(),
+                build_key: remote.build_config.clone(),
+                version: remote.versions_name.clone(),
+                cdn_path: cdn.path.clone(),
+                cdn_hosts: cdn.hosts.clone(),
+                cdn_servers: cdn.servers.clone(),
+            },
+        )?;
+        on_event(Event::Staged { version: remote.versions_name.clone() });
+        None
+    } else if complete {
         let info_path = dest.join(".build.info");
         // Only a missing file starts fresh: one that will not parse still
         // holds other products' rows.
@@ -136,6 +153,10 @@ pub async fn execute(
             path: info_path,
             version: remote.versions_name.clone(),
         });
+        // Released and now installed: nothing is staged any more.
+        if let Err(e) = crate::tact::staged::clear(dest, code, Some(&remote.build_config)) {
+            tracing::warn!("{e}");
+        }
 
         // Without `.product.db` Locate answers error 2800. From `.build.info`,
         // so the two agree.

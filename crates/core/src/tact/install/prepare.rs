@@ -105,6 +105,29 @@ pub struct Offerings {
     pub optional_bytes: Vec<(String, u64)>,
 }
 
+/// The build a run targets, the live one or with [`Options::stage`] the one
+/// `/bgdl` lists ahead of its release, and where the CDN serves it.
+async fn resolve(
+    http: &Http,
+    code: &ProductCode,
+    options: &Options,
+) -> Result<(version::Version, version::Cdn, Client), InstallError> {
+    let (rows, empty) = match options.stage {
+        true => (version::bgdl(http, options.region, code.as_str()).await?, InstallError::NothingStaged),
+        false => (
+            version::versions(http, options.region, code.as_str()).await?,
+            InstallError::EmptyTable("versions"),
+        ),
+    };
+    let remote = version::for_region(&rows, options.region, |v| &v.region).cloned().ok_or(empty)?;
+    let cdns = version::cdns(http, options.region, code.as_str()).await?;
+    let cdn = version::for_region(&cdns, options.region, |c| &c.name)
+        .cloned()
+        .ok_or(InstallError::EmptyTable("cdns"))?;
+    let client = Client::from_cdn(&cdn)?;
+    Ok((remote, cdn, client))
+}
+
 /// Resolve a build and read its download manifest, nothing else: much cheaper
 /// than [`prepare`]. With a `store`, sizes leave out what it holds.
 pub async fn offerings(
@@ -113,15 +136,7 @@ pub async fn offerings(
     options: &Options,
     store: Option<&StoreProbe>,
 ) -> Result<Offerings, InstallError> {
-    let versions = version::versions(http, options.region, code.as_str()).await?;
-    let remote = version::for_region(&versions, options.region, |v| &v.region)
-        .cloned()
-        .ok_or(InstallError::EmptyTable("versions"))?;
-    let cdns = version::cdns(http, options.region, code.as_str()).await?;
-    let cdn = version::for_region(&cdns, options.region, |c| &c.name)
-        .cloned()
-        .ok_or(InstallError::EmptyTable("cdns"))?;
-    let client = Client::from_cdn(&cdn)?;
+    let (remote, _, client) = resolve(http, code, options).await?;
 
     let build = BuildConfig::parse(&client.fetch_config(http, &remote.build_config).await?)?;
     let pair = build.download.ok_or(InstallError::MissingManifest("download"))?;
@@ -165,15 +180,7 @@ pub async fn prepare(
     options: &Options,
     on_event: &mut impl FnMut(Event),
 ) -> Result<Prepared, InstallError> {
-    let versions = version::versions(http, options.region, code.as_str()).await?;
-    let remote = version::for_region(&versions, options.region, |v| &v.region)
-        .cloned()
-        .ok_or(InstallError::EmptyTable("versions"))?;
-    let cdns = version::cdns(http, options.region, code.as_str()).await?;
-    let cdn = version::for_region(&cdns, options.region, |c| &c.name)
-        .cloned()
-        .ok_or(InstallError::EmptyTable("cdns"))?;
-    let client = Client::from_cdn(&cdn)?;
+    let (remote, cdn, client) = resolve(http, code, options).await?;
 
     let build_text = client.fetch_config(http, &remote.build_config).await?;
     let cdn_text = client.fetch_config(http, &remote.cdn_config).await?;

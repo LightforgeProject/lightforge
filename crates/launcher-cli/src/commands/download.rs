@@ -4,7 +4,7 @@ use crate::*;
 
 // One parameter per command-line flag.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn download(dest: PathBuf, product: String, region: String, locale: String, flavor: String, dry_run: bool, optional: Vec<String>, limit_archives: Option<usize>, limit_runs: Option<usize>, skip_loose: bool, install_files: bool, concurrency: usize, gap_kib: u32, checkpoint_mib: u64, cancel_after: Option<u64>, show_install: bool) -> Result<()> {
+pub(crate) async fn download(dest: PathBuf, product: String, region: String, locale: String, flavor: String, dry_run: bool, optional: Vec<String>, limit_archives: Option<usize>, limit_runs: Option<usize>, skip_loose: bool, install_files: bool, stage: bool, concurrency: usize, gap_kib: u32, checkpoint_mib: u64, cancel_after: Option<u64>, show_install: bool) -> Result<()> {
     use lightforge_core::net::Http;
     use lightforge_core::tact::download::Cancel;
     use lightforge_core::tact::install::{self, Event, Options as InstallOptions};
@@ -24,6 +24,7 @@ pub(crate) async fn download(dest: PathBuf, product: String, region: String, loc
         gap_bytes: gap_kib * 1024,
         checkpoint_bytes: checkpoint_mib * 1024 * 1024,
         install_files,
+        stage,
         limit_archives,
         limit_runs,
         skip_loose,
@@ -110,6 +111,7 @@ pub(crate) async fn download(dest: PathBuf, product: String, region: String, loc
         Event::BuildInfo { path, version } => {
             println!("\n.build.info     {} ({version})", path.display())
         }
+        Event::Staged { version } => println!("\nstaged          {version}, waiting for its release"),
         Event::ProductDb { path } => {
             println!(".product.db     {}", path.display())
         }

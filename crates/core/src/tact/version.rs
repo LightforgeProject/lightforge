@@ -120,12 +120,24 @@ impl Cdn {
     }
 }
 
-/// Fetch the version table for a product.
+/// Fetch the version table for a product: the build that is live.
 pub async fn versions(http: &Http, region: Region, product: &str) -> Result<Vec<Version>, VersionError> {
     let url = format!("{}/{product}/versions", region.host());
-    let table = Bpsv::parse(&http.get_text(&url).await?)?;
+    parse_versions(&http.get_text(&url).await?)
+}
 
-    table
+/// Fetch the background-download table: a build listed ahead of its release
+/// for clients to pre-load. Empty between patches, and for a product that
+/// has none the service answers `No matched data for selector …`, which
+/// parses to no rows as well.
+pub async fn bgdl(http: &Http, region: Region, product: &str) -> Result<Vec<Version>, VersionError> {
+    let url = format!("{}/{product}/bgdl", region.host());
+    parse_versions(&http.get_text(&url).await?)
+}
+
+/// `/versions` and `/bgdl` share their columns.
+fn parse_versions(text: &str) -> Result<Vec<Version>, VersionError> {
+    Bpsv::parse(text)?
         .rows()
         .map(|row| {
             Ok(Version {
@@ -557,6 +569,17 @@ eu|tpr/wow|level3.blizzard.com|http://level3.blizzard.com/?maxhosts=8 https://le
         // An empty cell is the same as no cell: .build.info has empty columns.
         assert_eq!(Status::compare(Some(""), None, &r), Status::NotInstalled);
         assert_eq!(Status::compare(None, None, &r).action(), crate::ActionState::Install);
+    }
+
+    /// `https://eu.version.battle.net/wow/bgdl` and `…/wow_classic_era/bgdl`,
+    /// both captured 2026-10-28, between patches.
+    #[test]
+    fn a_bgdl_table_between_patches_lists_no_build() {
+        let wow = "Region!STRING:0|BuildConfig!HEX:16|CDNConfig!HEX:16|KeyRing!HEX:16|BuildId!DEC:4|\
+                   VersionsName!String:0|ProductConfig!HEX:16\n## seqn = 4083842\n";
+        assert!(parse_versions(wow).unwrap().is_empty());
+        let era = "No matched data for selector 'v2/products/wow_classic_era/bgdl'";
+        assert!(parse_versions(era).unwrap().is_empty());
     }
 
     #[test]

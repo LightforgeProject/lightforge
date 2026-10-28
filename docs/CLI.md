@@ -320,6 +320,8 @@ Options:
           Skip the loose files, which are the large ones
       --install-files
           Also extract the install manifest's files (Wow.exe and friends)
+      --stage
+          Pre-download the build Blizzard lists ahead of its release, into the store only. The installed build stays the one that launches
       --concurrency <CONCURRENCY>
           Requests in flight. These transfers are request-latency bound, not bandwidth bound: 8 measured 9-10 MB/s where 32 measured 25 [default: 32]
       --gap-kib <GAP_KIB>

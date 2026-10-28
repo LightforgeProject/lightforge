@@ -191,6 +191,7 @@ pub(crate) fn describe(event: &Event) -> String {
         Event::InstallFile { path, .. } => format!("extracting {}", path.display()),
         Event::Extracted { files, .. } => format!("extracted {files} install files"),
         Event::BuildInfo { version, .. } => format!("finished — {version}"),
+        Event::Staged { version } => format!("pre-downloaded {version}"),
         Event::ProductDb { .. } => "writing .product.db".to_owned(),
         Event::Registered { .. } => "registered with Battle.net".to_owned(),
         Event::Incomplete { reasons } => format!("incomplete: {}", reasons.join(", ")),

@@ -115,6 +115,8 @@ pub struct Local {
     pub executable: Option<PathBuf>,
     /// Files the CASC store holds. Zero means no readable store.
     pub store_files: usize,
+    /// A build pre-downloaded ahead of its release.
+    pub staged: Option<crate::tact::staged::Staged>,
 }
 
 impl Local {
@@ -138,6 +140,7 @@ impl Local {
             version: cell(crate::buildinfo::COL_VERSION),
             executable: exe.is_file().then_some(exe),
             store_files,
+            staged: crate::tact::staged::get(&layout.wow_install(code), code),
         }
     }
 
@@ -194,6 +197,43 @@ pub fn decide(local: &Local, remote: Option<&Version>, transfer: Option<Transfer
     }
 }
 
+/// The pre-download beside the primary button, which it never replaces:
+/// the installed build stays what PLAY launches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreDownload {
+    /// `/bgdl` lists `version`, and its data is not here yet.
+    Available { version: String },
+    /// `version` is in the store, waiting for its release.
+    Ready { version: String },
+}
+
+/// `live` is the region's `/versions` row, `bgdl` its `/bgdl` row; either is
+/// `None` when unknown. A build that is live already is an update, not a
+/// pre-download.
+pub fn pre_download(local: &Local, live: Option<&Version>, bgdl: Option<&Version>) -> Option<PreDownload> {
+    if !local.is_installed() {
+        return None;
+    }
+    let released =
+        |key: &str| local.build_key.as_deref() == Some(key) || live.is_some_and(|l| l.build_config == key);
+
+    if let Some(next) = bgdl.filter(|b| !released(&b.build_config)) {
+        return Some(match &local.staged {
+            Some(staged) if staged.build_key == next.build_config => {
+                PreDownload::Ready { version: staged.version.clone() }
+            }
+            _ => PreDownload::Available { version: next.versions_name.clone() },
+        });
+    }
+    // `/bgdl` unreachable, or emptied ahead of the release: what is staged
+    // still counts until it goes live.
+    local
+        .staged
+        .as_ref()
+        .filter(|staged| !released(&staged.build_key))
+        .map(|staged| PreDownload::Ready { version: staged.version.clone() })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,7 +256,55 @@ mod tests {
             version: Some("1.15.9.69722".into()),
             executable: Some("/games/_classic_era_/WowClassic.exe".into()),
             store_files: 146_669,
+            staged: None,
         }
+    }
+
+    fn staged(build_key: &str) -> crate::tact::staged::Staged {
+        crate::tact::staged::Staged {
+            product: ProductCode::ClassicEra,
+            build_key: build_key.into(),
+            version: "1.15.10.71000".into(),
+            cdn_path: "tpr/wow".into(),
+            cdn_hosts: Vec::new(),
+            cdn_servers: Vec::new(),
+        }
+    }
+
+    const INSTALLED: &str = "3645f0fe9dc5215ea90eaf7cdb7379ce";
+    const NEXT: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+    #[test]
+    fn a_build_listed_ahead_of_release_can_be_pre_downloaded() {
+        let offer = pre_download(&complete(), Some(&remote(INSTALLED)), Some(&remote(NEXT)));
+        assert!(matches!(offer, Some(PreDownload::Available { .. })));
+    }
+
+    #[test]
+    fn a_pre_downloaded_build_reads_ready_even_offline() {
+        let local = Local { staged: Some(staged(NEXT)), ..complete() };
+        assert!(matches!(
+            pre_download(&local, Some(&remote(INSTALLED)), Some(&remote(NEXT))),
+            Some(PreDownload::Ready { .. })
+        ));
+        assert!(matches!(pre_download(&local, None, None), Some(PreDownload::Ready { .. })));
+    }
+
+    #[test]
+    fn a_released_build_is_an_update_not_a_pre_download() {
+        let local = Local { staged: Some(staged(NEXT)), ..complete() };
+        assert_eq!(pre_download(&local, Some(&remote(NEXT)), Some(&remote(NEXT))), None);
+        assert!(matches!(decide(&local, Some(&remote(NEXT)), None), ActionState::Update { .. }));
+    }
+
+    #[test]
+    fn a_newer_listing_supersedes_what_was_staged() {
+        let local = Local { staged: Some(staged(NEXT)), ..complete() };
+        let newer = "dddddddddddddddddddddddddddddddd";
+        assert!(matches!(
+            pre_download(&local, Some(&remote(INSTALLED)), Some(&remote(newer))),
+            Some(PreDownload::Available { .. })
+        ));
     }
 
     #[test]
@@ -322,6 +410,7 @@ mod queue_tests {
             version: Some("1.0.0".into()),
             executable: Some(PathBuf::from("/games/_retail_/Wow.exe")),
             store_files: 1,
+            staged: None,
         }
     }
 

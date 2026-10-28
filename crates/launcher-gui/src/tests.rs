@@ -280,6 +280,7 @@ fn a_game_on_an_absent_drive_is_held_rather_than_played_or_downloaded() {
         version: Some("11.2.7.65000".to_owned()),
         executable: Some(PathBuf::from("/nowhere/Wow.exe")),
         store_files: 12,
+        staged: None,
     };
     assert!(matches!(app.action(), ActionState::Play));
 

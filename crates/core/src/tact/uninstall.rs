@@ -136,6 +136,9 @@ pub fn execute(
         }
     }
 
+    // Its pre-download goes with it, or prune would keep that data forever.
+    super::staged::clear(install, code, None)?;
+
     // A record naming a removed product makes Battle.net reject the install.
     let db_path = install.join(".product.db");
     if db_path.exists() {
@@ -206,6 +209,9 @@ pub enum UninstallError {
 
     #[error(transparent)]
     ProductDb(#[from] productdb::ProductDbError),
+
+    #[error(transparent)]
+    Staged(#[from] super::staged::StagedError),
 
     #[error(transparent)]
     Write(#[from] super::writer::WriteError),

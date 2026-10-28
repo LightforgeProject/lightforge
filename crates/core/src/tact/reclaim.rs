@@ -10,9 +10,9 @@
 //! Three rules keep other versions' files safe:
 //!
 //! * The keep-set comes from the builds **on disk**: every `.build.info` row,
-//!   and every `.product.db` record without one (Agent drops a pre-installed
+//!   every `.product.db` record without one (Agent drops a pre-installed
 //!   build's row and keeps its data, as the Forever stress test showed on
-//!   2026-10-17).
+//!   2026-10-17), and every pre-downloaded build ([`super::staged`]).
 //! * A build keeps everything its build config names too (encoding, root,
 //!   `vfs-*`, patch manifests), which no manifest lists.
 //! * If any version's manifests cannot be read, there is no plan.
@@ -57,6 +57,8 @@ pub enum ReclaimError {
     Compact(#[from] CompactError),
     #[error(transparent)]
     ProductDb(#[from] ProductDbError),
+    #[error(transparent)]
+    Staged(#[from] super::staged::StagedError),
     #[error(
         "{product} is recorded in .product.db but its build cannot be worked out, \
          so its data cannot be told apart from unused data"
@@ -121,7 +123,8 @@ impl Build {
 }
 
 /// Every build whose data lives in the store under `install`: each
-/// `.build.info` row, then each product `.product.db` records without one.
+/// `.build.info` row, each product `.product.db` records without one, and
+/// each pre-downloaded build.
 ///
 /// A record with no build key or no CDN row is an error: skipped, its whole
 /// build would count as unused.
@@ -149,6 +152,20 @@ pub fn builds(install: &Path) -> Result<Vec<Build>, ReclaimError> {
         // Every WoW version comes from the same CDN path as its siblings.
         let cdn = builds.first().map(|b| b.cdn.clone()).ok_or_else(unaccounted)?;
         builds.push(Build { product, build_key, cdn });
+    }
+
+    for staged in super::staged::load(install)? {
+        if builds.iter().any(|b| b.product == staged.product && b.build_key == staged.build_key) {
+            continue;
+        }
+        let cdn = Cdn {
+            name: String::new(),
+            path: staged.cdn_path,
+            hosts: staged.cdn_hosts,
+            servers: staged.cdn_servers,
+            config_path: String::new(),
+        };
+        builds.push(Build { product: staged.product, build_key: staged.build_key, cdn });
     }
     Ok(builds)
 }
@@ -522,6 +539,24 @@ mod tests {
         assert_eq!(found, vec![("wow", a.as_str()), ("wowf", f.as_str())]);
         // Served from where its sibling is.
         assert_eq!(builds[1].cdn.path, "tpr/wow");
+    }
+
+    #[test]
+    fn a_pre_downloaded_build_is_kept_alongside_the_installed_one() {
+        let dir = tempfile::tempdir().unwrap();
+        write_build_info(dir.path(), &[("wow", &"a".repeat(32))]);
+        let staged = super::super::staged::Staged {
+            product: ProductCode::Retail,
+            build_key: "b".repeat(32),
+            version: "12.2.0.71000".to_owned(),
+            cdn_path: "tpr/wow".to_owned(),
+            cdn_hosts: vec!["level3.blizzard.com".to_owned()],
+            cdn_servers: Vec::new(),
+        };
+        super::super::staged::record(dir.path(), staged).unwrap();
+
+        let keys: Vec<String> = builds(dir.path()).unwrap().into_iter().map(|b| b.build_key).collect();
+        assert_eq!(keys, vec!["a".repeat(32), "b".repeat(32)]);
     }
 
     #[test]

@@ -216,6 +216,10 @@ pub(crate) enum Command {
         /// Also extract the install manifest's files (Wow.exe and friends).
         #[arg(long)]
         install_files: bool,
+        /// Pre-download the build Blizzard lists ahead of its release, into
+        /// the store only. The installed build stays the one that launches.
+        #[arg(long, conflicts_with = "install_files")]
+        stage: bool,
         /// Requests in flight. These transfers are request-latency bound, not
         /// bandwidth bound: 8 measured 9-10 MB/s where 32 measured 25.
         #[arg(long, default_value_t = 32)]
