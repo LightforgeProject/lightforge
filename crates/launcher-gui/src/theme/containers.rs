@@ -35,16 +35,8 @@ pub fn card(_theme: &Theme) -> container::Style {
 
 /// A panel that sits over artwork.
 ///
-/// Carries [`LIFT`]. Through 0.13 it could not: the software renderer sized a
-/// dirty region from the quad's bounds expanded by a single pixel, with no
-/// account of a shadow's blur radius or offset, so the area under a shadow
-/// never got cleared and the shadow composited over itself on every hover
-/// until it went black (iced-rs/iced#2712). #2715 fixed it, and 0.14 has it.
-///
-/// The brighter hairline stays alongside it. The two do different jobs, the
-/// hairline draws the edge, the shadow separates the panel from what is
-/// behind it, and over bright artwork a shadow alone leaves the top edge
-/// indistinct, which is the case [`BORDER_OVER_ART`] exists for.
+/// [`LIFT`] separates it from the art; the [`BORDER_OVER_ART`] hairline draws
+/// the edge a shadow leaves vague over bright art.
 pub fn floating(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(PANEL)),
@@ -61,15 +53,8 @@ pub fn floating(_theme: &Theme) -> container::Style {
 /// A dropdown's own surface, the app menu, the overflow list, an addon row's
 /// menu.
 ///
-/// Opaque, where [`floating`] is not. The translucency is right for a panel
-/// that occupies the page: it keeps the artwork readable underneath and the
-/// panel is large enough that the text still has contrast. A dropdown is the
-/// opposite case, a small list of short words, drawn over whatever happens to
-/// be behind it, read once and dismissed. At [`PANEL`]'s alpha a bright patch
-/// of key art shows straight through a four-word entry.
-///
-/// Same hairline and lift as [`floating`], so the two still read as the same
-/// material; only the background is solid.
+/// Like [`floating`] but opaque: key art shows through a short entry at
+/// [`PANEL`]'s alpha.
 pub fn menu(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(SURFACE)),
@@ -104,15 +89,7 @@ pub fn dialog(_theme: &Theme) -> container::Style {
 
 /// The hairline closing the header off from the content below it.
 ///
-/// Only on the screens without the game band: on the dashboard the band's own
-/// card does the separating. Its own element because a [`Border`] applies to
-/// all four sides and only the bottom edge wants a line here.
-///
-/// (There was a `ribbon` here, an edge-to-edge panel behind the whole header.
-/// It went when the band moved out into a card of its own: the bar existed to
-/// give the band and the title a readable ground, and the card now carries its
-/// own. Worth remembering why it was there, though, the header sits directly
-/// on product artwork, and loose text over a bright sky is the thing to watch.)
+/// Only without the game band. Its own element: a [`Border`] is all four sides.
 pub fn ribbon_edge(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(BORDER_OVER_ART)),
@@ -170,10 +147,7 @@ pub fn row(_theme: &Theme) -> container::Style {
     }
 }
 
-/// [`row`] as a button, for a row that is itself the click target, the
-/// games in All Games. The hover lights the whole row, for the reason
-/// [`card_button`] gives: a highlight inside a static row says only part of
-/// it is pressable. Buttons inside it still take their own clicks first.
+/// [`row`] as a button, lit whole on hover (see [`card_button`]).
 pub fn row_button(_theme: &Theme, status: button::Status) -> button::Style {
     let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
     // A twentieth of the way to the text colour: the same small lift as
@@ -204,20 +178,14 @@ pub fn row_button(_theme: &Theme, status: button::Status) -> button::Style {
 
 /// The shape of a scrollbar: narrow, and embedded rather than floating.
 ///
-/// iced's default is 10pt wide and drawn *over* the content, which on a list
-/// whose rows end in a button puts the scroller on top of the button. Giving
-/// it [`SM`] of spacing makes it take layout space of its own, so it sits
-/// beside the rows and the list below is simply that much narrower.
+/// With [`SM`] spacing it takes its own space, not drawn over row buttons.
 pub fn scrollbar_shape() -> scrollable::Scrollbar {
     scrollable::Scrollbar::new().width(6.0).scroller_width(6.0).spacing(SM)
 }
 
 /// A scrollbar: no rail, and a scroller that is a hairline made solid.
 ///
-/// Unstyled, iced draws a light grey rail that belongs to a light theme. The
-/// rail is dropped entirely, the gutter is already empty space, and the
-/// scroller is [`BORDER`]'s white at an alpha that reads over both a panel and
-/// artwork, brightening under the pointer the way the buttons do.
+/// The light-theme rail is dropped; the scroller is [`BORDER`]'s white.
 pub fn scrollbar(_theme: &Theme, status: scrollable::Status) -> scrollable::Style {
     let hovered = matches!(
         status,
@@ -259,14 +227,8 @@ pub fn badge(color: Color) -> impl Fn(&Theme) -> container::Style {
 
 /// A state worn at a button's size: same height, same corners, no press.
 ///
-/// [`badge`] is for a mark inside a line of text, a provider name beside an
-/// addon's title. This is for a state that stands where a button would and has
-/// to hold that space: "installed" next to Install, a build recommendation
-/// beside the picker that sets it. A pill in that position reads as a stray
-/// label rather than as the answer to the button next to it.
-///
-/// Deliberately not a disabled button: iced greys a button out by status, and
-/// grey is the one thing this must not be, the colour is the message.
+/// Where a button would stand ("installed" beside Install); [`badge`] is for
+/// inside text. Not a disabled button, which iced greys out.
 pub fn tag(color: Color) -> impl Fn(&Theme) -> container::Style {
     move |_theme| container::Style {
         background: Some(Background::Color(Color { a: 0.18, ..color })),

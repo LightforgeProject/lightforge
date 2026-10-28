@@ -23,9 +23,7 @@ impl Lightforge {
             }
 
             Message::BranchSelected(pick) => {
-                // An unconfigured branch is offered, not hidden, picking it
-                // is how it gets added, which beats hand-editing config.toml
-                // to try a PTR for an afternoon.
+                // Picking an unconfigured branch adds it.
                 if !pick.configured {
                     let label = pick.label.clone();
                     self.config
@@ -104,23 +102,13 @@ impl Lightforge {
                     self.manifest = themed.manifest;
                     self.refresh_catalog();
                 }
-                // Same reasoning as the branding swap below. A revalidation
-                // that answered 304 produces the same files decoded again;
-                // assigning them hands the renderer brand-new texture ids for
-                // pixels already on screen, and the whole band blinks after
-                // every switch.
+                // Only new marks: reassigning the same ones makes the band blink.
                 if !themed.icons.is_empty() && !tasks::same_marks(&self.icons, &themed.icons) {
                     self.icons = themed.icons;
                 }
                 if code == self.selected.code {
-                    // Only when it is actually different art. A revalidation
-                    // that answered 304 resolves to the same files, already
-                    // decoded and on screen, but assigning it hands iced new
-                    // image handles, which it has to upload again, and the
-                    // page blinks a second or two after a switch for no
-                    // reason. [`Branding`] carries each asset's path and
-                    // whether its bytes moved this run, so comparing it
-                    // answers exactly that question.
+                    // Only different art, compared by [`Branding`]: new handles
+                    // re-upload and the page blinks.
                     let same = self.branding.as_ref().map(|art| &art.branding)
                         == themed.branding.as_ref().map(|art| &art.branding);
                     trace::mark(match same {
@@ -214,10 +202,8 @@ impl Lightforge {
                     return Ok(Task::none());
                 }
 
-                // Moved over another tile: take its place, the way a browser
-                // tab does. Only in the direction of travel, or two tiles of
-                // different widths trade places back and forth under a
-                // cursor that has come to rest on the seam.
+                // Take a tile's place, only in the direction of travel, or two
+                // tiles swap back and forth on the seam.
                 let held = drag.line.clone();
                 let Some(over) = self.tile_hover.clone().filter(|line| line != &held) else {
                     return Ok(Task::none());
@@ -330,12 +316,7 @@ impl Lightforge {
             }
 
             Message::RemoveProduct(code) => {
-                // A tile is a *line*, and its PTR and beta are branches behind
-                // its version picker rather than games of their own, so
-                // Remove takes the line with it. Dropping the head alone left
-                // the tile on screen wearing whichever branch survived, which
-                // is what someone removing the game has just said they do not
-                // want.
+                // A tile is a line: Remove takes its branches too.
                 let line = self.catalog.line_of(&code);
                 let going: Vec<ProductCode> = self
                     .choices
@@ -353,9 +334,7 @@ impl Lightforge {
                 }
 
                 for code in &going {
-                    // A transfer for a product nobody is tracking has nowhere
-                    // to report to, so it stops here rather than running on
-                    // unseen.
+                    // An untracked product's transfer stops.
                     self.pause(code);
                     self.queue.retain(|d| &d.code != code);
                     self.downloads.finished(code);

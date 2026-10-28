@@ -50,7 +50,7 @@ pub(crate) use upgrade::{Prepared, Stamp};
 /// it when that is known.
 ///
 /// Built with [`Problem::of`] while the error still has its type, because
-/// that is the only point at which [`advise`](lightforge_core::advice::advise)
+/// that is the only point at which [`lightforge_core::advice::advise`]
 /// can tell a full drive from a dropped connection. A plain `String` converts
 /// into one with no advice, so a path that has not been taught any yet still
 /// reports exactly what it did before.

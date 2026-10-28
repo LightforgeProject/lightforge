@@ -14,9 +14,7 @@ pub(crate) use transfers::*;
 #[derive(Debug, Clone)]
 pub(crate) struct PatchNotes {
     pub(crate) release: lightforge_core::releases::Release,
-    /// Whether the checkbox is ticked. Written to the config on dismissal
-    /// rather than on each click, so a tick someone changes their mind about
-    /// before closing the card costs nothing.
+    /// Whether the checkbox is ticked; saved on dismissal.
     pub(crate) mute: bool,
 }
 
@@ -68,8 +66,7 @@ pub(crate) struct Splash {
 
 /// Where a product stands on [`proton::SHOP_BUILD`].
 ///
-/// Three states rather than a boolean: a hand-off title has no WoW shop to
-/// care about, and saying nothing is different from saying no.
+/// Three states: a hand-off title has no shop at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ShopBuild {
     /// Not a WoW product. Nothing to recommend.
@@ -95,11 +92,8 @@ pub(crate) enum AddonTab {
 
 /// Agent's registry, watched while Battle.net may be writing to it.
 ///
-/// The registry turns "Install via Battle.net" into "Play"; a game installed
-/// before Lightforge only lands there once the client has run, after "Open
-/// Battle.net" has already returned. So its timestamp is checked every
-/// [`REGISTRY_POLL`] and it is re-read when it moves. Stops once the client
-/// has come and gone, or after [`REGISTRY_GRACE`] if it never appears.
+/// A found game lands there only after the client runs. Checked every
+/// [`REGISTRY_POLL`] until the client has come and gone, or [`REGISTRY_GRACE`].
 #[derive(Debug, Clone)]
 pub(crate) struct RegistryWatch {
     pub(crate) since: Instant,
@@ -153,9 +147,7 @@ pub(crate) struct Maintain {
 /// What the hand-off panel's one button does, which depends on how much is
 /// known about the product.
 ///
-/// Three states rather than a pair of booleans at the call site: the label,
-/// the colour and the message have to agree, and they only do that reliably
-/// when one value decides all three.
+/// One value decides label, colour and message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HandoffAct {
     /// Installed, and the client knows which tile it is: start it.
@@ -177,10 +169,7 @@ impl HandoffAct {
 
     /// Blue means ready to play, and only that.
     ///
-    /// Installing is a filled button too. It is still the thing to press on
-    /// this panel, but a neutral one, so the blue is never spent on a game
-    /// that cannot be played yet. `None` draws outlined: opening the client
-    /// is not an act on this game at all, so it does not dress as one.
+    /// Installing is filled but neutral; `None` (just open the client) is outlined.
     pub(crate) fn colour(self) -> Option<iced::Color> {
         match self {
             Self::Play => Some(theme::ACCENT),
@@ -226,27 +215,21 @@ pub(crate) enum Launch {
     Game,
     /// Hand off to Battle.net, which starts the game itself.
     ///
-    /// Not for the shop's sake. That was the old assumption, disproven on
-    /// 2026-10-02: the shop is the game's own CEF and works from a direct
-    /// launch. This is for a game only Battle.net can install and update.
+    /// For games only Battle.net installs; the shop works from a direct launch.
     BattleNet,
     /// Open the Battle.net client itself, for everything outside the WoW
     /// family. A pass-through, not a managed install; see `SPEC.md`.
     Client,
     /// Put the client on a game's tile so its Install button can be pressed.
     ///
-    /// The same hand-off as [`Launch::BattleNet`] and deliberately a separate
-    /// intent: an install needs a visible window and a person, where a launch
-    /// needs neither and waits for a game that an install will not produce
-    /// for an hour.
+    /// Separate from [`Launch::BattleNet`]: an install needs a visible window
+    /// and waits for no game.
     Install,
 }
 
 /// A tile held down in the band.
 ///
-/// `origin` is unknown at the press, which carries no position, and is taken
-/// from the first movement after it. `last` is where the cursor was on the
-/// previous movement, so a move can tell which way it is heading.
+/// `origin` comes from the first movement (a press has no position).
 pub(crate) struct TileDrag {
     pub(crate) line: ProductLine,
     pub(crate) origin: Option<f32>,

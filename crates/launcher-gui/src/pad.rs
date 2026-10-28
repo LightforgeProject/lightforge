@@ -1,22 +1,13 @@
 //! Gamepads, read straight from the kernel.
 //!
-//! The selection ring was first driven by keys alone, on the theory that
-//! Steam Input turns a Deck's D-pad into arrows. It does that only under a
-//! keyboard layout. Under the gamepad layout Steam gives a non-Steam game by
-//! default in Game Mode, the game sees a virtual Xbox pad and no keys at all,
-//! so the launcher sat still while Steam's own menus worked. Reading the pad
-//! here makes the ring move whatever layout Steam chose.
+//! Steam Input sends arrows only under a keyboard layout; Game Mode's default
+//! for a non-Steam game is a virtual Xbox pad. Reading pads works either way.
 //!
 //! The D-pad and the left stick step the ring, A presses, B goes back. A
 //! held direction repeats, the way a held arrow key does.
 //!
-//! Steam names the physical pads it is already translating in
-//! `SDL_GAMECONTROLLER_IGNORE_DEVICES` when it launches a game, so the same
-//! press does not arrive twice, once raw and once through Steam's virtual
-//! pad. Those pads are skipped here too. A launcher started some other way
-//! while Steam runs gets no such list and sees both, so beyond that one pad
-//! has the floor while presses keep coming and the same press from another
-//! is dropped.
+//! Pads in `SDL_GAMECONTROLLER_IGNORE_DEVICES` (Steam's own) are skipped.
+//! Without that list both arrive, so one pad holds the floor while it presses.
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -37,10 +28,8 @@ pub enum Input {
     Back,
 }
 
-/// How long a direction is held before it starts repeating, and how often
-/// it repeats after that. Close to a desktop's key repeat, a little slower,
-/// because a ring that runs past its target on a list is worse than one
-/// that takes a moment longer to get there.
+/// Hold before repeating, and the repeat rate: a little slower than a
+/// keyboard's, so the ring does not overshoot.
 const REPEAT_DELAY: Duration = Duration::from_millis(400);
 const REPEAT_EVERY: Duration = Duration::from_millis(130);
 
@@ -55,9 +44,7 @@ const STICK_OFF: f32 = 0.4;
 /// controls. Longer than the repeat, so a held direction keeps it.
 const FLOOR: Duration = Duration::from_millis(150);
 
-/// Every press from every pad, for as long as the launcher runs. A machine
-/// with no pads, or one where the input devices cannot be opened, gives an
-/// empty stream and nothing else changes.
+/// Every press from every pad; empty without pads.
 pub fn inputs() -> impl Stream<Item = Input> {
     iced::stream::channel(16, async |mut output| {
         let (send, mut receive) = tokio::sync::mpsc::unbounded_channel();
@@ -93,9 +80,7 @@ fn read(send: tokio::sync::mpsc::UnboundedSender<Input>) {
         let event = gilrs.next_event_blocking(wait);
         let now = Instant::now();
         let Some(event) = event else {
-            // Not only a timeout: gilrs also comes back empty for an event
-            // its filters dropped, which a resting stick's noise makes every
-            // few milliseconds. So the hold is asked whether it is due.
+            // gilrs also comes back empty for filtered stick noise.
             if let Some((pad, step)) = held.repeat(now) {
                 floor.take(pad, now);
                 crate::trace::pad(format_args!("pad {pad} -> {:?} (held)", Input::Step(step)));
@@ -120,9 +105,7 @@ fn read(send: tokio::sync::mpsc::UnboundedSender<Input>) {
         if skipped {
             continue;
         }
-        // Releases and the stick's resting state are kept for every pad, so
-        // one that loses the floor mid-push is not out of step when it gets
-        // it back; only what would move the ring waits for the floor.
+        // Releases and resting state are tracked for every pad.
         let input = match event.event {
             EventType::ButtonPressed(button, _) => match button {
                 Button::South => Some(Input::Press),
@@ -191,10 +174,8 @@ struct Held {
 #[derive(Default)]
 struct Stick {
     pushed: Option<Step>,
-    /// Whether each axis, X then Y, has been seen resting. Until then it is
-    /// not trusted: measured with a Turtle Beach Recon, a pad nobody has
-    /// touched yet reports both sticks hard into a corner, which read as a
-    /// push would send the ring sliding left and down on its own.
+    /// Whether each axis has been seen resting: an untouched Turtle Beach
+    /// Recon reports its sticks hard in a corner.
     rested: [bool; 2],
 }
 

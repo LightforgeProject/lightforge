@@ -6,11 +6,7 @@ use iced::widget::column;
 impl Lightforge {
     /// Every Proton build on the machine, and how to add or remove one.
     ///
-    /// Installing lives in this card's own header rather than behind the
-    /// update check in the card above, which is where it used to be: the
-    /// button that revealed the picker and the picker it revealed were in
-    /// two different sections, so the page told you to go and press
-    /// something somewhere else.
+    /// Installing is in this card's own header.
     pub(crate) fn proton_builds(&self) -> Element<'_, Message> {
         let mut rows = column![].spacing(theme::SM);
 
@@ -38,19 +34,8 @@ impl Lightforge {
                 facts = facts.push(muted(bytes_of(*size, 0), theme::CAPTION));
             }
 
-            // Only managed builds are ours to delete, and only when nothing
-            // points at them, the reason is shown instead of a dead button,
-            // since "why can't I remove this" is the whole question here.
-            //
-            // The count, not the list. Spelled out it ran to two lines of
-            // full product names, "pinned by the app default, Battle.net,
-            // World of Warcraft, World of Warcraft Classic, World of
-            // Warcraft: Forever, Beta", which is a paragraph where a row
-            // wants a word. The names are still there on hover, because the
-            // count alone does not tell you what to go and unpin.
-            // A button in every case, pressable or not, so the column on the
-            // right reads as one: what cannot be done is a greyed button that
-            // says why, not a loose line of text.
+            // Only unpinned managed builds can go. Otherwise a greyed button
+            // with the pin count, the names on hover.
             let idle = |label: String| {
                 secondary(&label, Message::RemoveProton(build.version.clone()))
                     .keyed(format!("proton idle {}", build.version), false)
@@ -83,10 +68,7 @@ impl Lightforge {
             );
         }
 
-        // While a build is coming down, in this card. It used to throw the
-        // user to Settings > Setup, because that was the only place a
-        // progress bar existed, pressing Install and landing on a different
-        // page reads as a misclick.
+        // Progress shows in this card.
         if self.setup_running {
             rows = rows.push(self.install_progress());
         }
@@ -117,10 +99,7 @@ impl Lightforge {
 
     /// Which Proton each game runs under, and the update check.
     ///
-    /// Every installed game, not the one the Play page is showing: Settings is
-    /// about the install as a whole, and a row that renamed itself as you
-    /// switched tiles read as a bug, correctly, since nothing on the page
-    /// said which game it meant.
+    /// Every installed game, not the one the Play page shows.
     pub(crate) fn proton_section(&self) -> Element<'_, Message> {
         let games = self.installed_products();
         // Two questions: which Proton each game runs, and which Protons are
@@ -146,9 +125,7 @@ impl Lightforge {
         current: Option<String>,
         on_pick: impl Fn(ProtonChoice) -> Message,
     ) -> Element<'_, Message> {
-        // Built per row rather than once: the first entry is "no pin of my
-        // own", and what that falls through to is different on a title
-        // Battle.net opens than on a game Lightforge launches itself.
+        // Per row: "no pin of my own" falls through differently per game.
         let builds = std::iter::once(ProtonChoice(None, unpinned))
             .chain(
                 self.setup
@@ -173,22 +150,14 @@ impl Lightforge {
     fn game_pins(&self, games: &[(ProductCode, String)]) -> Vec<Element<'_, Message>> {
         let mut pins: Vec<Element<'_, Message>> = Vec::new();
         for (code, label) in games {
-            // Every game, a title Battle.net launches included. Its pin is
-            // honoured on the hand-off path too, so the control is not a lie,
-            // the client is told to start *that* game, and that game is
-            // what the pin is about. What it cannot do is give the title a
-            // prefix of its own: there is one, shared, which is what the
-            // downgrade sign is for.
+            // Hand-off titles too: their pin is honoured, in the shared prefix.
             let pin = self
                 .config
                 .product(code)
                 .and_then(|p| p.profile.proton_ge_version.clone());
             let for_code = code.clone();
 
-            // Both signs now, where the old row had space for one and the
-            // shop always won. They say different things, one names a build
-            // to move to, the other warns about the prefix this one shares,
-            // and a game can be in both states at once.
+            // Both signs: the shop build, and the shared prefix's downgrade.
             let mut tags: Vec<Element<'_, Message>> = Vec::new();
             match self.shop_build_state(code) {
                 ShopBuild::Running => tags.push(tag("In-game shop working".to_owned(), theme::OK)),

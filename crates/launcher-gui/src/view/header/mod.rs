@@ -10,59 +10,37 @@ mod selection;
 impl Lightforge {
     /// Title, product picker, and navigation.
     pub(crate) fn header(&self) -> Element<'_, Message> {
-        // Title, then the pages, then everything that is not a page pushed to
-        // the far end. The band is no longer in this row at all, it has one
-        // of its own below, so the tiles answer "which game" where the tabs
-        // answer "which page", instead of the two sharing a line.
+        // Title, pages, then the rest at the far end; the band has its own row.
         let mut bar = row![self.app_menu_button()]
             .align_y(Alignment::Center)
             .spacing(theme::SM);
 
-        // Back and forward, between the wordmark and the tabs as in any
-        // browser. Both are drawn always and lit only when there is somewhere
-        // to go: a control that appears and disappears moves the tabs beside
-        // it, and arrows that vanish are harder to find than arrows that are
-        // simply dim.
+        // Back and forward, always drawn so the tabs never move, dim when unusable.
         bar = bar.push(Space::new().width(Length::Fixed(GROUP_GAP)));
         bar = bar.extend(self.history_arrows());
 
-        // The pages in a row of their own rather than loose in `bar`, so
-        // [`TAB_GAP`] sets the air between tabs and nothing else: the row above
-        // separates groups, wordmark, arrows, pages, and those two distances
-        // are not the same distance.
+        // Their own row, so [`TAB_GAP`] spaces only the tabs.
         bar = bar.push(Space::new().width(Length::Fixed(GROUP_GAP)));
         bar = bar.push(self.page_tabs());
         bar = bar.push(Space::new().width(Length::Fill));
 
-        // Only while something is in flight. An idle launcher has no
-        // downloads to manage, and a permanent button that opens an empty
-        // panel is furniture.
+        // Only while something is in flight.
         if !self.queue.is_empty() {
             bar = bar.push(self.downloads_button());
             bar = bar.push(Space::new().width(Length::Fixed(theme::SM)));
         }
 
-        // No backdrop behind the tabs. The wordmark, the arrows and the pages
-        // are chrome, and chrome over artwork needs no bar of its own to be
-        // legible, what made the old ribbon necessary was the band sharing
-        // its line, and the band has moved out.
+        // No backdrop behind the tabs.
         let mut rows =
             column![container(bar).width(Length::Fill).padding([theme::SM, theme::LG])];
 
-        // The band as a card of its own, inset from the window and detached
-        // from the row above, the same `floating` treatment as the action
-        // panel at the foot of the dashboard, so the two read as the same kind
-        // of object: a surface laid over the art rather than a strip welded to
-        // the window's edge. `responsive` hands `strip` the room it actually
-        // has, which is what decides how many tiles fit before the overflow
-        // takes the rest.
+        // The band as a `floating` card, like the action panel. `responsive`
+        // gives `strip` its real width.
         if self.shows_band() {
             rows = rows.push(self.band_card());
         }
 
-        // The hairline only where the band card is not: the card is the
-        // separation where it appears, and on a page without one a header with
-        // no backdrop would otherwise run straight into the content.
+        // The hairline only where the band card is not.
         match self.shows_band() {
             true => rows.push(Space::new().height(Length::Fixed(theme::SM))).into(),
             false => rows
@@ -158,11 +136,7 @@ impl Lightforge {
             }
         };
 
-        // A tab that leaves the app rather than changing the screen, so it
-        // cannot go through `nav`: there is no `Screen` to compare against and
-        // nothing behind it to light up. It wears the arrow for exactly that
-        // reason. It is the only thing in this row that opens a browser, and
-        // without the mark it reads as a page that never arrives.
+        // A tab that opens a browser, so it wears the arrow and skips `nav`.
         let outbound = |label: &'static str, url: &'static str| {
             button(
                 row![
@@ -202,9 +176,7 @@ impl Lightforge {
         self.ring(
             focus::Target::Downloads,
             Some(Message::ToggleManager),
-            // A drawn mark, like the back and forward arrows beside it; a
-            // typed arrow sat on the text baseline at the font's weight
-            // and read as a stray character.
+            // A drawn mark; a typed arrow read as a stray character.
             button(
                 row![
                     image(download_icon())
@@ -229,12 +201,7 @@ impl Lightforge {
         container(
             container(
                 row![
-                    // Labelled, the way Battle.net labels its own
-                    // band: the tiles are marks without words, and one
-                    // quiet word says what the row is before you know
-                    // them.
-                    // Centred on the letters, not on the line box;
-                    // see [`optically_centred`].
+                    // Labelled as Battle.net's band is; see [`optically_centred`].
                     container(optically_centred(
                         muted("GAMES".to_owned(), theme::LABEL).font(theme::BOLD),
                     ))
@@ -242,10 +209,7 @@ impl Lightforge {
                     .align_y(Alignment::Center),
                     responsive(|space| self.strip(space.width)),
                 ]
-                // Only where there is a client to open. Declining
-                // Battle.net during setup is a supported choice, and a
-                // button that opens something that is not installed is
-                // worse than no button.
+                // Not when Battle.net was declined.
                 .extend((!self.config.battle_net_declined).then(|| {
                     Element::from(
                         container(self.ring(
@@ -260,12 +224,7 @@ impl Lightforge {
                 .spacing(theme::MD)
                 .align_y(Alignment::Center),
             )
-            // Centred, not merely given the height: a container aligns
-            // its content to the top by default, so the row's slack
-            // all fell below the tiles and they sat against the card's
-            // upper edge. The row's own `align_y` cannot fix that, it
-            // centres the tiles within the row, which is exactly as
-            // tall as they are.
+            // Centred: a container aligns to the top by default.
             .align_y(Alignment::Center)
             .height(Length::Fixed(strip_height()))
             .padding([0.0, theme::MD])

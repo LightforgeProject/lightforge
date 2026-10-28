@@ -1,33 +1,21 @@
 //! Moving through the launcher without a mouse.
 //!
-//! A controller reaches us as keys or as a gamepad, depending on the Steam
-//! Input layout: the D-pad is the arrows, A is Enter and B is Escape either
-//! way, the gamepad half read by [`crate::pad`]. iced has no focus for
-//! buttons, so the launcher keeps its own: one selected control at a time,
-//! drawn with a ring, moved by the arrows and pressed by Enter.
+//! A controller arrives as keys or as a gamepad ([`crate::pad`]). iced has no
+//! button focus, so the launcher keeps a ring: [`ring`] records where each
+//! control was drawn, and an arrow moves to the nearest one that way.
 //!
-//! Every control that can take the ring is wrapped in [`ring`], which writes
-//! down where it was drawn and how to press it. The arrows then move to the
-//! nearest control in that direction on the page as it was last drawn, the
-//! way a television remote does, so up from the leftmost game is the logo
-//! above it and not some fixed place.
-//!
-//! Three more wrappers shape where the ring may go:
+//! More wrappers shape where the ring may go:
 //!
 //! - [`root`] goes round the whole window and starts each frame's record
 //!   afresh, so a control that is no longer drawn is no longer a place.
 //! - [`layer`] goes round a dialog or a menu. Only the topmost layer drawn
 //!   is reachable, the way only it is clickable.
-//! - [`region`] goes round a scrolled list or page. The ring scrolls it to
-//!   keep itself in view, and an arrow with nowhere to go scrolls it instead,
-//!   which is how release notes are read with a D-pad.
-//! - [`group`] goes round controls that belong together, a card or a list.
-//!   Up and down stay inside it while there is anywhere to go, so the ring
-//!   walks down a card rather than across into the one beside it. A region
-//!   is a group too.
+//! - [`region`] goes round a scrolled list: it scrolls to keep the ring in
+//!   view, and an arrow with nowhere to go scrolls it.
+//! - [`group`] keeps up and down inside a card or list while it can. A
+//!   region is a group too.
 //!
-//! The record is per thread: iced draws and updates on one, and each test
-//! gets its own.
+//! The record is per thread, so each test gets its own.
 
 mod nav;
 mod typing;
@@ -113,13 +101,9 @@ pub enum Press {
 #[derive(Debug, Clone)]
 pub struct Spot {
     pub bounds: Rectangle,
-    /// Where it is in the window, which is what the arrows compare: inside
-    /// a scrolled list `bounds` moves with the scrolling, so a row far down
-    /// the list would otherwise sit below the buttons under the list.
+    /// Where it is in the window, which the arrows compare.
     screen: Rectangle,
-    /// What was visible of the region the control was drawn in. Inside a
-    /// scrolled list both are in the list's own coordinates, which is what
-    /// lets the list be scrolled to bring the control into view.
+    /// What was visible of its region, in the region's coordinates.
     pub viewport: Rectangle,
     pub press: Press,
     /// Whether it is a text field, which on a console wants a keyboard.

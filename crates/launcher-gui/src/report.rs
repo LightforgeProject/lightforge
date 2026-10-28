@@ -1,49 +1,32 @@
 //! Sending a bug report, or a note to the developer.
 //!
-//! Both go to our own GlitchTip as a Sentry event, and both only ever happen
-//! because somebody filled in a dialog and pressed Send. There is no panic
-//! hook and no automatic capture: the `panic` and `release-health` features
-//! are off in `Cargo.toml` precisely so that nothing can be sent behind
-//! anyone's back.
+//! A Sentry event to our GlitchTip, only on Send. No automatic capture: the
+//! `panic` and `release-health` features are off in `Cargo.toml`.
 
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use lightforge_core::net::Http;
 
-/// Our GlitchTip project. A Sentry DSN is a write-only ingest key and is meant
-/// to ship inside the client, which is why this is a plain constant rather
-/// than something read from the environment.
+/// Our GlitchTip project; a DSN is a write-only key meant to ship.
 const DSN: &str = "https://788f3511837f42abade303476cdeef11@bugs.k3nny.tech/1";
 
-/// How long to wait for the event to actually leave the machine. The dialog
-/// tells someone their report was sent, so that has to be true rather than
-/// hopeful, `capture` alone only queues it.
+/// How long to wait for the event to leave: the dialog says it was sent.
 const FLUSH: Duration = Duration::from_secs(15);
 
-/// Where a screenshot is uploaded, so the issue carries a link instead of a
-/// megabyte of base64, GlitchTip drops envelope attachments, so this is the
-/// only way the picture gets to be a picture. Our own host, the same one the
-/// artwork manifest comes from.
-///
-/// `/upload` and not the bare namespace: the reverse proxy in front of it
-/// routes `/shots/v1/*`, which matches nothing without a segment after `v1`,
-/// so a POST to the bare path never reaches the service at all.
+/// Where a screenshot is uploaded, so the issue carries a link (GlitchTip
+/// drops attachments). `/upload`: the proxy routes `/shots/v1/*` only.
 const SHOTS: &str = "https://lightforge.tuxcore.pro/shots/v1/upload";
 
 /// How long the upload may take before the report goes without it.
 ///
-/// Short on purpose. Nothing depends on it working: the picture travels
-/// inside the event when it fails, exactly as it used to, so the only thing a
-/// longer wait buys is a longer wait in front of someone who has already
-/// pressed Send.
+/// Short: on failure the picture travels inside the event.
 const UPLOAD: Duration = Duration::from_secs(20);
 
 /// What is being sent.
 pub enum Kind {
-    /// A bug, with the rendered debug bundle. Already scrubbed: every bundle
-    /// is, because [`lightforge_core::debug::DebugInfo::render`] scrubs on the
-    /// way out.
+    /// A bug, with the debug bundle, already scrubbed by
+    /// [`lightforge_core::debug::DebugInfo::render`].
     Bug(String),
     /// A note about the app. No diagnostics: nothing is wrong with the
     /// machine, so none of its details are anyone's business.
@@ -52,11 +35,8 @@ pub enum Kind {
 
 /// What a report is about, picked in the dialog before it can be sent.
 ///
-/// Two jobs: it puts the report in a pile on the issue list (a tag, and a
-/// prefix on the title, which is the one thing the list shows), and for a bug
-/// it decides what is attached beside the base bundle. A report about addons
-/// carries the addon list, one about the settings carries the settings; the
-/// rest of the machine's state is noise for that question.
+/// It tags the report and prefixes its title, and decides what a bug report
+/// attaches beside the bundle (the addon list, the settings).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
     /// The game itself: it will not start, crashes, looks or runs wrong.
@@ -118,9 +98,7 @@ impl std::fmt::Display for Category {
 
 static CLIENT: OnceLock<Option<Arc<sentry::Client>>> = OnceLock::new();
 
-/// Feedback goes out without what the `contexts` integration adds to every
-/// event, OS, kernel, device, runtime: [`Kind::Feedback`] promises no
-/// diagnostics, and the card never shows them.
+/// Feedback goes out without the `contexts` integration's machine details.
 fn without_machine_details(mut event: sentry::protocol::Event<'static>) -> Option<sentry::protocol::Event<'static>> {
     if event.tags.get("type").map(String::as_str) == Some("feedback") {
         event.contexts.clear();
@@ -130,20 +108,13 @@ fn without_machine_details(mut event: sentry::protocol::Event<'static>) -> Optio
 
 /// One report at a time.
 ///
-/// [`Ours`] records the outcome of the send it just made so that `flush` can
-/// report it, which is only exact while one report is in flight. Two at once
-/// would have each reading the other's answer, and the dialog would tell
-/// somebody their report arrived because a different one did.
+/// [`Ours`] records one send's outcome for `flush`, exact only one at a time.
 static SENDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The launcher's own HTTP client, wearing sentry's transport trait.
 ///
-/// sentry's transport brings a second `reqwest` major version and, through
-/// the shared `rustls`, a second crypto provider (`aws-lc-sys`, built from C).
-/// All it was needed for: serialise the envelope, post it, say whether it
-/// worked. Synchronous because the only caller is already on a blocking
-/// thread (see [`send`]). No rate-limit handling or retries: a report only
-/// exists because someone pressed Send, and the dialog refuses repeats.
+/// sentry's own transport brings a second `reqwest` and `aws-lc-sys`.
+/// Synchronous: the caller is on a blocking thread ([`send`]). No retries.
 struct Ours {
     http: Http,
     runtime: tokio::runtime::Handle,
@@ -171,17 +142,14 @@ impl sentry::Transport for Ours {
     }
 
     fn flush(&self, _timeout: Duration) -> bool {
-        // Nothing is ever queued: `send_envelope` has already been and
-        // waited. So this is not "did the queue drain" but "did the one send
-        // work", which is the question the dialog is actually asking.
+        // Nothing is queued: this is whether the one send worked.
         *self.outcome.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
 /// Builds [`Ours`] when the client asks for a transport.
 ///
-/// It holds the pieces the transport cannot find for itself: the launcher's
-/// HTTP client, and a handle to the runtime it has to be driven on.
+/// With the launcher's HTTP client and the runtime to drive it on.
 struct OursFactory {
     http: Http,
     runtime: tokio::runtime::Handle,
@@ -204,9 +172,7 @@ impl sentry::TransportFactory for OursFactory {
 
 /// The client, built the first time something is sent.
 ///
-/// Nothing exists until then: no client, no transport thread, no connection to
-/// our server. A launcher that never reports a bug never talks to us at all,
-/// which is the consent model rather than a promise about it.
+/// Until then nothing exists: no client, no thread, no connection.
 // `ClientOptions` cannot be built by a struct literal (see below), so the
 // fields are assigned after the default; that is the only way available.
 #[allow(clippy::field_reassign_with_default)]
@@ -216,38 +182,27 @@ fn client(http: Option<Http>, runtime: tokio::runtime::Handle) -> Option<Arc<sen
             // The launcher's client when there is one. It is the same stack
             // with the same roots either way, this only shares the pool.
             let http = http.or_else(|| Http::new().ok())?;
-            // Assembled field by field rather than with a struct literal
-            // because `ClientOptions` is `#[non_exhaustive]`: a literal does
-            // not compile against it, whatever the field list.
+            // `ClientOptions` is `#[non_exhaustive]`.
             let mut options = sentry::ClientOptions::default();
             options.release = sentry::release_name!();
             // The default, set anyway because it is load-bearing: it is what
             // stops the server recording the sender's IP address.
             options.send_default_pii = false;
-            // Pinned, because the `contexts` integration fills an empty
-            // `server_name` with the machine's hostname and does not consult
-            // `send_default_pii` before doing it. A desktop hostname is
-            // usually somebody's name.
+            // Or `contexts` fills in the hostname, often a person's name,
+            // ignoring `send_default_pii`.
             options.server_name = Some("redacted".into());
             // After the integrations, so it sees what they added.
             options.before_send = Some(Arc::new(without_machine_details));
 
-            // Parsed rather than handed to `from_config` as a string, which
-            // panics on a malformed DSN. A typo in the constant should cost a
-            // report, not the launcher.
+            // Parsed: `from_config` panics on a malformed DSN.
             let Ok(dsn) = DSN.parse::<sentry::types::Dsn>() else { return None };
             options.dsn = Some(dsn);
 
-            // Ours, set before `apply_defaults`, which only fills a transport
-            // in when there is none. With it, sentry's `reqwest`, `rustls`
-            // and `transport` features are all off in `Cargo.toml` and the
-            // release carries one HTTP client and one crypto provider.
+            // Before `apply_defaults`, which only fills in a missing transport.
             options.transport = Some(Arc::new(OursFactory { http, runtime }));
 
-            // `apply_defaults` still, for the `contexts` integration, and
-            // because without it a client reports `is_enabled()` as false and
-            // `flush` cheerfully returns true on an empty queue, which looks
-            // exactly like a working client that cannot reach the network.
+            // Without `apply_defaults` the client is disabled and `flush`
+            // returns true on an empty queue.
             let client = sentry::Client::from_config(sentry::apply_defaults(options));
             client.is_enabled().then(|| Arc::new(client))
         })
@@ -269,9 +224,7 @@ pub struct Report {
     /// An address, a Discord name, or nothing. The one piece of personal data
     /// in either report, and it is here because they typed it.
     pub contact: String,
-    /// Facts worth filtering issues by, product, Proton build, distro. Every
-    /// one of them is already in the bundle the card showed; they are repeated
-    /// here only so GlitchTip can group and search on them.
+    /// Facts to filter issues by (product, Proton, distro), also in the bundle.
     pub tags: Vec<(String, String)>,
     pub shot: Option<Shot>,
     /// The last things the launcher said, oldest first.
@@ -289,10 +242,7 @@ enum Picture {
 
 /// Upload the screenshot, or say why the report will have to carry it.
 ///
-/// Every failure lands in the same place deliberately: an unreachable host, a
-/// refusal, a rate limit and a reply we cannot read are all "the picture goes
-/// inside the event", and none of them is worth putting in front of someone
-/// who is already reporting a bug.
+/// Every failure means the picture goes inside the event, silently.
 async fn upload(shot: &Shot, http: Option<&Http>) -> Picture {
     use base64::Engine as _;
 
@@ -318,13 +268,9 @@ struct Uploaded {
 
 /// Send one report, and say whether it arrived.
 ///
-/// `http` is the launcher's own client, so the upload shares the connection
-/// pool and the TLS roots with everything else; without one the picture is
-/// embedded as before.
+/// `http` is the launcher's own client; without it the picture is embedded.
 pub async fn send(report: Report, http: Option<Http>) -> bool {
-    // Taken here, where there is certainly a runtime, and handed down: the
-    // transport is driven from a blocking thread and has to be told which
-    // runtime to drive it on.
+    // Taken here, for the transport on its blocking thread.
     let runtime = tokio::runtime::Handle::current();
 
     // Before the blocking half, because it is the one part that is actually
@@ -364,11 +310,7 @@ pub async fn send(report: Report, http: Option<Http>) -> bool {
             .collect::<Vec<_>>()
             .into();
 
-        // Inside the event either way, never beside it: GlitchTip's ingest
-        // lists `attachment` among the envelope item types it ignores, so an
-        // attached image is parsed and dropped without an error anywhere.
-        // A link is one click from the issue page; a data URI pastes into a
-        // browser's address bar.
+        // Inside the event: GlitchTip drops attachments.
         if let Some((name, picture)) = picture {
             let (key, value) = match picture {
                 Picture::Link(url) => ("screenshot_url", url),
@@ -380,10 +322,7 @@ pub async fn send(report: Report, http: Option<Http>) -> bool {
 
         let contact = contact.trim();
         if !contact.is_empty() {
-            // An address goes in `email` and anything else in `username`, so
-            // GlitchTip shows it in the place a reply would be looked for.
-            // The test is deliberately crude, it only decides which of two
-            // fields the same string lands in.
+            // An address in `email`, anything else in `username`.
             let mut user = sentry::protocol::User::default();
             match contact.contains('@') {
                 true => user.email = Some(contact.to_owned()),
@@ -417,10 +356,7 @@ mod tests {
 
     /// A server that answers one request and hands back what it was sent.
     ///
-    /// The transport is the one piece of the report path with nobody above it
-    /// to notice a mistake: a report that silently fails to leave the machine
-    /// looks exactly like a report that arrived. So it is spoken to over a
-    /// real socket rather than mocked.
+    /// Over a real socket, not mocked: a silent failure looks like success.
     fn one_request() -> (String, std::sync::mpsc::Receiver<(String, Vec<u8>)>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().unwrap().port();
@@ -469,10 +405,7 @@ mod tests {
         }
     }
 
-    /// Multi-threaded, like the one the launcher actually runs under: a
-    /// current-thread runtime is driven only while something calls into it,
-    /// and `Ours` hands it work from a *different* thread and waits, which
-    /// is a deadlock, not a test.
+    /// Multi-threaded: `Ours` waits on work from another thread.
     fn runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("runtime")
     }

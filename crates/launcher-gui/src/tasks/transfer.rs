@@ -4,31 +4,23 @@ use super::*;
 
 /// What a running transfer publishes for the UI to read.
 ///
-/// A `watch` channel deliberately keeps only the newest value: the download
-/// calls its progress callback once per stored file, 1.5 million times on
-/// retail, and the UI samples at its own rate. Nothing queues, so the
-/// transfer can never be slowed by a busy window.
+/// Through a `watch` channel, newest value only: the callback runs 1.5
+/// million times on retail.
 #[derive(Debug, Clone, Default)]
 pub struct TransferState {
     pub stage: String,
     pub progress: Progress,
     /// Bytes this run's plan has to fetch; `None` until the plan is made.
     ///
-    /// The plan excludes everything already in the store, so this is the
-    /// size of the job, not of the product: an update to a 90 GB install
-    /// that changes 10 GB plans 10 GB.
+    /// The size of the job, not the product.
     pub remaining: Option<u64>,
-    /// Optional content this build offers, as the manifest named it. Carried
-    /// back so the settings panel has something real to offer rather than a
-    /// hardcoded guess.
+    /// Optional content this build offers, as the manifest named it.
     pub optional: Vec<String>,
 }
 
 /// Download `code` into its install directory, publishing progress to `tx`.
 ///
-/// Returns the run's summary. A paused transfer is not an error: `pause` trips
-/// the same cancel token the guard uses, and the next run resumes from what
-/// the store already holds.
+/// A paused transfer is not an error; the next run resumes from the store.
 // Eight arguments, all of them a distinct input to one transfer; a struct
 // here would only move the same list one level out.
 #[allow(clippy::too_many_arguments)]
@@ -45,14 +37,8 @@ pub async fn download(
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
     let stalls = tx.subscribe();
 
-    // The download runs on its own thread with its own runtime, and the result
-    // comes back over a channel.
-    //
-    // This is not ceremony: the fetch loop holds borrowed work items across
-    // await points, so its future is not provably `Send`, and `Task::perform`
-    // requires `Send`. `block_on` imposes no such bound. The CLI has always run
-    // the whole fetch as a single task regardless of its runtime's threads, so
-    // nothing about throughput changes here.
+    // Its own thread and runtime: the fetch future is not `Send`, which
+    // `Task::perform` requires.
     std::thread::Builder::new()
         .name("lightforge-download".to_owned())
         .spawn(move || {
@@ -67,18 +53,10 @@ pub async fn download(
             let result = runtime.block_on(async move {
                 let watchdog = tokio::spawn(report_stalls(stalls));
                 let result = async move {
-                // Deliberately not the app's shared client: this runtime is
-                // built here and torn down with the thread, and a reqwest
-                // client's connections belong to the runtime that opened them.
+                // Its own client: connections belong to the runtime that opened them.
                 let http = Http::new().map_err(|e| Problem::of(&e))?;
                 let dest = layout.wow_install(&code);
-                // The library's own path, not the default one. `.product.db`
-                // records where Battle.net should look, and a product on an
-                // added drive lives under that drive's letter; writing
-                // `C:\Program Files (x86)\World of Warcraft` for it points
-                // Battle.net at the default library, where this install is
-                // not, and it answers that the folder holds no WoW files.
-                // `uninstall` already resolves it this way.
+                // The library's own Windows path, for `.product.db`.
                 let windows_path = layout
                     .library(&code)
                     .map(|library| library.windows_wow_path())
@@ -88,11 +66,7 @@ pub async fn download(
                     locale,
                     flavor: code.install_dir().into_owned(),
                     optional_tags: optional_tags.clone(),
-                    // Tighter than the CLI's 4 GiB. A checkpoint is a few
-                    // milliseconds of index writing, and it bounds what is
-                    // lost if the app is killed rather than closed, the CLI
-                    // is a foreground process someone is watching, a launcher
-                    // is not.
+                    // Tighter than the CLI's 4 GiB: nobody watches a launcher.
                     checkpoint_bytes: 512 * 1024 * 1024,
                     limit_bytes_per_second,
                     // So Battle.net lists the product as installed rather than
@@ -108,12 +82,7 @@ pub async fn download(
                 let mut stage = String::from("preparing");
                 let mut remaining = None;
                 let mut optional: Vec<String> = Vec::new();
-                // The last figures the downloader actually reported. A stage
-                // event carries no progress of its own, and publishing a
-                // default one in its place is what emptied the bar and dropped
-                // the rate to zero the moment the bytes were in: the tail of
-                // every run, extracting, .build.info, .product.db, is
-                // nothing but stage events.
+                // A stage event carries no progress, so the last figures stay.
                 let mut latest = Progress::default();
 
                 let on_event = move |event: Event| {
@@ -162,12 +131,8 @@ pub async fn download(
 
 /// Write to the log when a running transfer stops moving.
 ///
-/// A stuck download raises no error, so without this the log would only
-/// say "progress" and then nothing, and nothing is not evidence. Sampled
-/// from the same channel the window reads, so it costs the transfer nothing.
-/// The first note comes after a minute without a byte, a request or a new
-/// stage; after that one every five minutes, so a download left stuck
-/// overnight adds a few lines, not a few hundred.
+/// A stuck download raises no error. After a minute without progress, then
+/// every five minutes.
 async fn report_stalls(mut state: tokio::sync::watch::Receiver<TransferState>) {
     const TICK: Duration = Duration::from_secs(15);
     let key = |s: &TransferState| (s.stage.clone(), s.progress.bytes_stored, s.progress.requests_done);
@@ -238,16 +203,11 @@ pub(crate) fn gib(bytes: u64) -> f64 {
 
 /// `Downloads` behind a lock, so pre-flight can pause a transfer the UI owns.
 ///
-/// A launch must not let Agent and our downloader write the same CASC
-/// files.
 #[derive(Debug, Clone, Default)]
 pub struct SharedDownloads(pub Arc<Mutex<Downloads>>);
 
 impl SharedDownloads {
-    /// Every `Downloads` method is a single map insert or remove, so a panic
-    /// elsewhere cannot leave it half-updated. Skipping on poison instead
-    /// would stop registering downloads, and a launch would then never pause
-    /// one.
+    /// Poison is ignored: every method is a single insert or remove.
     fn lock(&self) -> std::sync::MutexGuard<'_, Downloads> {
         self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
@@ -280,12 +240,9 @@ impl DownloadGuard for SharedDownloads {
 
 /// Remove what a cancelled download wrote, and nothing else.
 ///
-/// If nothing else is installed, the whole store goes with the flavour
-/// directory. Otherwise only entries this build wants and no remaining
-/// product wants are dropped, which covers everything the cancelled run
-/// fetched, since the plan skips what the store already had. The build comes
-/// from the version service (a cancelled install has no `.build.info` row);
-/// without the network the files stay.
+/// The whole store when nothing else is installed; otherwise entries only
+/// this build wants. The build comes from the version service, so offline
+/// the files stay.
 pub async fn discard_download(
     http: Option<Http>,
     layout: Layout,

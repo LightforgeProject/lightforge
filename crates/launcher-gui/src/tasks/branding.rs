@@ -4,9 +4,7 @@ use super::*;
 
 /// Branding straight off disk, for the frame before [`theme`] answers.
 ///
-/// Network-free and typically a few tens of milliseconds, so on every run
-/// after the first the dashboard opens already themed instead of showing its
-/// unthemed card for the length of a revalidation.
+/// Network-free, tens of milliseconds.
 pub async fn cached_theme(
     pipeline: Option<Pipeline>,
     codes: Vec<ProductCode>,
@@ -57,30 +55,20 @@ pub(crate) fn cached_icons(
 /// A theming pass: the branding it produced, the manifest it read, and every
 /// configured product's bar icon.
 ///
-/// The manifest comes back so the app can hold onto it; see [`theme`]. The
-/// icons ride along because the pass already holds the one manifest that names
-/// them all, and the product bar needs the whole set, not just the selected
-/// product's.
+/// The manifest comes back for the app to keep ([`theme`]).
 #[derive(Debug, Default, Clone)]
 pub struct Themed {
     pub manifest: Option<Arc<Manifest>>,
     pub branding: Option<Art>,
     pub icons: HashMap<ProductCode, Mark>,
-    /// Set only by the cache-only pass: everything the first screen draws
-    /// was on disk, the selected game's art and every product's mark, so the
-    /// splash has nothing left to wait for.
+    /// Set by the cache-only pass when the first screen's art was all on disk.
     pub warm: bool,
 }
 
 /// A product's decoded mark, beside the file it came from.
 ///
-/// The path is kept for one reason: to tell whether a theming pass produced
-/// *different* marks or the same ones again. [`Handle::from_path`] used to
-/// make that free, because iced caches those by path and reassigning one costs
-/// nothing. A handle built from pixels is a fresh id every time, so assigning
-/// an identical set makes the renderer re-upload every texture, which is the
-/// band blinking after a switch. Comparing paths answers it exactly, the same
-/// way [`Art`] compares its [`lightforge_core::assets::Branding`].
+/// The path tells an identical set of marks from a new one: a pixel handle is
+/// a fresh id, and reassigning re-uploads every texture (the band blinks).
 #[derive(Debug, Clone)]
 pub struct Mark {
     pub path: PathBuf,
@@ -129,15 +117,9 @@ pub async fn prefetch_within(
 
 /// Fetch every product's artwork into the cache, without decoding any of it.
 ///
-/// The first run's "it looks weird for the first second or two on every game"
-/// fix: a panel's background and wordmark are revalidated the first time it is
-/// opened, and until they land the card is empty. Pulling them all down while
-/// the wizard's first slide is on screen means every panel opens from disk.
-///
-/// Deliberately not decoded and not kept: decoding thirteen 4K backgrounds to
-/// hold them all in memory would cost more than it saves, and [`cached_theme`]
-/// reads them off disk per product in tens of milliseconds. Returns how many
-/// products now have art cached.
+/// So every panel opens from disk on a first run. Not decoded: thirteen 4K
+/// backgrounds in memory cost more than [`cached_theme`]'s disk read. Returns
+/// how many products have art cached.
 pub async fn prefetch(
     http: Option<Http>,
     pipeline: Option<Pipeline>,
@@ -156,13 +138,8 @@ pub async fn prefetch(
     };
     use futures_util::StreamExt;
 
-    // A few products at a time. This only runs with art missing, usually a
-    // first run, where everything is a real download: one at a time made the
-    // splash the sum of every transfer, and all at once would open a dozen
-    // connections to one host (no HTTP/2 here) fighting over a slow link.
-    //
-    // Each future owns its handles: borrowing them across `buffer_unordered`
-    // trips the compiler's higher-ranked `Send` check on the task.
+    // A few at a time (no HTTP/2 here). Each future owns its handles, or
+    // `buffer_unordered` fails the higher-ranked `Send` check.
     let manifest = Arc::new(manifest);
     let total = codes.len();
     let cached = futures_util::stream::iter(codes)
@@ -191,11 +168,7 @@ pub async fn prefetch(
 /// Resolve a product's branding, or an empty [`Themed`] when theming isn't
 /// configured or the manifest can't be read.
 ///
-/// The manifest is fetched once per session rather than once per product
-/// switch: one document describes every product, so re-asking for it on each
-/// switch buys a round trip and nothing else. Pass the cached copy back in and
-/// only the two images are revalidated. The app drops its copy when the asset
-/// source changes, which is the only thing that can invalidate it mid-session.
+/// Pass the session's manifest back in and only the two images are revalidated.
 pub async fn theme(
     http: Option<Http>,
     pipeline: Option<Pipeline>,
@@ -212,11 +185,7 @@ pub async fn theme(
         Some(cached) => cached,
         None => match pipeline.manifest(&http).await {
             Ok(fresh) => {
-                // Only on a fresh manifest, which is the only moment the full
-                // set of live URLs is known. Published art is
-                // content-addressed, so a changed image arrives under a new
-                // URL and the old cache file would otherwise sit there
-                // forever, a few megabytes per revision.
+                // Only on a fresh manifest.
                 let removed = pipeline.prune_cache(&fresh);
                 if removed > 0 {
                     crate::trace::mark(format_args!("pruned {removed} stale cached assets"));
@@ -240,15 +209,11 @@ pub async fn theme(
         }
     };
 
-    // Every product's mark, not just the selected one's: the bar shows them
-    // all at once. They are small and revalidate to a 304, so the whole set
-    // costs about what one image does.
+    // Every product's mark: the bar shows them all.
     let mut icons = HashMap::new();
     for product in &codes {
         if let Ok(Some(icon)) = pipeline.icon(&http, &manifest, product).await {
-            // Scaled here rather than handed over as a path: the band draws
-            // these at 40pt, and letting the renderer reduce a 256px image
-            // that far is what made them look pixelated.
+            // Scaled here: the renderer's reduction pixelates.
             icons.insert(product.clone(), Mark::decode(icon.path));
         }
     }
@@ -271,11 +236,7 @@ mod mark_tests {
         Mark { path: PathBuf::from(path), handle: Handle::from_rgba(1, 1, vec![0, 0, 0, 0]) }
     }
 
-    /// The regression this guards: icons became decoded handles, and a handle
-    /// built from pixels is a fresh id every time. Reassigning an identical
-    /// set makes the renderer re-upload every texture, which is the band
-    /// blinking a second after each product switch, the same fault the
-    /// branding swap was fixed for in October.
+    /// An identical set reassigned made the band blink after each switch.
     #[test]
     fn identical_icon_sets_compare_equal_despite_new_handles() {
         let retail = ProductCode::from("wow".to_owned());

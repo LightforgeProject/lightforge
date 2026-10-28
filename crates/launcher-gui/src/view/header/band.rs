@@ -6,9 +6,7 @@ use iced::widget::column;
 impl Lightforge {
     /// The configured lines, in the order their first product appears.
     ///
-    /// A line, not a product: PTR and beta are builds of a game, not games
-    /// beside it, so five World of Warcrafts collapse to three tiles and a
-    /// version picker.
+    /// A line, not a product: PTR and beta sit behind a version picker.
     pub(crate) fn lines(&self) -> Vec<ProductLine> {
         let mut lines: Vec<ProductLine> = Vec::new();
         for choice in &self.choices {
@@ -22,9 +20,7 @@ impl Lightforge {
 
     /// Move the line at `from` in the band to `to`, its products with it.
     ///
-    /// The band's order is the configured products' order, so that is what
-    /// changes; the choices follow so the band redraws without a reload. A
-    /// stable sort keeps a line's PTR and beta where they were behind it.
+    /// Reorders the configured products, stably.
     pub(crate) fn move_line(&mut self, from: usize, to: usize) {
         let mut order = self.lines();
         let line = order.remove(from);
@@ -40,9 +36,7 @@ impl Lightforge {
 
     /// What to call a line on screen.
     ///
-    /// The name the user gave it first, then the catalog's, and only then the
-    /// line's own, which for a line Lightforge does not model is the bare
-    /// product code, and `hs_beta` is not a thing to label a tile with.
+    /// The user's name, then the catalog's, then the line's own.
     pub(crate) fn name_of(&self, line: &ProductLine) -> String {
         let head = line.head();
         self.choices
@@ -55,19 +49,15 @@ impl Lightforge {
 
     /// The mark a line's tile wears, if the manifest gives it one.
     ///
-    /// Hand-offs included: whether a tile shows art depends on whether art
-    /// exists, not on who installs the game. The head's mark first, then any
-    /// other branch's: Forever's head is `wowf`, whose art stays on
-    /// `wow_classic_beta` (see `Manifest::head_theme`).
+    /// Hand-offs included. The head's mark, then any branch's (Forever's art
+    /// stays on `wow_classic_beta`).
     pub(crate) fn tile_art(&self, line: &ProductLine) -> Option<&tasks::Mark> {
         line.branches().iter().find_map(|code| self.icons.get(code))
     }
 
     /// One tile.
     ///
-    /// A line with no icon in the manifest falls back to its label, so the
-    /// band is complete and usable before any art exists and fills in one line
-    /// at a time as art is published.
+    /// Without an icon, the label.
     pub(crate) fn tile(&self, line: &ProductLine) -> Element<'_, Message> {
         let selected = line == &self.catalog.line_of(&self.selected.code);
         let face: Element<Message> = match self.tile_art(line) {
@@ -82,13 +72,9 @@ impl Lightforge {
                 .into(),
         };
 
-        // The button only for its look. A pressable one keeps its pressed
-        // state by position in the row, and a drag moves tiles between
-        // positions, so a tile let go after a drag could fire a different
-        // tile's press. The mouse area around it takes press, hover, and
-        // release instead, and [`Message::TileDropped`] tells a click from a
-        // drag. With no `on_press` the button always reports `Disabled`, so
-        // the hover it would have shown is passed in from what is tracked.
+        // The button only for its look: its press is tracked by position, and
+        // a drag moves tiles. The mouse area takes press, hover and release;
+        // [`Message::TileDropped`] tells a click from a drag.
         let hovered = self.tile_hover.as_ref() == Some(line);
         let held = self.tile_drag.as_ref().is_some_and(|drag| &drag.line == line);
         let status = match hovered || held {
@@ -133,9 +119,7 @@ impl Lightforge {
 
     /// A tile's right-click menu.
     ///
-    /// Remove takes the tile out of the band and nothing else: the game stays
-    /// installed and can be added back from Add a game. Held when it is the
-    /// last tile, for the reason [`Message::RemoveProduct`] refuses it.
+    /// Remove only takes the tile out of the band; never the last one.
     pub(crate) fn tile_menu_panel(&self, line: &ProductLine) -> Element<'_, Message> {
         let elsewhere = self.lines().iter().any(|other| other != line);
         let face = row![
@@ -159,12 +143,7 @@ impl Lightforge {
 
     /// How wide a tile will be.
     ///
-    /// Exact for art: a fixed square in fixed padding. A line falling back to
-    /// its name cannot be measured without a renderer, so its width is
-    /// estimated from the glyph count at a width no glyph of this size
-    /// exceeds. Erring wide costs a little unused band; erring narrow would
-    /// cut a tile in half against the navigation, so the estimate leans wide
-    /// on purpose.
+    /// Exact for art; a label is estimated from its glyph count, leaning wide.
     pub(crate) fn tile_width(&self, line: &ProductLine) -> f32 {
         let padding = theme::SM * 2.0;
         match self.tile_art(line) {
@@ -179,9 +158,7 @@ impl Lightforge {
     /// The game band: the tiles that fit, then Add a game, and whatever did
     /// not fit behind an overflow button.
     ///
-    /// `room` is the width the header has left over once the title, the
-    /// navigation and the buttons beside it have taken theirs, so the band
-    /// never has to know the window's size; see [`Self::header`].
+    /// `room` is what the header leaves ([`Self::header`]).
     pub(crate) fn strip(&self, room: f32) -> Element<'_, Message> {
         let lines = self.lines();
         // The tile the ring is on stays in view in place of the selected one,
@@ -197,11 +174,7 @@ impl Lightforge {
         // width is not the band's to spend.
         let (shown, hidden) = divide_strip(&widths, selected, room - BAND_BUTTON);
 
-        // Fills the height it is given, rather than shrinking to the tiles.
-        // `responsive` lays its content out at the top of the box, so a band
-        // that is only as tall as its tiles leaves all of the card's slack
-        // underneath them and they ride high in it. Filling first, then
-        // centring, puts the slack on both sides.
+        // Fills, then centres: `responsive` lays out at the top.
         let mut band =
             row![].height(Length::Fill).align_y(Alignment::Center).spacing(theme::SM);
         for id in shown {
@@ -225,20 +198,14 @@ impl Lightforge {
                     }),
                 ),
             );
-            // The panel hangs under the button it belongs to rather than in
-            // the corner like the download manager: which games are behind it
-            // is the button's own answer, and the corner is a long way from
-            // the band on a wide window.
+            // Under its button, not in the corner.
             band = band.push(popover::popover(
                 more,
                 self.strip_open.then(|| self.overflow_menu(&hidden)),
             ));
         }
 
-        // Under the `+` itself, not in the corner: the button moves along the
-        // band as games are added and removed, and the panel is the button's
-        // own answer. Pinned by its left edge, since the `+` has the rest of
-        // the ribbon to its right to grow into.
+        // Under the `+`, by its left edge.
         band = band.push(
             popover::popover(
                 self.ring(
@@ -264,23 +231,15 @@ impl Lightforge {
 
     /// Which screens wear the game band under the tabs.
     ///
-    /// Only the dashboard. Settings and a game's own page (Addons)
-    /// is somewhere you went *into*: they are about one thing,
-    /// and a band offering to switch games above them invites a click that
-    /// would throw away what you are doing.
+    /// Only the dashboard.
     pub(crate) fn shows_band(&self) -> bool {
         matches!(self.screen, Screen::Dashboard)
     }
 
     /// The hand-off into Battle.net, at the right-hand end of the game card.
     ///
-    /// App-level, not per-product: everything outside the WoW family is a
-    /// hand-off, so it belongs with the games rather than on a panel that
-    /// describes one of them, and the card is where games live now.
-    ///
-    /// The mark comes out of the prefix rather than the binary: see
-    /// [`Layout::battle_net_icon`]. Before Battle.net is installed there is
-    /// none, and the button is the word alone.
+    /// The mark comes from the prefix ([`Layout::battle_net_icon`]); before
+    /// Battle.net is installed, the word alone.
     pub(crate) fn battle_net_button(&self) -> Element<'_, Message> {
         let mut face = row![].spacing(theme::SM).align_y(Alignment::Center);
         if let Some(icon) = &self.bnet_icon {

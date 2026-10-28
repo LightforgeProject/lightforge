@@ -6,17 +6,14 @@ use iced::widget::column;
 impl Lightforge {
     /// Explanatory prose under a control, drawn only when the hints are on.
     ///
-    /// `None` rather than an empty widget so a column simply does not lay the
-    /// line out: an invisible child still costs its spacing, which would leave
-    /// the controls unevenly spread once the prose is gone.
+    /// `None`, not an empty widget, which would still cost its spacing.
     pub(crate) fn hint<'a>(&self, content: impl Into<String>) -> Option<iced::widget::Text<'a>> {
         self.hints.then(|| muted(content.into(), theme::CAPTION))
     }
 
     /// Go to a page, remembering where you were.
     ///
-    /// Asking for the page you are on is not a history step, or back would
-    /// walk through the same page once per click of its tab.
+    /// The page you are on is not a history step.
     pub(crate) fn go_to(&mut self, screen: Screen) {
         if screen != self.screen {
             self.visited.push(self.screen);
@@ -27,16 +24,10 @@ impl Lightforge {
 
     /// Work a page needs on the way in.
     ///
-    /// Called from all three ways of getting somewhere, a tab, back, and
-    /// forward, because a page reached by the back button is just as opened
-    /// as one reached by clicking it. Doing this in `go_to` instead is not
-    /// possible: that returns nothing, and this has to hand a `Task` back to
-    /// the runtime.
+    /// From a tab, back and forward alike; `go_to` cannot return a `Task`.
     pub(crate) fn arrived(&mut self) -> Task<Message> {
         match self.screen {
-            // Arriving back on Browse with nothing in it, by the back
-            // button, or on a first visit, is the same question the tab
-            // itself answers: what is there?
+            // An empty Browse asks what is there, however it was reached.
             Screen::Addons
                 if self.addon_tab == AddonTab::Browse
                     && self.search_input.trim().is_empty()
@@ -51,17 +42,10 @@ impl Lightforge {
 
     /// Settings opened: at the top, or at the section a link asked for.
     ///
-    /// Everything a section fetches for itself is asked for here, now that
-    /// they are all one page. The Proton release list, so the install picker
-    /// is populated by the time anyone scrolls to it; only when there is
-    /// nothing to show, since the answer is cached by ETag but a request per
-    /// visit is still a request. And the drives, scanned when the page opens
-    /// rather than polled: a drive appearing while the page is shut is not
-    /// news, and this is also where a library that moved gets found again.
+    /// Fetches what the sections need: the Proton release list when there is
+    /// none, and a drive scan, which also finds a library that moved.
     pub(crate) fn settings_arrived(&mut self) -> Task<Message> {
-        // At the top unless a link said otherwise, which is a jump too: the
-        // page is still where it was when Settings is chosen from the menu
-        // while it is already open.
+        // At the top unless a link said otherwise.
         self.settings_tab = self.settings_jump.unwrap_or(SettingsTab::ALL[0]);
         self.settings_jump = Some(self.settings_tab);
         self.settings_jump_tries = 0;
@@ -76,8 +60,6 @@ impl Lightforge {
         Task::batch([proton, self.measure_storage(), self.check_unused(), measure_settings()])
     }
 
-    /// Whether the arrows, Enter and Escape are someone else's right now.
-    ///
     /// Whether the controller and touch look is on: the answer setup asks
     /// for on SteamOS, or the switch in Settings › General anywhere.
     pub(crate) fn console(&self) -> bool {
@@ -87,8 +69,7 @@ impl Lightforge {
     /// Put this program in the Steam library of the account that signed in
     /// last, with its artwork; the outcome goes under the Settings button.
     ///
-    /// Written straight away whether or not Steam is running: Steam reads
-    /// its shortcuts when it starts, so the entry is there next time.
+    /// Written at once; Steam reads it on its next start.
     pub(crate) fn add_to_steam(&mut self) {
         use lightforge_core::steam_shortcut;
 
@@ -109,10 +90,7 @@ impl Lightforge {
 
     /// Fullscreen on a console, a window anywhere else.
     ///
-    /// Game Mode shows one window at a time anyway, and a window the
-    /// launcher's own 1280x820 on a 1280x800 screen was shrunk to fit with a
-    /// bar down either side. The minimum size goes with it, or the window
-    /// could not be made smaller than the screen it fills.
+    /// 1280x820 does not fit a 1280x800 screen. The minimum size goes too.
     pub(crate) fn window_mode(&self) -> Task<Message> {
         let console = self.console();
         iced::window::oldest().and_then(move |id| match console {
@@ -163,7 +141,8 @@ impl Lightforge {
         }
     }
 
-    /// The splash and the broken-config screen have nothing to press.
+    /// Whether the arrows, Enter and Escape are someone else's: the splash and
+    /// the broken-config screen have nothing to press.
     pub(crate) fn keys_belong_elsewhere(&self) -> bool {
         self.config_error.is_some() || self.splash.is_some()
     }
@@ -252,9 +231,7 @@ impl Lightforge {
     /// in a menu is its first entry.
     pub(crate) fn focus_start(&mut self, spots: &[focus::Place]) -> Option<focus::Target> {
         let drawn = |target: &focus::Target| spots.iter().any(|p| &p.target == target);
-        // Kept until it can be gone back to: a button that vanishes inside
-        // a dialog, Install turning into nothing, must not make the ring
-        // forget what opened the dialog.
+        // Kept while a dialog's button vanishes under it.
         if let Some(back) = self.focus_return.clone().filter(|t| drawn(t)) {
             self.focus_return = None;
             return Some(back);
@@ -274,12 +251,8 @@ impl Lightforge {
 
     /// Scroll the region `target` is in so that it can be seen.
     ///
-    /// The control and the part of the region showing were recorded in the
-    /// region's own coordinates, so the distance to scroll is the difference
-    /// between them. A row's worth of room is kept beyond it: a list only
-    /// draws the rows it shows, and the next one has to be drawn to be
-    /// somewhere the arrows can go. Scrolling past either end is clamped by
-    /// the list itself.
+    /// Plus a row beyond: a list only draws the rows it shows, and the arrows
+    /// need the next one drawn.
     pub(crate) fn scroll_into_view(target: &focus::Target) {
         let Some(spot) = focus::spot(target) else {
             return;
@@ -313,10 +286,7 @@ impl Lightforge {
 
     /// Whether any dismissable panel is showing.
     ///
-    /// One list, used both to arm the click-anywhere dismissal and to clear
-    /// everything in [`Message::Dismiss`]. Adding a panel and forgetting to
-    /// name it here is what left the wordmark menu unable to be closed by
-    /// clicking the page, so the two now read from the same place.
+    /// One list for arming click-anywhere and for [`Message::Dismiss`].
     pub(crate) fn panel_open(&self) -> bool {
         self.picker_open.is_some()
             || self.gear_open
@@ -330,9 +300,7 @@ impl Lightforge {
 
     /// Close every one of them.
     ///
-    /// Anything that answers the question a panel was asking closes it:
-    /// clicking the page, choosing a page, picking a game. A panel left
-    /// hanging over the thing you just changed is the bug this prevents.
+    /// On clicking the page, choosing a page or picking a game.
     pub(crate) fn close_panels(&mut self) {
         self.picker_open = None;
         self.gear_open = false;

@@ -32,3 +32,6 @@ b1b1cf2575b3d83e29c7c84bc149681b4bfbb8e1
 # docs: trim assets, paths and storage comments
 50540b71f38a3203ce33d14a5662b1f4125e054f
 6a90c22cf75ae3d1660a0d3ce76e4b7053cd9c66
+
+# docs: trim remaining core comments
+e3aa76ed8740e5142ec8b35889f3d3642cb41874

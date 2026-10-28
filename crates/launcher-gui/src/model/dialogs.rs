@@ -61,9 +61,7 @@ pub(crate) enum ReportStage {
     Writing,
     Sending,
     Sent,
-    /// It did not leave the machine inside the flush window. Said plainly
-    /// rather than swallowed: a dialog that claims "sent" when the server was
-    /// unreachable is worse than no dialog.
+    /// It did not leave the machine inside the flush window.
     Failed,
     /// The same text went out a moment ago. Typing anything clears it.
     TooSoon,
@@ -71,45 +69,32 @@ pub(crate) enum ReportStage {
 
 /// How long the same report is refused for after it is sent.
 ///
-/// Aimed at the person pressing Send again because nothing visibly happened,
-/// not at an attacker, the DSN ships in the binary, so real abuse is a
-/// server-side limit, not a client-side one.
+/// Against pressing Send twice; abuse is limited server-side.
 pub(crate) const REPORT_COOLDOWN: Duration = Duration::from_secs(300);
 
 /// The bug report / feedback dialog.
 ///
-/// Not `Clone` or `Debug`, unlike its neighbours: a [`text_editor::Content`]
-/// is neither, because it owns a laid-out buffer rather than a string.
+/// Not `Clone` or `Debug`: [`text_editor::Content`] is neither.
 pub(crate) struct ReportDialog {
     pub(crate) kind: ReportKind,
-    /// What the user is typing. A multi-line editor rather than a field,
-    /// "what were you doing" is a paragraph, and a one-line box that scrolls
-    /// sideways invites a one-line answer.
+    /// What the user is typing, multi-line.
     pub(crate) note: iced::widget::text_editor::Content,
     /// Picked before Send is offered; `None` until then.
     pub(crate) category: Option<report::Category>,
-    /// An address or a Discord name, so there is a way to answer. Required
-    /// on a bug report, since one nobody can be asked about usually stalls at
-    /// the first question; optional on feedback. The only personal thing
-    /// either report carries.
+    /// An address or a Discord name: required for a bug, optional for feedback.
     pub(crate) contact: String,
     /// Facts worth filtering issues by, taken off the same bundle the card
     /// shows. Empty for feedback, which carries no diagnostics.
     pub(crate) tags: Vec<(String, String)>,
     /// A screenshot dropped on the dialog, if there is one.
     pub(crate) shot: Option<art::Shot>,
-    /// The debug bundle, rendered when the dialog opened. That is where the
-    /// four things [`DebugInfo::gather`] needs are in scope. Empty for
-    /// feedback, which sends none of it. Already scrubbed of the account
-    /// name: every rendered bundle is.
+    /// The debug bundle, rendered (and scrubbed) when the dialog opened.
+    /// Empty for feedback.
     pub(crate) base: String,
     /// `base` plus what the category attaches: what the card shows and what
     /// is sent, rebuilt whenever the category changes.
     pub(crate) debug: String,
-    /// The recent status lines shown in `debug`, scrubbed, as they were when
-    /// the dialog opened. What is sent, so the report carries exactly what
-    /// the card showed and nothing logged while it was being written. Empty
-    /// for feedback, like the bundle.
+    /// The recent status lines, scrubbed, as the card showed them.
     pub(crate) history: Vec<String>,
     pub(crate) stage: ReportStage,
 }
@@ -155,11 +140,8 @@ pub(crate) const UNUSED_WORTH_SHOWING: u64 = 100 * 1024 * 1024;
 
 /// The confirmation before a download is given up.
 ///
-/// Two different questions wearing one dialog. Giving up a *first install*
-/// leaves a partial store nothing can read and nothing names, so it offers to
-/// delete it and says how much that is. Giving up an *update* must not delete
-/// anything: the game on disk is playable right now, and what has come down is
-/// reused by the next attempt rather than fetched twice.
+/// A first install offers to delete its partial store; an update deletes
+/// nothing, the game still plays.
 #[derive(Debug, Clone)]
 pub(crate) struct CancelDialog {
     pub(crate) code: ProductCode,
@@ -172,10 +154,7 @@ pub(crate) struct CancelDialog {
 /// The confirmation before a launch that would open the shared prefix with an
 /// older Proton than the one that last built it.
 ///
-/// Shown rather than refused. The pin is a choice the user made, an older
-/// build is sometimes the only one a title runs under, and Lightforge is not
-/// in a position to know that this particular pair breaks. What it can do is
-/// say what is about to happen to the prefix every other game shares.
+/// Shown, not refused: the pin is the user's choice.
 #[derive(Debug, Clone)]
 pub(crate) struct DowngradeDialog {
     /// Held until it is answered, then started unchanged.
@@ -190,10 +169,7 @@ pub(crate) struct DowngradeDialog {
 
 /// Which half of the detail view is on show.
 ///
-/// Changelog first, deliberately: somebody who opens this from an installed
-/// addon is asking "what would change if I updated", and somebody browsing
-/// gets the description on the other tab one click away. The default is set
-/// at the call site for that reason.
+/// The call site picks: changelog for an installed addon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DetailTab {
     Changelog,
@@ -204,9 +180,7 @@ pub(crate) enum DetailTab {
 pub(crate) struct AddonDetail {
     pub(crate) provider: String,
     pub(crate) id: String,
-    /// What to call it before the project answers. The search row and the
-    /// ledger both already know the name, and a card headed "…" while a
-    /// request is out reads like a failure.
+    /// What to call it before the project answers.
     pub(crate) name: String,
     /// `None` while the catalogue is still answering.
     pub(crate) loaded: Option<addonwork::Detail>,

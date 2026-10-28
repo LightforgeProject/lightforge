@@ -13,10 +13,8 @@ pub struct Scanned {
 
 /// Verify the store's entries against their own headers, and drop the bad ones.
 ///
-/// Repair rewrites the indices a running client memory-maps, so the prefix
-/// has to be quiet first. A game or an open Battle.net is the user's to
-/// close; anything else, a `wineserver` waiting out its timeout or a launch's
-/// leftovers, is put to rest here exactly as a launch's pre-flight would.
+/// The prefix must be quiet: a game or Battle.net is the user's to close; any
+/// leftovers are put to rest as pre-flight does.
 pub async fn scan_and_repair(
     layout: Layout,
     code: ProductCode,
@@ -65,9 +63,7 @@ pub async fn scan_and_repair(
 
 /// Hash every stored byte against its chunk table and key.
 ///
-/// Only reads, so unlike [`scan_and_repair`] it does not wait for the game to
-/// close; the caller holds the download queue for as long as it runs, and
-/// the core refuses a result from a store that changed underneath it anyway.
+/// Read-only, so it does not wait for the game; the queue is held meanwhile.
 pub async fn deep_scan(
     layout: Layout,
     code: ProductCode,
@@ -181,13 +177,8 @@ pub async fn uninstall_plan(
 /// was the last product), and its entry in Battle.net's registry. Returns
 /// the bytes freed.
 ///
-/// Refuses while anything is alive in the prefix, the same gate repair uses:
-/// deleting files a running client has open, or a registry Agent rewrites on
-/// exit, is not something to race.
-///
-/// Everything is planned again here rather than trusted from when the dialog
-/// opened. The reclaim is planned *before* the product's row goes, since the
-/// row is what names the build whose files it was.
+/// Refuses while anything runs in the prefix. Planned afresh, the reclaim
+/// before the row goes, since the row names the build.
 pub async fn uninstall(
     http: Option<Http>,
     layout: Layout,
@@ -254,8 +245,7 @@ pub async fn optional_plan(
 
 /// Carry out a plan from [`optional_plan`], returning the bytes freed.
 ///
-/// Behind the same gate as repair and uninstall: the files and the indices
-/// being rewritten are ones a running client has open.
+/// Behind the same gate as repair and uninstall.
 pub async fn optional_remove(
     layout: Layout,
     code: ProductCode,
@@ -388,10 +378,8 @@ mod uninstall_tests {
     use super::*;
     use lightforge_core::tact::productdb;
 
-    /// Uninstalling one version from a throwaway library built from copies of
-    /// the real `.build.info` and Agent registry: only that version goes, and
-    /// every other row and record stays. Skipped where there is no real
-    /// install to copy from.
+    /// On copies of the real `.build.info` and registry: only that version
+    /// goes. Skipped without a real install.
     #[test]
     fn uninstalling_one_version_leaves_the_rest() {
         let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };

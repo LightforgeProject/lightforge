@@ -1,19 +1,10 @@
 //! The design system: tokens first, components built from them.
 //!
-//! Three rules hold the four screens together:
-//!
-//! 1. **Nothing hard-codes a colour, size or gap.** Everything comes from the
-//!    scales below, so a change lands everywhere at once instead of in one
-//!    screen.
-//! 2. **The action button's colour is state, not decoration**: light blue
-//!    install, orange update, green play. Those four are the only saturated
-//!    colours on screen, which is what makes them readable at a glance.
-//! 3. **Machine text is monospaced**: versions, paths, ids. It stops a
-//!    version number from being mistaken for prose, and makes columns line up
-//!    without a table.
-//!
-//! iced gives no cascade, so "restraint" here means type, spacing and one
-//! accent rather than effects.
+//! 1. **Nothing hard-codes a colour, size or gap**: everything comes from the
+//!    scales below.
+//! 2. **The action button's colour is state**: blue install, violet update,
+//!    gold play, the only saturated colours.
+//! 3. **Machine text is monospaced**: versions, paths, ids.
 
 use iced::{Color, Font, Shadow, Theme, Vector};
 
@@ -58,24 +49,16 @@ pub const ACCENT: Color = rgb(0x00, 0xB4, 0xFF);
 
 pub const INSTALL: Color = rgb(0x4F, 0xC3, 0xF7);
 
-/// An update waiting. Violet rather than the orange it used to be: orange and
-/// [`PLAY`]'s gold are the same hue to the eye at a glance, and Update and Play
-/// are the two buttons that occupy the same spot on the panel, a player who
-/// reads the colour before the word has to be able to tell them apart. Violet
-/// is the one strong hue the palette had not already spent.
+/// An update waiting: violet, distinct at a glance from [`PLAY`]'s gold in
+/// the same spot.
 pub const UPDATE: Color = rgb(0xA7, 0x8B, 0xFA);
 
 /// The launch button, and nothing else.
 ///
-/// Taken from the wordmark: it is the midpoint of the two golds the mark is
-/// drawn in (`#FABD2F` and `#D79921`), so the one button the eye goes to first
-/// is wearing the app's own colour. It replaced a green that read as a traffic
-/// light next to a gold mark.
+/// The midpoint of the wordmark's two golds (`#FABD2F`, `#D79921`).
 pub const PLAY: Color = rgb(0xE9, 0xAB, 0x28);
 
-/// Done, healthy, present, a status, never an action. This is the green
-/// [`PLAY`] used to be, kept for the things that only report: the "installed"
-/// pill, a finished setup step, the dot that says the install is shared.
+/// Done, healthy, present: a status, never an action.
 pub const OK: Color = rgb(0x4C, 0xAF, 0x50);
 
 pub const PAUSE: Color = rgb(0x78, 0x86, 0x96);
@@ -90,9 +73,7 @@ pub const PANEL: Color = Color::from_rgba(0.043, 0.055, 0.070, 0.88);
 
 /// Height of a primary control, so the halves of a split button match exactly.
 ///
-/// Pinned rather than left to content: the action half is sized by a line of
-/// HEADING text and the menu half by an 18px icon, and letting each shrink to
-/// its own content leaves the tab visibly short of the button it belongs to.
+/// Pinned: text and an 18px icon would otherwise size the halves differently.
 pub const CONTROL_HEIGHT: f32 = 56.0;
 
 /// Spacing scale. Four values cover every gap on every screen; a fifth would
@@ -122,23 +103,15 @@ pub const CAPTION: f32 = 11.0;
 
 /// The box a product's wordmark is drawn in, under the app title.
 ///
-/// A limit, not a size: [`logo_size`] sizes the mark, and only the two
-/// StarCraft marks reach this width (equal area would make StarCraft 601pt
-/// against Retail's 349, which reads as louder). Nothing reaches the height;
-/// Retail's, the tallest, is 270.
+/// A limit, not a size ([`logo_size`] sizes); only StarCraft's marks reach it.
 pub const LOGO_BOX_WIDTH: f32 = 450.0;
 
 pub const LOGO_BOX_HEIGHT: f32 = 280.0;
 
 /// The width a wordmark is centred against before it is left-aligned.
 ///
-/// Left-aligned alone, every mark starts on the same line but the narrow ones
-/// read as *further* left than the wide ones, because what the eye places is
-/// the middle of the block and not its edge: Forever, the narrowest in the
-/// catalogue at 263, sits its centre a good 90pt left of StarCraft's. So a
-/// mark narrower than this is nudged in by half the difference, and one at
-/// least this wide simply starts at the edge. Roughly the median drawn width,
-/// which is what leaves most marks untouched.
+/// The eye places a block's middle, so a narrower mark is nudged in by half
+/// the difference. Roughly the median drawn width.
 pub const LOGO_ANCHOR_WIDTH: f32 = 350.0;
 
 /// How far a mark of `width` is nudged in from the box's left edge.
@@ -148,41 +121,25 @@ pub fn logo_offset(width: f32) -> f32 {
 
 /// How far in from the page's own inset the wordmark sits.
 ///
-/// Small: the marks are trimmed to their own ink, so flush with the page edge
-/// meant *touching* it, and this is the margin that stops that, not a place
-/// the wordmark was moved to. The box is centred on what this leaves, so a
-/// narrow mark still sits further in than a wide one starts.
+/// Small: the marks are trimmed to their ink and would touch the edge.
 pub const LOGO_INSET: f32 = XL;
 
 /// How much of the page one product wordmark covers, in square points.
 ///
-/// Area, because that is what the eye reads as size: the marks are trimmed
-/// to their ink and range from five times wider than tall to nearly square,
-/// so one bounding box made the square ones look half the size. The number
-/// is the largest that keeps every mark inside [`LOGO_BOX_WIDTH`] by
-/// [`LOGO_BOX_HEIGHT`]; StarCraft's sets it.
+/// Area is what the eye reads as size, across marks from 5:1 to square. The
+/// largest that fits every mark in the box; StarCraft's sets it.
 const LOGO_AREA: f32 = 56_000.0;
 
 /// The least of a logo [`logo_size`] will believe is the mark rather than its
 /// glow.
 ///
-/// Dividing by the ink fraction is dividing by a number below one, so a
-/// mistaken reading, art that is genuinely almost all soft edge, would ask
-/// for a wordmark several times the size of every other. A floor costs
-/// nothing on the art we have, where the lowest is Retail's 0.59.
+/// A floor on the divisor; the lowest real one is Retail's 0.59.
 const LOGO_MIN_INK: f32 = 0.4;
 
 /// How wide and tall to draw one wordmark, from the shape of its trimmed ink.
 ///
-/// [`LOGO_AREA`] decides the size; `aspect` decides how that area is spent;
-/// `ink` is the share of the image that is the mark rather than its halo (see
-/// [`crate::art::Art::logo_ink`]), and the box is grown by the inverse of it
-/// so that the *mark* ends up at the standard area with its glow spilling
-/// past.
-///
-/// The result is then scaled down, never up, if it would leave the box, so
-/// a mark of some shape nobody has published yet is made smaller rather than
-/// allowed off the page.
+/// [`LOGO_AREA`] by `aspect`, grown by `1 / ink`
+/// ([`crate::art::Art::logo_ink`]), then scaled down to fit the box.
 pub fn logo_size(aspect: f32, ink: f32) -> (f32, f32) {
     let aspect = match aspect.is_finite() && aspect > 0.0 {
         true => aspect,
@@ -201,16 +158,10 @@ pub fn logo_size(aspect: f32, ink: f32) -> (f32, f32) {
 /// Edge of a product tile in the header's product bar. Square, so this is
 /// both dimensions; the art inside is drawn to fit.
 ///
-/// Sized for a row of its own under the tabs rather than a seat in them: when
-/// the band shared the ribbon it had to stay near the height of a button, and
-/// it no longer does. Not as large as that freedom allows, though, the band
-/// is a card over the artwork now, and a card is sized by what it holds.
 pub const TILE: f32 = 40.0;
 
-/// Drawn for a Steam Deck or Steam Machine: held in a hand or read from a
-/// sofa, pressed with a thumb or a controller. Set by the view at the start
-/// of each frame, from the answer setup asked for on SteamOS, so the shared
-/// builders below can read it without every page passing it down.
+/// Drawn for a Steam Deck or Steam Machine. Set by the view each frame, so
+/// the builders below need not be passed it.
 static CONSOLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_console(on: bool) {
@@ -229,9 +180,8 @@ pub fn tile() -> f32 {
     }
 }
 
-/// Padding for something pressed, `[vertical, horizontal]`. On a console a
-/// button grows to about 42 points tall, the size Steam's own Game Mode
-/// buttons are on the same screen, from the 32 a mouse is happy with.
+/// Padding for something pressed, `[vertical, horizontal]`: about 42pt tall
+/// on a console, as Steam's Game Mode buttons are.
 pub fn tap(padding: [f32; 2]) -> [f32; 2] {
     match console() {
         true => [padding[0] + 5.0, padding[1] + XS],
@@ -248,16 +198,8 @@ pub fn tap_text(size: f32) -> f32 {
     }
 }
 
-// A manifest may still carry a `height` per art set. Nothing reads it any
-// more, and the field is kept only so older manifests still parse.
-//
-// It meant "draw this art set's logo at this many pixels tall", from when
-// every logo was drawn on its publisher's own canvas and a height was the
-// only lever there was for making two of them look alike. It never worked,
-// a height is not a size when the shapes differ, which is why every row in
-// the published table carries the same number, and against [`logo_size`] it
-// does active harm: capping Retail at the table's 210 undoes most of what
-// measuring its mark rather than its halo just bought it.
+// A manifest's per-art `height` is parsed but ignored: [`logo_size`] sizes
+// by area.
 
 /// Corner radius. One value for panels, one for controls.
 pub const RADIUS: f32 = 10.0;
@@ -266,13 +208,8 @@ pub const RADIUS_SM: f32 = 6.0;
 
 /// The one drop shadow, for a surface that floats above the page.
 ///
-/// A single value rather than a scale, because depth here is binary: a panel
-/// is either part of the page or laid over it. Two shadows would imply a
-/// hierarchy among floating things that the four screens do not have.
-///
-/// Tuned for a near-black page, pure black at a low alpha, since a grey
-/// shadow over [`BG`] reads as fog rather than depth, and a downward offset
-/// smaller than the blur so the panel lifts without appearing to tilt.
+/// One shadow: a panel is part of the page or over it. Black at low alpha
+/// (grey reads as fog on [`BG`]), offset less than the blur.
 pub const LIFT: Shadow = Shadow {
     color: Color::from_rgba(0.0, 0.0, 0.0, 0.45),
     offset: Vector::new(0.0, 4.0),
@@ -285,8 +222,6 @@ pub const MONO: Font = Font::MONOSPACE;
 /// The emphasis weight, for the words that name a place rather than describe
 /// one: the page tabs and the band's label.
 ///
-/// Spelled out rather than built from [`Font::DEFAULT`], because struct update
-/// syntax is not allowed in a `const`.
 pub const BOLD: Font = Font {
     family: iced::font::Family::SansSerif,
     weight: iced::font::Weight::Bold,
@@ -326,9 +261,7 @@ pub fn base() -> Theme {
 
 /// `a` laid over `b` at `amount`, resolved now rather than by the compositor.
 ///
-/// A gradient paints the whole window on its own, so a translucent stop would
-/// be asking the renderer to blend against a clear colour it has already
-/// drawn. Mixing the two here keeps the result the same on both backends.
+/// So both backends agree: a translucent gradient stop blends against clear.
 const fn mix(a: Color, b: Color, amount: f32) -> Color {
     Color {
         r: b.r + (a.r - b.r) * amount,

@@ -1,19 +1,9 @@
 //! A product's artwork, decoded once and held in memory.
 //!
-//! Handing iced a file path looks free but isn't: the tiny-skia renderer keeps
-//! a decoded image only while it is being drawn, and trims everything else at
-//! the end of each frame. Leave the dashboard and the background is dropped;
-//! come back and the whole JPEG is decoded again on the render thread before
-//! the page can paint. With 3840×1600 art that was the pause on returning to
-//! Play.
-//!
-//! So the pixels live here instead, as RGBA behind a stable handle. The
-//! renderer still trims its own copy, but rebuilding it from ours is a copy,
-//! not a decode.
-//!
-//! Every picture the GUI draws is decoded here, and only here. iced is built
-//! without image codecs, so a handle holding a path or encoded bytes would not
-//! draw at all; what this module cannot read becomes [`placeholder`] instead.
+//! The renderer drops a decoded image at the end of each frame it is unused
+//! in, so a path handle re-decodes the JPEG on every return to Play. The RGBA
+//! lives here instead. iced is built without codecs: every picture is decoded
+//! here, and what cannot be read becomes [`placeholder`].
 
 use std::path::Path;
 use std::sync::OnceLock;
@@ -22,23 +12,13 @@ use iced::widget::image::Handle;
 use image::imageops::FilterType;
 use lightforge_core::assets::Branding;
 
-/// Widest a background is kept. Enough to fill a full-screen 1440p window;
-/// art is drawn behind a scrim, so what a 4K window loses is not visible.
-/// Past this width every frame pays to scale pixels it throws away.
+/// Widest a background is kept: 1440p, behind a scrim.
 const BACKGROUND_MAX_WIDTH: u32 = 2560;
 
 /// Widest a product mark is kept: twice [`crate::theme::TILE`].
 ///
-/// Marks are published at 256px so they stay useful if the UI ever draws them
-/// larger, but the band draws them at 40pt. Handing the renderer 256px and
-/// letting it reduce that far samples four texels per pixel with no mipmaps,
-/// which is the crunchy, aliased look that reads as "pixelated".
-///
-/// Twice the tile rather than exactly the tile: a 2x display then maps one
-/// texel to one device pixel, and a 1x display gets a 2:1 reduction, which is
-/// the one ratio bilinear filtering handles cleanly. Measured against 64, 96
-/// and 128 at the drawn size, the differences past this point are not visible,
-/// what remains is the artwork, not the scaling.
+/// Marks come at 256px; reduced that far without mipmaps they alias. Twice
+/// the tile is 1:1 on a 2x display and a clean 2:1 on 1x.
 const MARK_MAX_WIDTH: u32 = (crate::theme::TILE * 2.0) as u32;
 
 /// Widest a logo is kept. It is drawn at most a couple of hundred pixels tall.
@@ -46,14 +26,12 @@ const LOGO_MAX_WIDTH: u32 = 1024;
 
 /// How many times its width a scaled picture may be tall.
 ///
-/// Nothing the GUI draws is portrait past this, and without a bound on height
-/// a 320x60000 file would sail through a width-only cap at full size.
+/// Bounds height too: a 320x60000 file passes a width cap.
 const MAX_TALL: u32 = 2;
 
 /// What a picture that could not be decoded draws as: one transparent pixel.
 ///
-/// One handle for the whole session rather than one per failure, so a feed
-/// with a broken picture in it does not mint a fresh texture on every pass.
+/// One handle for the session, not a texture per failure.
 pub fn placeholder() -> Handle {
     static EMPTY: OnceLock<Handle> = OnceLock::new();
     EMPTY.get_or_init(|| Handle::from_rgba(1, 1, vec![0, 0, 0, 0])).clone()
@@ -66,22 +44,12 @@ pub struct Art {
     pub logo: Handle,
     /// The trimmed wordmark's width over its height.
     ///
-    /// Carried because the dashboard sizes the logo by *area* rather than by
-    /// a bounding box; see [`crate::theme::logo_size`]. `1.0` for a logo
-    /// that could not be measured, which is a square box and no worse than
-    /// any other guess.
+    /// For sizing by area ([`crate::theme::logo_size`]); `1.0` if unmeasured.
     pub logo_aspect: f32,
     /// How much of the trimmed wordmark is the mark, and how much is glow.
     ///
-    /// Some logos are drawn with a wide soft halo, Retail's is a third of
-    /// its own bounding box, and a halo is not something the eye measures a
-    /// logo by. Sizing those by their outer bounds makes the mark inside
-    /// come out visibly smaller than everything else, which is exactly what
-    /// Retail looked like. This is the fraction of the bounding box the solid
-    /// mark covers, and the dashboard divides by it so that it is the *mark*
-    /// that gets the standard area, with the glow spilling past.
-    ///
-    /// `1.0` for a logo with no soft edge at all, which is most of them.
+    /// The fraction of the box the solid mark covers (Retail's halo is a
+    /// third of it), so the mark, not the glow, gets the standard area.
     pub logo_ink: f32,
     pub background: Handle,
 }
@@ -103,9 +71,7 @@ impl Art {
 
 /// A product mark, decoded and scaled for the size it is actually drawn at.
 ///
-/// Unlike [`load`]'s backgrounds this is a large reduction, 256px down to
-/// 128, so it is worth the sharper filter. The image is tiny and this runs
-/// once per product per session.
+/// A large reduction, so the sharper filter is worth it.
 pub fn mark(path: &Path) -> Handle {
     try_mark(path).unwrap_or_else(placeholder)
 }
@@ -118,13 +84,8 @@ pub fn try_mark(path: &Path) -> Option<Handle> {
 
 /// Decode a bundled image that is already at the size it is drawn.
 ///
-/// Bundled art goes through here rather than `Handle::from_bytes` for the
-/// reason at the top of this file: a handle holding compressed bytes is
-/// decoded by the renderer, which keeps the result only while it is drawing
-/// and throws it away at the end of the frame. A 2560px JPEG re-decoded on
-/// every return to the page is exactly the pause this module exists to
-/// remove. Blocking and CPU-bound: a large picture belongs off the UI thread,
-/// a bundled icon of a few hundred bytes does not.
+/// Not `Handle::from_bytes`, for the reason at the top of this file.
+/// Blocking: large pictures go off the UI thread.
 pub fn decode_bundled(bytes: &'static [u8]) -> Handle {
     match image::load_from_memory(bytes) {
         Ok(decoded) => {
@@ -140,11 +101,8 @@ pub fn decode_bundled(bytes: &'static [u8]) -> Handle {
 
 /// A product wordmark, cropped to the pixels that are actually drawn.
 ///
-/// Blizzard puts every logo on the same 704x440 canvas, but the marks inside
-/// it differ wildly (StarCraft's is 127px tall, Retail's 440). Fitting the
-/// canvas left them at different sizes; fitting the cropped mark makes them
-/// read as one size. A logo with no transparent border, or one that is all
-/// transparent, comes back unchanged.
+/// Every logo shares a 704x440 canvas, but the marks inside differ (127px to
+/// 440px tall); cropped, they read as one size.
 ///
 /// Returns the image, its aspect, and its [`Art::logo_ink`] fraction.
 fn logo(path: &Path) -> (Handle, f32, f32) {
@@ -199,23 +157,14 @@ fn logo(path: &Path) -> (Handle, f32, f32) {
 
 /// Where a logo's glow stops being glow and starts being the mark.
 ///
-/// An eighth of full opacity. Above it the pixel is something you would point
-/// at; below it, on these logos, it is the outer half of a halo. The exact
-/// number matters less than it sounds, Retail's bounds move 25px between an
-/// eighth and two thirds, and every other logo in the catalogue moves less
-/// than 5.
+/// An eighth of full opacity; the exact value barely moves the bounds.
 const SOLID_ALPHA: u8 = 32;
 
 /// The smallest rectangle holding every pixel more opaque than `alpha`, as
 /// `(x, y, width, height)`.
 ///
-/// `None` when there is no such pixel, an all-transparent image, or one whose
-/// every pixel is fainter than the threshold, neither of which has anything to
-/// measure.
-///
-/// At `0` this is "not fully transparent", which is the crop: a logo's own
-/// soft edge is still artwork and must not be cut off. At [`SOLID_ALPHA`] it
-/// is the mark within that artwork, which is what the page is sized by.
+/// `None` without such a pixel. At `0` this is the crop; at [`SOLID_ALPHA`],
+/// the mark the page is sized by.
 fn ink_bounds(rgba: &image::RgbaImage, alpha: u8) -> Option<(u32, u32, u32, u32)> {
     let (mut left, mut top) = (u32::MAX, u32::MAX);
     let (mut right, mut bottom) = (0_u32, 0_u32);
@@ -237,21 +186,15 @@ fn ink_bounds(rgba: &image::RgbaImage, alpha: u8) -> Option<(u32, u32, u32, u32)
 /// Decode and downscale one image. An image this can't read is drawn as
 /// [`placeholder`].
 fn load(path: &Path, max_width: u32) -> Handle {
-    // Triangle rather than Lanczos: a one-off downscale by less than 2x,
-    // where the sharper filter costs several times as long for no difference
-    // behind a scrim.
+    // Triangle: under 2x behind a scrim, Lanczos only costs time.
     scale(path, max_width, FilterType::Triangle)
 }
 
 /// Decode a file, asking a JPEG to come out no larger than it needs to be.
 ///
-/// Decoding at full size once cost 665 MB across a page of pictures for 22 MB
-/// of thumbnails. JPEG can emit at 1/2, 1/4 or 1/8 scale almost free, so `scale`
-/// asks for the smallest that still covers `max_width` and the resize below
-/// finishes the job. JPEG is recognised by its magic bytes (cache files are
-/// named by URL hash); PNG has no such trick and is decoded whole. The box is
-/// `max_width` by [`MAX_TALL`] times that, under the same 512 MiB allocation
-/// limit `Reader` gives the generic path.
+/// Full-size decoding once cost 665 MB for 22 MB of thumbnails. A JPEG
+/// (recognised by magic bytes) decodes at 1/2, 1/4 or 1/8 almost free; PNG is
+/// decoded whole. Same 512 MiB limit as `Reader`.
 fn decode(path: &Path, max_width: u32) -> image::ImageResult<image::DynamicImage> {
     use image::ImageDecoder;
     use std::io::Read;
@@ -503,18 +446,13 @@ mod tests {
 
 /// Size and quality steps, tried in order until one fits [`SHOT_MAX_BYTES`].
 ///
-/// The last pair is the floor and is sent whatever it weighs: a heavy
-/// screenshot is better than none, and nothing anybody drags in here will get
-/// past 720px at quality 45 anyway.
+/// The last pair is sent whatever it weighs.
 const SHOT_STEPS: [(u32, u8); 4] = [(1280, 75), (1280, 55), (960, 55), (720, 45)];
 
 /// What an embedded screenshot may weigh before it is squeezed again.
 ///
-/// It is embedded rather than attached because **GlitchTip throws envelope
-/// attachments away**: `attachment` is in its hard-coded `IgnoredItemType`
-/// list, so an attached image is parsed and dropped with no error. So the
-/// image rides inside the event as base64, and the event has to stay a size
-/// the server will accept: 400 KiB of JPEG is about 533 KiB of base64.
+/// Embedded, because **GlitchTip drops envelope attachments** (hard-coded
+/// `IgnoredItemType`). 400 KiB of JPEG is about 533 KiB of base64.
 const SHOT_MAX_BYTES: usize = 400 * 1024;
 
 /// A screenshot somebody chose for a bug report.
@@ -532,8 +470,7 @@ pub struct Shot {
 
 /// Read an image from disk and re-encode it small enough to travel.
 ///
-/// Fails rather than guesses: a file that is not an image at all is the common
-/// case here, because the picker will hand over whatever was selected.
+/// Fails on anything that is not an image.
 pub fn load_shot(path: &Path) -> Result<Shot, String> {
     let decoded = image::open(path).map_err(|e| format!("not an image: {e}"))?;
     let original = decoded.into_rgb8();

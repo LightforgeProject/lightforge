@@ -100,9 +100,7 @@ pub(crate) enum Message {
     /// An arrow key, Enter or Escape, or the same from a gamepad: sorted
     /// into the three below once the two cannot be doubling each other.
     Nav(NavFrom, pad::Input),
-    /// The window gained or lost the desktop's focus. A gamepad is read
-    /// whatever window is in front, so this is what keeps it from steering
-    /// the launcher behind a running game.
+    /// The window gained or lost focus; a gamepad must not steer it from behind a game.
     WindowFocused(bool),
     /// The window changed size, under gamescope only; see [`fit`].
     WindowResized,
@@ -260,9 +258,7 @@ pub(crate) enum Message {
     Wizard(wizard::Msg),
     /// Take back a declined Battle.net and install it after all.
     InstallBattleNet,
-    /// Put the 32-bit library command on the clipboard. Lightforge never runs
-    /// it: installing system packages needs root, and the distributions where
-    /// help is most needed cannot be served by a command at all.
+    /// Put the 32-bit library command on the clipboard; Lightforge never runs it.
     CopyRuntimeCommand(String),
     /// Re-read the machine after the user has installed the libraries, so the
     /// row clears without restarting the app.
@@ -271,9 +267,7 @@ pub(crate) enum Message {
     PinDefaultProton(ProtonChoice),
     /// The build Battle.net and Agent launch under.
     PinBattleNetProton(ProtonChoice),
-    /// One product's own pin. Carries the code, because the Proton page
-    /// lists every installed game rather than whichever one the Play page
-    /// happens to be showing.
+    /// One product's own pin; the Proton page lists every game.
     PinProductProton(ProductCode, ProtonChoice),
     /// The download cap field changed.
     DownloadLimitChanged(String),
@@ -464,11 +458,8 @@ pub(crate) const NAV_DOUBLED: Duration = Duration::from_millis(150);
 
 /// Which profile a launch-settings control edits.
 ///
-/// The same switches appear twice, on a product's own page, and in
-/// Settings › Battle.net for the shared profile that Battle.net and every
-/// game it launches run under. Routed by an explicit scope rather than by
-/// whichever screen happens to be open: the second is the kind of implicit
-/// rule that works until a panel becomes reachable from somewhere new.
+/// A product's own page, or the shared Battle.net profile; explicit, not
+/// read off the open screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Scope {
     /// The product the launcher is showing.
@@ -489,9 +480,7 @@ pub(crate) enum Tweak {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProtonChoice(pub(crate) Option<String>, pub(crate) Unpinned);
 
-/// What a picker's "no pin of my own" entry falls through to, which is not the
-/// same on every row, and the entry has to say which, or it reads as a build
-/// the user never chose.
+/// What a picker's "no pin of my own" entry falls through to, which it names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Unpinned {
     /// The app default: nothing sits above it, so unpinned is the newest build
@@ -539,9 +528,7 @@ impl std::fmt::Display for Choice {
 
 /// One entry in the branch dropdown: a build of the selected line.
 ///
-/// Carries whether the product is configured so the list can offer branches
-/// the user has never set up, picking one is how you add it, which beats
-/// hand-editing `config.toml` to try a PTR.
+/// Includes branches not set up yet: picking one adds it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BranchChoice {
     pub(crate) code: ProductCode,
@@ -559,9 +546,7 @@ impl std::fmt::Display for BranchChoice {
         let name = self.name.as_deref().unwrap_or(self.branch.label());
         match self.configured {
             true => f.write_str(name),
-            // Said plainly in the list rather than greyed out: iced's
-            // pick_list cannot style one entry differently, and a silently
-            // different-looking row explains nothing anyway.
+            // In words: pick_list cannot style one entry.
             false => write!(f, "{name} — add"),
         }
     }
@@ -579,8 +564,7 @@ impl std::fmt::Display for ChannelChoice {
 
 /// One addon's channel: its own, or whatever the default happens to be.
 ///
-/// "Default" is a real option rather than a blank, because following the
-/// default and choosing stable look identical until the default changes.
+/// "Default" is a real option: it differs from stable once the default changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RowChannel(pub(crate) Option<Channel>);
 

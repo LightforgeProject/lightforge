@@ -9,10 +9,7 @@ impl Lightforge {
 
         let mut body = column![self.mine_toolbar(outdated)].spacing(theme::SM);
 
-        // Offered only when there is something to offer it for. A button
-        // that does nothing on every press teaches people to ignore it, and
-        // a library installed entirely through Lightforge has nothing to
-        // recognise.
+        // Only when something is unmanaged.
         let unmanaged = self
             .addons
             .rows
@@ -30,9 +27,7 @@ impl Lightforge {
             body = body.push(mine_header());
         }
 
-        // What happened without anyone asking, said where the addons are.
-        // Nothing interrupted the user to tell them, so this is the only
-        // place it is said at all.
+        // What the unattended pass did, said only here.
         if let Some(note) = &self.addon_auto_note {
             body = body.push(muted(note.clone(), theme::CAPTION));
         }
@@ -46,10 +41,7 @@ impl Lightforge {
             ));
         }
 
-        // Ordered and filtered before drawing, rather than in the order the
-        // folder scan happened to return. Outdated first. That is the reason
-        // to open this page, then by name, so a list of forty is something
-        // you can read down instead of search through.
+        // Outdated first, then by name.
         let needle = self.addon_filter.trim().to_lowercase();
         let mut shown: Vec<&_> = self
             .addons
@@ -90,9 +82,7 @@ impl Lightforge {
     fn mine_toolbar(&self, outdated: usize) -> Element<'_, Message> {
         container(
             row![
-                // Sized, not filling: a filter box the width of the window
-                // looks like the page's search when it only narrows the list
-                // below it.
+                // Sized, or it reads as a search.
                 clickable(
                     "addon filter",
                     text_input("Filter installed addons…", &self.addon_filter)
@@ -111,9 +101,7 @@ impl Lightforge {
                     },
                     theme::LABEL,
                 ),
-                // One shape for the three, so the toolbar reads as a set.
-                // Colour still carries state: blue is the one to press, grey
-                // is a thing you can do.
+                // One shape for the three; blue is the one to press.
                 action_button("Check for updates", theme::PAUSE, Message::CheckAddonUpdates)
                     .enabled(!self.addons_locked() && self.addons.managed > 0),
                 action_button("Update all", theme::ACCENT, Message::UpdateAddons)
@@ -186,11 +174,7 @@ impl Lightforge {
         .spacing(theme::SM)
         .align_y(Alignment::Center);
 
-        // The three facts, in the columns the header names. A dash
-        // rather than a blank for a fact we do not have: an empty cell
-        // reads as a layout bug, where ", " reads as "not known", which
-        // is what it is for an addon installed before this was recorded
-        // or a provider that publishes no dates.
+        // A dash for an unknown fact; a blank reads as a layout bug.
         let managed_row = addon.managed.as_ref();
         line = line.push(cell(
             status.and_then(|s| s.available_name.clone()).or_else(|| {
@@ -205,13 +189,8 @@ impl Lightforge {
         line = line.push(cell(
             managed_row.and_then(|m| m.installed_at.as_deref().map(short_day)),
         ));
-        // Everything that acts on the row lives in a box of its own
-        // width, right-aligned inside it. Without it the three columns
-        // float: a row with an Update button pushes them left of a row
-        // without one, and both sit left of the header that is supposed
-        // to name them. The box is pushed for an addon installed by hand
-        // too, which has no controls at all, otherwise its columns would
-        // be the ones out of step.
+        // A fixed-width box for the controls, even an empty one, so the
+        // columns line up with the header.
         let actions: Element<'a, Message> = match &addon.managed {
             Some(managed) => self.addon_actions(addon, managed, status),
             None => row![].into(),
@@ -245,19 +224,14 @@ impl Lightforge {
             Some(m) if m.pinned.is_some() => {
                 heading = heading.push(pill("pinned".to_owned(), theme::MUTED));
             }
-            // Only worth a word when it differs from what everything else
-            // on the page is doing; with the default on, that is the
-            // addon somebody decided to keep still.
+            // Only when it differs from the default.
             Some(m) if !m.auto_update.unwrap_or(self.config.addon_auto_update) => {
                 heading = heading.push(pill("manual".to_owned(), theme::MUTED));
             }
             _ => {}
         }
         if let Some(status) = status.filter(|s| s.has_update()) {
-            // What is on offer, named the way the provider names it, a
-            // version people recognise, not the opaque file id the
-            // ledger trades in. A channel switch says so instead, because
-            // "→ 1.4.26" beside an alpha looks like going forwards.
+            // The provider's version name; a channel switch says so instead.
             heading = heading.push(match status.is_channel_switch() {
                 true => pill(
                     format!(
@@ -293,14 +267,7 @@ impl Lightforge {
         status: Option<&'a lightforge_core::addons::manage::UpdateStatus>,
     ) -> Element<'a, Message> {
         let mut actions = row![].spacing(theme::SM).align_y(Alignment::Center);
-        // Which builds this addon accepts. Narrow and first, so the
-        // buttons that act stay where the eye expects them whether or
-        // not there is an update to show.
-        // Sized like the buttons it sits beside: three controls on
-        // one line that disagree about their height read as a
-        // mistake rather than as a hierarchy. The width is fixed so
-        // the buttons do not shift as the word changes between
-        // Default, Stable, Beta and Alpha.
+        // Which builds this addon accepts: first, fixed width, button height.
         actions = actions.push(self.picker(
             format!("channel {} {}", managed.provider, managed.id),
             RowChannel::ALL.to_vec(),

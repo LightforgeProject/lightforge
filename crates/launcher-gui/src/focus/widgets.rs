@@ -121,10 +121,7 @@ pub fn region<'a>(id: &'static str, content: impl Into<Element<'a, Message>>) ->
     Element::new(Region { content: content.into(), id, pane: false })
 }
 
-/// A [`region`] the arrows never leave: a page beside a list of pages, like
-/// Settings, which is left by Escape, back to its entry in the list. Without
-/// it, down from the last switch was the list's next entry, and left from
-/// anything was the list.
+/// A [`region`] the arrows never leave, like Settings' page; Escape leaves it.
 pub fn pane<'a>(id: &'static str, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     Element::new(Region { content: content.into(), id, pane: true })
 }
@@ -164,10 +161,8 @@ struct Root<'a> {
     content: Element<'a, Message>,
 }
 
-/// How far outside a checkbox or a radio its ring is drawn, above and below
-/// and to either side. Wider at the sides: a checkbox's box and the last
-/// letter of its label sit right on its edges, and four points there still
-/// read as touching, while the rows above and below are only so far away.
+/// How far outside a checkbox or radio its ring is drawn; wider at the sides,
+/// where box and label touch the edges.
 const RING_GAP_Y: f32 = 5.0;
 const RING_GAP_X: f32 = 10.0;
 
@@ -182,11 +177,8 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Ring<'_> {
         viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, iced::Theme, iced::Renderer>> {
-        // Only while typing on a console, where Steam's keyboard covers the
-        // bottom of the screen and a field down there would be typed into
-        // blind. The field is drawn a second time, its own tree and all, so
-        // the bar shows the words and the cursor exactly as the field has
-        // them, whichever field it is.
+        // On a console Steam's keyboard covers the bottom, so the field is
+        // drawn again in a bar above it.
         if !(crate::theme::console() && typing(tree)) {
             return self.content.as_widget_mut().overlay(tree, layout, renderer, viewport, translation);
         }
@@ -266,9 +258,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Ring<'_> {
             .as_widget_mut()
             .update(tree, event, layout, cursor, renderer, clipboard, shell, viewport);
 
-        // A click asked for from the keyboard, done here because only the
-        // widget itself knows where the pointer would have to be: inside a
-        // scrolled list, its bounds are in the list's own coordinates.
+        // A keyboard click, here: only the widget knows its real position.
         let mine = with(|r| match r.click.as_ref() == Some(&self.target) {
             true => r.click.take().is_some(),
             false => false,
@@ -343,17 +333,8 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Ring<'_> {
 
         self.content.as_widget().draw(tree, renderer, theme, style, layout, cursor, viewport);
 
-        // White rather than the accent: INSTALL is filled with nearly the
-        // accent's blue, and a ring the colour of the button it is on is no
-        // ring at all. A layer of its own, so it lands over the control's
-        // picture and text and not under them.
-        //
-        // Drawn round a checkbox or a radio rather than on its edge: their
-        // bounds end at the box and the label's last letter, and a ring on
-        // that line touches both. A field has a box of its own to sit on,
-        // the way a dropdown does.
-        // A field with the cursor in it already says so with its own
-        // border, and a ring round that read as two selections at once.
+        // White (INSTALL is nearly the accent), on a layer of its own. Round
+        // a checkbox, not on its edge. Not on a field being typed in.
         if on && !typing(tree) {
             let (ring, radius) = match self.press {
                 Press::Click if !field(tree) => {
@@ -524,11 +505,8 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Root<'_> {
             r.groups.clear();
         });
         self.content.as_widget().draw(tree, renderer, theme, style, layout, cursor, viewport);
-        // The overlays come next, and a [`layer`] in one, a picker's menu,
-        // counts from here: above the deepest layer the window drew. Counted
-        // from zero instead, a menu opened inside a dialog tied with the
-        // dialog, both stayed reachable, and the arrows walked on through the
-        // dialog rather than into the list.
+        // A [`layer`] in an overlay counts above the deepest one drawn, or a
+        // menu in a dialog ties with the dialog.
         with(|r| r.depth = r.top);
     }
 }

@@ -1,21 +1,12 @@
 //! Lightforge GUI, the dashboard.
 //!
-//! One product at a time: its branding, one primary action whose label and
-//! color *are* the state machine in [`lightforge_core::state`], and the
-//! secondary paths around it.
+//! One product at a time, its primary action being the state machine in
+//! [`lightforge_core::state`].
 //!
-//! Two things here are deliberate and easy to get wrong:
-//!
-//! - **Progress arrives through a `watch` channel, sampled on a timer.** The
-//!   downloader calls its callback once per stored file; forwarding each one as
-//!   a message would drown the loop and make transfer speed a function of UI
-//!   responsiveness. `watch` keeps only the newest value, so a slow window
-//!   costs nothing.
-//! - **Pausing is cancelling.** The downloader's cancel token stops the loop
-//!   between chunks and the store keeps what it has, so resuming is a fresh
-//!   run that plans against what is already on disk. That is also exactly what
-//!   pre-flight does before launching Battle.net, which is why the same guard
-//!   serves both.
+//! - **Progress arrives through a `watch` channel, sampled on a timer**: a
+//!   message per stored file would drown the loop.
+//! - **Pausing is cancelling**: resuming plans against what is on disk, as
+//!   pre-flight's pause before Battle.net does.
 
 mod addonwork;
 mod app;
@@ -83,65 +74,37 @@ use tasks::{Problem, Refreshed, SharedDownloads, TransferState};
 /// Where a player manages their subscription, per the spec.
 const ACCOUNT_URL: &str = "https://account.battle.net/games";
 
-/// The desktop entry's basename, the Wayland `app_id` and the AppStream
-/// component id, which are required to be the same string, see
-/// `packaging/README.md`.
+/// The desktop entry's basename, Wayland `app_id` and AppStream id, which
+/// must match (`packaging/README.md`).
 const APP_ID: &str = "pro.tuxcore.Lightforge";
 
-/// Opening size, and the floor for resizing, deliberately the same number.
-///
-/// Below it the dashboard does not squeeze, it loses its fixed right-hand
-/// column, and PLAY with it. It is also the smallest screen Lightforge fits:
-/// a 1366x768 laptop cannot show 820pt plus a title bar. A tiling compositor
-/// can still hand the window a smaller slot; nothing here can prevent that.
+/// Opening size and resize floor: below it the right-hand column, and PLAY,
+/// would go. Fits a 1366x768 laptop.
 const WINDOW: iced::Size = iced::Size::new(1280.0, 820.0);
 const WINDOW_MIN: iced::Size = WINDOW;
 
-/// The splash card, the only thing painted while a start's artwork is
-/// fetched. Small enough to read as a loading screen rather than as a
-/// launcher that has come up broken, which is the complaint it answers: a
-/// cold start used to show the full window with an empty card for a second or
-/// two per game, while that game's background and wordmark came down.
-///
-/// The *window* is the launcher's size throughout; see [`main`]. Only this
-/// card is drawn, on a transparent background, so what anyone sees is a small
-/// panel floating in the middle of the screen.
+/// The splash card, drawn alone on a transparent full-size window while the
+/// artwork is fetched, so a cold start does not show empty cards.
 const SPLASH: iced::Size = iced::Size::new(460.0, 280.0);
 
-/// How long the splash card is kept on screen at the very least.
-///
-/// A warm cache answers in milliseconds, and a card that appears and vanishes
-/// inside two frames reads as a glitch rather than as a start. Short enough
-/// that "nothing to fetch" still feels instant, a start is never *slower*
-/// than it was, only less ugly.
+/// The splash card's minimum time on screen: shorter reads as a glitch.
 const SPLASH_FLOOR: Duration = Duration::from_millis(350);
 
-/// A ceiling on the fetch, so a machine with no network, or one behind a
-/// captive portal that never answers, still reaches its launcher. Whatever
-/// landed inside the budget is kept; the rest is fetched on demand as it
-/// always was.
+/// A ceiling on the splash fetch, for a machine with no network; the rest is
+/// fetched on demand.
 const SPLASH_BUDGET: Duration = Duration::from_secs(12);
 
-// No renderer is forced. iced 0.13's wgpu lagged on Wayland resizes
-// (iced-rs/iced#2750); 0.14 fixed it, and wgpu is now the smoother one. With
-// `ICED_BACKEND` unset iced tries wgpu and falls back to tiny-skia on any
-// init error, so a machine without a working GPU still gets a window;
-// `ICED_BACKEND=tiny-skia` stays as the escape hatch for hardware that
-// initialises fine but renders badly.
+// No renderer is forced: iced tries wgpu and falls back to tiny-skia on an
+// init error. `ICED_BACKEND=tiny-skia` is the escape hatch for bad rendering.
 
 /// Keep large, short-lived allocations out of the heap.
 ///
-/// Decoding pictures makes big buffers that are freed correctly, but glibc
-/// raises its mmap threshold as it watches them (up to 32 MiB), so later ones
-/// come off the heap and freed pages stay resident, hundreds of MB across 48
-/// arenas. Measured on a page of 97 images: 444 MB RSS as shipped, 149 MB
-/// with fixed trim and mmap thresholds. Pinning the threshold is what stops
-/// the drift. glibc only; musl would need measuring again.
+/// glibc raises its mmap threshold as it sees big image buffers, and freed
+/// heap pages stay resident. Measured on 97 images: 444 MB RSS, 149 MB with
+/// the thresholds pinned. glibc only.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn tune_allocator() {
-    // 128 KiB: large enough that ordinary small allocations are untouched,
-    // small enough that every image buffer is mapped and so handed straight
-    // back on free.
+    // 128 KiB: every image buffer is mapped, small allocations are not.
     const LARGE: libc::c_int = 128 * 1024;
     // SAFETY: `mallopt` takes two ints and touches only the allocator's own
     // parameters. Called before any thread is spawned.
@@ -166,10 +129,8 @@ fn start_logging() {
 }
 
 fn main() -> iced::Result {
-    // The one flag, answered before anything opens a window. Packaging checks
-    // that a release ships the build it says it does by asking both binaries,
-    // and a bug report is easier with the version than with a screenshot.
-    // Same shape as clap's answer for `lightforge`.
+    // Answered before any window, as clap answers it for `lightforge`;
+    // packaging checks it.
     if std::env::args().skip(1).any(|arg| arg == "--version" || arg == "-V") {
         println!("lightforge-gui {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
@@ -197,11 +158,8 @@ fn main() -> iced::Result {
     // 1 everywhere but gamescope, where winit's own guess is pinned off and
     // this is the whole scale; see [`fit`].
     .scale_factor(|state: &Lightforge| state.ui_scale)
-    // What the surface is cleared to, which is the other half of the splash
-    // being a small window. `transparent: true` only gives the surface an
-    // alpha channel, iced still clears it to the theme's background, so
-    // without this the "transparent" window is an opaque rectangle with a
-    // card in the middle of it. Measured: it dimmed everything behind it.
+    // `transparent: true` only adds alpha; iced still clears to the theme's
+    // background unless told otherwise here.
     .style(|state: &Lightforge, theme| iced::theme::Style {
         background_color: match state.splash.is_some() {
             true => iced::Color::TRANSPARENT,
@@ -209,22 +167,16 @@ fn main() -> iced::Result {
         },
         text_color: theme.palette().text,
     })
-    // The window has its final size from the first frame and is never
-    // resized; while the art loads it paints only the [`SPLASH`] card on a
-    // transparent, frameless surface. Resizing instead broke three things: a
-    // Wayland client cannot position itself, so a window mapped small and
-    // grown later stays off-centre for good.
+    // Final size from the first frame, never resized: a Wayland client cannot
+    // position itself, so a window grown later stays off-centre.
     .window(iced::window::Settings {
         size: WINDOW,
         min_size: Some(WINDOW_MIN),
         decorations: false,
         transparent: true,
         position: iced::window::Position::Centered,
-        // The Wayland `app_id` / X11 `WM_CLASS`, and the one thing that ties
-        // a running window to the installed desktop entry: a compositor
-        // matches `pro.tuxcore.Lightforge.desktop` by this string and by
-        // nothing else. Left at winit's default the taskbar shows a generic
-        // placeholder instead of the launcher's icon.
+        // The Wayland `app_id` / X11 `WM_CLASS`: how the compositor finds the
+        // desktop entry, and so the icon.
         platform_specific: iced::window::settings::PlatformSpecific {
             application_id: APP_ID.to_owned(),
             ..Default::default()
@@ -283,9 +235,7 @@ struct Lightforge {
     /// The control that opened the menu the ring is in, to land on again
     /// when the menu closes.
     focus_return: Option<focus::Target>,
-    /// Where the ring was when the mouse moved and took it away, for the
-    /// next key to bring it back to. Steam's keyboard moves the pointer
-    /// when it closes, and the ring then started over at the logo.
+    /// Where the ring was when the mouse took it away, for the next key.
     focus_resume: Option<focus::Target>,
     /// Where the last control pressed by Enter was, and on which page, in
     /// case pressing it made it go away: Keep after Remove, Install inside a
@@ -312,25 +262,15 @@ struct Lightforge {
     steam_shortcut: Option<Result<String, String>>,
     /// Whether the menu under the wordmark is open.
     app_menu_open: bool,
-    /// Pages left behind, oldest first, and pages stepped back out of.
-    ///
-    /// Two stacks rather than an index into one list, because that is exactly
-    /// what back and forward are: going back moves the current page onto
-    /// `forward`, going forward moves it onto `visited`, and visiting a new
-    /// page from anywhere clears `forward`: the branch you did not take.
+    /// Pages left behind, oldest first, and pages stepped back out of. A new
+    /// page clears `forward`.
     visited: Vec<Screen>,
     forward: Vec<Screen>,
-    /// Whether the explanatory prose under the controls is drawn.
-    ///
-    /// Off for the people who use Lightforge: the interface is meant to be
-    /// readable without a paragraph under every switch, and a screen of grey
-    /// sentences is what it looks like when it is not. On for whoever is
-    /// working on it; see [`HINTS_CHORD`].
+    /// Whether the explanatory prose under the controls is drawn; off unless
+    /// [`HINTS_CHORD`] turns it on.
     hints: bool,
-    /// Battle.net's own mark, if the prefix has one, see
-    /// [`Layout::battle_net_icon`]. Decoded once, here, and held as the one
-    /// handle: iced has no decoder of its own, and a handle rebuilt in `view`
-    /// would be a fresh texture on every frame.
+    /// Battle.net's own mark ([`Layout::battle_net_icon`]), decoded once: a
+    /// handle built in `view` is a new texture every frame.
     bnet_icon: Option<image::Handle>,
     /// Whether the cog menu beside the primary button is open.
     gear_open: bool,
@@ -366,12 +306,8 @@ struct Lightforge {
     /// Set once the window is closing: the pause that closing performs must
     /// not be what the next start restores.
     queue_frozen: bool,
-    /// A cancelled transfer whose task has not reported back yet.
-    ///
-    /// Pausing flips the UI at once, but the run keeps going for a moment,
-    /// it finishes the requests already in flight and checkpoints the store.
-    /// Starting anything before it lands would put two writers on the same
-    /// CASC store, which is the corruption pre-flight exists to prevent.
+    /// A cancelled transfer still checkpointing; nothing else may write the
+    /// store until it reports back.
     winding_down: Option<ProductCode>,
 
     downloads: SharedDownloads,
@@ -394,7 +330,7 @@ struct Lightforge {
     wizard: Option<wizard::Wizard>,
     /// The release notes for the version that has just started, while they
     /// are on screen. `None` once dismissed, or when this start is not the
-    /// first one after an update; see [`Lightforge::patch_notes_due`].
+    /// first one after an update; see [`Lightforge::open_patch_notes`].
     patch_notes: Option<PatchNotes>,
     /// The small window the app opens in. `None` once it has grown into the
     /// launcher, which happens exactly once per run.
@@ -446,18 +382,11 @@ struct Lightforge {
     /// The update of Lightforge itself, once "Update" was pressed.
     upgrade: Option<Upgrade>,
     launcher_check: LauncherCheck,
-    /// A cancelled transfer whose files go once the run has wound down.
-    ///
-    /// Deferred rather than done on the click: the downloader may still have
-    /// the store open, and deleting a store out from under its own writer is
-    /// not something to race. The `Downloaded` message is the run saying it
-    /// has stopped, which is when this fires.
+    /// A cancelled transfer whose files go once `Downloaded` says the run stopped.
     delete_after_cancel: Vec<ProductCode>,
     /// A given-up download's files being removed right now.
     discarding: Option<ProductCode>,
-    /// The product being launched, from pre-flight until it exits. Captured
-    /// on the click, so the launch, and what follows it, cannot move to a
-    /// tile selected in the meantime.
+    /// The product being launched, from pre-flight until it exits.
     launching: Option<ProductCode>,
     /// A game process is up in the prefix during a launch of ours: PLAY
     /// becomes STOP.
@@ -476,36 +405,21 @@ struct Lightforge {
     /// sent in that window simply says so rather than blocking on it.
     system: Option<iced::system::Information>,
     downgrade_dialog: Option<DowngradeDialog>,
-    /// Builds the user has already agreed to launch under this session.
-    ///
-    /// Per build rather than once for all: agreeing to one downgrade is not
-    /// agreeing to the next one. Not persisted, a new run of the launcher is
-    /// a fair moment to ask again, and the prefix may have moved since.
+    /// Builds the user agreed to launch under despite a downgrade, this
+    /// session only.
     downgrade_ok: HashSet<String>,
-    /// Partitions that could become a library, as last scanned. Refreshed
-    /// when the Storage section opens rather than polled, a drive appearing
-    /// while the page is shut is not news.
+    /// Partitions that could become a library, scanned when Storage opens.
     partitions: Vec<library::Partition>,
     /// What clearing one drive last freed, by library id.
     drive_notice: Option<(String, String)>,
     /// Each library's unused game data, as last checked, by library id.
     unused: HashMap<String, UnusedData>,
-    /// Whether nothing is installed yet, as last checked.
-    ///
-    /// Cached beside `drive_states` and for the same reason: it is two
-    /// `read_dir` calls, and the view asks it on every frame.
+    /// Whether nothing is installed yet, cached like `drive_states`.
     library_empty: bool,
-    /// Each library's state as last checked, by id.
-    ///
-    /// Cached rather than asked in the view: `action()` runs on every frame,
-    /// and a marker file read per frame would put a filesystem call in the
-    /// render path. Refreshed when drives are rescanned and when a product is
-    /// reloaded, which is also when a drive going away would matter.
+    /// Each library's state, by id: cached, since `action()` runs every frame.
     drive_states: HashMap<String, library::State>,
 
-    /// Optional performance tools this machine has, detected once at startup.
-    /// A toggle for a binary that is not installed is a launch failure waiting
-    /// to happen, so the panel hides what is missing.
+    /// Optional performance tools this machine has, detected at startup.
     tools: HostTools,
     /// The environment-variable editors: Game Settings' and Battle.net's.
     env_editor: iced::widget::text_editor::Content,
@@ -519,9 +433,7 @@ struct Lightforge {
 
     addons: addonwork::Listing,
     token_input: String,
-    /// Narrows the installed list. Held here rather than derived, because it
-    /// is the one piece of the addon page the user types into and expects to
-    /// survive a refresh of the list underneath it.
+    /// Narrows the installed list; survives a refresh.
     addon_filter: String,
     /// The addon whose Remove has been clicked once. Removing deletes files,
     /// so the second click is the one that means it.
@@ -529,51 +441,29 @@ struct Lightforge {
     /// The addon whose per-addon menu is showing. One at a time: the panel is
     /// an overlay, and two of them would draw over each other.
     addon_menu_open: Option<(String, String)>,
-    /// Whether the next import reproduces the token's exact versions. Off by
-    /// default: most tokens are someone saying which addons they use, not
-    /// which builds of them.
+    /// Whether the next import reproduces the token's exact versions.
     import_pinned: bool,
     /// The version picker, when it is open: which addon, and the builds the
     /// catalogue offers. `None` in the list means the fetch is still out.
     version_picker: Option<VersionPicker>,
     game_settings: Option<GameSettings>,
     addon_detail: Option<AddonDetail>,
-    /// Whether the environment-variable editor is expanded, per panel.
-    ///
-    /// Two flags rather than one because they want different defaults. On a
-    /// product's page the card is folded away. It is the escape hatch, below
-    /// four cards of switches. In Settings › Battle.net it is open from the
-    /// start: a hand-off game has no client settings, so environment
-    /// variables are not a last resort there but most of what the page is
-    /// for, and hiding them behind a Show button reads as "nothing here".
-    /// Game families, as Blizzard's own catalogue names them, read out of the
-    /// client's cache at startup. Empty on a prefix whose client has never
-    /// run, which falls the hand-off back to the compiled-in families.
+    /// Game families from the client's cache, read at startup. Empty until
+    /// the client has run; the hand-off then uses compiled-in families.
     families: lightforge_core::families::Families,
-    /// Products whose unattended pass has already run this session. Addons
-    /// are per product, so switching to Classic is the first chance to bring
-    /// Classic's up to date, but only the first chance: clicking back and
-    /// forth along the band must not re-ask CurseForge each time.
+    /// Products whose unattended addon pass ran this session: once each.
     addon_auto_done: Vec<ProductCode>,
-    /// An unattended addon pass is in flight. Separate from `addons_busy`,
-    /// which disables the buttons a person pressed: this one nobody asked
-    /// for, so it must not grey the page out.
+    /// An unattended addon pass is in flight; unlike `addons_busy`, it greys nothing.
     addon_auto_running: bool,
     /// What the unattended pass did, said once on the Addons page. `None`
     /// when it has not run or had nothing to do, "0 addons updated" is noise.
     addon_auto_note: Option<String>,
-    /// A launch waiting for that pass to finish. The game reads AddOns once,
-    /// at login, and extracting into that directory while it does is how a
-    /// half-written addon gets loaded.
+    /// A launch waiting for that pass: the game reads AddOns at login.
     launch_after_addons: Option<Launch>,
-    /// Which tab the standing report belongs to. An import's failures are read
-    /// next to the import that caused them; an update's belong with the
-    /// addons. Same type, two meanings, so it is remembered rather than
-    /// guessed at from the report's contents.
+    /// Which tab the standing report belongs to: import, or update.
     addon_report_tab: AddonTab,
-    /// Counts keystrokes in the search box. A debounced search carries the
-    /// number it was scheduled at and does nothing if another key has landed
-    /// since, which is what stops a six-letter word becoming six searches.
+    /// Counts keystrokes in the search box, so a debounced search runs only
+    /// for the last one.
     search_seq: u64,
     /// The token the Export button built, held so it can be read and copied.
     export_token: String,
@@ -605,19 +495,12 @@ impl Lightforge {
         (app, task)
     }
 
-    /// Every message, with the status line watched on the way out.
-    ///
-    /// Every change is also written to the log file, so the status line is the
-    /// thread through it, and whatever it said in the minute before a bug
-    /// report is usually the whole story. Recording it here rather than at
-    /// the hundred-odd places that assign it means nothing can be forgotten.
+    /// Every message; a change of the status line is written to the log here,
+    /// once for every place that sets it.
     fn update(&mut self, message: Message) -> Task<Message> {
         let before = (self.status.clone(), self.error.clone());
-        // Anything may change how tall a Settings section is, a scan
-        // finishing, a list arriving, so while a jump is holding its section
-        // at the top, every message re-measures. Only for a moment after the
-        // jump: after that the page has settled, and a reader scrolling it
-        // is the only thing that moves the index.
+        // Shortly after a Settings jump, any message may change a section's
+        // height, so each one re-measures.
         let settling = self.screen == Screen::Settings
             && self.settings_anchor.as_ref().is_some_and(|a| a.since.elapsed() < SETTINGS_JUMP_SETTLE)
             && !matches!(message, Message::SettingsMeasured(_) | Message::SettingsScrolled(_));
@@ -688,9 +571,7 @@ impl Lightforge {
         if let Some(splash) = &self.splash {
             return self.splash_screen(splash);
         }
-        // The first run is a layer over the app rather than a `Screen`: there
-        // is no way out of it except the two buttons in its footer, so nothing
-        // else may be reachable while it is up.
+        // The first run is a layer over the app: nothing else is reachable.
         if let Some(open) = &self.wizard {
             return focus::root(self.with_hints(self.wizard_layer(open)));
         }

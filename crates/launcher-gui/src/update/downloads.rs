@@ -38,23 +38,16 @@ impl Lightforge {
                     }
                     match (entry.job.total, entry.sample.remaining) {
                         (None, remaining) => entry.job.total = remaining,
-                        // Restored from before a restart, and a new build has
-                        // come out since: the saved size no longer describes
-                        // this job, so it starts over from what is left.
+                        // A new build since the restart: start from what is left.
                         (Some(total), Some(remaining)) if remaining > total => {
                             entry.job = Job { total: Some(remaining), reached: 0 };
                         }
                         _ => {}
                     }
-                    // Rate is measured on what this run has stored; the
-                    // baseline is a constant offset and would only mute the
-                    // first sample.
+                    // Rate on this run's bytes only.
                     entry.rate.sample(entry.sample.progress.bytes_stored);
 
-                    // What this build offers is only knowable once its
-                    // manifest has been read, so a run is the one chance to
-                    // learn it. Cached per product so the settings panel has
-                    // something real to list.
+                    // Only a run reads the manifest; cache what it offers.
                     let (code, offered) =
                         (entry.code.clone(), entry.sample.optional.clone());
                     if !offered.is_empty() {
@@ -116,10 +109,7 @@ impl Lightforge {
                 self.busy = false;
                 match *result {
                     Ok(offerings) => {
-                        // The point of the round trip: the optional list is
-                        // only knowable from the manifest, and this is the
-                        // cheap way to learn it. Kept whichever product is
-                        // showing by now; the rest only describes this one.
+                        // Kept whatever product is showing now.
                         self.remember_optional(&code, offerings.optional.clone());
                         if code != self.selected.code {
                             return Ok(Task::none());
@@ -147,9 +137,7 @@ impl Lightforge {
     fn update_transfer_ended(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
             Message::Downloaded(code, result) => {
-                // A run a launch paused stops as cancelled, and is still owed
-                // its restart when the game exits: `finished` would forget
-                // that, which is why `Launched` never found anything owed.
+                // Paused by a launch, it is owed a restart; `finished` would forget.
                 let paused_by_launch = matches!(&result, Ok(done) if done.cancelled)
                     && self.downloads.pending().contains(&code);
                 if !paused_by_launch {
@@ -158,17 +146,12 @@ impl Lightforge {
                 if self.winding_down.as_ref() == Some(&code) {
                     self.winding_down = None;
                 }
-                // The run this was waiting on has stopped, so the store is
-                // closed and its files can go, which `pump` does before it
-                // starts anything else. Before everything below, which is all
-                // about a queue entry that no longer exists.
+                // The store is closed now; `pump` deletes the files first.
                 if self.delete_after_cancel.contains(&code) {
                     return Ok(self.pump());
                 }
 
-                // Status and errors describe the selected product. A transfer
-                // that finished while the user was looking elsewhere updates
-                // the queue and says nothing.
+                // Status only for the selected product.
                 let showing = code == self.selected.code;
                 let entry = self.queue.iter().position(|d| d.code == code);
                 let note = |app: &mut Self, text: String| {
@@ -177,10 +160,7 @@ impl Lightforge {
                     }
                 };
 
-                // Resumed while this run was still winding down: the entry is
-                // already a fresh, queued one. Marking it paused here, as
-                // this handler once did, swallowed the resume, and whether it
-                // happened came down to how fast the old run stopped.
+                // Resumed during the wind-down: already queued, not paused.
                 let resumed = entry.is_some_and(|at| matches!(self.queue[at].stage, Stage::Queued));
                 let complete = matches!(&result, Ok(done) if done.complete);
                 if resumed && !complete {
@@ -275,10 +255,7 @@ impl Lightforge {
                     .find(|d| d.code == code)
                     .map(|d| d.label.clone())
                     .unwrap_or_else(|| code.as_str().to_owned());
-                // What is on disk for *this* product, which is the thing that
-                // decides whether giving up may delete anything. Read from the
-                // panel only when the panel is showing this product; otherwise
-                // the disk is asked directly.
+                // What is on disk for this product decides what may be deleted.
                 let installed = match code == self.selected.code {
                     true => self.local.version.clone(),
                     false => state::Local::inspect(&self.layout, &code).version,
@@ -306,9 +283,7 @@ impl Lightforge {
                                 format!("cancelled {label} — freed {}", size_of(freed));
                         }
                     }
-                    // The transfer is still cancelled; only the clean-up
-                    // failed, and saying so is better than a status line
-                    // claiming space came back.
+                    // Cancelled, but the clean-up failed: say so.
                     Err(e) => {
                         self.error = Some(format!(
                             "{label} was cancelled, but its files could not be \
@@ -345,10 +320,7 @@ impl Lightforge {
                 if !delete {
                     return Ok(self.pump());
                 }
-                // Removed once nothing is writing to the store any more: at
-                // once for a queued entry, after the wind-down for a running
-                // or just-paused one, after another product's run for a
-                // store they share. See `pump`.
+                // Removed once nothing writes the store; see `pump`.
                 self.delete_after_cancel.push(code);
                 self.pump()
             }

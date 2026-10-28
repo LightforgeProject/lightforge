@@ -22,9 +22,7 @@ impl Lightforge {
             .map(|library| (library.id.clone(), library.state()))
             .collect();
         self.library_empty = storage::library_is_empty(&self.layout);
-        // Seeded here rather than when Storage is first measured: the field
-        // lives on Setup now, which is the page a first run opens on, before
-        // anything has been measured.
+        // Seeded here: Setup shows it before anything is measured.
         if self.location_input.is_empty() {
             self.location_input = self.layout.root().display().to_string();
         }
@@ -84,9 +82,7 @@ impl Lightforge {
 
     /// Bring the header's list back in line with the configured products.
     ///
-    /// Adoption can add a product nobody chose, a found install of Classic Era
-    /// is a game the user has, whether or not they would have thought to add
-    /// the tile, so the two lists are reconciled rather than appended to.
+    /// Reconciled, not appended: adoption can add products.
     pub(crate) fn sync_choices(&mut self) {
         self.choices = self
             .config
@@ -106,9 +102,7 @@ impl Lightforge {
 
     /// Put the game on screen into the band, if it was only being looked at.
     ///
-    /// Called by every action that starts something for it: a download or a
-    /// game running for a product the band does not show would have nowhere
-    /// to report to, and nowhere to be found again.
+    /// Before anything starts for it, so it has somewhere to report.
     pub(crate) fn track_selected(&mut self) {
         if self.choices.iter().any(|c| c.code == self.selected.code) {
             return;
@@ -132,10 +126,7 @@ impl Lightforge {
     /// Re-read the mount table: which partitions could be added, and whether a
     /// library that was absent has come back somewhere else.
     ///
-    /// The relocation is the half worth having. A drive that was mounted at
-    /// `/run/media/user/games` and comes back at `/run/media/user/games1` is
-    /// still the same volume, and its marker says so, so the recorded path is
-    /// corrected rather than the library being declared lost.
+    /// A drive back at `/run/media/user/games1` is found by its marker.
     pub(crate) fn refresh_drives(&mut self) {
         let mut moved = false;
         for library in &mut self.config.libraries {
@@ -202,9 +193,7 @@ impl Lightforge {
                 library.label
             ));
         }
-        // The letters go with it, and the prefix keeps the links until the
-        // next provision tidies them: a dangling `dosdevices` entry is inert,
-        // and removing one while the client is up is not worth the race.
+        // The links stay until the next provision; a dangling one is inert.
         self.config.libraries.retain(|l| l.id != id);
         for product in &mut self.config.products {
             if product.profile.library.as_deref() == Some(id) {
@@ -251,10 +240,7 @@ impl Lightforge {
 
     /// Point the library at the typed location.
     ///
-    /// Only while nothing is installed in the current one: then it is a
-    /// config change. With games or a prefix in it, it would be a data
-    /// migration, re-pointing the prefix's game symlink, moving 100+ GB,
-    /// and leaving the old library behind unannounced is not an answer.
+    /// Only while nothing is installed: otherwise it is a data migration.
     pub(crate) fn relocate(&mut self) -> Result<(), String> {
         let path = parse_path(&self.location_input)?;
         if path == self.layout.root() {
@@ -275,9 +261,7 @@ impl Lightforge {
             Some(root) if root == path => None,
             _ => Some(path.clone()),
         };
-        // The first library moves with the root when it was under it, which
-        // it is unless the user pointed `games_dir` somewhere else. Nothing is
-        // installed (checked above), so this is a path change, not a move.
+        // The first library follows the root when it was under it.
         let old = self.layout.games_root();
         if let Some(main) = self.config.libraries.iter_mut().find(|l| l.is_default) {
             if main.games == old {

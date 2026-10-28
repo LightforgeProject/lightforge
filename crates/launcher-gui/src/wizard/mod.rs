@@ -1,17 +1,9 @@
 //! The first run.
 //!
-//! Everything a machine needs before a game can be played, in the order it has
-//! to happen, as one flow instead of a Settings page the user has to find:
-//! where things go, what is already here, provisioning, which games to keep in
-//! the band, done.
-//!
-//! It is a layer over the app rather than a screen of its own, the same
-//! [`Lightforge`] state, the same messages where they already exist. The Place
-//! step *is* Settings' install-location field and the Storage page's drive
-//! list, the Install step *is* [`crate::provision`], and the Games step is the
-//! add-a-game list. Only the three things with nowhere else to live are new:
-//! the artwork prefetch, the scan for installs that were here first, and the
-//! choice to do without Battle.net.
+//! Where things go, what is already here, provisioning, which games to keep.
+//! A layer over the app reusing its pieces (the Install step is
+//! [`crate::provision`]); new are only the art prefetch, the scan for
+//! existing installs, and declining Battle.net.
 
 mod adopt;
 mod steps;
@@ -204,11 +196,7 @@ pub enum Msg {
 
 /// One line about what adoption did to one install.
 ///
-/// Typed rather than a bare string because the three outcomes do not deserve
-/// the same ink: an install that was taken is a receipt, an install that was
-/// not is the reason someone's game is missing from the launcher, and the
-/// difference used to be invisible, both were the same grey caption on a slide
-/// people click past.
+/// Typed, so a refused install does not read like a receipt.
 #[derive(Debug, Clone)]
 pub struct Note {
     pub text: String,
@@ -246,9 +234,7 @@ fn rows_of(found: Vec<Found>) -> Vec<Row> {
                 prefix: entry.prefix.clone(),
                 origin: entry.origin,
                 blocked: install.blocked.clone(),
-                // Ticked by default: someone with a 120 GB install on this
-                // machine is here to use it, and the alternative is a wizard
-                // that quietly offers to download it again.
+                // Ticked by default: a found install is here to be used.
                 take: install.blocked.is_none(),
                 kind: RowKind::Wow(install),
             });
@@ -275,9 +261,7 @@ pub fn forward(wizard: &Wizard) -> focus::Target {
     focus::Target::Key(format!("{:?}", Message::Wizard(message)))
 }
 
-/// Fetch every tracked product's artwork into the cache, before anyone looks at
-/// a panel. This is the "it looks weird on the first start" fix, done where the
-/// user is reading a slide anyway.
+/// Fetch every tracked product's artwork while the user reads a slide.
 pub fn prefetch(app: &Lightforge) -> iced::Task<Message> {
     let codes: Vec<ProductCode> = app.choices.iter().map(|c| c.code.clone()).collect();
     iced::Task::perform(
