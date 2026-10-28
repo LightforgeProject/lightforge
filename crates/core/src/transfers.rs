@@ -42,6 +42,9 @@ pub struct Saved {
     /// Bytes done when it was paused.
     #[serde(default)]
     pub reached: u64,
+    /// A pre-download, not an install or update; see [`crate::tact::staged`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pre_download: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,12 +99,14 @@ mod tests {
                     standing: Standing::Running,
                     job_bytes: Some(12 << 30),
                     reached: 0,
+                    pre_download: false,
                 },
                 Saved {
                     code: ProductCode::ClassicEra,
                     standing: Standing::Paused,
                     job_bytes: Some(4 << 30),
                     reached: 1 << 30,
+                    pre_download: true,
                 },
             ],
         };
@@ -123,6 +128,7 @@ mod tests {
                 standing: Standing::Queued,
                 job_bytes: None,
                 reached: 0,
+                pre_download: false,
             }],
         };
 

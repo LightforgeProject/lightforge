@@ -76,6 +76,7 @@ impl Lightforge {
             selected: selected.clone(),
             local: Local::default(),
             remote: None,
+            bgdl: None,
             branding: None,
             queue: Vec::new(),
             manager_open: false,

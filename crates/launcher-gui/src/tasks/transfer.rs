@@ -31,6 +31,7 @@ pub async fn download(
     locale: String,
     limit_bytes_per_second: u64,
     optional_tags: Vec<String>,
+    pre_download: bool,
     cancel: Cancel,
     tx: tokio::sync::watch::Sender<TransferState>,
 ) -> Result<Summary, Problem> {
@@ -73,6 +74,7 @@ pub async fn download(
                     // offering to install what is already there.
                     agent_dir: Some(layout.agent_dir()),
                     windows_path: Some(windows_path),
+                    stage: pre_download,
                     ..InstallOptions::default()
                 };
 

@@ -183,6 +183,7 @@ fn a_resumed_run_continues_its_job_rather_than_restarting() {
         sample: TransferState::default(),
         rate: Rate::default(),
         job: Job { total: Some(10 * gib), reached: 0 },
+        pre_download: false,
     };
     let job = paused.resumed();
 
@@ -788,6 +789,7 @@ fn a_resume_during_the_wind_down_is_not_swallowed() {
         sample: TransferState::default(),
         rate: Rate::default(),
         job: Job::default(),
+        pre_download: false,
     });
     app.winding_down = Some(code.clone());
 
@@ -827,6 +829,7 @@ fn deleting_a_cancelled_install_waits_for_the_run_to_stop() {
         sample: TransferState::default(),
         rate: Rate::default(),
         job: Job::default(),
+        pre_download: false,
     });
 
     app.cancel_dialog = Some(CancelDialog {
@@ -853,6 +856,7 @@ fn running(app: &mut Lightforge, code: &ProductCode) {
         sample: TransferState::default(),
         rate: Rate::default(),
         job: Job::default(),
+        pre_download: false,
     });
 }
 
@@ -990,6 +994,7 @@ fn cancelling_an_update_never_deletes_anything() {
         sample: TransferState::default(),
         rate: Rate::default(),
         job: Job::default(),
+        pre_download: false,
     });
     app.cancel_dialog = Some(CancelDialog {
         code: code.clone(),
@@ -1032,6 +1037,7 @@ fn a_download_running_at_close_is_saved_as_running() {
         sample: TransferState::default(),
         rate: Rate::default(),
         job: Job { total: Some(12 << 30), reached: 0 },
+        pre_download: false,
     });
     let _ = app.pump();
     let running = app.queue_snapshot();
@@ -1405,4 +1411,67 @@ fn an_env_edit_still_waiting_is_saved_when_the_window_closes() {
     let saved = Config::load_or_default(&dirs.config_file()).unwrap();
     assert_eq!(saved.battle_net_tweaks.env.get("A").map(String::as_str), Some("1"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn paused_pre_download(code: ProductCode) -> Download {
+    Download {
+        code,
+        label: String::new(),
+        stage: Stage::Paused(state::Progress::default()),
+        sample: TransferState::default(),
+        rate: Rate::default(),
+        job: Job { total: Some(5 << 30), reached: 1 << 30 },
+        pre_download: true,
+    }
+}
+
+#[test]
+fn a_pre_download_leaves_play_alone() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.queue.clear();
+    app.local = Local {
+        build_key: Some("abc".to_owned()),
+        version: Some("11.2.7.65000".to_owned()),
+        executable: Some(PathBuf::from("/nowhere/Wow.exe")),
+        store_files: 12,
+        staged: None,
+    };
+    let code = app.selected.code.clone();
+    app.queue.push(paused_pre_download(code.clone()));
+
+    assert!(matches!(app.action(), ActionState::Play));
+    assert!(app.queue_snapshot().entries[0].pre_download, "a restart must not turn it into an update");
+}
+
+#[test]
+fn an_update_takes_over_a_paused_pre_download_as_a_job_of_its_own() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.queue.clear();
+    let code = app.selected.code.clone();
+    app.queue.push(paused_pre_download(code.clone()));
+
+    let _ = app.enqueue_for(code);
+
+    let entry = &app.queue[0];
+    assert!(!entry.pre_download);
+    assert_eq!(entry.job.total, None, "the pre-download's bar is not the update's");
+}
+
+/// The delete path uninstalls the product, and a pre-download's product is
+/// an installed game. Whatever the dialog asked, nothing may be deleted.
+#[test]
+fn cancelling_a_pre_download_never_deletes_the_installed_game() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.queue.clear();
+    let code = app.selected.code.clone();
+    app.queue.push(paused_pre_download(code.clone()));
+    app.cancel_dialog = Some(CancelDialog { code, label: String::new(), installed: None });
+
+    let _ = app.update(Message::CancelDownloadConfirm { delete: true });
+
+    assert!(app.delete_after_cancel.is_empty());
+    assert!(app.queue.is_empty());
 }

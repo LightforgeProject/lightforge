@@ -7,6 +7,9 @@ use super::*;
 pub struct Refreshed {
     pub local: Local,
     pub remote: Option<Version>,
+    /// The build `/bgdl` lists ahead of its release. A failure here is not
+    /// "offline": most of the year the table is empty.
+    pub bgdl: Option<Version>,
     /// Why the remote half is missing, if it is. Not an error state: an
     /// unreachable version service must not stop a complete install launching.
     pub offline: Option<String>,
@@ -37,7 +40,7 @@ pub async fn refresh(
     };
 
     if !check_remote {
-        return Refreshed { local, remote: None, offline: None };
+        return Refreshed { local, remote: None, bgdl: None, offline: None };
     }
 
     let (remote, offline) = match &http {
@@ -51,7 +54,15 @@ pub async fn refresh(
         None => (None, Some(NO_HTTP.to_owned())),
     };
 
-    Refreshed { local, remote, offline }
+    let bgdl = match (&http, &remote) {
+        (Some(http), Some(_)) => version::bgdl(http, region, code.as_str())
+            .await
+            .ok()
+            .and_then(|rows| version::for_region(&rows, region, |v| &v.region).cloned()),
+        _ => None,
+    };
+
+    Refreshed { local, remote, bgdl, offline }
 }
 
 /// What a build is and what it offers, for the Check for Updates action.

@@ -128,6 +128,15 @@ impl Lightforge {
 
     /// Put `code` in the queue, starting it if nothing is running.
     pub(crate) fn enqueue_for(&mut self, code: ProductCode) -> Task<Message> {
+        self.enqueue_job(code, false)
+    }
+
+    /// Queue the selected product's pre-download, see [`state::pre_download`].
+    pub(crate) fn enqueue_pre_download(&mut self) -> Task<Message> {
+        self.enqueue_job(self.selected.code.clone(), true)
+    }
+
+    fn enqueue_job(&mut self, code: ProductCode, pre_download: bool) -> Task<Message> {
         let label = self.label_of(&code);
         // The panel above should never offer this, but the download path is
         // the one that writes to disk, so it checks for itself.
@@ -154,16 +163,24 @@ impl Lightforge {
             if matches!(self.queue[existing].stage, Stage::Queued | Stage::Running { .. }) {
                 return Task::none();
             }
-            job = self.queue.remove(existing).resumed();
+            // A paused pre-download is not part of an update's bar.
+            let paused = self.queue.remove(existing);
+            if paused.pre_download == pre_download {
+                job = paused.resumed();
+            }
         }
 
         self.queue.push(Download {
             code,
-            label,
+            label: match pre_download {
+                true => format!("{label} (pre-download)"),
+                false => label,
+            },
             stage: Stage::Queued,
             sample: TransferState { stage: "queued".to_owned(), ..TransferState::default() },
             rate: Rate::default(),
             job,
+            pre_download,
         });
         let started = self.pump();
         // Not started: waiting on another download, or on this one's own
@@ -235,6 +252,7 @@ impl Lightforge {
                 self.config.locale_for(&code).to_owned(),
                 self.config.download_limit_bytes(),
                 self.opted_optional(&code),
+                self.queue[next].pre_download,
                 cancel,
                 tx,
             ),
@@ -353,7 +371,13 @@ impl Lightforge {
                     Stage::Queued => (Standing::Queued, d.job.reached),
                     Stage::Paused(p) => (Standing::Paused, p.downloaded_bytes),
                 };
-                Saved { code: d.code.clone(), standing, job_bytes: d.job.total, reached }
+                Saved {
+                    code: d.code.clone(),
+                    standing,
+                    job_bytes: d.job.total,
+                    reached,
+                    pre_download: d.pre_download,
+                }
             })
             .collect();
         transfers::Queue { entries }
@@ -405,11 +429,15 @@ impl Lightforge {
             };
             self.queue.push(Download {
                 code: entry.code.clone(),
-                label: choice.label.clone(),
+                label: match entry.pre_download {
+                    true => format!("{} (pre-download)", choice.label),
+                    false => choice.label.clone(),
+                },
                 stage,
                 sample: TransferState { stage: "queued".to_owned(), ..TransferState::default() },
                 rate: Rate::default(),
                 job,
+                pre_download: entry.pre_download,
             });
         }
         self.saved_queue = self.queue_snapshot();

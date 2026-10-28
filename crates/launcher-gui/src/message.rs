@@ -66,6 +66,8 @@ pub(crate) enum Message {
     AddProduct(ProductCode),
     /// Stop tracking one, taking it out of the header.
     RemoveProduct(ProductCode),
+    /// Queue the selected product's pre-download.
+    PreDownload,
     /// Pause one product's transfer from the manager.
     PauseDownload(ProductCode),
     /// Resume or re-queue one product's transfer from the manager.

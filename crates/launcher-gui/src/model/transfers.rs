@@ -40,6 +40,8 @@ pub(crate) struct Download {
     pub(crate) sample: TransferState,
     pub(crate) rate: Rate,
     pub(crate) job: Job,
+    /// Into the store ahead of a release, while the installed build plays on.
+    pub(crate) pre_download: bool,
 }
 
 /// What one transfer set out to fetch, carried across its pauses.

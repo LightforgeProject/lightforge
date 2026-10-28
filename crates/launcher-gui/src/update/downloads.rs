@@ -62,6 +62,8 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::PreDownload => self.enqueue_pre_download(),
+
             Message::ResumeDownload(code) => {
                 // Its game is running and has the store open: it goes back in
                 // the queue when the game exits, as pre-flight arranged.
@@ -160,6 +162,7 @@ impl Lightforge {
                     }
                 };
 
+                let pre_download = entry.is_some_and(|at| self.queue[at].pre_download);
                 // Resumed during the wind-down: already queued, not paused.
                 let resumed = entry.is_some_and(|at| matches!(self.queue[at].stage, Stage::Queued));
                 let complete = matches!(&result, Ok(done) if done.complete);
@@ -171,6 +174,13 @@ impl Lightforge {
                 }
 
                 match result {
+                    Ok(done) if done.complete && pre_download => {
+                        if let Some(at) = entry {
+                            self.queue.remove(at);
+                        }
+                        note(self, "pre-downloaded, ready for release day".to_owned());
+                        Task::batch([self.pump(), self.reload_if_showing(&code)])
+                    }
                     Ok(done) if done.complete => {
                         if let Some(at) = entry {
                             self.queue.remove(at);
@@ -312,6 +322,10 @@ impl Lightforge {
                     self.status = format!("{} had already finished; nothing was cancelled", dialog.label);
                     return Ok(Task::none());
                 }
+                // A pre-download sits beside an installed game, and the
+                // delete path uninstalls the game. Its files go with the next
+                // Free Unused Data instead.
+                let delete = delete && !self.queue.iter().any(|d| d.code == code && d.pre_download);
                 self.drop_transfer(&code);
                 self.status = match delete {
                     true => "cancelled — removing the files…".to_owned(),

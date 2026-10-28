@@ -218,6 +218,8 @@ struct Lightforge {
 
     local: Local,
     remote: Option<lightforge_core::tact::version::Version>,
+    /// The build `/bgdl` lists for the selected product, if any.
+    bgdl: Option<lightforge_core::tact::version::Version>,
     branding: Option<Art>,
 
     /// Every transfer this session knows about, in queue order. At most one

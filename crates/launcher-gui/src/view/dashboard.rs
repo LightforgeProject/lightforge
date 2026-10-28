@@ -1,7 +1,7 @@
 //! The Play page: art and the action panel.
 
 use crate::*;
-use iced::widget::column;
+use iced::widget::{column, Column};
 
 impl Lightforge {
     /// The action panel for a game Battle.net installs and starts.
@@ -307,39 +307,20 @@ impl Lightforge {
         left = self.scan_progress(left);
 
         if let Some(progress) = progress_of(action) {
-            // Sweeps while there is work but no fraction: before the total,
-            // and while extracting after the last byte.
-            let sweeping = progress.total_bytes == 0
-                || progress.downloaded_bytes >= progress.total_bytes;
-            let value = match sweeping {
-                true => sweep(),
-                false => progress.fraction(),
-            };
-            left = left.push(progress_bar(0.0..=1.0, value).girth(6));
-            left = left.push(
-                row![
-                    mono(bytes_of(progress.downloaded_bytes, progress.total_bytes)),
-                    dot(),
-                    mono(rate_of(progress.bytes_per_second)),
-                    dot(),
-                    mono(eta_of(progress)),
-                ]
-                .spacing(theme::SM)
-                .align_y(Alignment::Center),
-            );
             let stage = self
                 .download_for(&self.selected.code)
                 .map(|d| d.sample.stage.clone())
                 .unwrap_or_default();
-            if !stage.is_empty() {
-                left = left.push(muted(stage, theme::CAPTION));
-            }
+            left = transfer_lines(left, progress, stage);
         } else if let Some(version) = &self.local.version {
             left = left.push(
                 row![muted("installed".to_owned(), theme::CAPTION), mono(version.clone())]
                     .spacing(theme::SM)
                     .align_y(Alignment::Center),
             );
+        }
+        if action.is_playable() {
+            left = self.pre_download_lines(left);
         }
 
         // What would come beyond the base game (37 GiB of textures on Forever).
@@ -354,6 +335,51 @@ impl Lightforge {
         }
 
         left.push(self.product_links()).into()
+    }
+
+    /// The pre-download beside PLAY: what can be fetched ahead of a release,
+    /// how far it has got, or that it is done.
+    fn pre_download_lines<'a>(&'a self, left: Column<'a, Message>) -> Column<'a, Message> {
+        let code = &self.selected.code;
+        let offer = state::pre_download(&self.local, self.remote.as_ref(), self.bgdl.as_ref());
+        let version = match &offer {
+            Some(state::PreDownload::Available { version } | state::PreDownload::Ready { version }) => {
+                version.clone()
+            }
+            None => String::new(),
+        };
+        let action = |label: &str, message: Message| {
+            self.ring(focus::Target::PreDownload, Some(message.clone()), secondary(label, message).enabled(true))
+        };
+
+        if let Some(download) = self.download_for(code).filter(|d| d.pre_download) {
+            let control = match download.stage {
+                Stage::Running { .. } => action("Pause", Message::PauseDownload(code.clone())),
+                Stage::Paused(_) => action("Resume", Message::ResumeDownload(code.clone())),
+                Stage::Queued => muted("queued".to_owned(), theme::CAPTION).into(),
+            };
+            let left = left.push(
+                row![muted(format!("pre-downloading {version}"), theme::CAPTION).width(Length::Fill), control]
+                    .spacing(theme::SM)
+                    .align_y(Alignment::Center),
+            );
+            return transfer_lines(left, download.progress(), download.sample.stage.clone());
+        }
+        match offer {
+            Some(state::PreDownload::Available { version }) => left.push(
+                row![
+                    muted(format!("{version} can be pre-downloaded before its release"), theme::CAPTION)
+                        .width(Length::Fill),
+                    action("Pre-download", Message::PreDownload),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
+            ),
+            Some(state::PreDownload::Ready { version }) => {
+                left.push(muted(format!("{version} is pre-downloaded, ready for release day"), theme::CAPTION))
+            }
+            None => left,
+        }
     }
 
     /// Manage Addons, Game Settings, Manage Subscription.
@@ -500,5 +526,31 @@ impl Lightforge {
         .align_x(Alignment::Center)
         .width(Length::Shrink)
         .into()
+    }
+}
+
+/// A transfer's bar, its figures, and what it is doing.
+fn transfer_lines<'a>(left: Column<'a, Message>, progress: state::Progress, stage: String) -> Column<'a, Message> {
+    // Sweeps while there is work but no fraction: before the total, and
+    // while extracting after the last byte.
+    let sweeping = progress.total_bytes == 0 || progress.downloaded_bytes >= progress.total_bytes;
+    let value = match sweeping {
+        true => sweep(),
+        false => progress.fraction(),
+    };
+    let left = left.push(progress_bar(0.0..=1.0, value).girth(6)).push(
+        row![
+            mono(bytes_of(progress.downloaded_bytes, progress.total_bytes)),
+            dot(),
+            mono(rate_of(progress.bytes_per_second)),
+            dot(),
+            mono(eta_of(progress)),
+        ]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center),
+    );
+    match stage.is_empty() {
+        true => left,
+        false => left.push(muted(stage, theme::CAPTION)),
     }
 }

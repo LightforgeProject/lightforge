@@ -213,8 +213,13 @@ impl Lightforge {
             return ActionState::Offline { drive };
         }
         // Only this product's own transfer. Anything else is another game's
-        // business, however loudly it is downloading.
-        let transfer = self.download_for(&self.selected.code).map(Download::transfer);
+        // business, however loudly it is downloading. A pre-download leaves
+        // PLAY alone: the installed build is untouched by it, and a launch
+        // pauses it as it would any of this game's downloads.
+        let transfer = self
+            .download_for(&self.selected.code)
+            .filter(|d| !d.pre_download)
+            .map(Download::transfer);
         state::decide(&self.local, self.remote.as_ref(), transfer)
     }
 

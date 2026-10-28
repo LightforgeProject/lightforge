@@ -81,6 +81,7 @@ impl Lightforge {
         self.selected = choice.clone();
         self.local = Local::default();
         self.remote = None;
+        self.bgdl = None;
         self.branding = None;
         self.status = "checking…".to_owned();
         // These are per-product, so they follow the selection instead of

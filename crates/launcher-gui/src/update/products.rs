@@ -47,6 +47,7 @@ impl Lightforge {
                 self.check_drives();
                 self.local = refreshed.local.clone();
                 self.remote = refreshed.remote.clone();
+                self.bgdl = refreshed.bgdl.clone();
                 self.status = match &refreshed.offline {
                     // Rule 2 of the resolver: offline never blocks a launch, so
                     // it is a note, not an error.

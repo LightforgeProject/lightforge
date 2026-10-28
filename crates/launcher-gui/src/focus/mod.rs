@@ -56,6 +56,7 @@ pub enum Target {
     Addons,
     GameSettings,
     Subscription,
+    PreDownload,
     Primary,
     Gear,
     LaunchViaBattleNet,
