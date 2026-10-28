@@ -250,7 +250,8 @@ impl ProtonRunner {
             );
             return Ok(());
         }
-        let stderr = tail(&output.stderr);
+        // Five lines: an error message that still fits on screen.
+        let stderr = crate::text::tail_lines(&String::from_utf8_lossy(&output.stderr), 5);
         tracing::error!(
             "{} exited with {:?} after {:.1}s; stderr tail: {}",
             program.to_string_lossy(),
@@ -382,13 +383,6 @@ fn join_paths(paths: &[PathBuf]) -> OsString {
         out.push(path);
     }
     out
-}
-
-/// Last few lines of a child's stderr, for an error message that fits on screen.
-fn tail(stderr: &[u8]) -> String {
-    let text = String::from_utf8_lossy(stderr);
-    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-    lines[lines.len().saturating_sub(5)..].join("\n")
 }
 
 /// What the Windows-visible game path currently is.

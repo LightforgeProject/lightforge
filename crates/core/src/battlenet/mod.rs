@@ -42,7 +42,8 @@ use std::time::Duration;
 use crate::paths::Layout;
 use crate::prefix::{PrefixError, ProtonRunner};
 use crate::product::ProductCode;
-use installer::{last_lines, STDERR_LINES_SHOWN};
+use crate::text::tail_lines;
+use installer::STDERR_LINES_SHOWN;
 // The tests reach the installer's and the log reader's private helpers.
 #[cfg(test)]
 use {installer::*, readiness::*};
@@ -117,7 +118,7 @@ pub enum BattleNetError {
     #[error(
         "the Battle.net installer exited{} without installing into {dir}{}",
         match code { Some(c) => format!(" with code {c}"), None => " on a signal".to_owned() },
-        match stderr.is_empty() { true => String::new(), false => format!("\n{}", last_lines(stderr, STDERR_LINES_SHOWN)) }
+        match stderr.is_empty() { true => String::new(), false => format!("\n{}", tail_lines(stderr, STDERR_LINES_SHOWN)) }
     )]
     InstallerExited {
         code: Option<i32>,

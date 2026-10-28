@@ -300,12 +300,6 @@ pub(super) enum Wait {
     Exited(Option<i32>),
 }
 
-/// The last `n` non-empty lines of `text`, in order.
-pub(super) fn last_lines(text: &str, n: usize) -> String {
-    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-    lines[lines.len().saturating_sub(n)..].join("\n")
-}
-
 /// Read a pipe to the end, keeping only the last [`STDERR_TAIL`] bytes.
 ///
 /// Reads everything so the writer never blocks on a full pipe, but retains a
