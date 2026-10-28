@@ -186,6 +186,25 @@ pub(crate) fn short_day(timestamp: &str) -> String {
     }
 }
 
+/// An offered build as a version: `BigWigs-v427.8.zip` -> `v427.8`.
+///
+/// CurseForge names files, not versions; the addon's own name in front and
+/// the extension are what is dropped. Anything else shows as itself.
+pub(crate) fn release_version(file_name: &str, title: &str) -> String {
+    let stem = file_name.strip_suffix(".zip").unwrap_or(file_name);
+    let squashed: String = title.chars().filter(|c| !c.is_whitespace()).collect();
+    let version = match stem.get(..squashed.len()) {
+        Some(head) if head.eq_ignore_ascii_case(&squashed) => {
+            stem[squashed.len()..].trim_start_matches(['-', '_', ' '])
+        }
+        _ => stem,
+    };
+    match version.is_empty() {
+        true => stem.to_owned(),
+        false => version.to_owned(),
+    }
+}
+
 /// The day out of an RFC 3339 timestamp, which is all a build list needs.
 ///
 /// Not parsed: a malformed one shows as itself.

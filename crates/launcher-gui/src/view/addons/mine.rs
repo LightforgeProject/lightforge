@@ -211,11 +211,14 @@ impl Lightforge {
         // A dash for an unknown fact; a blank reads as a layout bug.
         let managed_row = addon.managed.as_ref();
         line = line.push(cell(
-            status.and_then(|s| s.available_name.clone()).or_else(|| {
-                // Up to date: what is latest is what is installed, and
-                // saying so beats an empty column.
-                managed_row.map(|_| addon.version.clone())
-            }),
+            status
+                .and_then(|s| s.available_name.as_deref())
+                .map(|name| release_version(name, &addon.title))
+                .or_else(|| {
+                    // Up to date: what is latest is what is installed, and
+                    // saying so beats an empty column.
+                    managed_row.map(|_| addon.version.clone())
+                }),
         ));
         line = line.push(cell(
             status.and_then(|s| s.available_date.as_deref().map(short_day)),
@@ -286,7 +289,8 @@ impl Lightforge {
                         "→ {}",
                         status
                             .available_name
-                            .clone()
+                            .as_deref()
+                            .map(|name| release_version(name, &addon.title))
                             .or_else(|| status.available.clone())
                             .unwrap_or_default()
                     ),

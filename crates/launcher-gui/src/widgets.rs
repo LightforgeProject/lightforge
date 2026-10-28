@@ -461,6 +461,8 @@ pub(crate) fn cell<'a>(value: Option<String>) -> Element<'a, Message> {
         None => muted("—".to_owned(), theme::CAPTION),
     }
     .width(Length::Fixed(ADDON_COLUMN))
+    // One long word would otherwise run into the next column.
+    .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
     .into()
 }
 

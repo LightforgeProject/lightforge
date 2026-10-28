@@ -28,6 +28,15 @@ fn a_date_column_is_a_day_and_a_month_or_the_string_itself() {
 }
 
 #[test]
+fn a_curseforge_file_name_shows_as_its_version() {
+    // CurseForge file names for Forever, 2026-10-28.
+    assert_eq!(release_version("BigWigs-v427.8.zip", "BigWigs"), "v427.8");
+    assert_eq!(release_version("EllesmereUI-v9.6.9.zip", "EllesmereUI"), "v9.6.9");
+    assert_eq!(release_version("NaowhForever-1.1.48.zip", "Naowh Forever"), "1.1.48");
+    assert_eq!(release_version("2.4.1", "Details"), "2.4.1", "already a version");
+}
+
+#[test]
 fn the_handoff_button_only_promises_what_is_known() {
     let act = |family: bool, installed: bool| match (family, installed) {
         (false, _) => HandoffAct::OpenClient,
