@@ -1,21 +1,17 @@
 //! Building a local CASC store: archives plus the indices that find them.
 //!
-//! The inverse of [`super::storage`]. A downloader hands BLTE payloads in,
-//! this lays them out the way Agent would, and the result has to be
-//! indistinguishable from an install Blizzard produced. Anything else and
-//! Agent decides the install is damaged and starts the repair scan the whole
-//! project exists to avoid.
+//! The inverse of [`super::storage`]: BLTE payloads in, a store laid out the
+//! way Agent lays one out. Any difference and Agent starts its repair scan.
 //!
 //! Three details are load-bearing and none are guessable:
 //!
 //! 1. Every archive reserves [`idx::ARCHIVE_RESERVED`] bytes at its head, and
 //!    each bucket's index records a marker pointing at its own slot there.
-//! 2. Each file gets a 30-byte [`entry::Header`] whose second checksum depends
-//!    on the archive number and offset it is written at, so payload and
-//!    position have to be decided together.
-//! 3. Indices are written as a **new generation** rather than in place, which
-//!    is how CASC updates an index without a reader ever seeing a half-written
-//!    one.
+//! 2. Each file gets a 30-byte [`entry::Header`](super::entry::Header)
+//!    whose second checksum depends on the archive number and offset it is
+//!    written at, so payload and position are decided together.
+//! 3. Indices are written as a **new generation**, never in place, so no
+//!    reader sees a half-written one.
 //!
 //! Offsets are 30 bits in an index entry, so an archive cannot exceed
 //! [`MAX_ARCHIVE_SIZE`]; the writer rolls to a new one before that happens.
@@ -37,34 +33,23 @@ pub const MAX_ARCHIVE_SIZE: u64 = 1 << 30;
 pub const MAX_ARCHIVE_ID: u16 = (1 << 10) - 1;
 
 /// Generation a bucket's first index is written at when the store has none.
-///
-/// **Never zero.** A real install's generations sit around 0x32-0x38, the
-/// counter has advanced once per update since the install was created, and
-/// generation 0 is not a shape the client ever produces. Starting there was a
-/// real bug, caught only by a live run, so the floor lives here rather than in
-/// whichever caller happens to remember.
+/// **Never zero**: real installs sit around 0x32-0x38, and the client never
+/// produces generation 0.
 pub const FIRST_GENERATION: u32 = 0x32;
 
-/// Exclusive hold on a CASC store against other Lightforge processes, released
-/// on drop.
+/// Exclusive hold on a CASC store against other Lightforge processes (the
+/// CLI, a second GUI), released on drop. Two writers pick the same next
+/// `data.NNN` and the second truncates the first one's archive.
 ///
-/// Two writers pick the same next `data.NNN`, and the second `File::create`
-/// empties the first one's archive; whichever rewrites the indices last drops
-/// the other's files. Within one process the GUI already runs one writer per
-/// store at a time, this covers the CLI and a second GUI.
-///
-/// An `flock` on the data directory itself, so nothing new appears among the
-/// files Agent and the client own. Wine takes POSIX locks, not `flock`, so
-/// they never see it.
+/// An `flock` on the data directory itself, so no lock file appears among
+/// Agent's files. Wine takes POSIX locks, so it never sees this one.
 #[derive(Debug)]
 pub struct StoreLock {
     held: Option<File>,
 }
 
 impl Drop for StoreLock {
-    // Explicit, not left to the close: a process forked in another thread
-    // shares this descriptor until it execs, and the lock would outlive us
-    // by that long.
+    // Explicit: a child forked in another thread holds the descriptor until exec.
     fn drop(&mut self) {
         if let Some(dir) = &self.held {
             let _ = dir.unlock();
@@ -73,10 +58,8 @@ impl Drop for StoreLock {
 }
 
 impl StoreLock {
-    /// Take the lock on `data_dir`, which must exist.
-    ///
-    /// A filesystem without `flock` (some NFS and SMB mounts) gets a warning
-    /// and no lock rather than a store that cannot be written at all.
+    /// Take the lock on `data_dir`, which must exist. Without `flock` support
+    /// (some NFS and SMB mounts) it warns and goes on unlocked.
     pub fn acquire(data_dir: &Path) -> Result<Self, WriteError> {
         let dir = File::open(data_dir).map_err(io(data_dir))?;
         match dir.try_lock() {
@@ -90,10 +73,8 @@ impl StoreLock {
     }
 }
 
-/// Writes files into a CASC store.
-///
-/// Nothing is durable until [`StoreWriter::finish`] runs. It is what writes
-/// the indices, and an archive nothing indexes is unreachable bytes.
+/// Writes files into a CASC store. Nothing is reachable until an index is
+/// written by [`StoreWriter::checkpoint`] or [`StoreWriter::finish`].
 #[derive(Debug)]
 pub struct StoreWriter {
     data_dir: PathBuf,
@@ -109,20 +90,17 @@ pub struct StoreWriter {
     /// Generation to write each bucket's index at, when rebuilding a store
     /// whose numbering should be preserved.
     generations: HashMap<u8, u32>,
-    /// Open each new archive at the lowest free number rather than after the
-    /// highest. See [`StoreWriter::filling_gaps`].
+    /// See [`StoreWriter::filling_gaps`].
     fill_gaps: bool,
 }
 
 impl StoreWriter {
-    /// Start writing into `data_dir`, which is created if absent.
+    /// Start writing into `data_dir`, which is created if absent. New archives
+    /// start after the highest `data.NNN`, leaving earlier ones untouched.
     ///
-    /// A fresh archive set starts after the highest `data.NNN` present, so an
-    /// interrupted run leaves earlier archives untouched. **Existing indices
-    /// are loaded first**: a bucket's index is replaced wholesale on write, and
-    /// starting empty once cut a resumed Classic Era store from 146,662
-    /// reachable files to 131,129. It also lets [`StoreWriter::contains`]
-    /// answer for the whole store, so a resume skips what it has.
+    /// **Existing indices are loaded first**: a bucket's index is replaced
+    /// whole on write (see test `a_second_writer_keeps_what_the_first_one_stored`),
+    /// and [`StoreWriter::contains`] then answers for the whole store.
     pub fn create(data_dir: impl Into<PathBuf>) -> Result<Self, WriteError> {
         let data_dir = data_dir.into();
         std::fs::create_dir_all(&data_dir).map_err(io(&data_dir))?;
@@ -157,28 +135,21 @@ impl StoreWriter {
         })
     }
 
-    /// Number new archives from the lowest free `data.NNN` instead of after
-    /// the highest.
-    ///
-    /// Compaction deletes archives from the middle of the range and writes
-    /// their survivors into new ones. Always appending would walk the numbers
-    /// up towards [`MAX_ARCHIVE_ID`] with every pass, so a compacting writer
-    /// reuses the holes. A download keeps appending: it never deletes, so it
-    /// has no holes worth filling.
+    /// Number new archives from the lowest free `data.NNN`. For compaction,
+    /// which deletes from the middle: appending would walk every pass towards
+    /// [`MAX_ARCHIVE_ID`].
     pub fn filling_gaps(mut self) -> Self {
         self.fill_gaps = true;
         self
     }
 
-    /// Write `bucket`'s index at a specific generation instead of the next
-    /// free one. See [`Index::save_generation`] for why that matters.
+    /// Write `bucket`'s index at this generation; see [`Index::save_generation`].
     pub fn with_index_generation(mut self, bucket: u8, sequence: u32) -> Self {
         self.generations.insert(bucket, sequence);
         self
     }
 
-    /// Cap archives lower than the format allows. Only useful for tests, which
-    /// would otherwise have to write a gigabyte to see a roll-over.
+    /// Cap archives lower than the format allows, for roll-over tests.
     pub fn with_max_archive_size(mut self, bytes: u64) -> Self {
         self.max_archive = bytes.min(MAX_ARCHIVE_SIZE);
         self
@@ -197,17 +168,10 @@ impl StoreWriter {
         self.indices.get(&probe.bucket()).is_some_and(|i| i.lookup(&key).is_some())
     }
 
-    /// Write one BLTE payload under its encoding key.
-    ///
-    /// `blte` is the encoded file exactly as the CDN serves it, no CASC
-    /// header, which this adds. Returns where it landed, or where it already
-    /// was: a key written twice is stored once.
-    ///
-    /// Deduplication is not an optimisation here, it is required. WoW shares
-    /// content aggressively, many file ids resolve to one encoding key, so a
-    /// caller walking file ids hands the same payload over repeatedly. Writing
-    /// each copy would append bytes that the index, which holds one entry per
-    /// key, then has no way to reach: dead weight in the archive forever.
+    /// Write one BLTE payload, as the CDN serves it, under its encoding key;
+    /// the CASC header is added here. Returns where it landed, or where it
+    /// already was: many file ids share one key, and the index holds one entry
+    /// per key, so a second copy would be unreachable bytes.
     pub fn write(&mut self, ekey: &EKey, blte: &[u8]) -> Result<Entry, WriteError> {
         if let Ok(key) = <[u8; 9]>::try_from(&ekey[..9]) {
             let probe = Entry { key, archive_id: 0, offset: 0, size: 0 };
@@ -221,7 +185,7 @@ impl StoreWriter {
             return Err(WriteError::FileTooLarge { size: total, max: self.max_archive });
         }
 
-        // Roll to a new archive rather than let an offset exceed 30 bits.
+        // Offsets are 30 bits.
         if self.archive.is_none() || self.offset + total > self.max_archive {
             self.roll_archive()?;
         }
@@ -247,16 +211,10 @@ impl StoreWriter {
 
     /// Move a file already in the store to the writer's current position.
     ///
-    /// `raw` is the entry exactly as [`super::storage::Storage::read_raw`]
-    /// returned it for `from`: header and payload. The header is kept byte
-    /// for byte except checksum B, which encodes the position and so has to
-    /// be recomputed. Rebuilding it from scratch would quietly turn a
-    /// full-width key, which Agent writes and this writer does not, into a
-    /// padded one.
-    ///
-    /// Unlike [`StoreWriter::write`], the key already being indexed is the
-    /// point, not a reason to skip: the entry is replaced with its new home.
-    /// The bytes at `from` stay where they are and become dead space.
+    /// `raw` is the entry as [`super::storage::Storage::read_raw`] returned it.
+    /// The header is kept byte for byte except checksum B, which encodes the
+    /// position: rebuilt, Agent's full-width keys would come out padded. The
+    /// bytes at `from` become dead space.
     pub fn relocate(&mut self, from: &Entry, raw: &[u8]) -> Result<Entry, WriteError> {
         let total = raw.len() as u64;
         if total != u64::from(from.size) || !Header::verify(raw, from.archive_id, from.offset) {
@@ -290,33 +248,20 @@ impl StoreWriter {
         Ok(entry)
     }
 
-    /// Drop every index entry pointing into `archive_id`, its markers
-    /// included, ahead of deleting the file.
-    ///
-    /// The caller must already have moved or given up every file in it; this
-    /// does not check. The next [`StoreWriter::checkpoint`] publishes the
-    /// result, and only after that is the archive safe to delete.
+    /// Drop every index entry pointing into `archive_id`, markers included.
+    /// Unchecked: the caller has moved or given up its files. The archive may
+    /// be deleted once the next [`StoreWriter::checkpoint`] has published this.
     pub fn forget_archive(&mut self, archive_id: u16) {
         for index in self.indices.values_mut() {
             index.retain(|e| e.archive_id != archive_id);
         }
     }
 
-    /// Make everything written so far durable, without ending the store.
-    ///
-    /// Archive bytes that no index references are unreachable, so an
-    /// interrupted download would refetch everything since the last index
-    /// write. Checkpointing bounds that loss: after it returns, the store on
-    /// disk is complete and readable, and a resumed download re-plans against
-    /// it and fetches only what is missing.
-    ///
-    /// Each checkpoint writes the next generation and removes the previous
-    /// one, which is exactly what a real install looks like, sixteen `.idx`
-    /// files, one per bucket, nothing older kept.
+    /// Make everything written so far reachable, without ending the store:
+    /// an interruption then loses only what came after. Each checkpoint
+    /// writes the next generation and removes the previous one.
     pub fn checkpoint(&mut self) -> Result<Vec<PathBuf>, WriteError> {
-        // Flush and sync the open archive without closing it: the indices
-        // about to be written will point into these bytes, so they have to be
-        // on the disk before the index that references them, not after.
+        // The bytes must be on disk before an index points at them.
         if let Some(archive) = self.archive.as_mut() {
             let path = self.data_dir.join(archive_name(self.archive_id));
             archive
@@ -347,10 +292,8 @@ impl StoreWriter {
         })
     }
 
-    /// Write every bucket's index at its next generation, pruning the old one.
-    ///
-    /// Buckets that received nothing still get an index: a store missing one
-    /// of its sixteen is not a shape Blizzard ever produces.
+    /// Write all sixteen buckets' indices at their next generation, pruning
+    /// the old ones. Empty buckets too: Blizzard never omits one.
     fn write_indices(&mut self) -> Result<Vec<PathBuf>, WriteError> {
         let mut written = Vec::new();
         let mut buckets: Vec<u8> = self.indices.keys().copied().collect();
@@ -367,8 +310,7 @@ impl StoreWriter {
             let index = &self.indices[&bucket];
             let path = index.save_generation(&self.data_dir, sequence)?;
 
-            // A later checkpoint must not rewrite the generation this one just
-            // wrote, or a reader could see the same name with two contents.
+            // Never rewrite a generation: one name, two contents.
             self.generations.insert(bucket, sequence.saturating_add(1));
             prune_old_generations(&self.data_dir, bucket, sequence)?;
             written.push(path);
@@ -399,10 +341,8 @@ impl StoreWriter {
         let file = File::create(&path).map_err(io(&path))?;
         let mut archive = BufWriter::new(file);
 
-        // The reserved head: sixteen 30-byte slots, one per bucket, which each
-        // bucket's index points a marker entry at. Real archives have them and
-        // an archive without them indexes its first real file at offset 0,
-        // where Agent expects a marker.
+        // Sixteen 30-byte slots, one per bucket's marker entry. Agent expects
+        // a marker at offset 0, not a file.
         archive
             .write_all(&vec![0u8; idx::ARCHIVE_RESERVED]).map_err(io(&path))?;
 
@@ -437,11 +377,8 @@ pub struct Summary {
     pub indices: Vec<PathBuf>,
 }
 
-/// Delete every generation of `bucket` except the one just written.
-///
-/// Agent keeps exactly one index per bucket, a real install has sixteen
-/// `.idx` files and no history, so a store that accumulated a generation per
-/// checkpoint would be visibly not one of its own.
+/// Delete every generation of `bucket` except the one just written: a real
+/// install has sixteen `.idx` files and no history.
 fn prune_old_generations(data_dir: &Path, bucket: u8, keep: u32) -> Result<(), WriteError> {
     let entries = match std::fs::read_dir(data_dir) {
         Ok(e) => e,
@@ -454,9 +391,7 @@ fn prune_old_generations(data_dir: &Path, bucket: u8, keep: u32) -> Result<(), W
             continue;
         };
         if b == bucket && sequence != keep {
-            // A failure here is not fatal: the new index is already in place
-            // and a stale sibling is ignored by every reader, which picks the
-            // highest generation. Leaving it beats failing the download.
+            // Not fatal: readers pick the highest generation.
             let _ = std::fs::remove_file(entry.path());
         }
     }
@@ -811,8 +746,7 @@ mod tests {
             .collect();
         assert!(names.contains(&"0000000035.idx".to_owned()), "{names:?}");
         assert!(names.contains(&"0100000038.idx".to_owned()), "{names:?}");
-        // A bucket with no pin starts at the floor, never at generation 0,
-        // pinning some buckets used to leave the rest writing 0000000000.idx.
+        // A bucket with no pin starts at the floor, never at generation 0.
         assert!(names.contains(&"0200000032.idx".to_owned()), "{names:?}");
         assert!(!names.iter().any(|n| n.ends_with("00000000.idx")), "{names:?}");
 
