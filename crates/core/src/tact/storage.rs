@@ -1,13 +1,9 @@
 //! The local CASC store: bucket indices plus the `data.NNN` archives they
 //! point into.
 //!
-//! This is the read side of [`crate::tact`]. `casc-storage` is deliberately
-//! not used for any of it. Its `read` returns an empty `Vec` for every entry
-//! in a real install, the BLTE *streaming* reader it calls yields nothing
-//! where the one-shot decoder returns correct data, and its index support is
-//! read-only anyway, so [`super::idx`] already replaces the other half. What
-//! is left after removing both is small enough to own outright: find the
-//! newest index per bucket, seek into an archive, decode one BLTE payload.
+//! The read side of [`crate::tact`]. Not `casc-storage`: its `read` returns
+//! an empty `Vec` for every entry of a real install, because the BLTE
+//! streaming reader it calls yields nothing.
 //!
 //! Layout underneath a WoW install:
 //!
@@ -32,13 +28,9 @@ use crate::text::hex;
 /// Full 16-byte encoding key. Indices store only the first 9 bytes.
 pub type EKey = [u8; 16];
 
-/// A local CASC store opened for reading.
-///
-/// Archive handles are cached as they are used, which is why reads take
-/// `&mut self`: a bulk verify touches the same handful of archives thousands
-/// of times, and reopening each file per entry dominates the cost.
-// `KeyService` is not `Debug`, so the derive is hand-written to keep `Storage`
-// printable in error paths without dumping decryption keys into a log either.
+/// A local CASC store opened for reading. Reads take `&mut self` to cache
+/// archive handles: reopening per entry dominates a bulk verify.
+// Hand-written `Debug`: `KeyService` has none, and its keys stay out of logs.
 pub struct Storage {
     data_dir: PathBuf,
     /// Newest generation per bucket, keyed by bucket number.
@@ -58,12 +50,8 @@ impl std::fmt::Debug for Storage {
 }
 
 impl Storage {
-    /// Open the store under a WoW install root, or under a `Data` directory,
-    /// or a `Data/data` directory directly.
-    ///
-    /// All three spellings are accepted because callers reasonably hold any of
-    /// them: the layout module hands out install roots, while a debugging
-    /// session usually has the data directory itself.
+    /// Open the store under an install root, a `Data` directory, or
+    /// `Data/data` itself.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
         let data_dir = resolve_data_dir(path.as_ref());
         if !data_dir.is_dir() {
@@ -79,9 +67,8 @@ impl Storage {
             return Err(StorageError::NoIndices(data_dir));
         }
 
-        // Encrypted blocks are normal, Blizzard ships unreleased content in
-        // the same archives, so a missing key file is not an error here. The
-        // read that needs a key is where it becomes one.
+        // Encrypted blocks are normal (unreleased content); only a read that
+        // needs a missing key fails.
         let mut keys = KeyService::new();
         let _ = keys.load_from_standard_dirs();
 
@@ -123,11 +110,8 @@ impl Storage {
         self.read_entry(&entry)
     }
 
-    /// [`Storage::read`], and refuse bytes that do not hash to `ckey`.
-    ///
-    /// For anything a decision is made from. The index checks the encoded
-    /// bytes against nothing but their length, and the BLTE layer only its
-    /// own chunks, so a store that serves the wrong file decodes cleanly.
+    /// [`Storage::read`], refusing bytes that do not hash to `ckey`. For
+    /// anything a decision is made from: a wrong file still decodes cleanly.
     pub fn read_verified(&mut self, ekey: &EKey, ckey: &[u8; 16]) -> Result<Vec<u8>, StorageError> {
         let bytes = self.read(ekey)?;
         if *md5::compute(&bytes) != *ckey {
@@ -148,8 +132,7 @@ impl Storage {
             offset: entry.offset,
         })?;
 
-        // The one-shot decoder, never the streaming one: the streaming reader
-        // in blte 0.4 returns zero bytes for payloads this decodes correctly.
+        // One-shot: blte 0.4's streaming reader returns zero bytes here.
         blte::decompress_blte(payload.to_vec(), Some(&self.keys)).map_err(|source| {
             StorageError::Decode {
                 archive_id: entry.archive_id,
@@ -188,8 +171,7 @@ impl Storage {
         Ok(raw)
     }
 
-    /// Close the cached handle on an archive, so deleting the file gives its
-    /// space back now rather than when this store is dropped.
+    /// Close the cached handle on an archive, so deleting it frees the space now.
     pub fn close_archive(&mut self, archive_id: u16) {
         self.archives.remove(&archive_id);
     }
@@ -225,12 +207,8 @@ pub struct Stats {
 /// The BLTE payload inside an archive slice, with or without the CASC entry
 /// header in front of it.
 ///
-/// Almost every entry points at a 30-byte CASC header followed by the payload.
-/// A few point straight at the payload instead: a real install has 57 pairs of
-/// entries that share a key, where the second of the pair has both its offset
-/// advanced by 30 and its size reduced by 30, the same file, described
-/// without its header. Assuming the header is always present makes those
-/// aliases look like a corrupt archive.
+/// A real install has 57 headerless aliases: a second entry for the same key,
+/// 30 bytes further on and 30 bytes shorter.
 pub(crate) fn blte_payload(raw: &[u8]) -> Option<&[u8]> {
     const MAGIC: &[u8; 4] = b"BLTE";
     if raw.len() >= CASC_ENTRY_HEADER + 4 && &raw[CASC_ENTRY_HEADER..CASC_ENTRY_HEADER + 4] == MAGIC {
@@ -421,9 +399,8 @@ mod tests {
             storage.read(&[0x42; 16]),
             Err(StorageError::NotFound(_))
         ));
-        // Reading a marker is a caller mistake, not a corrupt install, and the
-        // message has to say which. This is the case that made a naive
-        // "decode every entry" sweep look like 1968 failures.
+        // Reading a marker is a caller mistake, and the message says so: a
+        // naive sweep once reported 1968 failures on a healthy install.
         assert!(matches!(
             storage.read_entry(&marker),
             Err(StorageError::IsArchiveMarker { archive_id: 7 })
