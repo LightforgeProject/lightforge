@@ -15,6 +15,7 @@ mod app;
 mod art;
 mod fit;
 mod focus;
+mod instance;
 mod pad;
 mod popover;
 mod provision;
@@ -138,6 +139,9 @@ fn main() -> iced::Result {
         return Ok(());
     }
     start_logging();
+    if !instance::claim(std::env::args().any(|arg| arg == instance::AFTER_UPDATE)) {
+        return Ok(());
+    }
     tune_allocator();
     fit::take_over_scale();
     trace::begin();

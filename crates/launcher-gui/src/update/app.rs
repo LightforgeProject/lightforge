@@ -91,6 +91,16 @@ impl Lightforge {
                 self.window_focused = focused;
                 Task::none()
             }
+
+            // Compositors may refuse the focus (Wayland's focus-stealing
+            // rules); the attention request still marks the taskbar entry.
+            Message::Raise => iced::window::oldest().and_then(|id| {
+                Task::batch([
+                    iced::window::minimize(id, false),
+                    iced::window::gain_focus(id),
+                    iced::window::request_user_attention(id, Some(iced::window::UserAttention::Informational)),
+                ])
+            }),
             other => return Err(other),
         })
     }

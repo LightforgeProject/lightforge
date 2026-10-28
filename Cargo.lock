@@ -2499,9 +2499,11 @@ dependencies = [
  "image 0.24.9",
  "libc",
  "lightforge-core",
+ "md5",
  "open",
  "sentry",
  "serde",
+ "tempfile",
  "tokio",
  "tracing",
 ]

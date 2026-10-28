@@ -71,6 +71,7 @@ pub async fn run(
 /// Start `exe` on its own, for the old process to close behind it.
 pub fn restart(exe: &PathBuf) -> std::io::Result<()> {
     std::process::Command::new(exe)
+        .arg(crate::instance::AFTER_UPDATE)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

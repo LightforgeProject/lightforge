@@ -102,6 +102,8 @@ pub(crate) enum Message {
     Nav(NavFrom, pad::Input),
     /// The window gained or lost focus; a gamepad must not steer it from behind a game.
     WindowFocused(bool),
+    /// A second launch asked for this window; see [`crate::instance`].
+    Raise,
     /// The window changed size, under gamescope only; see [`fit`].
     WindowResized,
     /// The window's height in points, and the [`Lightforge::ui_scale_gen`]

@@ -3,7 +3,8 @@
 use crate::*;
 
 impl Lightforge {
-    /// The window closing, keys, gamepads and focus: listened to for the whole run.
+    /// The window closing, keys, gamepads, focus and second launches: listened
+    /// to for the whole run.
     pub(crate) fn input_events() -> Subscription<Message> {
         let closing = iced::window::close_requests().map(Message::CloseRequested);
 
@@ -31,6 +32,7 @@ impl Lightforge {
         // Gamepads, for when Steam hands us a pad, not keys. Read on a
         // thread of their own for the whole run; see [`pad`].
         let pads = Subscription::run(pad::inputs).map(|input| Message::Nav(NavFrom::Pad, input));
+        let raises = Subscription::run(crate::instance::raises).map(|()| Message::Raise);
         let window_focus = iced::event::listen_with(|event, _, _| match event {
             iced::Event::Window(iced::window::Event::Focused) => Some(Message::WindowFocused(true)),
             iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::WindowFocused(false)),
@@ -40,7 +42,7 @@ impl Lightforge {
             _ => None,
         });
 
-        Subscription::batch([closing, hints, pads, window_focus])
+        Subscription::batch([closing, hints, pads, raises, window_focus])
     }
 
     /// The mouse, only while it means something: the ring is up, or a tile is held.

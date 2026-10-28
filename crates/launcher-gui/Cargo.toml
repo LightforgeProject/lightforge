@@ -21,6 +21,7 @@ gilrs.workspace = true
 iced.workspace = true
 image.workspace = true
 libc.workspace = true
+md5.workspace = true
 open.workspace = true
 ashpd.workspace = true
 base64.workspace = true
@@ -123,6 +124,9 @@ assets = [
 glibc = ">= 2.36"
 # libudev.so.1, for gamepads.
 systemd-libs = "*"
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
