@@ -16,15 +16,12 @@ pub async fn install_all(
     options: &Options,
     mut on_event: impl FnMut(Event),
 ) -> Result<Report, ManageError> {
-    // Read once to decide what to do. The save at the end reads it again:
-    // a pass takes minutes, and a pin or an ignore set meanwhile must not be
-    // undone by writing this copy back over it.
+    // Read once to decide. The save reads it again: a pin set meanwhile survives.
     let mut ledger = Ledger::load(&options.ledger_path)?;
     let mut written: Vec<(Record, Option<String>)> = Vec::new();
     let mut report = Report::default();
 
-    // Pins only make sense when reproducing an export; otherwise ask for the
-    // newest file the flavor has, on whichever channel this addon accepts.
+    // Pins only when reproducing an export; otherwise the newest on the channel.
     let requests: Vec<Request> = requests
         .iter()
         .map(|r| Request {
@@ -56,9 +53,7 @@ pub async fn install_all(
     for (provider, entry) in &resolved {
         let asked = requests.iter().find(|r| r.provider == *provider && r.id == entry.id);
         let provider = provider.clone();
-        // A request naming a file is someone reproducing an exact setup, and
-        // that is a pin: it has to survive the install, or the next pass
-        // moves the addon straight off the version they asked for.
+        // A request naming a file reproduces an exact setup: it becomes a pin.
         let pin = asked.and_then(|r| r.version_id.clone());
         let name = entry.name.clone().unwrap_or_else(|| entry.id.clone());
 
@@ -73,26 +68,21 @@ pub async fn install_all(
             });
             continue;
         }
-        // Being on the right file is the whole question for an update and
-        // beside the point for a repair.
+        // A repair reinstalls even the right file.
         if !options.reinstall && !ledger.needs_update(entry, &provider) {
             on_event(Event::UpToDate { name: name.clone() });
             report.up_to_date.push(name);
             continue;
         }
 
-        // Once per run, and only when something already installed is about
-        // to change: a fresh install has no saved data to migrate. Without a
-        // backup nothing is replaced, which is the point of taking one.
+        // Once per run, before something installed changes. No backup, no change.
         if ledger.find(&provider, &entry.id).is_some() {
             if let Some(plan) = backup.take() {
                 let made = tokio::task::spawn_blocking(move || plan.create(Reason::AddonUpdate))
                     .await
                     .map_err(|e| ManageError::Join(e.to_string()))
                     .and_then(|made| made.map_err(ManageError::from));
-                // What was installed before this point is on disk and has to
-                // be recorded, so the pass stops here rather than returning
-                // past the save below.
+                // Stop here, still saving what was installed so far.
                 if let Err(e) = made {
                     tracing::error!("addons: the settings backup before updating failed, stopping: {}", crate::error::chain(&e));
                     failed = Some(e);
@@ -141,12 +131,8 @@ pub async fn install_all(
     }
 }
 
-/// Write what a pass installed into the ledger as it is *now*, not as it was
-/// when the pass started.
-///
-/// Each record this pass wrote replaces its row, but the choices that are the
-/// user's, channel, ignore, auto-update and pin, are taken from the current
-/// row when there is one: they may have changed while the pass ran.
+/// Write what a pass installed into the ledger as it is now. The user's
+/// choices (channel, ignore, auto-update, pin) come from the current row.
 pub(super) fn save_merged(path: &std::path::Path, written: Vec<(Record, Option<String>)>, importing: bool) -> Result<(), ManageError> {
     let mut ledger = Ledger::load(path)?;
     for (mut record, asked) in written {
@@ -177,15 +163,9 @@ pub async fn update_all(
     install_all(http, catalog, &requests, &options, on_event).await
 }
 
-/// Resolve a mixed batch, sending each provider's entries where they belong.
-///
-/// CurseForge goes through the catalog proxy because it needs a key; the rest
-/// are resolved client-side. That split is the point: with no catalog
-/// configured, or with the proxy down, every keyless provider still works.
-///
-/// Each result comes back with the provider of the request it answers: ids
-/// are only unique within a provider, and CurseForge and WoWInterface both
-/// number theirs, so an id alone can match the wrong request.
+/// Resolve a mixed batch: CurseForge through the proxy (it needs a key), the
+/// rest client-side, so they work without one. Each result carries its
+/// request's provider: ids are only unique per provider.
 pub async fn resolve_everywhere(
     http: &Http,
     catalog: Option<&Catalog>,
@@ -212,8 +192,7 @@ pub async fn resolve_everywhere(
             ),
             _ => providers::resolve(http, &provider, &batch, flavor).await,
         };
-        // The provider exactly as the request spelled it, which is what the
-        // ledger keys its records on.
+        // As the request spelled it: the ledger's key.
         let named = batch.first().map(|r| r.provider.clone()).unwrap_or_default();
         resolved.extend(answers.into_iter().map(|answer| (named.clone(), answer)));
     }
@@ -235,11 +214,8 @@ async fn fetch_and_install(
 
     verify_md5(&package, entry.md5.as_deref(), name)?;
 
-    // An update or a repair replaces every folder the record names, so one an
-    // older build shipped and this one does not goes too, rather than staying
-    // loaded in game with nothing left that owns it. Not a folder another
-    // record also claims. It happens inside the extract's swap, so a failure
-    // leaves the addon as it was rather than half gone.
+    // Folders an older build shipped and this one does not go too (unless
+    // another record claims them), inside the extract's swap.
     let retire: Vec<String> = ledger
         .find(provider, &entry.id)
         .map(|r| r.folders.clone())
@@ -253,11 +229,9 @@ async fn fetch_and_install(
         })
         .collect();
 
-    // Trust what the package contains over what the catalog said it contains:
-    // the folders are what removal will delete, so they have to be real.
+    // The package's folders, not the catalog's: removal deletes these.
     let extracted = install::extract(&package, &options.addons_dir, &retire)?;
-    // An install replaces the record wholesale, so everything the user chose
-    // about this addon is read off the old one first and carried across.
+    // The user's choices carry over from the old record.
     let chosen = ledger.find(provider, &entry.id).cloned().unwrap_or_default();
     ledger.record(Record {
         provider: provider.to_owned(),
@@ -270,13 +244,9 @@ async fn fetch_and_install(
         ignored: chosen.ignored,
         auto_update: chosen.auto_update,
         pinned: pin_after_install(pin, options.pinned, chosen.pinned, entry.file_id.as_deref()),
-        // Stamped now, not carried over: the question it answers is when
-        // *this* build arrived, and a new build arriving is this line.
+        // When this build arrived.
         installed_at: Some(install::today()),
-        // Taken from the reply that was just acted on rather than carried
-        // across: a project can move its repository, and the record should
-        // say where it is now. An older proxy answers none of these, which
-        // costs the menu entries and nothing else.
+        // From this reply: a project can move. An older proxy sends none.
         website_url: entry.website_url.clone(),
         author_url: entry.author_url.clone(),
         source_url: entry.source_url.clone(),
@@ -286,12 +256,8 @@ async fn fetch_and_install(
 
 /// What an addon is pinned to once a file has been installed over it.
 ///
-/// `asked` is the file this request named, which only counts as a pin when
-/// the run is reproducing an export (`importing`). Otherwise whatever pin was
-/// already held carries over, but either way only while it still describes
-/// what is on disk: an explicit install of a different file has moved the
-/// addon off its pin, and a pin naming a file that is not there would be a
-/// lie the next pass would act on.
+/// `asked` pins only when `importing`; otherwise the old pin carries over.
+/// Either way only while it names the file now on disk.
 pub(super) fn pin_after_install(
     asked: Option<String>,
     importing: bool,
@@ -306,9 +272,7 @@ pub(super) fn pin_after_install(
 
 /// Check a package against a published MD5, when there is one.
 ///
-/// Only WoWInterface publishes one today. A mismatch means a truncated or
-/// tampered package, and extracting it would overwrite a working addon folder
-/// with a broken one, so it fails before anything is written.
+/// Only WoWInterface publishes one. A mismatch fails before anything is written.
 pub(super) fn verify_md5(package: &[u8], expected: Option<&str>, name: &str) -> Result<(), ManageError> {
     let Some(expected) = expected else {
         return Ok(());

@@ -31,8 +31,7 @@ pub fn unsupported(collection: &crate::addons::Collection) -> Vec<&crate::addons
 
 /// Set or clear one addon's channel override.
 ///
-/// Clearing it (`None`) returns the addon to following the global default,
-/// which is not the same as setting it to stable.
+/// `None` follows the global default, which is not the same as stable.
 pub fn set_channel(
     options: &Options,
     provider: &str,
@@ -49,8 +48,7 @@ pub fn set_channel(
 
 /// Leave one addon out of everything that updates in bulk, or stop doing so.
 ///
-/// Deliberately not a toggle: the caller knows which state it is showing, and
-/// a toggle would flip the wrong way against a ledger changed under it.
+/// Not a toggle: the ledger may have changed under the caller.
 pub fn set_ignored(
     options: &Options,
     provider: &str,
@@ -67,8 +65,7 @@ pub fn set_ignored(
 
 /// Set or clear one addon's auto-update choice.
 ///
-/// Clearing it (`None`) returns the addon to following the app-wide default,
-/// which is not the same as turning auto-update off.
+/// `None` follows the app-wide default, which is not the same as off.
 pub fn set_auto_update(
     options: &Options,
     provider: &str,
@@ -85,9 +82,7 @@ pub fn set_auto_update(
 
 /// Hold one addon at a file id, or let it track its channel again.
 ///
-/// The caller passes the file to hold rather than a flag, because a pin is a
-/// statement about a particular file: re-pinning after an update means
-/// pinning to the *new* file, which a toggle could not express.
+/// A file, not a flag: a pin names one particular file.
 pub fn set_pinned(
     options: &Options,
     provider: &str,

@@ -1,14 +1,7 @@
 //! Install, update and remove addons end to end.
 //!
-//! The half that needs the network: resolve through the catalog, fetch each
-//! package from the CDN, extract it, and record what was written. Reports
-//! through an [`Event`] callback like the other orchestrators, so both
-//! front-ends drive the same code.
-//!
-//! One addon failing never stops the rest. A shared list of twenty will
-//! routinely contain one project whose author has opted out of third-party
-//! downloads and one that no longer exists, and the right outcome is eighteen
-//! installed addons plus two clear explanations.
+//! Resolve, fetch, extract and record, reporting through [`Event`]s. One
+//! addon failing (an opt-out, a deleted project) never stops the rest.
 
 mod adopt;
 mod fetch;
@@ -45,12 +38,8 @@ pub struct Options {
     /// Honour the `version_id` an import token pins, instead of taking the
     /// newest file. Reproduces someone's exact setup rather than tracking them.
     pub pinned: bool,
-    /// Install even when the ledger says the addon is already on this file,
-    /// replacing the folders it recorded rather than writing over them.
-    ///
-    /// What "re-install" means: the ledger can only say which *file* is
-    /// installed, never whether the folders it wrote are still intact, so
-    /// repairing one has to be something the user can ask for directly.
+    /// Install even when the ledger says the addon is already on this file:
+    /// the ledger cannot tell whether its folders are intact. "Re-install".
     pub reinstall: bool,
     /// Which builds to accept for an addon that has no opinion of its own.
     pub channel: super::Channel,
@@ -76,11 +65,10 @@ pub enum Event {
 pub struct Unavailable {
     pub name: String,
     pub reason: String,
-    /// The project page. For an opt-out this is the *only* way to get the
-    /// addon, so a UI should offer to open it rather than just explaining.
+    /// The project page: for an opt-out, the only way to get the addon.
     pub website_url: Option<String>,
     /// `owner/repo` of the author's own GitHub releases, for an opt-out whose
-    /// project names one. See [`Resolved::github_repo`].
+    /// project names one. See [`crate::addons::Resolved::github_repo`].
     pub github: Option<String>,
 }
 

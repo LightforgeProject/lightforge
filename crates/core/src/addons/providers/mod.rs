@@ -1,21 +1,11 @@
 //! Keyless addon providers, resolved client-side.
 //!
-//! CurseForge needs a key and therefore a server (see [`super::catalog`]).
-//! These three do not, so Lightforge talks to them directly, which means addon
-//! management keeps working when the Tuxcore proxy is down, and works at all
-//! before a CurseForge key exists.
+//! These need no key, so they work without the proxy ([`super::catalog`]),
+//! answering with the same [`Resolved`] shape.
 //!
-//! Each provider answers with the same [`Resolved`] shape the catalog does, so
-//! everything downstream, download, extract, ledger, is provider-agnostic.
-//!
-//! What each one is for:
-//!
-//! - [`wowinterface`], a large back catalogue, and it hands back an MD5, so
-//!   its downloads are the only ones we can verify.
-//! - [`tukui`], the *only* source for ElvUI, which is not on CurseForge at
-//!   all. It also declares its folder list up front.
-//! - [`github`], where many authors release first, and the BigWigs packager's
-//!   `release.json` makes per-flavor selection exact rather than guessed.
+//! - [`wowinterface`]: a large catalogue, and an MD5 per download.
+//! - [`tukui`]: the only source of ElvUI.
+//! - [`github`]: many authors release here first; `release.json` picks the flavor.
 
 pub mod github;
 pub mod tukui;
@@ -27,9 +17,8 @@ use crate::net::Http;
 
 /// Resolve a batch that all belongs to one provider.
 ///
-/// Errors are per-provider, not per-addon: a provider being unreachable turns
-/// its whole batch into `not_found` entries with a reason rather than failing
-/// the run, because the other providers' addons are still perfectly installable.
+/// An unreachable provider turns its batch into `not_found` entries with a
+/// reason; the other providers go on.
 pub async fn resolve(
     http: &Http,
     provider: &Provider,

@@ -1,14 +1,7 @@
 //! WoWInterface, through the MMOUI API. No key required.
 //!
-//! **Pinned to `v3` deliberately.** The `v4` API serves `filelist.json` but its
-//! `filedetails` endpoint answers 404, so v3 is the one that can actually
-//! resolve a single addon. Verified live rather than assumed.
-//!
-//! Its ids are the ones a `.toc` already declares as `X-WoWI-ID`, so an
-//! installed addon can be matched to this provider with no lookup at all.
-//!
-//! Alone among the providers it returns an **MD5** of the package, which is
-//! what makes a WoWInterface download verifiable end to end.
+//! **Pinned to `v3`**: v4's `filedetails` answers 404. Ids are a `.toc`'s
+//! `X-WoWI-ID`. The only provider returning an **MD5** of the package.
 
 use serde::Deserialize;
 
@@ -24,7 +17,7 @@ fn details_url(ids: &str) -> String {
     format!("https://api.mmoui.com/v3/game/WOW/filedetails/{ids}.json")
 }
 
-/// The fields we use. The API returns a dozen more we deliberately ignore.
+/// The fields we use.
 #[derive(Debug, Clone, Deserialize)]
 struct Details {
     #[serde(rename = "UID")]
@@ -56,8 +49,7 @@ pub async fn resolve(http: &Http, requests: &[Request]) -> ProviderResult {
 
             resolved.push(Resolved {
                 name: found.name.clone(),
-                // WoWInterface has no per-file id; the version is what changes
-                // when an update lands, so it plays that role for the ledger.
+                // No per-file id; the version plays that role.
                 file_id: found.version.clone(),
                 file_name: found.file_name.clone(),
                 md5: found.md5.clone(),
@@ -78,8 +70,7 @@ mod tests {
 
     #[test]
     fn the_v3_endpoint_is_the_one_that_answers() {
-        // v4's filedetails 404s; this comment and test exist so nobody
-        // "upgrades" the URL and breaks resolution silently.
+        // v4's filedetails 404s.
         assert!(details_url("5086").starts_with("https://api.mmoui.com/v3/"));
         assert!(details_url("5086").ends_with("filedetails/5086.json"));
     }

@@ -12,11 +12,8 @@ pub struct Adopted {
 
 /// Recognise hand-installed addons and take them into the ledger.
 ///
-/// An unmanaged folder can only be listed; fingerprinting it the way
-/// CurseForge does (see [`crate::addons::fingerprint`]) and asking the catalog
-/// makes it an ordinary managed addon. A folder another record owns is left
-/// alone, and only folders actually present are recorded, so a later removal
-/// never promises to delete one that is not there.
+/// By fingerprint ([`crate::addons::fingerprint`]). Folders another record
+/// owns are left alone; only folders present are recorded.
 pub async fn adopt(
     http: &Http,
     catalog: Option<&Catalog>,
@@ -29,9 +26,7 @@ pub async fn adopt(
     };
     let mut ledger = Ledger::load(&options.ledger_path)?;
 
-    // Folders a record already claims. Not just the ones on disk: a record
-    // whose folders are missing is still that addon's, and adopting over it
-    // would leave two records fighting for one name.
+    // Folders a record claims, on disk or not.
     let mut claimed: std::collections::BTreeSet<String> = ledger
         .addons
         .iter()
@@ -44,8 +39,7 @@ pub async fn adopt(
         .map(|addon| addon.folder)
         .collect();
 
-    // Fingerprint to folder, so the catalog's answer, which is keyed by the
-    // hashes we sent, can be read back as "this folder is that addon".
+    // Fingerprint to folder, to read the catalog's answer back.
     let mut by_print: std::collections::BTreeMap<u32, String> = Default::default();
     for folder in present.iter().filter(|f| !claimed.contains(*f)) {
         if let Some(print) = fingerprint::of_folder(&options.addons_dir.join(folder)) {
@@ -65,9 +59,7 @@ pub async fn adopt(
     let by_project = group_by_project(&matches, &by_print);
     let mut adopted = Vec::new();
     for (id, (found, matched)) in by_project {
-        // The package's folders, limited to what is here and not already
-        // somebody else's, plus every folder that actually matched, which
-        // is the stronger evidence of the two.
+        // The package's folders that are here and unclaimed, plus every match.
         let mut folders: Vec<String> = found
             .folders
             .iter()
@@ -84,9 +76,8 @@ pub async fn adopt(
         // Taken now, so a second project in the same answer cannot claim it.
         claimed.extend(folders.iter().cloned());
 
-        // Already managed under this id: a folder an older build left behind,
-        // most likely. It joins that record, which keeps everything the user
-        // chose about the addon; a fresh record would have replaced it.
+        // Already managed under this id (an older build's folder): it joins
+        // that record, keeping the user's choices.
         if let Some(existing) = ledger.find_mut("curse", &id) {
             existing.folders.extend(folders.iter().cloned());
             existing.folders.sort();
@@ -106,8 +97,7 @@ pub async fn adopt(
             name: name.clone(),
             file_id: found.file_id.clone(),
             folders: folders.clone(),
-            // Adopted, not installed: the build on disk is whatever the user
-            // put there, and the day it arrived is not ours to claim.
+            // Adopted: when it arrived is unknown.
             ..Record::default()
         });
         adopted.push(Adopted { name, folders });
@@ -122,10 +112,8 @@ pub async fn adopt(
 
 /// Gather fingerprint matches into one entry per project.
 ///
-/// Every folder of a package matches separately, BigWigs answers twelve
-/// times, EllesmereUI twenty-two, and each answer names the same project.
-/// Writing one record per match records one addon a dozen times over, and
-/// reports it a dozen times to the user, which is how this was noticed.
+/// Every folder matches separately (BigWigs twelve times, EllesmereUI
+/// twenty-two), all naming one project.
 pub(super) fn group_by_project(
     matches: &std::collections::BTreeMap<String, crate::addons::catalog::Match>,
     by_print: &std::collections::BTreeMap<u32, String>,

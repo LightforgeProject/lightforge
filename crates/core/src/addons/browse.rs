@@ -1,19 +1,13 @@
 //! Searching for addons to install.
 //!
-//! The import-token flow answers "give me this exact list". This answers the
-//! other question, "what is there?", which is what makes Lightforge an addon
-//! manager rather than an importer.
-//!
 //! Each provider is searched the cheapest way it allows:
 //!
 //! - **WoWInterface** publishes its entire catalogue as one 2.7 MB
-//!   `filelist.json` (7,702 addons), so it is fetched once, cached, and
-//!   searched locally. Every keystroke costs nothing after that.
+//!   `filelist.json` (7,702 addons), fetched once, cached, searched locally.
 //! - **Tukui** lists two addons in 4 KB. Same treatment, trivially.
-//! - **CurseForge** has no public catalogue dump, so its search is a request to
-//!   the proxy, and is simply absent when no proxy is configured.
-//! - **GitHub** cannot be searched usefully without authentication, so an
-//!   `owner/repo` typed exactly is offered as a direct result.
+//! - **CurseForge** is a request to the proxy, absent without one.
+//! - **GitHub** cannot be searched without authentication; an exact
+//!   `owner/repo` is offered as a direct result.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -24,11 +18,8 @@ use super::catalog::{Catalog, CatalogError};
 use super::Provider;
 use crate::net::Http;
 
-/// How long a cached catalogue is considered fresh.
-///
-/// Addon listings move slowly and the payload is megabytes; re-fetching on
-/// every search would be rude to a service that gives its whole catalogue away
-/// for free.
+/// How long a cached catalogue is considered fresh: listings move slowly, and
+/// the payload is megabytes.
 pub const CATALOGUE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 
 const WOWI_FILELIST: &str = "https://api.mmoui.com/v4/game/WOW/filelist.json";
@@ -53,9 +44,7 @@ pub struct Listing {
     pub downloads: u64,
     #[serde(default)]
     pub website_url: Option<String>,
-    /// The author turned third-party downloads off, so Install cannot work.
-    /// Known ahead of time only for CurseForge, and only from a proxy new
-    /// enough to say.
+    /// The author turned third-party downloads off (known only for CurseForge).
     #[serde(default)]
     pub opted_out: bool,
     /// `owner/repo` of the author's own GitHub releases, for an opt-out.
@@ -101,9 +90,8 @@ struct WowiEntry {
     version: Option<String>,
     #[serde(default)]
     downloads: u64,
-    /// `gameVersions` is **null** for 3,510 of WoWInterface's 7,702 entries,
-    /// and `#[serde(default)]` covers a *missing* key, not an explicit null,
-    /// so this must be an `Option` or the whole catalogue fails to parse.
+    /// **null** for 3,510 of 7,702 entries; `#[serde(default)]` does not cover
+    /// an explicit null, hence the `Option`.
     #[serde(rename = "gameVersions", default)]
     game_versions: Option<Vec<String>>,
     #[serde(rename = "fileInfoUri", default)]
@@ -143,10 +131,8 @@ pub async fn search(
         return Results::default();
     }
 
-    // A pasted project page is the same question as a typed name, so it is
-    // answered by rewriting it into one rather than by a second code path:
-    // every provider below already knows how to find an addon by the thing
-    // its URL carries, a slug, an `owner/repo`, a numeric id.
+    // A pasted project page is rewritten into a query: a slug, an
+    // `owner/repo` or a numeric id.
     let from_url = query_from_url(query);
     let query = from_url.as_ref().map(|(_, text)| text.as_str()).unwrap_or(query);
 
@@ -158,9 +144,8 @@ pub async fn search(
         results.push(listing);
     }
 
-    // A provider that cannot answer is reported, not silently dropped: an
-    // empty result list and a broken catalogue look identical to a user, and
-    // that is how a parse failure hid here once already.
+    // A provider that cannot answer is reported: no results and a broken
+    // catalogue look the same otherwise.
     match wowi_catalogue(http, cache_dir).await {
         Ok(entries) => results.extend(search_wowi(&entries, query, flavor)),
         Err(e) => problems.push(format!("WoWInterface: {e}")),
@@ -176,9 +161,7 @@ pub async fn search(
         }
     }
 
-    // A link names one addon at one provider. Offering the same name from
-    // the others is answering a question that was not asked, and the one
-    // that was asked may not even be the top hit.
+    // A link names one addon at one provider; only that one answers.
     if let Some((provider, _)) = &from_url {
         results.retain(|listing| &listing.provider == provider);
     }
@@ -188,13 +171,9 @@ pub async fn search(
     Results { listings: results, problems }
 }
 
-/// The most-downloaded addons for a flavor, for a search box nobody has typed
-/// in yet: ranked by popularity alone, from WoWInterface's catalogue already
-/// on disk, so Browse has rows before the first keystroke.
-///
-/// Tukui is left out: it publishes no download counts, and ElvUI does not
-/// belong at the bottom. A provider that cannot answer is dropped silently,
-/// unlike in [`search`]: this is a tab's default view, not a question asked.
+/// The most-downloaded addons for a flavor, from the cached catalogue, for an
+/// empty search box. Not Tukui (no download counts). Failures are silent:
+/// a default view, not a question.
 pub async fn popular(
     http: &Http,
     catalog: Option<&Catalog>,
@@ -220,10 +199,7 @@ pub async fn popular(
 
 /// The most-downloaded WoWInterface entries that support a flavor.
 ///
-/// Same flavor rule as [`search_wowi`], including the entries that declare no
-/// game versions at all: half the catalogue does, and excluding them here
-/// would mean the popular list and a search for the same addon disagreed
-/// about whether it exists.
+/// Same flavor rule as [`search_wowi`], entries without versions included.
 fn top_wowi(entries: &[WowiEntry], flavor: &str, limit: usize) -> Vec<Listing> {
     let mut top: Vec<&WowiEntry> = entries
         .iter()
@@ -250,17 +226,12 @@ fn top_wowi(entries: &[WowiEntry], flavor: &str, limit: usize) -> Vec<Listing> {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Results {
     pub listings: Vec<Listing>,
-    /// One line per provider that failed, for the UI to show. A search that
-    /// finds nothing because a provider is down must not look like a search
-    /// that found nothing because nothing matched.
+    /// One line per provider that failed, for the UI to show.
     pub problems: Vec<String>,
 }
 
-/// Order results by how well they match, then by popularity.
-///
-/// An exact title match must outrank a more-downloaded addon that merely
-/// contains the word, or searching "BigWigs" surfaces eleven BigWigs plugins
-/// before BigWigs itself.
+/// Order results by match quality, then popularity, so "BigWigs" comes before
+/// its eleven plugins.
 fn rank(results: &mut [Listing], query: &str) {
     let needle = fold(query);
     results.sort_by(|a, b| {
@@ -271,8 +242,7 @@ fn rank(results: &mut [Listing], query: &str) {
     });
 }
 
-/// Lower is better. Both sides are folded, so "big wigs" scores against
-/// "BigWigs" as an exact match rather than as no match at all.
+/// Lower is better. Both sides are folded: "big wigs" matches "BigWigs" exactly.
 fn score(name: &str, needle: &str) -> u8 {
     let name = fold(name);
     match () {
@@ -285,10 +255,8 @@ fn score(name: &str, needle: &str) -> u8 {
 
 /// Lowercase, keeping only letters and digits.
 ///
-/// Addon names are typed from memory, not copied: "big wigs", "BigWigs" and
-/// "Big-Wigs" are one query, and "ElvUI" is often typed "Elv UI". Folding
-/// also strips the decoration real titles carry, "BigWigs (Boss Timers &
-/// Tools)" still begins with the query once the punctuation is gone.
+/// "big wigs", "BigWigs" and "Big-Wigs" are one query, and "BigWigs (Boss
+/// Timers & Tools)" still begins with it.
 fn fold(text: &str) -> String {
     text.chars()
         .filter(|c| c.is_alphanumeric())
@@ -297,13 +265,11 @@ fn fold(text: &str) -> String {
 }
 
 fn search_wowi(entries: &[WowiEntry], query: &str, flavor: &str) -> Vec<Listing> {
-    // Folded on both sides, so "big wigs" finds "BigWigs". A matcher that is
-    // stricter than the ranker hides results the ranker was written to order.
+    // Folded on both sides, as the ranker is.
     let needle = fold(query);
     entries
         .iter()
-        // An id matches exactly, which is what a pasted WoWInterface URL
-        // becomes: its title is decoration and changes, the id does not.
+        // An id matches exactly: what a pasted WoWInterface URL becomes.
         .filter(|e| e.id.to_string() == needle || fold(&e.title).contains(&needle))
         .filter(|e| e.flavors().is_empty() || supports(e.flavors(), flavor))
         .map(|e| Listing {
@@ -342,21 +308,14 @@ fn search_tukui(entries: &[TukuiEntry], query: &str) -> Vec<Listing> {
 
 /// What a pasted addon page URL means, as a query the search already handles.
 ///
-/// Returns `None` for anything that is not one of these, including a URL from
-/// a provider Lightforge does not install from, searching the text of a
-/// Wago link finds nothing, which is the honest answer, where guessing at an
-/// id from it would install something else.
-///
-/// Deliberately a string rewrite rather than a direct install: the result
-/// goes through the same resolve every other hit does, so a dead link reports
-/// `not_found` like anything else instead of failing in its own way.
+/// `None` for anything else, a Wago link included. A rewrite, not an install,
+/// so a dead link reports `not_found` like any other hit.
 pub fn query_from_url(input: &str) -> Option<(Provider, String)> {
     let rest = input
         .trim()
         .strip_prefix("https://")
         .or_else(|| input.trim().strip_prefix("http://"))?;
-    // Path only, with the query string and fragment kept aside: Tukui puts
-    // the addon's name in the query string, everyone else in the path.
+    // Tukui puts the name in the query string, everyone else in the path.
     let (host_path, params) = match rest.split_once('?') {
         Some((before, after)) => (before, after.split('#').next().unwrap_or(after)),
         None => (rest.split('#').next().unwrap_or(rest), ""),
@@ -366,14 +325,12 @@ pub fn query_from_url(input: &str) -> Option<(Provider, String)> {
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
 
     match host {
-        // curseforge.com/wow/addons/<slug>, with anything after it ignored:
-        // a link copied from the Files tab still names the project.
+        // curseforge.com/wow/addons/<slug>, anything after it ignored.
         "curseforge.com" | "legacy.curseforge.com" => match segments.as_slice() {
             [_game, "addons", slug, ..] => Some((Provider::Curse, (*slug).to_owned())),
             _ => None,
         },
-        // github.com/<owner>/<repo>, which is already a query this
-        // understands. `.git` because that is what a clone URL carries.
+        // github.com/<owner>/<repo>, `.git` from a clone URL stripped.
         "github.com" => match segments.as_slice() {
             [owner, repo, ..] => {
                 let repo = repo.strip_suffix(".git").unwrap_or(repo);
@@ -381,8 +338,7 @@ pub fn query_from_url(input: &str) -> Option<(Provider, String)> {
             }
             _ => None,
         },
-        // wowinterface.com/downloads/info24608-SomeAddon.html, the id is the
-        // only part that is stable, so it is the part that is kept.
+        // wowinterface.com/downloads/info24608-SomeAddon.html: only the id is stable.
         "wowinterface.com" => segments.iter().find_map(|segment| {
             let digits: String = segment
                 .strip_prefix("info")?
@@ -426,10 +382,8 @@ fn github_direct(query: &str) -> Option<Listing> {
 
 /// Whether a catalogue entry's game versions cover a flavor.
 ///
-/// Version *lines* rather than exact patches: retail is the 10+ major series,
-/// Classic Era is the 1.x line, and the progression Classic realms move through
-/// 2.x-5.x. Coarse on purpose, a hard match on the live patch would hide every
-/// addon whose author has not yet bumped their `.toc`.
+/// By version line, not patch (retail 10+, Era 1.x, progression 2.x-5.x), so
+/// an addon whose `.toc` lags a patch still shows.
 fn supports(game_versions: &[String], flavor: &str) -> bool {
     game_versions.iter().any(|version| {
         let major: u32 = version
@@ -467,8 +421,7 @@ async fn cached_json<T: serde::de::DeserializeOwned>(
             if let Ok(parsed) = serde_json::from_slice(&bytes) {
                 return Ok(parsed);
             }
-            // A corrupt cache is replaced rather than reported: it is a copy of
-            // something freely refetchable.
+            // A corrupt cache is refetched.
         }
     }
 
@@ -625,9 +578,7 @@ mod tests {
 
     #[test]
     fn a_null_game_versions_does_not_kill_the_whole_catalogue() {
-        // 3,510 of 7,702 real entries send `"gameVersions": null`. Parsing must
-        // survive them, or searching finds nothing at all, which is exactly
-        // what happened before this was caught.
+        // 3,510 of 7,702 real entries send `"gameVersions": null`.
         let json = br#"[{"id":1,"title":"Nulled","author":"x","version":"1",
                          "downloads":5,"gameVersions":null,"fileInfoUri":"u"},
                         {"id":2,"title":"Fine","author":"x","version":"1",
@@ -671,10 +622,8 @@ mod tests {
 
     #[test]
     fn a_decorated_title_is_found_by_the_bare_name() {
-        // Real catalogue titles carry parentheticals. Folding reaches past
-        // them; it cannot, however, tell "BigWigs (Boss Timers)" apart from
-        // "BigWigs_Voice" on name alone: both are prefix matches, and
-        // downloads are the only honest signal left to separate them.
+        // Folding reaches past parentheticals, but "BigWigs (Boss Timers)" and
+        // "BigWigs_Voice" are both prefix matches; downloads decide.
         let entries = vec![wowi(1, "BigWigs (Boss Timers & Tools)", 500, &["12.0.7"])];
 
         assert_eq!(search_wowi(&entries, "big wigs", "retail").len(), 1);

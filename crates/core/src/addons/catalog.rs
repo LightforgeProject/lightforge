@@ -1,23 +1,16 @@
 //! The addon catalog: Lightforge's view of CurseForge, through the Tuxcore
 //! proxy.
 //!
-//! The proxy exists because the CurseForge API needs a key, and a key cannot
-//! live in a GPL repo or in a binary anyone can unpack. It holds the key, adds
-//! caching and rate limiting, and hands back a trimmed shape of its own, so
-//! this module never talks to CurseForge, and nothing here has to change if the
-//! upstream API does.
+//! The CurseForge API needs a key, which cannot live in a GPL binary, so the
+//! proxy holds it, caches, rate-limits and returns its own trimmed shape.
 //!
-//! Two outcomes are normal rather than failures, and both are modelled as
-//! [`Status`] instead of errors:
+//! Two normal outcomes are [`Status`], not errors:
 //!
-//! - **`opt_out`**: an author can switch off third-party distribution, and the
-//!   API then returns no download URL. The only correct response is to send the
-//!   user to the project page. Never synthesise a CDN URL around it.
-//! - **`not_found`**: a project id in someone's shared list that no longer
-//!   exists. One dead entry must not fail the other nineteen.
+//! - **`opt_out`**: the author switched off third-party distribution. Send the
+//!   user to the project page; never synthesise a CDN URL.
+//! - **`not_found`**: a project that no longer exists.
 //!
-//! File bytes are fetched straight from CurseForge's CDN using the URL the
-//! proxy returns; they never transit Tuxcore.
+//! File bytes come straight from CurseForge's CDN, never through Tuxcore.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -57,9 +50,6 @@ pub enum Status {
 }
 
 /// One resolved addon, ready to download, or a reason it is not.
-/// `Default` exists so a field the catalog starts reporting does not mean
-/// editing every construction that never cared about it, the same reason
-/// [`crate::addons::Record`] has one.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Resolved {
     pub id: String,
@@ -72,8 +62,7 @@ pub struct Resolved {
     pub file_name: Option<String>,
     #[serde(default)]
     pub file_length: Option<u64>,
-    /// Package MD5, when the provider publishes one. Only WoWInterface does
-    /// today, and it is the one provider whose downloads can be verified.
+    /// Package MD5, when the provider publishes one (only WoWInterface).
     #[serde(default)]
     pub md5: Option<String>,
     /// Absent for anything but [`Status::Ok`].
@@ -85,25 +74,15 @@ pub struct Resolved {
     /// Where to send the user when the download is unavailable.
     #[serde(default)]
     pub website_url: Option<String>,
-    /// The author's own page at the provider, when it names one.
-    ///
-    /// Carried on the resolve reply so an installed addon can offer it
-    /// without a second request; see [`crate::addons::install::Record`],
-    /// which is where it ends up.
+    /// The author's own page at the provider, kept in the
+    /// [`crate::addons::install::Record`].
     #[serde(default)]
     pub author_url: Option<String>,
-    /// The project's source repository, when the provider publishes one.
-    ///
-    /// Worth having beside [`Resolved::author_url`] because this is where
-    /// sponsorship actually lives: a CurseForge author profile takes no
-    /// money, a GitHub repository usually has a Sponsor button.
+    /// The project's source repository: where a Sponsor button usually is.
     #[serde(default)]
     pub source_url: Option<String>,
-    /// When the provider published this file, RFC 3339 as it states it.
-    ///
-    /// Carried on the resolve reply rather than fetched per addon: the files
-    /// endpoint answers this for one project, and an installed list of thirty
-    /// addons would be thirty requests for one column.
+    /// When the provider published this file, RFC 3339, so a list needs no
+    /// request per addon.
     #[serde(default)]
     pub file_date: Option<String>,
     /// Anything worth telling the user about how this was resolved, a guessed
@@ -139,12 +118,8 @@ impl Resolved {
     }
 
     /// The author's own GitHub repository, `owner/repo`, for an opt-out.
-    ///
-    /// Offered as a button the user presses, never followed on their behalf:
-    /// the opt-out is the author saying no to downloads through someone
-    /// else's catalogue, and quietly switching sources because of it would
-    /// be ignoring that. A release the author published themselves, fetched
-    /// because the user asked for it, is the author's own channel.
+    /// Only a button the user presses: switching sources on their behalf
+    /// would ignore the author's choice.
     pub fn github_repo(&self) -> Option<String> {
         if self.status != Status::OptOut {
             return None;
@@ -161,8 +136,7 @@ pub struct Request {
     /// Pin to an exact file, as a WoWUp token records. Omit for the newest.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version_id: Option<String>,
-    /// Which builds are acceptable. Omitted means the proxy's own default,
-    /// which is stable, so an older client keeps getting releases.
+    /// Which builds are acceptable; omitted, the proxy's default (stable).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel: Option<super::Channel>,
 }
@@ -211,13 +185,10 @@ pub struct Project {
     pub source_url: Option<String>,
     #[serde(default)]
     pub thumbnail_url: Option<String>,
-    /// Lifetime downloads, as the proxy reports them. Absent on an older
-    /// proxy, which then ranks every CurseForge hit equally, see
-    /// [`crate::addons::browse`].
+    /// Lifetime downloads. Absent on an older proxy.
     #[serde(default)]
     pub download_count: u64,
-    /// The author turned third-party downloads off. Absent on an older proxy,
-    /// which leaves it to resolve to find out.
+    /// The author turned third-party downloads off. Absent on an older proxy.
     #[serde(default)]
     pub opted_out: bool,
 }
@@ -230,11 +201,8 @@ pub struct Match {
     pub name: Option<String>,
     #[serde(default)]
     pub file_id: Option<String>,
-    /// Every folder of the file this fingerprint belongs to.
-    ///
-    /// A match on one folder identifies the whole package, and the package
-    /// is what a ledger entry has to record: adopting one folder of BigWigs
-    /// and leaving twelve unmanaged would be worse than adopting none.
+    /// Every folder of the file this fingerprint belongs to: one folder's
+    /// match adopts the whole package.
     #[serde(default)]
     pub folders: Vec<String>,
 }
@@ -254,8 +222,7 @@ struct MatchReply {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileInfo {
     pub file_id: String,
-    /// What the author calls this build, a version people recognise, where
-    /// the file id is an opaque number.
+    /// What the author calls this build.
     #[serde(default)]
     pub display_name: Option<String>,
     #[serde(default)]
@@ -273,12 +240,8 @@ pub struct FileInfo {
     pub md5: Option<String>,
     #[serde(default)]
     pub folders: Vec<String>,
-    /// Folder name to the fingerprint the provider expects it to hash to.
-    ///
-    /// The authority's own statement of what a correct install looks like,
-    /// which is the only way to check our hashing is right: a fingerprint
-    /// that is wrong matches nothing, and matching nothing is also what a
-    /// genuinely unknown addon looks like.
+    /// Folder name to the fingerprint the provider expects: the only check on
+    /// our hashing, since a wrong hash looks like an unknown addon.
     #[serde(default)]
     pub fingerprints: std::collections::BTreeMap<String, u32>,
 }
@@ -322,11 +285,7 @@ impl Catalog {
         serde_json::from_slice(&bytes).map_err(|source| CatalogError::Fixture { path, source })
     }
 
-    /// Resolve a batch of addons to download URLs.
-    ///
-    /// Requests beyond [`RESOLVE_LIMIT`] are split into several calls rather
-    /// than rejected, a shared list is allowed to be long, and the chunking is
-    /// nobody else's problem.
+    /// Resolve a batch of addons to download URLs, in calls of [`RESOLVE_LIMIT`].
     pub async fn resolve(
         &self,
         http: &Http,
@@ -335,8 +294,7 @@ impl Catalog {
     ) -> Result<Vec<Resolved>, CatalogError> {
         if let Origin::Dir(_) = self.origin {
             let reply: ResolveReply = self.fixture("resolve.json")?;
-            // A fixture answers for everything it knows about; anything else is
-            // reported missing rather than silently dropped.
+            // What a fixture does not know is reported missing.
             return Ok(requests
                 .iter()
                 .map(|request| {
@@ -392,12 +350,8 @@ impl Catalog {
         Ok(reply.results)
     }
 
-    /// Every file a project offers for one flavor, newest first.
-    ///
-    /// What a version picker is built on, and the one question `resolve`
-    /// cannot answer: resolve returns the *chosen* file, this returns the
-    /// choices. Asked for one project at a time, because that is when
-    /// somebody is looking at one.
+    /// Every file a project offers for one flavor, newest first: the choices,
+    /// where `resolve` gives the chosen one.
     pub async fn files(
         &self,
         http: &Http,
@@ -417,12 +371,8 @@ impl Catalog {
         }
     }
 
-    /// Which project each folder fingerprint belongs to.
-    ///
-    /// One call for a whole library: the answer is keyed by the fingerprints
-    /// *we* sent, so a caller holding folder-to-hash can turn it into
-    /// folder-to-project without a second lookup. Hashes the catalog does
-    /// not recognise are simply absent.
+    /// Which project each folder fingerprint belongs to, keyed by the
+    /// fingerprints sent, in one call. Unknown ones are absent.
     pub async fn match_fingerprints(
         &self,
         http: &Http,
@@ -469,11 +419,7 @@ impl Catalog {
         }
     }
 
-    /// One file's changelog.
-    ///
-    /// Keyed by the file as well as the project, because "what changed" is a
-    /// question about a build and not about an addon, which is also why the
-    /// proxy can cache it for a day: a published file's changelog is final.
+    /// One file's changelog, final once published.
     pub async fn changelog(
         &self,
         http: &Http,
@@ -492,8 +438,7 @@ impl Catalog {
     }
 }
 
-/// Percent-encode a query value. Only the handful of characters an addon
-/// search can realistically contain need escaping.
+/// Percent-encode a query value.
 fn urlencode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {

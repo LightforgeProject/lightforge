@@ -28,17 +28,12 @@ pub struct UpdateStatus {
 }
 
 impl UpdateStatus {
-    /// True when the offered build is a different *kind* from the installed
-    /// one, moving between channels rather than forward on one.
-    ///
-    /// Calling that an update is how "Update" ends up installing an older
-    /// version: switching back to stable from an alpha is a different file,
-    /// which is all `has_update` can see.
+    /// True when the offered build is a different kind from the installed one:
+    /// alpha back to stable is a switch, not an update.
     pub fn is_channel_switch(&self) -> bool {
         match (self.installed_build, self.available_build) {
             (Some(installed), Some(available)) => installed != available,
-            // One side unknown: an addon installed before builds were
-            // recorded. Treat it as an ordinary update rather than guessing.
+            // One side unknown (an older record): an ordinary update.
             _ => false,
         }
     }
@@ -46,10 +41,8 @@ impl UpdateStatus {
     pub fn has_update(&self) -> bool {
         match (&self.installed, &self.available) {
             (Some(installed), Some(available)) => installed != available,
-            // Never installed-with-no-record vs unknown: without both sides
-            // this is "unknown", not "update available". Badging every addon
-            // as outdated because a provider is down would be worse than
-            // saying nothing.
+            // Without both sides it is unknown: a provider being down must not
+            // badge every addon outdated.
             _ => false,
         }
     }
@@ -58,21 +51,16 @@ impl UpdateStatus {
 /// What a bulk update or update check asks for: every tracked addon that has
 /// not been ignored.
 ///
-/// Both front-ends and both operations share this, because the set is a rule
-/// rather than a detail, an ignored addon that one of them still asked about
-/// would be ignored everywhere except the one place it mattered.
-///
-/// An ignored addon can still be asked for by name. `install_all` takes
-/// explicit requests, and an explicit request is the user asking.
+/// Shared by both front ends and both operations. An ignored addon can still
+/// be asked for by name.
 pub fn update_requests(ledger: &Ledger, default_channel: crate::addons::Channel) -> Vec<Request> {
     requests_for(ledger, default_channel, install::Record::tracks_updates)
 }
 
 /// What an unattended pass asks for: every addon that updates itself.
 ///
-/// Separate from [`update_requests`] because the two answer different
-/// questions. Pressing "Update all" is the user updating everything they have
-/// not excluded; this is Lightforge updating what it was told it may.
+/// Not [`update_requests`]: "Update all" covers what is not excluded, this
+/// only what was allowed.
 pub fn auto_update_requests(
     ledger: &Ledger,
     default_channel: crate::addons::Channel,
@@ -95,8 +83,7 @@ fn requests_for(
             id: record.id.clone(),
             // Updating means the newest file, never the pinned one.
             version_id: None,
-            // install_all recomputes this from the ledger; set here too so a
-            // caller reading these requests sees what will be asked for.
+            // `install_all` recomputes it; set so callers see the same.
             channel: Some(record.channel.unwrap_or(default_channel)),
         })
         .collect()
@@ -109,9 +96,7 @@ pub async fn check_updates(
     options: &Options,
 ) -> Result<Vec<UpdateStatus>, ManageError> {
     let ledger = Ledger::load(&options.ledger_path)?;
-    // No request for an addon held still either, ignored or pinned: there is
-    // nothing to be done with the answer, and every round-trip costs
-    // someone's bandwidth.
+    // No request for an ignored or pinned addon.
     let requests = update_requests(&ledger, options.channel);
     if requests.is_empty() {
         return Ok(Vec::new());
@@ -124,9 +109,7 @@ pub async fn check_updates(
         .addons
         .iter()
         .map(|record| {
-            // Nothing was asked for an addon that does not track updates, so
-            // nothing is offered: the row still exists, it just never reads
-            // as outdated.
+            // Not asked, so never outdated.
             let found = match record.tracks_updates() {
                 true => resolved
                     .iter()
