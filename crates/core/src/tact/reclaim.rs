@@ -64,8 +64,6 @@ pub enum ReclaimError {
          so its data cannot be told apart from unused data"
     )]
     Unaccounted { product: String },
-    #[error("{product}'s {what} is not in the store, so what it needs cannot be listed")]
-    NotInStore { product: String, what: &'static str },
 }
 
 /// What reclaiming one version's data would do.
@@ -345,11 +343,18 @@ pub(crate) async fn keep_keys(
         product: product.clone(),
         reason: "no encoding key".to_owned(),
     })?;
-    // Verified: a damaged copy would keep too little.
-    let raw = store.read_verified(&ekey, &config.encoding.ckey).map_err(|e| match e {
-        StorageError::ContentMismatch { .. } => ReclaimError::Storage(e),
-        _ => ReclaimError::NotInStore { product: product.clone(), what: "encoding manifest" },
-    })?;
+    // Verified: a damaged copy would keep too little. The download manifest
+    // does not list it, so a build Lightforge updated may have none until the
+    // client stores it; the CDN serves the same bytes.
+    let raw = match store.read_verified(&ekey, &config.encoding.ckey) {
+        Ok(raw) => raw,
+        Err(e @ StorageError::ContentMismatch { .. }) => return Err(e.into()),
+        Err(_) => {
+            let cdn_err = |source| ReclaimError::Cdn { product: product.clone(), source };
+            let client = Client::from_cdn(&build.cdn).map_err(cdn_err)?;
+            client.fetch_loose(http, &ekey, &config.encoding.ckey).await.map_err(cdn_err)?
+        }
+    };
     let encoding = Encoding::parse(&raw)
         .map_err(|e| ReclaimError::Manifest { product: product.clone(), reason: e.to_string() })?;
     drop(raw);

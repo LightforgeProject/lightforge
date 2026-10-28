@@ -421,7 +421,7 @@ mod uninstall_tests {
     use lightforge_core::tact::productdb;
 
     /// On copies of the real `.build.info` and registry: only that version
-    /// goes. Skipped without a real install.
+    /// goes. Skipped without a real install that holds another version too.
     #[test]
     fn uninstalling_one_version_leaves_the_rest() {
         let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
@@ -432,6 +432,10 @@ mod uninstall_tests {
         ) else {
             return;
         };
+        let rows = lightforge_core::buildinfo::BuildInfo::load(real.build_info(&ProductCode::ClassicEra));
+        if !rows.is_ok_and(|rows| rows.products().count() > 1) {
+            return;
+        }
 
         let root = std::env::temp_dir()
             .join(format!("lightforge-uninstall-{}", std::process::id()));

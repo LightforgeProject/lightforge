@@ -271,7 +271,16 @@ pub(crate) fn uninstall(ctx: Ctx, product: String, path: Option<PathBuf>, yes: b
         return Ok(());
     }
 
-    let removed = uninstall::execute(&install, &code, &plan, &windows_wow_path(&layout, &code))?;
+    // `--path` can name another library than the product's own, as after a
+    // move that left a copy behind; the products left there keep its path.
+    let windows_path = layout
+        .libraries()
+        .all()
+        .iter()
+        .find(|library| layout.wow_install_in(library) == install)
+        .map(|library| library.windows_wow_path())
+        .unwrap_or_else(|| windows_wow_path(&layout, &code));
+    let removed = uninstall::execute(&install, &code, &plan, &windows_path)?;
     println!("\ndeleted         {} paths, {:.2} GiB", removed.paths.len(), gib(removed.bytes));
     Ok(())
 }
