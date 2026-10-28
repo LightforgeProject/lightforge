@@ -27,13 +27,9 @@ pub async fn execute(
         plan, remote, cdn, client, encoding, install, locations, loose, tags, tag_column, ..
     } = prepared;
 
-    // Before a byte is fetched, not after. The run's very last act is to write
-    // `.build.info` *into the install root*, and a root that will not take a
-    // new file fails there, hours in, with every downloaded byte already on
-    // disk and the update still reported as failed. Writing into `Data/data`
-    // and the flavour directory proves nothing about the root: those are
-    // separate directories with their own permissions, and an install carried
-    // over from another tool or another user is exactly where they differ.
+    // Before a byte is fetched: the run ends by writing `.build.info` into
+    // the install root, and a root that refuses it would fail hours in. Its
+    // permissions can differ from `Data/data`'s (an install from another tool).
     match crate::paths::ensure_writable(dest) {
         Ok(crate::paths::Repaired::Yes) => on_event(Event::Repaired { dir: dest.to_path_buf() }),
         Ok(crate::paths::Repaired::No) => {}
@@ -41,8 +37,7 @@ pub async fn execute(
     }
 
     let mut writer = StoreWriter::create(dest.join("Data").join("data"))?;
-    // The reader always carries a key service; the downloader must too, or
-    // blte cannot even name a missing key properly.
+    // As the reader does, or blte cannot name a missing key.
     let keys = download::default_key_service();
     let source = Source { http, client: &client, keys: Some(&keys) };
     let downloader = Downloader::new(DownloadOptions {
@@ -76,13 +71,8 @@ pub async fn execute(
         }
         install_failed = report.failed.clone();
 
-        // Agent writes this and the install manifest does not list it; without
-        // it the client cannot tell which product it is.
-        //
-        // Only on a complete extraction, though: a `.flavor.info` sitting in a
-        // directory with no game in it claims a product that is not installed.
-        // A cancelled run used to leave exactly that behind, and Battle.net
-        // scanning the install then sees a flavor it cannot account for.
+        // Only on a complete extraction: a `.flavor.info` beside no game
+        // claims a product that is not installed.
         if install_complete {
             let flavor_dir = dest.join(&options.flavor);
             download::write_flavor_info(&flavor_dir, code).map_err(io(&flavor_dir))?;
@@ -121,9 +111,8 @@ pub async fn execute(
 
     let version = if complete {
         let info_path = dest.join(".build.info");
-        // Only a missing file starts fresh. One that is there but will not
-        // parse holds the other products' rows, and replacing it would drop
-        // them from every launcher that reads it.
+        // Only a missing file starts fresh: one that will not parse still
+        // holds other products' rows.
         let mut info = match BuildInfo::load(&info_path) {
             Ok(info) => info,
             Err(_) if !info_path.exists() => BuildInfo::with_default_schema(),
@@ -150,9 +139,8 @@ pub async fn execute(
             version: remote.versions_name.clone(),
         });
 
-        // Battle.net will not adopt an install without `.product.db`: its
-        // Locate flow reads the file and answers error 2800 when it is absent.
-        // Written from `.build.info`, so the two can never disagree.
+        // Without `.product.db` Locate answers error 2800. From `.build.info`,
+        // so the two agree.
         if let Some(windows_path) = &options.windows_path {
             let record = crate::tact::productdb::ProductInstall::from_build_info(
                 &info,
@@ -163,13 +151,8 @@ pub async fn execute(
             let path = crate::tact::productdb::upsert(dest, std::slice::from_ref(&record))?;
             on_event(Event::ProductDb { path });
 
-            // And into Agent's own registry, which is the list the client
-            // builds its library from. Without this the tile reads `Install`
-            // until the user asks Battle.net to locate the game, it adopts
-            // fine, but only after a scan nobody should have to trigger.
-            //
-            // Skipped silently when there is no registry to merge into, or
-            // when it cannot be read back: see `productdb::register`.
+            // And into Agent's registry, or the tile reads Install until a
+            // Locate. Skipped without a readable registry (`productdb::register`).
             if let Some(agent_dir) = &options.agent_dir {
                 if crate::tact::productdb::register(agent_dir, std::slice::from_ref(&record))? {
                     on_event(Event::Registered { code: code.as_str().to_owned() });
@@ -245,8 +228,7 @@ pub async fn run(
 /// How often a running transfer writes a progress line.
 const HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Rate-limits the progress line, so a multi-hour download leaves a few
-/// hundred lines of "still going, this far" and not one per file.
+/// Rate-limits the progress line: a few hundred lines per download, not one per file.
 struct Heartbeat {
     last: std::time::Instant,
     bytes: u64,
@@ -289,9 +271,8 @@ fn log_event(event: &Event, heartbeat: &mut Heartbeat) {
     }
 }
 
-/// Write what a run could not fetch. The first few are named with their
-/// cause, the rest only counted: a dead mirror fails thousands of files for
-/// the same reason, and the reason is what matters.
+/// Write what a run could not fetch: the first few with their cause, the rest
+/// counted (a dead mirror fails thousands for one reason).
 fn log_failures(failed: &[download::Failure]) {
     const NAMED: usize = 20;
     for failure in failed.iter().take(NAMED) {

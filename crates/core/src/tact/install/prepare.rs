@@ -19,20 +19,14 @@ use crate::tact::storage::{EKey, Storage};
 use crate::tact::version;
 
 /// Everything resolved before a byte is fetched: what the build is, what is
-/// wanted, and where each key lives.
-///
-/// Split out so a caller can show a plan (a dry run) without committing to the
-/// download, and so the GUI can present sizes before asking the user.
+/// wanted, and where each key lives. Enough for a dry run or a size.
 pub struct Prepared {
     pub plan: Plan,
-    /// Optional content this build offers, opted in or not, what a UI can
-    /// offer the user. Only knowable once the manifest has been read.
+    /// Optional content this build offers, opted in or not.
     pub optional: Vec<String>,
-    /// The build's download manifest, kept so a report can attribute the
-    /// selection back to the tags that produced it.
+    /// The build's download manifest, for attributing the selection to tags.
     pub download: DownloadManifest,
-    /// Every file this build wants for the selected tags, before the store is
-    /// consulted, the input the plan is a subtraction from.
+    /// Every file wanted for the selected tags, before the store is consulted.
     pub wanted: Vec<DownloadEntry>,
     /// The probe that decided what the store already holds.
     pub probe: StoreProbe,
@@ -47,20 +41,12 @@ pub struct Prepared {
     pub tag_column: String,
 }
 
-/// The planner's "does the store already hold this?" test.
-///
-/// Named rather than a closure because it is the one piece of the plan that
-/// can be wrong without anything looking wrong: every key it wrongly answers
-/// `false` for becomes a file the plan re-fetches. [`crate::tact::explain`]
-/// exists to cross-examine it, which means it has to be something a caller can
-/// hold on to.
-///
-/// The set is built once from the store's indices and matched on the 9-byte
-/// truncated key the indices store, so a lookup costs no I/O.
+/// The planner's "does the store already hold this?" test, on 9-byte index
+/// keys loaded once. A type, not a closure, so [`crate::tact::explain`] can
+/// cross-examine it: a wrong `false` only shows as a re-fetch.
 pub struct StoreProbe {
     present: HashSet<EKey>,
-    /// False when the store could not be opened at all, which is a fresh
-    /// install: every key is absent, and legitimately so.
+    /// False when the store could not be opened: a fresh install.
     opened: bool,
 }
 
@@ -88,9 +74,7 @@ impl StoreProbe {
         self.present.contains(&probe)
     }
 
-    /// Whether the store opened. A plan that fetches everything because the
-    /// store would not open is a very different fact from one that fetches
-    /// everything because the store is empty.
+    /// Whether the store opened, as opposed to being empty.
     pub fn opened(&self) -> bool {
         self.opened
     }
@@ -110,25 +94,19 @@ pub struct Offerings {
     pub remote: version::Version,
     /// Optional content this build offers, by tag name.
     pub optional: Vec<String>,
-    /// Files and encoded bytes the current tag selection wants, so a caller
-    /// can say how big this product is without fetching a plan.
+    /// Files and encoded bytes the current tag selection wants.
     pub wanted_files: usize,
     pub wanted_bytes: u64,
     /// Encoded bytes to fetch for the game with no optional content at all:
     /// all of it without a store, only what the store lacks with one.
     pub base_bytes: u64,
     /// What each optional download adds on top of [`Offerings::base_bytes`],
-    /// counted the same way, in the order of [`Offerings::optional`], so an
-    /// install dialog can price a switch before it is flipped.
+    /// in the order of [`Offerings::optional`].
     pub optional_bytes: Vec<(String, u64)>,
 }
 
-/// Resolve a build and read its download manifest. Nothing else.
-///
-/// Much cheaper than [`prepare`] (no encoding or install manifest, none of the
-/// ~1400 archive indices), and the only way to know which optional content a
-/// build offers before downloading. With a `store`, sizes leave out what it
-/// already holds, by the same test a real plan applies.
+/// Resolve a build and read its download manifest, nothing else: much cheaper
+/// than [`prepare`]. With a `store`, sizes leave out what it holds.
 pub async fn offerings(
     http: &Http,
     code: &ProductCode,
@@ -199,12 +177,8 @@ pub async fn prepare(
 
     let build_text = client.fetch_config(http, &remote.build_config).await?;
     let cdn_text = client.fetch_config(http, &remote.cdn_config).await?;
-    // Into the store on the way past. These two are the only part of an
-    // install that is not inside CASC, the client needs both before it can
-    // start, and it fetches them itself when they are missing: about 1.7
-    // seconds on the first launch of a new build, for bytes we are holding
-    // right here and have already checked against their hashes. Not fatal if
-    // it fails, the client's own fetch is the fallback and always was.
+    // Into the store on the way past: otherwise the client fetches them on
+    // first launch (about 1.7 s). Not fatal; that fetch is the fallback.
     let data_dir = dest.join("Data");
     for (hash, text) in
         [(&remote.build_config, &build_text), (&remote.cdn_config, &cdn_text)]
@@ -221,8 +195,7 @@ pub async fn prepare(
         archives: cdn_config.archives.len(),
     });
 
-    // Manifests are the loose kind: one plain GET, decoded and checked against
-    // the content key the build config names them by.
+    // Manifests are loose: one GET, checked against their content key.
     let fetch_manifest = |pair: Option<KeyPair>, what: &'static str| {
         let client = &client;
         async move {
@@ -298,8 +271,7 @@ pub async fn prepare(
         if !cache.is_cached(archive, None) {
             continue;
         }
-        // One archive that could not be fetched intact costs its own files,
-        // which then show up as unlocatable, not the whole download.
+        // A failed index costs its own files (unlocatable), not the download.
         match cache.load_archive(archive) {
             Ok(index) => {
                 locations.absorb(&index, &wanted_keys);
@@ -309,8 +281,7 @@ pub async fn prepare(
     }
     on_event(Event::Located { located: locations.len(), wanted: wanted.len() });
 
-    // Skip whatever the store already holds. This is what makes an
-    // interrupted download resume instead of starting over.
+    // Skip what the store holds: this is resume.
     let probe = StoreProbe::open(dest);
     let have = |ekey: &EKey| probe.has(ekey);
 

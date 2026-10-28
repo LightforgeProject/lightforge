@@ -1,24 +1,13 @@
 //! Why a plan is the size it is.
 //!
-//! A plan's headline numbers, wanted, already present, still to fetch, say
-//! *how much* without saying *what*, and when the answer looks wrong there is
-//! nothing to argue with. This breaks the same numbers down four ways, each
-//! chosen to separate one wrong explanation from another:
+//! A plan's numbers broken down four ways, each separating one wrong
+//! explanation from another. Read-only.
 //!
-//! * **by priority**, because the download manifest's priority is what
-//!   separates the files a client needs to start from the ones it can live
-//!   without, a shortfall concentrated in the high numbers is optional
-//!   content nobody fetched, not a broken install;
-//! * **by bucket**, because the store is 16 hash-keyed indices and a single
-//!   unreadable one would hide about a sixteenth of the store uniformly;
-//! * **by where the missing keys can be fetched from**, which separates "not
-//!   in the store" from "in no archive index either", a broken plan;
-//! * **against [`Storage::contains`]**, which is the cross-check: the planner
-//!   probes a set of truncated keys it built once, and this asks the store
-//!   itself about every key that probe called missing. A disagreement means
-//!   the probe is wrong and the files were there all along.
-//!
-//! Read-only. Nothing here writes to the store.
+//! * **by priority**: a shortfall in the high numbers is optional content;
+//! * **by bucket**: one unreadable index hides a sixteenth of the store;
+//! * **by where missing keys can come from**: in no index at all is a broken plan;
+//! * **against [`Storage::contains`]**: the store disagreeing with the
+//!   planner's probe means the files were there all along.
 
 use std::collections::BTreeMap;
 
@@ -68,15 +57,14 @@ pub struct Explanation {
     pub missing: Tally,
     /// Keyed by the download manifest's priority; lower is fetched sooner.
     pub by_priority: BTreeMap<i8, Split>,
-    /// Missing keys per store bucket, 0-15. Flat is healthy; one bucket
-    /// carrying all of them is an index that did not load.
+    /// Missing keys per store bucket, 0-15. One bucket carrying them all is
+    /// an index that did not load.
     pub missing_by_bucket: BTreeMap<u8, u64>,
     /// Entries the store's own indices list, per bucket, for comparison.
     pub store_by_bucket: BTreeMap<u8, u64>,
     pub sources: Sources,
-    /// Keys the planner called missing that [`Storage::contains`] finds
-    /// anyway. Always zero unless the planner's probe is broken, which is
-    /// exactly the thing worth knowing.
+    /// Keys the planner called missing that [`Storage::contains`] finds:
+    /// non-zero means the probe is broken.
     pub false_missing: u64,
     /// A few of those, for a report that has to name names.
     pub examples: Vec<EKey>,
@@ -87,9 +75,7 @@ const EXAMPLES: usize = 8;
 
 /// Break `wanted` down against the store that would satisfy it.
 ///
-/// `already_have` is the planner's own probe, passed in rather than
-/// reimplemented: the point is to reproduce its answer exactly and then
-/// contradict it with the store where the two disagree.
+/// `already_have` is the planner's own probe, so its answer is reproduced exactly.
 pub fn explain(
     wanted: &[DownloadEntry],
     store: Option<&Storage>,
@@ -152,26 +138,16 @@ pub struct TagRow {
     /// Whether this tag now excludes the entries it covers: optional content
     /// the expression is silent about and nobody opted in to.
     pub gated: bool,
-    /// What this tag covers in the manifest at all, selection aside.
-    ///
-    /// The only number that is still meaningful when nothing is selected,
-    /// and the one that says whether a name means anything here: a manifest
-    /// that tags no entry `enUS` and one that tags every entry `enUS` look
-    /// identical in [`TagRow::selected`] when the plan comes out empty.
+    /// What this tag covers in the manifest, selection aside: still telling
+    /// when the plan comes out empty.
     pub covered: Tally,
     pub selected: Tally,
     pub missing: Tally,
 }
 
-/// Which tag categories the selection actually constrains.
-///
-/// The blind spot this exists to close: [`TagSet`] drops names the manifest
-/// does not define, and the selection rule only requires the tags that are
-/// left. A category the expression says *nothing* about is therefore not
-/// narrowed at all: every value of it passes, and nothing in the plan's
-/// numbers shows that happening. A build that introduces a new category is
-/// exactly the case where a launcher quietly starts wanting several times
-/// what it should.
+/// Which tag categories the selection actually constrains. A category the
+/// expression never names shows nowhere in the plan's numbers, so it is
+/// listed here.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TagReport {
     pub rows: Vec<TagRow>,
@@ -211,8 +187,7 @@ pub fn by_tag(
         }
     }
 
-    // Walked by index, because a tag's mask addresses manifest positions,
-    // the selected list has been sorted by then and cannot be indexed back.
+    // By index: a tag's mask addresses manifest positions.
     let selected = manifest.selected_indices(tags);
     for index in selected {
         let entry = &manifest.entries()[index];
@@ -299,9 +274,7 @@ mod tests {
 
     #[test]
     fn priorities_separate_what_a_client_needs_from_what_it_does_not() {
-        // The distinction the whole report exists to make: a shortfall that
-        // sits entirely in one priority is a different bug from one spread
-        // across all of them.
+        // A shortfall in one priority is a different bug from one spread out.
         let wanted = want(&[(1, 0, 100), (2, 2, 900), (3, 2, 900)]);
         let have = |k: &EKey| *k == key(1);
         let e = explain(&wanted, None, &Locations::default(), &no_loose(), have);
@@ -342,8 +315,7 @@ mod tests {
 
     #[test]
     fn with_no_store_nothing_is_reported_as_falsely_missing() {
-        // Without a store there is nothing to contradict the probe with, so
-        // the cross-check must stay silent rather than accusing it.
+        // Without a store the cross-check stays silent.
         let wanted = want(&[(1, 0, 100)]);
         let e = explain(
             &wanted,

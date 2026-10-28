@@ -1,22 +1,12 @@
 //! Driving a whole install: version service -> plan -> download -> store.
 //!
-//! This is the orchestration both front-ends need, so it lives here rather than
-//! in either of them. It reports through an [`Event`] callback instead of
-//! printing: the CLI turns events into lines, and the GUI turns them into
-//! messages, without either owning the sequence.
-//!
-//! The ordering is not arbitrary and is the part worth preserving:
+//! Shared by both front ends, reporting through [`Event`]s. The order matters:
 //!
 //! 1. Archive indices are cached first. Nothing can be *located* without them.
-//! 2. Whatever the store already holds is subtracted from the plan, which is
-//!    what makes an interrupted download resume rather than start over.
-//! 3. `.build.info` is written **last, and only on a genuinely complete run**.
-//!    [`crate::state::Local`] treats its presence as proof that a download
-//!    finished, so writing it after a partial run would offer PLAY on a broken
-//!    game. Every way a run can fall short is accounted for in
-//!    [`Summary::complete`], failures, cancellation, unlocatable keys, an
-//!    incomplete install-file extraction, and the limit options, which
-//!    truncate the plan deliberately.
+//! 2. What the store already holds is subtracted, so a download resumes.
+//! 3. `.build.info` is written **last, and only on a complete run**:
+//!    [`crate::state::Local`] reads it as proof, and a partial run would offer
+//!    PLAY on a broken game. See [`Summary::complete`].
 
 mod execute;
 mod locale;
@@ -38,27 +28,20 @@ use crate::tact::writer::Summary as StoreSummary;
 #[cfg(test)]
 use locale::*;
 
-/// How a run is tuned. The limits exist for development slices and must never
-/// be set by a real install, each of them makes the result deliberately
-/// partial, which is why [`Summary::complete`] refuses `.build.info` when any
-/// is in play.
+/// How a run is tuned. The limits are for development: any of them makes the
+/// run partial, and [`Summary::complete`] then refuses `.build.info`.
 #[derive(Debug, Clone)]
 pub struct Options {
     pub region: Region,
     /// Client locale, e.g. `enUS`. Selects which of a build's files are wanted.
     pub locale: String,
-    /// Optional content to opt in to, by tag name, e.g. `HighRes`.
-    ///
-    /// Empty matches Battle.net, which installs optional content only when
-    /// asked. See [`crate::tact::manifest::TagSet::with_optional`].
+    /// Optional content to opt in to, by tag name, e.g. `HighRes`. See
+    /// [`crate::tact::manifest::TagSet::with_optional`].
     pub optional_tags: Vec<String>,
     /// Flavor directory the install files are extracted into, e.g. `_retail_`.
     pub flavor: String,
     pub concurrency: usize,
     /// Cap on download speed in bytes per second; `0` is no cap.
-    ///
-    /// Bytes rather than a friendlier unit because this is the layer that
-    /// spends them, the UI converts from whatever it shows the user.
     pub limit_bytes_per_second: u64,
     /// Ranges this far apart are merged into one request.
     pub gap_bytes: u32,
@@ -73,15 +56,11 @@ pub struct Options {
     /// Skip the loose (unarchived) files, development only.
     pub skip_loose: bool,
     /// The install's path as Windows sees it, e.g.
-    /// `C:/Program Files (x86)/World of Warcraft`. `None` skips writing
-    /// `.product.db`, which only matters for Battle.net adoption.
+    /// `C:/Program Files (x86)/World of Warcraft`. `None` skips `.product.db`.
     pub windows_path: Option<String>,
-    /// Agent's own directory, whose `product.db` decides whether Battle.net
-    /// shows `Play` or `Install` for a product Lightforge downloaded.
-    ///
-    /// `None` skips the registration. There is nothing to merge into on a
-    /// machine with no Battle.net, and a CLI run against a bare directory has
-    /// no prefix to speak of.
+    /// Agent's directory, whose `product.db` decides whether Battle.net shows
+    /// Play or Install. `None` skips registering (no Battle.net, or a CLI run
+    /// against a bare directory).
     pub agent_dir: Option<PathBuf>,
     /// Account and GeoIP country, as Agent would record them. Empty is fine.
     pub account_country: String,
@@ -159,9 +138,8 @@ pub enum Event {
         downloaded: usize,
         bytes: u64,
     },
-    /// The install root refused a file and its owner-write bit was added so
-    /// the run could proceed. Reported because it is a change to a directory
-    /// the user owns, made without being asked.
+    /// The install root refused a file and its owner-write bit was added:
+    /// a change to the user's directory, so it is reported.
     Repaired {
         dir: PathBuf,
     },
@@ -184,8 +162,7 @@ pub enum Event {
         already_present: usize,
         missing: usize,
     },
-    /// Transfer progress. Called once per stored file, so a UI consumer must
-    /// coalesce rather than redraw on each one.
+    /// Transfer progress, once per stored file: coalesce before redrawing.
     Progress(Progress),
     InstallFile {
         path: PathBuf,
@@ -271,10 +248,8 @@ pub enum InstallError {
     #[error("the build config has no {0} manifest")]
     MissingManifest(&'static str),
 
-    /// The content is downloaded and extracted and only the bookkeeping is
-    /// left. Its own variant because "i/o error at <the install root>" says
-    /// nothing about which of the half-dozen things that touch that directory
-    /// was being written, and this is the one the user has waited longest for.
+    /// Downloaded and extracted; only the bookkeeping failed. Its own variant,
+    /// so the message says which file in the install root it was.
     #[error("{dir} will not accept new files, so this install cannot be finished")]
     Unwritable {
         dir: PathBuf,

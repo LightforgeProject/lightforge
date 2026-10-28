@@ -5,10 +5,7 @@ use crate::tact::manifest::Tag;
 /// The locales a WoW build ships, as the download manifest spells them, with
 /// something to call each one in a picker.
 ///
-/// Not every product has every one, a Classic Era build ships fewer, but the
-/// manifest decides that at plan time: a tag nothing defines selects nothing
-/// rather than failing, so offering the full list is safe and the alternative
-/// is reading a manifest before the user can pick a language.
+/// Not every build ships all of them; the plan sorts that out.
 pub const LOCALES: &[(&str, &str)] = &[
     ("enUS", "English (US)"),
     ("deDE", "Deutsch"),
@@ -23,12 +20,8 @@ pub const LOCALES: &[(&str, &str)] = &[
     ("zhTW", "繁體中文"),
 ];
 
-/// The locale to use for a saved language that is not on the list.
-///
-/// `enGB` and `ptPT` used to be offered, but no build ships data for them (the
-/// English (EU) client reads `enUS`, Portuguese reads `ptBR`), so a download in
-/// either selected nothing. A config that still says so is read as the
-/// language it meant.
+/// The locale to use for a saved language not on the list: `enGB` reads
+/// `enUS` and `ptPT` reads `ptBR`, which is what those clients load.
 pub fn current_locale(saved: &str) -> &str {
     match saved {
         "enGB" => "enUS",
@@ -48,11 +41,9 @@ pub fn locale_name(code: &str) -> &str {
 
 /// The locale whose files to fetch for a client language.
 ///
-/// A build ships a data pack per locale tag, and `enGB` (English (EU)) and
-/// `ptPT` are client languages with none: the English (EU) client reads the
-/// `enUS` files and takes its language from `Config.wtf`. Asking the manifest
-/// for a tag it does not define selects *nothing*, so the download "finished"
-/// with zero files and no error, which is how it looked like a hang.
+/// `enGB` and `ptPT` have no data pack: the English (EU) client reads `enUS`
+/// and takes its language from `Config.wtf`. A tag the manifest lacks selects
+/// nothing, and the download "finished" with zero files.
 pub(super) fn shipped_locale(wanted: &str, tags: &[Tag]) -> String {
     let ships = |name: &str| tags.iter().any(|t| t.kind == LOCALE_TAG && t.name == name);
     // A product with no locale tags at all has no packs to choose between.
