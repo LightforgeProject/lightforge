@@ -177,13 +177,12 @@ pub(crate) fn reindex(ctx: Ctx, path: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn move_game(ctx: Ctx, product: String, to: String, yes: bool) -> Result<()> {
+pub(crate) async fn move_game(ctx: Ctx, code: ProductCode, to: String, yes: bool) -> Result<()> {
     use lightforge_core::migrate::{self, Moved};
     use lightforge_core::net::Http;
     use lightforge_core::tact::download::Cancel;
 
     let Ctx { layout, mut config } = ctx;
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let target = config
         .libraries
         .iter()
@@ -227,11 +226,10 @@ pub(crate) async fn move_game(ctx: Ctx, product: String, to: String, yes: bool) 
     Ok(())
 }
 
-pub(crate) fn uninstall(ctx: Ctx, product: String, path: Option<PathBuf>, yes: bool) -> Result<()> {
+pub(crate) fn uninstall(ctx: Ctx, code: ProductCode, path: Option<PathBuf>, yes: bool) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::tact::uninstall;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let install = path.unwrap_or_else(|| layout.wow_install(&code));
     let plan = uninstall::plan(&install, &code)?;
 
@@ -285,14 +283,13 @@ pub(crate) fn uninstall(ctx: Ctx, product: String, path: Option<PathBuf>, yes: b
     Ok(())
 }
 
-pub(crate) async fn reclaim(ctx: Ctx, product: String, build_key: Option<String>, region: String, path: Option<PathBuf>, yes: bool) -> Result<()> {
+pub(crate) async fn reclaim(ctx: Ctx, code: ProductCode, build_key: Option<String>, region: String, path: Option<PathBuf>, yes: bool) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::buildinfo::BuildInfo;
     use lightforge_core::net::Http;
     use lightforge_core::tact::version::{self, Region};
     use lightforge_core::tact::reclaim;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let install = path.unwrap_or_else(|| layout.wow_install(&code));
     let http = Http::new()?;
     let departing = match build_key {
@@ -376,7 +373,7 @@ pub(crate) async fn prune(ctx: Ctx, path: Option<PathBuf>, yes: bool) -> Result<
 
 pub(crate) async fn drop_optional(
     ctx: Ctx,
-    product: String,
+    product: ProductCode,
     tag: String,
     keep: Vec<String>,
     path: Option<PathBuf>,
@@ -387,7 +384,6 @@ pub(crate) async fn drop_optional(
     use lightforge_core::tact::reclaim;
 
     let install = path.unwrap_or_else(|| default_install(&layout));
-    let product: lightforge_core::product::ProductCode = product.parse()?;
     let gib = |b: u64| b as f64 / 1024f64.powi(3);
     let http = Http::new()?;
     let plan = reclaim::plan_optional(&http, &install, &product, &tag, &keep).await?;

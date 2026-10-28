@@ -3,12 +3,10 @@
 use super::{managed_products, print_preflight, proton_runner};
 use crate::*;
 
-pub(crate) fn play(ctx: Ctx, product: String, proton: Option<String>, dry_run: bool) -> Result<()> {
+pub(crate) fn play(ctx: Ctx, code: ProductCode, proton: Option<String>, dry_run: bool) -> Result<()> {
     let Ctx { layout, config } = ctx;
     use lightforge_core::config::Config;
     use lightforge_core::preflight::{NoDownloads, Preflight};
-
-    let code: ProductCode = product.parse().expect("product codes are infallible");
 
     // Through the `C:` symlink. The GUI launches the native path instead,
     // which the in-game shop needs (see `Layout::wow_drive`).
@@ -75,12 +73,9 @@ pub(crate) fn play(ctx: Ctx, product: String, proton: Option<String>, dry_run: b
     Ok(())
 }
 
-pub(crate) fn preflight(ctx: Ctx, proton: Option<String>, product: Option<String>, dry_run: bool, grace: u64) -> Result<()> {
+pub(crate) fn preflight(ctx: Ctx, proton: Option<String>, code: Option<ProductCode>, dry_run: bool, grace: u64) -> Result<()> {
     let Ctx { layout, config } = ctx;
     use lightforge_core::preflight::{self, NoDownloads, Preflight};
-
-    let code: Option<ProductCode> =
-        product.map(|p| p.parse().expect("product codes are infallible"));
 
     if dry_run {
         let found = preflight::scan(&layout);

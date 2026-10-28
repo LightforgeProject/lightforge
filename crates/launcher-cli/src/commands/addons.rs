@@ -3,14 +3,13 @@
 use super::truncate;
 use crate::*;
 
-pub(crate) async fn addon_adopt(ctx: Ctx, product: String, path: Option<PathBuf>, ledger: Option<PathBuf>, catalog: Option<String>) -> Result<()> {
+pub(crate) async fn addon_adopt(ctx: Ctx, code: ProductCode, path: Option<PathBuf>, ledger: Option<PathBuf>, catalog: Option<String>) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::addons::catalog::Catalog;
     use lightforge_core::addons::manage;
     use lightforge_core::addons::{self};
     use lightforge_core::net::Http;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let dir = path.unwrap_or_else(|| layout.addons_dir(&code));
     let options = manage::Options {
@@ -47,7 +46,7 @@ pub(crate) async fn addon_adopt(ctx: Ctx, product: String, path: Option<PathBuf>
     Ok(())
 }
 
-pub(crate) async fn addon_fingerprints(ctx: Ctx, product: String, path: Option<PathBuf>, catalog: Option<String>) -> Result<()> {
+pub(crate) async fn addon_fingerprints(ctx: Ctx, code: ProductCode, path: Option<PathBuf>, catalog: Option<String>) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::addons::catalog::Catalog;
     use lightforge_core::addons::install::Ledger;
@@ -55,7 +54,6 @@ pub(crate) async fn addon_fingerprints(ctx: Ctx, product: String, path: Option<P
     use lightforge_core::addons::{self, fingerprint};
     use lightforge_core::net::Http;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let dir = path.unwrap_or_else(|| layout.addons_dir(&code));
     let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &dir, &code))
@@ -117,11 +115,10 @@ pub(crate) async fn addon_fingerprints(ctx: Ctx, product: String, path: Option<P
     Ok(())
 }
 
-pub(crate) fn addons(ctx: Ctx, product: String, path: Option<PathBuf>, token: Option<String>) -> Result<()> {
+pub(crate) fn addons(ctx: Ctx, code: ProductCode, path: Option<PathBuf>, token: Option<String>) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::addons;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dir = path.unwrap_or_else(|| layout.addons_dir(&code));
     let version = BuildInfo::load(layout.build_info(&code))
         .ok()
@@ -187,11 +184,10 @@ pub(crate) fn addons(ctx: Ctx, product: String, path: Option<PathBuf>, token: Op
     Ok(())
 }
 
-pub(crate) async fn addon_search(query: String, product: String, limit: usize, catalog: Option<String>) -> Result<()> {
+pub(crate) async fn addon_search(query: String, code: ProductCode, limit: usize, catalog: Option<String>) -> Result<()> {
     use lightforge_core::addons::{self, browse, catalog::Catalog};
     use lightforge_core::net::Http;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let catalog = addon_origin(catalog.as_deref(), &dirs).map(Catalog::new);
     let http = Http::new()?;
@@ -226,12 +222,11 @@ pub(crate) async fn addon_search(query: String, product: String, limit: usize, c
     Ok(())
 }
 
-pub(crate) async fn addon_install(ctx: Ctx, id: String, provider: String, product: String, catalog: Option<String>) -> Result<()> {
+pub(crate) async fn addon_install(ctx: Ctx, id: String, provider: String, code: ProductCode, catalog: Option<String>) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::addons::{self, catalog::Catalog, catalog::Request, manage};
     use lightforge_core::net::Http;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let catalog = addon_origin(catalog.as_deref(), &dirs).map(Catalog::new);
     let options = manage::Options {
@@ -260,12 +255,11 @@ pub(crate) async fn addon_install(ctx: Ctx, id: String, provider: String, produc
     Ok(())
 }
 
-pub(crate) async fn addon_import(ctx: Ctx, token: String, product: String, catalog: Option<String>, pinned: bool, dry_run: bool) -> Result<()> {
+pub(crate) async fn addon_import(ctx: Ctx, token: String, code: ProductCode, catalog: Option<String>, pinned: bool, dry_run: bool) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::addons::{self, catalog::Catalog, manage};
     use lightforge_core::net::Http;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let collection = addons::Collection::parse(&read_token(&token)?)?;
 
@@ -337,12 +331,11 @@ pub(crate) async fn addon_import(ctx: Ctx, token: String, product: String, catal
     Ok(())
 }
 
-pub(crate) async fn addon_update(ctx: Ctx, product: String, catalog: Option<String>) -> Result<()> {
+pub(crate) async fn addon_update(ctx: Ctx, code: ProductCode, catalog: Option<String>) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::addons::{self, catalog::Catalog, manage};
     use lightforge_core::net::Http;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let catalog = addon_origin(catalog.as_deref(), &dirs).map(Catalog::new);
     let options = manage::Options {
@@ -364,9 +357,8 @@ pub(crate) async fn addon_update(ctx: Ctx, product: String, catalog: Option<Stri
     Ok(())
 }
 
-pub(crate) fn backup_list(ctx: Ctx, product: String) -> Result<()> {
+pub(crate) fn backup_list(ctx: Ctx, code: ProductCode) -> Result<()> {
     let Ctx { layout, .. } = ctx;
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let plan = settings_backup(&layout, &dirs, &code);
     let backups = plan.list().context("reading backups")?;
@@ -390,9 +382,8 @@ pub(crate) fn backup_list(ctx: Ctx, product: String) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn backup_create(ctx: Ctx, product: String) -> Result<()> {
+pub(crate) fn backup_create(ctx: Ctx, code: ProductCode) -> Result<()> {
     let Ctx { layout, .. } = ctx;
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let plan = settings_backup(&layout, &dirs, &code);
     match plan.create(backup::Reason::Manual).context("backing up")? {
@@ -403,9 +394,8 @@ pub(crate) fn backup_create(ctx: Ctx, product: String) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn backup_restore(ctx: Ctx, which: String, product: String, account: Option<String>) -> Result<()> {
+pub(crate) fn backup_restore(ctx: Ctx, which: String, code: ProductCode, account: Option<String>) -> Result<()> {
     let Ctx { layout, .. } = ctx;
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let running = lightforge_core::preflight::games_running(&layout);
     if !running.is_empty() {
@@ -432,11 +422,10 @@ pub(crate) fn backup_restore(ctx: Ctx, which: String, product: String, account: 
     Ok(())
 }
 
-pub(crate) fn addon_remove(ctx: Ctx, id: String, provider: String, product: String) -> Result<()> {
+pub(crate) fn addon_remove(ctx: Ctx, id: String, provider: String, code: ProductCode) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::addons::{self, manage};
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let options = manage::Options {
         flavor: addons::flavor_of(&code).to_owned(),

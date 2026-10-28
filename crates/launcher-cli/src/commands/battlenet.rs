@@ -112,7 +112,7 @@ pub(crate) fn battlenet_config(ctx: Ctx) -> Result<()> {
 
 // One parameter per command-line flag.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<String>, exec: Option<String>, uri: Option<String>, install_game: Option<String>, skip_preflight: bool) -> Result<()> {
+pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<ProductCode>, exec: Option<String>, uri: Option<String>, install_game: Option<String>, skip_preflight: bool) -> Result<()> {
     let Ctx { layout, config } = ctx;
     use lightforge_core::battlenet::{self, Launch};
     use lightforge_core::config::Config;
@@ -124,7 +124,7 @@ pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<St
         },
         (_, Some(family)) => Launch::Uri(battlenet::game_uri(family)),
         (Some(code), None) => Launch::Product {
-            code: code.parse().expect("product codes are infallible"),
+            code: code.clone(),
             exec: exec.clone(),
         },
         (None, None) => Launch::Client,
@@ -198,7 +198,7 @@ pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<St
     Ok(())
 }
 
-pub(crate) fn product_db(ctx: Ctx, path: Option<PathBuf>, products: Vec<String>, account_country: String, geo_country: String, agent_tags: bool, dry_run: bool) -> Result<()> {
+pub(crate) fn product_db(ctx: Ctx, path: Option<PathBuf>, products: Vec<ProductCode>, account_country: String, geo_country: String, agent_tags: bool, dry_run: bool) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::tact::productdb::{self, ProductInstall};
 
@@ -209,10 +209,7 @@ pub(crate) fn product_db(ctx: Ctx, path: Option<PathBuf>, products: Vec<String>,
     // Every product with a row, unless told otherwise: Agent refuses a
     // record for a product that is not there.
     let codes: Vec<ProductCode> = match products.is_empty() {
-        false => products
-            .iter()
-            .map(|p| p.parse().expect("product codes are infallible"))
-            .collect(),
+        false => products,
         true => info.products().collect(),
     };
 

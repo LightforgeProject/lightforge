@@ -95,11 +95,10 @@ pub(crate) async fn products(region: String, codes: Vec<String>, all: bool, conc
     Ok(())
 }
 
-pub(crate) async fn assets(product: String, source: Option<String>) -> Result<()> {
+pub(crate) async fn assets(code: ProductCode, source: Option<String>) -> Result<()> {
     use lightforge_core::assets::{Origin, Pipeline, Store};
     use lightforge_core::net::Http;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let config = Config::load_or_default(&dirs.config_file())
         .with_context(|| format!("reading {}", dirs.config_file().display()))?;
@@ -171,13 +170,12 @@ pub(crate) async fn assets(product: String, source: Option<String>) -> Result<()
     Ok(())
 }
 
-pub(crate) async fn status(ctx: Ctx, product: String, region: String, offline: bool) -> Result<()> {
+pub(crate) async fn status(ctx: Ctx, code: ProductCode, region: String, offline: bool) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::net::Http;
     use lightforge_core::state::{decide, Local};
     use lightforge_core::tact::version::{self, Region};
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let region: Region = region.parse().context("parsing --region")?;
 
     let local = Local::inspect(&layout, &code);
@@ -217,12 +215,11 @@ pub(crate) async fn status(ctx: Ctx, product: String, region: String, offline: b
     Ok(())
 }
 
-pub(crate) async fn update_check(ctx: Ctx, path: Option<PathBuf>, product: String, region: String) -> Result<()> {
+pub(crate) async fn update_check(ctx: Ctx, path: Option<PathBuf>, code: ProductCode, region: String) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::net::Http;
     use lightforge_core::tact::version::{self, Region, Status};
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let region: Region = region.parse().context("parsing --region")?;
     let install = path.unwrap_or_else(|| layout.wow_install(&code));
 

@@ -4,14 +4,13 @@ use crate::*;
 
 // One parameter per command-line flag.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn download(dest: PathBuf, product: String, region: String, locale: String, flavor: String, dry_run: bool, optional: Vec<String>, limit_archives: Option<usize>, limit_runs: Option<usize>, skip_loose: bool, install_files: bool, stage: bool, concurrency: usize, gap_kib: u32, checkpoint_mib: u64, cancel_after: Option<u64>, show_install: bool) -> Result<()> {
+pub(crate) async fn download(dest: PathBuf, code: ProductCode, region: String, locale: String, flavor: String, dry_run: bool, optional: Vec<String>, limit_archives: Option<usize>, limit_runs: Option<usize>, skip_loose: bool, install_files: bool, stage: bool, concurrency: usize, gap_kib: u32, checkpoint_mib: u64, cancel_after: Option<u64>, show_install: bool) -> Result<()> {
     use lightforge_core::net::Http;
     use lightforge_core::tact::download::Cancel;
     use lightforge_core::tact::install::{self, Event, Options as InstallOptions};
     use lightforge_core::tact::version::Region;
     use std::time::Instant;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let region: Region = region.parse().context("parsing --region")?;
     let gib = |b: u64| b as f64 / 1024f64.powi(3);
 
@@ -189,7 +188,7 @@ pub(crate) async fn download(dest: PathBuf, product: String, region: String, loc
     Ok(())
 }
 
-pub(crate) async fn cdn_archive(archive: Option<String>, product: String, region: String, fetch: usize, verify_with: Option<PathBuf>) -> Result<()> {
+pub(crate) async fn cdn_archive(archive: Option<String>, code: ProductCode, region: String, fetch: usize, verify_with: Option<PathBuf>) -> Result<()> {
     use lightforge_core::net::Http;
     use lightforge_core::tact::archive::ArchiveIndex;
     use lightforge_core::tact::cdn::{Client, Kind};
@@ -197,7 +196,6 @@ pub(crate) async fn cdn_archive(archive: Option<String>, product: String, region
     use lightforge_core::text::hex;
     use lightforge_core::tact::version::{self, Region};
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let region: Region = region.parse().context("parsing --region")?;
 
     let http = Http::new()?;
@@ -281,12 +279,11 @@ pub(crate) async fn cdn_archive(archive: Option<String>, product: String, region
     Ok(())
 }
 
-pub(crate) async fn cdn_fetch(product: String, region: String, hash: Option<String>, kind: String, compare: Option<PathBuf>) -> Result<()> {
+pub(crate) async fn cdn_fetch(code: ProductCode, region: String, hash: Option<String>, kind: String, compare: Option<PathBuf>) -> Result<()> {
     use lightforge_core::net::Http;
     use lightforge_core::tact::cdn::{Client, Kind};
     use lightforge_core::tact::version::{self, Region};
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let region: Region = region.parse().context("parsing --region")?;
     let kind = match kind.as_str() {
         "config" => Kind::Config,
@@ -336,14 +333,13 @@ pub(crate) async fn cdn_fetch(product: String, region: String, hash: Option<Stri
 
 // One parameter per command-line flag.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn plan(dest: PathBuf, product: String, region: String, locale: String, flavor: String, explain: bool, optional: Vec<String>, limit_archives: Option<usize>, concurrency: usize) -> Result<()> {
+pub(crate) async fn plan(dest: PathBuf, code: ProductCode, region: String, locale: String, flavor: String, explain: bool, optional: Vec<String>, limit_archives: Option<usize>, concurrency: usize) -> Result<()> {
     use lightforge_core::net::Http;
     use lightforge_core::tact::explain as tact_explain;
     use lightforge_core::tact::storage::Storage;
     use lightforge_core::tact::install::{self, Event, Options as InstallOptions};
     use lightforge_core::tact::version::Region;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let region: Region = region.parse().context("parsing --region")?;
     let gib = |b: u64| b as f64 / 1024f64.powi(3);
 
