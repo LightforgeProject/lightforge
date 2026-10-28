@@ -220,7 +220,8 @@ pub(crate) fn product_db(ctx: Ctx, path: Option<PathBuf>, products: Vec<String>,
     let mut info = info;
     for code in &codes {
         let windows_path = windows_wow_path(&layout, code);
-        let mut record = ProductInstall::from_build_info(&info, code, &windows_path)?
+        let flavor = lightforge_core::paths::flavor_dir_name(&install, code);
+        let mut record = ProductInstall::from_build_info(&info, code, &flavor, &windows_path)?
             .with_countries(&account_country, &geo_country);
         if agent_tags {
             record = record.with_agent_tags();

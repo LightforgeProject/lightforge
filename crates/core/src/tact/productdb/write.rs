@@ -34,9 +34,11 @@ pub struct ProductInstall {
 
 impl ProductInstall {
     /// Build a record from what `.build.info` already says about a product.
+    /// `flavor_dir` is the folder the game is in, e.g. `_forever_`.
     pub fn from_build_info(
         info: &BuildInfo,
         code: &ProductCode,
+        flavor_dir: &str,
         install_path: impl Into<String>,
     ) -> Result<Self, ProductDbError> {
         let cell = |column: &str| {
@@ -60,7 +62,7 @@ impl ProductInstall {
             locale: locale_from_tags(&tags).unwrap_or_else(|| "enUS".to_owned()),
             account_country: String::new(),
             geo_country: String::new(),
-            flavor_dir: code.install_dir().into_owned(),
+            flavor_dir: flavor_dir.to_owned(),
             version: cell(buildinfo::COL_VERSION)?,
             build_key: cell(buildinfo::COL_BUILD_KEY)?,
             tags,

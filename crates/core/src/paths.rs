@@ -39,6 +39,18 @@ const WINDOWS_PROGRAM_FILES: &str = "Program Files (x86)";
 pub struct Layout {
     root: PathBuf,
     libraries: Libraries,
+    /// Each game's folder and binary as its product config named them,
+    /// where known ([`crate::config::Config::layout`]).
+    flavors: std::collections::HashMap<ProductCode, Flavor>,
+}
+
+/// Where one game lives inside the WoW install.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Flavor {
+    /// e.g. `_forever_`.
+    pub dir: String,
+    /// e.g. `WoW.exe`; `None` falls back to [`ProductCode::executable`].
+    pub executable: Option<String>,
 }
 
 impl Layout {
@@ -49,6 +61,7 @@ impl Layout {
         Self {
             libraries: Libraries::new(vec![Library::main_at(games, "home")]),
             root,
+            flavors: Default::default(),
         }
     }
 
@@ -62,6 +75,26 @@ impl Layout {
     pub fn with_libraries(mut self, libraries: Libraries) -> Self {
         self.libraries = libraries;
         self
+    }
+
+    /// Where `code` lives in its WoW install, overriding the derived folder.
+    pub fn with_flavor(mut self, code: ProductCode, flavor: Flavor) -> Self {
+        self.flavors.insert(code, flavor);
+        self
+    }
+
+    /// The folder `code` is known to live in, recorded or found on disk;
+    /// `None` before it is installed.
+    pub fn known_flavor(&self, code: &ProductCode) -> Option<&str> {
+        self.flavors.get(code).map(|flavor| flavor.dir.as_str())
+    }
+
+    /// The folder `code` lives in: recorded, else derived from the code.
+    pub fn flavor<'a>(&'a self, code: &'a ProductCode) -> std::borrow::Cow<'a, str> {
+        match self.flavors.get(code) {
+            Some(flavor) => std::borrow::Cow::Borrowed(flavor.dir.as_str()),
+            None => code.install_dir(),
+        }
     }
 
     /// Every library this layout knows about, and which product is in which.
@@ -255,7 +288,7 @@ impl Layout {
 
     /// A product's install directory, e.g. `.../World of Warcraft/_retail_`.
     pub fn product_dir(&self, code: &ProductCode) -> PathBuf {
-        self.wow_install(code).join(&*code.install_dir())
+        self.wow_install(code).join(&*self.flavor(code))
     }
 
     /// A product's addon directory.
@@ -270,7 +303,8 @@ impl Layout {
 
     /// The product's game binary, for `[ PLAY ]`; see [`game_executable`].
     pub fn wow_exe(&self, code: &ProductCode) -> PathBuf {
-        game_executable(&self.product_dir(code), code)
+        let name = self.flavors.get(code).and_then(|f| f.executable.as_deref()).unwrap_or(code.executable());
+        game_executable(&self.product_dir(code), name)
     }
 }
 
@@ -331,15 +365,43 @@ fn normalize(path: &Path) -> PathBuf {
     out
 }
 
+/// The folder `code` lives in under the WoW install `install`, for code
+/// without a [`Layout`]: the one whose `.flavor.info` names it (every install
+/// writes one, Battle.net's too), else the folder derived from the code.
+pub fn flavor_dir_name(install: &Path, code: &ProductCode) -> String {
+    let names = |dir: &Path| {
+        std::fs::read_to_string(dir.join(".flavor.info"))
+            .is_ok_and(|text| text.lines().nth(1).is_some_and(|line| line.trim() == code.as_str()))
+    };
+    std::fs::read_dir(install)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .find(|entry| entry.file_type().is_ok_and(|t| t.is_dir()) && names(&entry.path()))
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .unwrap_or_else(|| code.install_dir().into_owned())
+}
+
 /// The game binary inside a flavor directory, resolved by probing it.
 ///
 /// One real install holds `_retail_/Wow.exe`, `_classic_era_/WowClassic.exe`
-/// and `_classic_beta_/WowB.exe`. The expected name wins, a probe covers the
-/// rest, and with nothing found the expected name comes back for the error.
-pub fn game_executable(flavor_dir: &Path, code: &ProductCode) -> PathBuf {
-    let expected = flavor_dir.join(code.executable());
+/// and `_classic_beta_/WowB.exe`. The expected name wins, matched without
+/// case (retail's config says `WoW.exe`, the file is `Wow.exe`), a probe
+/// covers the rest, and with nothing found the expected name comes back for
+/// the error.
+pub fn game_executable(flavor_dir: &Path, name: &str) -> PathBuf {
+    let expected = flavor_dir.join(name);
     if expected.is_file() {
         return expected;
+    }
+    let same_name = std::fs::read_dir(flavor_dir).ok().and_then(|entries| {
+        entries
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.is_file() && p.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(name)))
+    });
+    if let Some(found) = same_name {
+        return found;
     }
 
     std::fs::read_dir(flavor_dir)
@@ -551,6 +613,28 @@ mod tests {
     }
 
     use super::*;
+
+    /// `_forever_/.flavor.info` as Battle.net wrote it, 2026-10-22.
+    const FOREVER_FLAVOR_INFO: &str = "Product Flavor!STRING:0\nwowf\n";
+
+    #[test]
+    fn a_game_is_found_in_whatever_folder_its_flavor_info_is_in() {
+        let install = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(install.path().join("_forever_")).unwrap();
+        std::fs::write(install.path().join("_forever_/.flavor.info"), FOREVER_FLAVOR_INFO).unwrap();
+        std::fs::create_dir_all(install.path().join("_retail_")).unwrap();
+
+        assert_eq!(flavor_dir_name(install.path(), &ProductCode::Forever), "_forever_");
+        // Nothing names retail: derived from its code.
+        assert_eq!(flavor_dir_name(install.path(), &ProductCode::Retail), "_retail_");
+    }
+
+    #[test]
+    fn the_binary_is_matched_without_case() {
+        let flavor = tempfile::tempdir().unwrap();
+        std::fs::write(flavor.path().join("Wow.exe"), b"MZ").unwrap();
+        assert_eq!(game_executable(flavor.path(), "WoW.exe"), flavor.path().join("Wow.exe"));
+    }
 
     fn layout() -> Layout {
         Layout::with_root("/games/Blizzard")

@@ -95,8 +95,7 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Probl
         // The native path, not the `C:` symlink, so Wine puts the game on its
         // own drive ([`Layout::wow_drive`]) and the shop's browser keeps its
         // GPU child. Verified 2026-10-02, a full checkout.
-        let flavor = layout.wow_install(&code).join(&*code.install_dir());
-        let exe = lightforge_core::paths::game_executable(&flavor, &code);
+        let exe = layout.wow_exe(&code);
         if !exe.is_file() {
             return Err(format!("no game at {}", exe.display()).into());
         }

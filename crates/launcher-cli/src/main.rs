@@ -124,7 +124,7 @@ async fn run() -> Result<()> {
             checkpoint_mib,
             cancel_after,
             show_install,
-        } => commands::download::download(dest, product, region, locale, flavor, dry_run, optional, limit_archives, limit_runs, skip_loose, install_files, stage, concurrency, gap_kib, checkpoint_mib, cancel_after, show_install).await,
+        } => commands::download::download(dest, product, region, locale, flavor.unwrap_or_default(), dry_run, optional, limit_archives, limit_runs, skip_loose, install_files, stage, concurrency, gap_kib, checkpoint_mib, cancel_after, show_install).await,
         Command::CdnArchive { archive, product, region, fetch, verify_with } => commands::download::cdn_archive(archive, product, region, fetch, verify_with).await,
         Command::CdnFetch { product, region, hash, kind, compare } => commands::download::cdn_fetch(product, region, hash, kind, compare).await,
         Command::Plan {
@@ -137,7 +137,7 @@ async fn run() -> Result<()> {
             optional,
             limit_archives,
             concurrency,
-        } => commands::download::plan(dest, product, region, locale, flavor, explain, optional, limit_archives, concurrency).await,
+        } => commands::download::plan(dest, product, region, locale, flavor.unwrap_or_default(), explain, optional, limit_archives, concurrency).await,
         Command::AddonAdopt { product, path, ledger, catalog } => commands::addons::addon_adopt(ctx, product, path, ledger, catalog).await,
         Command::AddonFingerprints { product, path, catalog } => commands::addons::addon_fingerprints(ctx, product, path, catalog).await,
         Command::Addons { product, path, token } => commands::addons::addons(ctx, product, path, token),

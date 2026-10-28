@@ -78,7 +78,6 @@ pub async fn offerings(
     let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
     let options = InstallOptions {
         region,
-        flavor: code.install_dir().into_owned(),
         optional_tags,
         ..InstallOptions::default()
     };

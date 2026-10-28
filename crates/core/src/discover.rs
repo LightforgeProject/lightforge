@@ -248,7 +248,7 @@ pub fn inspect(prefix: &Path, origin: Origin) -> Option<Found> {
                 products = rows;
             }
         }
-        products.retain(|code| path.join(code.install_dir().as_ref()).is_dir());
+        products.retain(|code| path.join(crate::paths::flavor_dir_name(&path, code)).is_dir());
         if products.is_empty() {
             continue;
         }
@@ -291,7 +291,7 @@ pub fn wow_install_at(path: &Path) -> Option<WowInstall> {
     let info = BuildInfo::load(path.join(".build.info")).ok()?;
     let products: Vec<ProductCode> = info
         .products()
-        .filter(|code| path.join(code.install_dir().as_ref()).is_dir())
+        .filter(|code| path.join(crate::paths::flavor_dir_name(path, code)).is_dir())
         .collect();
     if products.is_empty() {
         return None;
@@ -395,6 +395,7 @@ pub fn adopt(plan: &Plan, layout: &Layout) -> Result<Adopted, AdoptError> {
         records.push(productdb::ProductInstall::from_build_info(
             &info,
             code,
+            &crate::paths::flavor_dir_name(&install, code),
             windows_wow_path(&library),
         )?);
     }

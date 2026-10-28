@@ -12,8 +12,7 @@ pub(crate) fn play(ctx: Ctx, product: String, proton: Option<String>, dry_run: b
 
     // Through the `C:` symlink. The GUI launches the native path instead,
     // which the in-game shop needs (see `Layout::wow_drive`).
-    let flavor_dir = layout.wow_symlink().join(&*code.install_dir());
-    let exe = lightforge_core::paths::game_executable(&flavor_dir, &code);
+    let exe = layout.wow_symlink().join(layout.wow_exe(&code).strip_prefix(layout.wow_install(&code))?);
     if !exe.is_file() {
         anyhow::bail!(
             "no game at {} — is the symlink pointing at an install?",

@@ -307,7 +307,7 @@ Options:
       --locale <LOCALE>
           Locale to install, e.g. `enUS` [default: enUS]
       --flavor <FLAVOR>
-          Flavor directory the install files go in [default: _retail_]
+          Flavor directory the install files go in. Default: the one the product config names, e.g. `_forever_` for `wowf`
       --dry-run
           Plan and report, then stop without fetching any content
       --optional <OPTIONAL>

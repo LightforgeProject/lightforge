@@ -257,13 +257,15 @@ impl Lightforge {
                 tx,
             ),
             move |result| {
-                let mapped = result.map(|summary| Complete {
+                let mapped = result.map(|summary| Box::new(Complete {
                     complete: summary.complete,
                     cancelled: summary.outcome.cancelled,
                     files: summary.outcome.files_stored,
                     version: summary.version,
                     reasons: summary.reasons,
-                });
+                    flavor: summary.flavor,
+                    executable: summary.executable,
+                }));
                 Message::Downloaded(code.clone(), mapped)
             },
         )

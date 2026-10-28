@@ -12,6 +12,9 @@ pub(crate) struct Complete {
     pub(crate) version: Option<String>,
     /// Why a finished run is not complete, see `Summary::reasons`.
     pub(crate) reasons: Vec<String>,
+    /// Where the game went and its binary, see `Summary::flavor`.
+    pub(crate) flavor: String,
+    pub(crate) executable: Option<String>,
 }
 
 /// Where one product's transfer has got to.

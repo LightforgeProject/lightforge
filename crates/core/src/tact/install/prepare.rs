@@ -39,6 +39,10 @@ pub struct Prepared {
     pub loose: FileIndex,
     pub tags: TagSet,
     pub tag_column: String,
+    /// The folder the install files go into, see [`Options::flavor`].
+    pub flavor: String,
+    /// The game binary's name, when the product config says.
+    pub executable: Option<String>,
 }
 
 /// The planner's "does the store already hold this?" test, on 9-byte index
@@ -181,6 +185,23 @@ pub async fn prepare(
     on_event: &mut impl FnMut(Event),
 ) -> Result<Prepared, InstallError> {
     let (remote, cdn, client) = resolve(http, code, options).await?;
+    let product = match remote.product_config.is_empty() {
+        true => None,
+        false => crate::tact::product_config::fetch(http, &cdn, &remote.product_config)
+            .await
+            .inspect_err(|e| tracing::warn!("product config {}: {e}", remote.product_config))
+            .ok(),
+    };
+    let executable = product.as_ref().and_then(|p| p.executable.clone());
+    let flavor = match (options.flavor.is_empty(), product.and_then(|p| p.install_dir)) {
+        (false, _) => options.flavor.clone(),
+        (true, Some(dir)) => dir,
+        (true, None) => {
+            let derived = code.install_dir().into_owned();
+            tracing::info!("no product config for {}: installing into {derived}, derived from the code", code.as_str());
+            derived
+        }
+    };
 
     let build_text = client.fetch_config(http, &remote.build_config).await?;
     let cdn_text = client.fetch_config(http, &remote.cdn_config).await?;
@@ -330,5 +351,7 @@ pub async fn prepare(
         loose,
         tags,
         tag_column,
+        flavor,
+        executable,
     })
 }

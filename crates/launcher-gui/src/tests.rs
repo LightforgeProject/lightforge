@@ -793,8 +793,8 @@ fn a_resume_during_the_wind_down_is_not_swallowed() {
     });
     app.winding_down = Some(code.clone());
 
-    let stopped = Complete { complete: false, cancelled: true, files: 0, version: None, reasons: Vec::new() };
-    let _ = app.update(Message::Downloaded(code, Ok(stopped)));
+    let stopped = Complete { cancelled: true, ..incomplete() };
+    let _ = app.update(Message::Downloaded(code, Ok(Box::new(stopped))));
 
     assert!(app.winding_down.is_none());
     assert!(matches!(app.queue[0].stage, Stage::Running { .. }), "the resume must start");
@@ -860,8 +860,8 @@ fn running(app: &mut Lightforge, code: &ProductCode) {
     });
 }
 
-fn stopped(cancelled: bool) -> Result<Complete, Problem> {
-    Ok(Complete { complete: false, cancelled, files: 0, version: None, reasons: Vec::new() })
+fn stopped(cancelled: bool) -> Result<Box<Complete>, Problem> {
+    Ok(Box::new(Complete { cancelled, ..incomplete() }))
 }
 
 #[test]
@@ -1349,14 +1349,8 @@ fn a_run_that_ends_incomplete_says_why() {
     let code = app.selected.code.clone();
     running(&mut app, &code);
 
-    let done = Complete {
-        complete: false,
-        cancelled: false,
-        files: 0,
-        version: None,
-        reasons: vec!["3 files failed (first: connection reset)".to_owned()],
-    };
-    let _ = app.update(Message::Downloaded(code, Ok(done)));
+    let done = Complete { reasons: vec!["3 files failed (first: connection reset)".to_owned()], ..incomplete() };
+    let _ = app.update(Message::Downloaded(code, Ok(Box::new(done))));
 
     assert!(app.status.contains("3 files failed (first: connection reset)"), "{}", app.status);
 }
@@ -1519,4 +1513,17 @@ fn a_failed_copy_leaves_the_game_where_it_was() {
     assert!(app.moving.is_none());
     assert_eq!(app.config.product(&code).unwrap().profile.library, before);
     assert!(app.error.is_some());
+}
+
+/// A run that stopped short, nothing stored.
+fn incomplete() -> Complete {
+    Complete {
+        complete: false,
+        cancelled: false,
+        files: 0,
+        version: None,
+        reasons: Vec::new(),
+        flavor: "_retail_".to_owned(),
+        executable: None,
+    }
 }

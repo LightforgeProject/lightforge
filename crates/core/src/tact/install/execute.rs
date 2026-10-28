@@ -24,7 +24,7 @@ pub async fn execute(
     on_event: &mut impl FnMut(Event),
 ) -> Result<Summary, InstallError> {
     let Prepared {
-        plan, remote, cdn, client, encoding, install, locations, loose, tags, tag_column, ..
+        plan, remote, cdn, client, encoding, install, locations, loose, tags, tag_column, flavor, executable, ..
     } = prepared;
 
     // Before a byte is fetched: the run ends by writing `.build.info` into
@@ -60,7 +60,7 @@ pub async fn execute(
             source,
             &selected,
             catalog,
-            &dest.join(&options.flavor),
+            &dest.join(&flavor),
             cancel,
             |e| on_event(Event::InstallFile { path: e.path.clone(), bytes: e.bytes }),
         )
@@ -75,7 +75,7 @@ pub async fn execute(
         // Only on a complete extraction: a `.flavor.info` beside no game
         // claims a product that is not installed.
         if install_complete {
-            let flavor_dir = dest.join(&options.flavor);
+            let flavor_dir = dest.join(&flavor);
             download::write_flavor_info(&flavor_dir, code).map_err(io(&flavor_dir))?;
         }
     }
@@ -164,6 +164,7 @@ pub async fn execute(
             let record = crate::tact::productdb::ProductInstall::from_build_info(
                 &info,
                 code,
+                &flavor,
                 windows_path,
             )?
             .with_countries(&options.account_country, &options.geo_country);
@@ -192,6 +193,8 @@ pub async fn execute(
         complete,
         reasons: incomplete_because,
         version,
+        flavor,
+        executable,
     })
 }
 

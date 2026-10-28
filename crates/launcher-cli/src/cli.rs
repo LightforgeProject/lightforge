@@ -194,9 +194,10 @@ pub(crate) enum Command {
         /// Locale to install, e.g. `enUS`.
         #[arg(long, default_value = "enUS")]
         locale: String,
-        /// Flavor directory the install files go in.
-        #[arg(long, default_value = "_retail_")]
-        flavor: String,
+        /// Flavor directory the install files go in. Default: the one the
+        /// product config names, e.g. `_forever_` for `wowf`.
+        #[arg(long)]
+        flavor: Option<String>,
         /// Plan and report, then stop without fetching any content.
         #[arg(long)]
         dry_run: bool,
@@ -253,8 +254,8 @@ pub(crate) enum Command {
         region: String,
         #[arg(long, default_value = "enUS")]
         locale: String,
-        #[arg(long, default_value = "_retail_")]
-        flavor: String,
+        #[arg(long)]
+        flavor: Option<String>,
         /// Break the difference down by priority, bucket and source, and
         /// cross-examine the store probe that produced it.
         #[arg(long)]

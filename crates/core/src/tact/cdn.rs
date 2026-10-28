@@ -35,6 +35,9 @@ pub enum Kind {
     Data,
     /// Patch archives.
     Patch,
+    /// Product configs, JSON, under the CDN row's `ConfigPath`
+    /// (`tpr/configs/data`), which already ends where the hash begins.
+    ProductConfig,
 }
 
 impl Kind {
@@ -43,6 +46,7 @@ impl Kind {
             Self::Config => "config",
             Self::Data => "data",
             Self::Patch => "patch",
+            Self::ProductConfig => "",
         }
     }
 }
@@ -88,15 +92,11 @@ impl Endpoint {
         if hash.len() < 4 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(CdnError::BadHash(hash.to_owned()));
         }
-        Ok(format!(
-            "{}/{}/{}/{}/{}/{}",
-            self.origin.trim_end_matches('/'),
-            self.path.trim_matches('/'),
-            kind.segment(),
-            &hash[0..2],
-            &hash[2..4],
-            hash
-        ))
+        let prefix = match kind.segment() {
+            "" => self.path.trim_matches('/').to_owned(),
+            segment => format!("{}/{segment}", self.path.trim_matches('/')),
+        };
+        Ok(format!("{}/{prefix}/{}/{}/{hash}", self.origin.trim_end_matches('/'), &hash[0..2], &hash[2..4]))
     }
 }
 
@@ -170,7 +170,7 @@ impl Client {
         Err(last.unwrap_or(CdnError::NoEndpoints))
     }
 
-    /// Fetch a file named by the MD5 of its bytes ([`Kind::Config`] only) and
+    /// Fetch a file named by the MD5 of its bytes (a config of either kind) and
     /// check it. A mismatch tries the next endpoint; if all disagree, the
     /// error reports the mismatch.
     pub async fn fetch_md5_verified(

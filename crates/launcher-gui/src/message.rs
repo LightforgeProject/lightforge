@@ -139,7 +139,7 @@ pub(crate) enum Message {
     CachedTheme(ProductCode, Box<tasks::Themed>),
     Primary,
     Tick,
-    Downloaded(ProductCode, Result<Complete, Problem>),
+    Downloaded(ProductCode, Result<Box<Complete>, Problem>),
     CloseRequested(iced::window::Id),
     Launched(Result<String, Problem>),
     /// Every couple of seconds of a launch: is a game up yet?

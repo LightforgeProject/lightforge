@@ -281,16 +281,33 @@ impl Config {
             Some(root) => crate::paths::Layout::with_root(root),
             None => crate::paths::Layout::default_for_user()?,
         };
-        if self.libraries.is_empty() {
-            return Ok(layout.with_games(self.games_dir.clone()));
-        }
-        let mut libraries = crate::library::Libraries::new(self.libraries.clone());
+        let mut layout = match self.libraries.is_empty() {
+            true => layout.with_games(self.games_dir.clone()),
+            false => {
+                let mut libraries = crate::library::Libraries::new(self.libraries.clone());
+                for product in &self.products {
+                    if let Some(id) = &product.profile.library {
+                        libraries.assign(product.code.clone(), id);
+                    }
+                }
+                layout.with_libraries(libraries)
+            }
+        };
+        // Recorded at install; for an install from before that, or from
+        // Battle.net, the folder whose `.flavor.info` names the game.
         for product in &self.products {
-            if let Some(id) = &product.profile.library {
-                libraries.assign(product.code.clone(), id);
+            let profile = &product.profile;
+            let dir = profile.install_dir.clone().or_else(|| {
+                let install = layout.wow_install(&product.code);
+                let found = crate::paths::flavor_dir_name(&install, &product.code);
+                install.join(&found).is_dir().then_some(found)
+            });
+            if let Some(dir) = dir {
+                let flavor = crate::paths::Flavor { dir, executable: profile.executable.clone() };
+                layout = layout.with_flavor(product.code.clone(), flavor);
             }
         }
-        Ok(layout.with_libraries(libraries))
+        Ok(layout)
     }
 
     /// Seed the library list from a config written before multi-drive storage,

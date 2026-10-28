@@ -54,12 +54,13 @@ pub fn plan(install: &Path, code: &ProductCode) -> Result<Plan, UninstallError> 
         .map(|info| info.products().filter(|p| p != code).collect())
         .unwrap_or_default();
 
-    let flavor = install.join(&*code.install_dir());
+    let flavor_name = crate::paths::flavor_dir_name(install, code);
+    let flavor = install.join(&flavor_name);
     if !is_plain_child(install, &flavor) {
         return Err(UninstallError::Outside(flavor));
     }
     // Two codes can name one folder: `wow_retail` derives Retail's `_retail_`.
-    if let Some(owner) = remaining.iter().find(|p| p.install_dir() == code.install_dir()) {
+    if let Some(owner) = remaining.iter().find(|p| crate::paths::flavor_dir_name(install, p) == flavor_name) {
         return Err(UninstallError::SharedFlavor { flavor, owner: owner.as_str().to_owned() });
     }
     let flavor_dir = flavor.is_dir().then_some(flavor);
@@ -153,7 +154,8 @@ pub fn execute(
                         .remaining
                         .iter()
                         .filter_map(|code| {
-                            productdb::ProductInstall::from_build_info(&info, code, windows_path)
+                            let flavor = crate::paths::flavor_dir_name(install, code);
+                            productdb::ProductInstall::from_build_info(&info, code, &flavor, windows_path)
                             .ok()
                         })
                         .collect();

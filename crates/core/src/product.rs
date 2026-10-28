@@ -119,8 +119,9 @@ impl ProductCode {
         }
     }
 
-    /// The install subdirectory this product uses beneath the WoW root, e.g.
-    /// `_retail_`.
+    /// The install subdirectory derived from the code, e.g. `_retail_`: what
+    /// is used when neither the product config nor the install itself says
+    /// ([`crate::paths::Layout::flavor`]).
     ///
     /// Owned only for derived `wow_*` codes.
     pub fn install_dir(&self) -> Cow<'_, str> {
@@ -135,8 +136,9 @@ impl ProductCode {
             Self::Beta => "_beta_",
             // A real install carries `_classic_beta_/WowB.exe`.
             Self::ClassicBeta => "_classic_beta_",
-            // From `wowf`'s product config (`shared_container_default_subfolder`).
-            Self::Forever => "_forever_",
+            // No rule derives it: its product config names `_forever_`, and
+            // that is what an install reads ([`crate::tact::product_config`]).
+            Self::Forever => self.as_str(),
             // An unknown `wow_<flavor>` installs to `_<flavor>_`, as all known ones do.
             Self::Custom(code) => match code.strip_prefix("wow_") {
                 Some(flavor) if !flavor.is_empty() => return Cow::Owned(format!("_{flavor}_")),
@@ -568,6 +570,12 @@ pub struct ProductProfile {
     /// [`crate::config::Config::locale`], the one chosen at setup.
     pub locale: Option<String>,
     pub prefix_state: PrefixState,
+    /// The folder the game was installed into and its binary, as its product
+    /// config named them: a record of the install, not a setting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executable: Option<String>,
 }
 
 /// Lifecycle of a product's Wine/Proton prefix.
@@ -780,12 +788,11 @@ mod tests {
         assert_eq!(ProductCode::EraPtr.install_dir(), "_classic_era_ptr_");
     }
 
-    /// Measured from `wowf`'s product config, 2026-10-14.
+    /// Its folder comes from its product config ([`crate::tact::product_config`]).
     #[test]
-    fn forever_installs_where_its_product_config_says() {
+    fn forever_is_its_own_line() {
         let code: ProductCode = "wowf".parse().unwrap();
         assert_eq!(code, ProductCode::Forever);
-        assert_eq!(code.install_dir(), "_forever_");
         assert_eq!(code.executable(), "Wow.exe");
         assert_eq!(code.line(), ProductLine::Forever);
         assert_eq!(code.branch(), Branch::Live);

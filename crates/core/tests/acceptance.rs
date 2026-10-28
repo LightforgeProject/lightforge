@@ -132,7 +132,6 @@ async fn a_complete_install_produces_every_artifact() {
 
     let options = Options {
         region: Region::Eu,
-        flavor: code.install_dir().into_owned(),
         install_files: true,
         agent_dir: registry.parent().map(Path::to_path_buf),
         ..Options::default()
@@ -181,7 +180,9 @@ async fn a_complete_install_produces_every_artifact() {
     }
 
     // 5. The game binary, which is what `Local::is_installed` looks for.
-    let exe = lightforge_core::paths::game_executable(&root.join(code.install_dir().as_ref()), &code);
+    // Where the product config put it, under the name it gave.
+    let name = summary.executable.as_deref().unwrap_or(code.executable());
+    let exe = lightforge_core::paths::game_executable(&root.join(&summary.flavor), name);
     assert!(exe.is_file(), "no game executable at {}", exe.display());
 
     // 6. Removing it again leaves nothing behind.

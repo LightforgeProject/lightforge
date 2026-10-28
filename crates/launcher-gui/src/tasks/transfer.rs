@@ -65,7 +65,8 @@ pub async fn download(
                 let options = InstallOptions {
                     region,
                     locale,
-                    flavor: code.install_dir().into_owned(),
+                    // Empty for a new install: its product config decides.
+                    flavor: layout.known_flavor(&code).unwrap_or_default().to_owned(),
                     optional_tags: optional_tags.clone(),
                     // Tighter than the CLI's 4 GiB: nobody watches a launcher.
                     checkpoint_bytes: 512 * 1024 * 1024,

@@ -185,6 +185,13 @@ impl Lightforge {
                         if let Some(at) = entry {
                             self.queue.remove(at);
                         }
+                        // Every path to the game goes through this from now on.
+                        if let Some(product) = self.config.product_mut(&code) {
+                            product.profile.install_dir = Some(done.flavor.clone());
+                            product.profile.executable = done.executable.clone();
+                        }
+                        self.save_config();
+                        self.rebuild_layout();
                         // Only a game that was given its own language: one
                         // that follows the setup choice keeps whatever the
                         // client has already written.

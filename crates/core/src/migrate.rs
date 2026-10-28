@@ -124,7 +124,7 @@ pub async fn copy(
         Err(_) if !dest_info_path.exists() => BuildInfo::with_default_schema(),
         Err(e) => return Err(e.into()),
     };
-    let flavor = code.install_dir();
+    let flavor = layout.flavor(code);
     let (src_flavor, dst_flavor) = (from.join(&*flavor), dest.join(&*flavor));
     if dest_info.row(code).is_some() || !is_empty_dir(&dst_flavor) {
         return Err(already_there());
@@ -141,7 +141,7 @@ pub async fn copy(
         }
         std::fs::rename(&from, &dest).map_err(io(&dest))?;
         // Its `.product.db` still names the old Windows path.
-        let record = ProductInstall::from_build_info(&info, code, &windows_path)?;
+        let record = ProductInstall::from_build_info(&info, code, &flavor, &windows_path)?;
         productdb::upsert(&dest, &[record])?;
         tracing::info!("moved {} by renaming {} to {}", code.as_str(), from.display(), dest.display());
         return Ok(Moved::Renamed);
@@ -174,7 +174,7 @@ pub async fn copy(
     let mut commit = || -> Result<(), MoveError> {
         dest_info.set_product(code, &pairs)?;
         dest_info.save(&dest_info_path)?;
-        let record = ProductInstall::from_build_info(&dest_info, code, &windows_path)?;
+        let record = ProductInstall::from_build_info(&dest_info, code, &flavor, &windows_path)?;
         productdb::upsert(&dest, &[record])?;
         Ok(())
     };
@@ -304,7 +304,12 @@ pub async fn release(http: &Http, layout: &Layout, code: &ProductCode, from: &Li
         .library(code)
         .map(Library::windows_wow_path)
         .unwrap_or_else(|| crate::paths::WINDOWS_WOW_PATH.to_owned());
-    let record = ProductInstall::from_build_info(&BuildInfo::load(dest.join(".build.info"))?, code, &windows_path)?;
+    let record = ProductInstall::from_build_info(
+        &BuildInfo::load(dest.join(".build.info"))?,
+        code,
+        &crate::paths::flavor_dir_name(&dest, code),
+        &windows_path,
+    )?;
     productdb::register(&layout.agent_dir(), &[record])?;
     Ok(freed)
 }

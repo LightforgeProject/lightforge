@@ -22,6 +22,7 @@ pub mod indices;
 pub mod install;
 pub mod manifest;
 pub mod plan;
+pub mod product_config;
 pub mod productdb;
 pub mod reclaim;
 pub mod staged;

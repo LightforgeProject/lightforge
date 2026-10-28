@@ -39,6 +39,9 @@ pub struct Options {
     /// [`crate::tact::manifest::TagSet::with_optional`].
     pub optional_tags: Vec<String>,
     /// Flavor directory the install files are extracted into, e.g. `_retail_`.
+    /// Empty: the one the product config names, else the code's
+    /// ([`crate::product::ProductCode::install_dir`]). An existing install's
+    /// is passed, so an update never moves it.
     pub flavor: String,
     pub concurrency: usize,
     /// Cap on download speed in bytes per second; `0` is no cap.
@@ -215,6 +218,10 @@ pub struct Summary {
     /// Present when `complete`; the version `.build.info` now names. `None`
     /// after a pre-download, which names none.
     pub version: Option<String>,
+    /// The folder the game went into, and its binary's name when the product
+    /// config said: what the front end records for the paths to use.
+    pub flavor: String,
+    pub executable: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
