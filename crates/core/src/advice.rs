@@ -1,15 +1,8 @@
 //! What the user can do about an error.
 //!
-//! An error message says what went wrong, which is the half a bug report
-//! needs. Someone looking at `i/o error at …: No space left on device` needs
-//! the other half: what to do next. [`advise`] reads that off the error while
-//! it is still a type, by walking its causes and recognising the handful of
-//! situations a person can actually fix: a full or read-only drive, a missing
-//! connection, a damaged store, a game still running, a broken Proton build.
-//! Anything else gets no advice, rather than a guess.
-//!
-//! It runs at the same boundary as [`crate::error::chain`], just before the
-//! error becomes a string.
+//! [`advise`] walks an error's causes while it is still a type and recognises
+//! what a person can fix: a full or read-only drive, no connection, a damaged
+//! store, a running game, a broken Proton build. Anything else gets nothing.
 
 use std::error::Error;
 use std::io::ErrorKind;
@@ -21,8 +14,7 @@ use crate::net::NetError;
 pub struct Advice {
     /// A sentence, addressed to the user, saying what to do.
     pub todo: String,
-    /// What a front end can do on the user's behalf. The CLI prints the
-    /// sentence and ignores this.
+    /// What a front end can do on the user's behalf; the CLI ignores it.
     pub fix: Option<Fix>,
 }
 
@@ -52,9 +44,7 @@ impl Advice {
 /// What to do about `error`, if it is something the user can do anything
 /// about.
 ///
-/// The outermost recognised cause wins: a `.idx` that failed to parse because
-/// the drive went away is a drive problem, but the drive is only visible
-/// further down, so the walk goes all the way before giving up.
+/// The outermost recognised cause wins; the walk goes all the way down.
 pub fn advise(error: &(dyn Error + 'static)) -> Option<Advice> {
     let mut next = Some(error);
     while let Some(error) = next {
@@ -196,10 +186,9 @@ fn recognise(error: &(dyn Error + 'static)) -> Option<Advice> {
 
 /// The error a `#[error(transparent)]` variant wraps.
 ///
-/// `thiserror` forwards a transparent variant's `source` to the inner error's
-/// own `source`, so walking `source` alone skips the inner error entirely:
-/// `ProtonError::Net(NetError::Status { .. })` reads as an error with no cause
-/// at all. Every wrapper on a path the launcher reports from is listed here.
+/// A transparent variant's `source` is the inner error's own, so walking
+/// `source` skips the inner error: `ProtonError::Net(NetError::Status { .. })`
+/// has no cause. Every reported wrapper is listed.
 fn transparent<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a (dyn Error + 'static)> {
     use crate::tact;
 

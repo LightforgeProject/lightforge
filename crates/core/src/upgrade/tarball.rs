@@ -1,11 +1,9 @@
 //! The installer's route: Lightforge replaces its own files in the home
 //! folder, as running `install.sh` again would.
 //!
-//! The same steps as the script, in the same places: both binaries into
-//! `~/.local/bin`, the menu entry with its full path, the icons. Each binary
-//! is renamed over the old one, so a failure halfway leaves every file either
-//! old or new, never torn. The running process keeps the file it started
-//! from until it exits, which is why a restart is all the user has to do.
+//! The script's steps: binaries into `~/.local/bin`, the menu entry, icons.
+//! Each binary is renamed over the old one; the running process keeps its
+//! file until it exits, so a restart finishes the job.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -54,9 +52,7 @@ fn put_in_place(archive: &Path, bin_dir: &Path, data_dir: &Path) -> Result<(), U
         std::fs::rename(&staged, bin_dir.join(name)).map_err(io(&bin_dir.join(name)))?;
     }
 
-    // The menu entry names the binary by its full path: not every session
-    // has `~/.local/bin` on its PATH, and an entry whose TryExec is not found
-    // is hidden rather than broken.
+    // Full path: `~/.local/bin` is not on every session's PATH.
     let apps = data_dir.join("applications");
     std::fs::create_dir_all(&apps).map_err(io(&apps))?;
     let entry = std::fs::read_to_string(release.join(ENTRY)).map_err(io(&release.join(ENTRY)))?;

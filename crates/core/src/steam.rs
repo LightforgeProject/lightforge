@@ -1,9 +1,7 @@
 //! Steam installation discovery.
 //!
-//! Lightforge targets Proton-GE from a Steam library, so it needs to find the
-//! Steam root and enumerate library folders. Both only read; the one thing
-//! Lightforge writes into Steam is its own library entry, see
-//! [`crate::steam_shortcut`], and only when asked to.
+//! Read-only; the one write is Lightforge's own library entry
+//! ([`crate::steam_shortcut`]), when asked.
 
 use std::path::{Path, PathBuf};
 
@@ -47,11 +45,8 @@ impl SteamRoot {
         &self.path
     }
 
-    /// Every library folder Steam knows about, **filtered to those that
-    /// currently exist**.
-    ///
-    /// Library entries routinely point at unmounted drives, external disks,
-    /// other distros' partitions. A missing path is normal, not an error.
+    /// Every library folder Steam knows about **that exists now**: unmounted
+    /// drives are normal.
     pub fn library_paths(&self) -> Vec<PathBuf> {
         let mut out = vec![self.path.clone()];
 
@@ -76,9 +71,7 @@ impl SteamRoot {
 
 /// Extract `"path"` values from a `libraryfolders.vdf`.
 ///
-/// Deliberately a targeted extractor rather than a general KeyValues parser:
-/// one field is needed, and a tolerant line scan degrades gracefully if Valve
-/// changes the surrounding schema, which they have done before.
+/// A line scan for one field, tolerant of schema changes.
 fn parse_library_paths(contents: &str) -> Vec<PathBuf> {
     contents
         .lines()

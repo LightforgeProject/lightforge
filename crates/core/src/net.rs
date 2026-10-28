@@ -1,13 +1,8 @@
 //! The async edge.
 //!
-//! `core` is otherwise synchronous; everything that touches the network lives
-//! behind `async fn` here and in its callers. TLS is rustls rather than the
-//! system OpenSSL, so behavior doesn't drift with the distribution's crypto
-//! policy or library version.
-//!
-//! The [`ETagCache`] built here is shared by Proton-GE release polling and
-//! the themed asset pipeline: both revalidate a small document on every
-//! launch and want a `304` to cost nothing.
+//! `core` is otherwise synchronous. TLS is rustls, so it does not vary with
+//! the distribution's OpenSSL. [`ETagCache`] serves Proton release polling
+//! and the asset pipeline.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -24,9 +19,8 @@ const USER_AGENT: &str = concat!("Lightforge/", env!("CARGO_PKG_VERSION"));
 /// How long a response may go without sending a byte before it fails.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Ceiling on a JSON or text document read whole into memory. The largest
-/// real one, GitHub's release list, is a few hundred KB; a server streaming
-/// without end should fail here rather than in the allocator.
+/// Ceiling on a JSON or text document read whole; the largest real one,
+/// GitHub's release list, is a few hundred KB.
 const MAX_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
 
 /// Ceiling on a cached picture, key art the largest of them.
@@ -40,51 +34,33 @@ pub const MAX_CDN_BYTES: usize = 1024 * 1024 * 1024;
 /// Name prefix of an unfinished [`Http::download`].
 const DOWNLOAD_PREFIX: &str = ".lightforge-download-";
 
-/// How old an unfinished download must be before the next one in the same
-/// directory clears it away. A live transfer touches its file with every
-/// chunk and fails after [`READ_TIMEOUT`] of silence, so an hour is only ever
-/// one a crash or a kill left behind.
+/// How old an unfinished download must be before it is cleared: a live one
+/// fails after [`READ_TIMEOUT`] of silence.
 const STALE_DOWNLOAD: Duration = Duration::from_secs(60 * 60);
 
-/// Shared HTTP client.
-///
-/// `reqwest::Client` owns a connection pool and is designed to be created once
-/// and cloned, so hand this around rather than building clients per request.
+/// Shared HTTP client, one connection pool; clone it, do not build more.
 #[derive(Debug, Clone)]
 pub struct Http {
     client: reqwest::Client,
 }
 
 impl Http {
-    /// One client, one connection pool.
-    ///
-    /// Spreading a bulk download over several pools was tried and **measured
-    /// slower**, so it is deliberately not done. Blizzard's CDN speaks HTTP/2
-    /// and reqwest multiplexes every request over one connection per host;
-    /// isolated `curl` runs suggested four connections should beat one
-    /// (33.3 vs 28.8 MB/s on 48 concurrent 2 MB ranges), but in the real
-    /// download loop four pools measured 25.3 and 21.7 MB/s against one pool's
-    /// 26.8 and 25.5. The warm, single connection wins. Do not re-add this
-    /// without an A/B in the downloader itself.
+    /// One client, one connection pool. Several pools **measured slower** in
+    /// the download loop (25.3 and 21.7 MB/s against 26.8 and 25.5), though
+    /// isolated `curl` runs favoured them. Do not re-add without an A/B there.
     pub fn new() -> Result<Self, NetError> {
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .connect_timeout(Duration::from_secs(15))
-            // Deliberately no overall request timeout: a Proton tarball is
-            // ~400 MB and a slow link is not an error. A *silent* one is: this
-            // resets on every chunk, so it only fires on a server that keeps
-            // the connection open and stops sending, which, without it,
-            // stalled a download (and any pause waiting on it) forever.
+            // No overall timeout (a slow link is fine); this one resets per
+            // chunk and catches a server that goes silent.
             .read_timeout(READ_TIMEOUT)
             .build()
             .map_err(NetError::Client)?;
         Ok(Self { client })
     }
 
-    /// Fetch and deserialize JSON, revalidating against `cache` when possible.
-    ///
-    /// Returns `None` when the server answers `304 Not Modified` and the cached
-    /// copy is still good.
+    /// Fetch and deserialize JSON, revalidating against `cache`; `None` on `304`.
     pub async fn get_json_cached<T: serde::de::DeserializeOwned>(
         &self,
         url: &str,
@@ -113,8 +89,7 @@ impl Http {
 
         let body = bounded_body(url, response, MAX_DOCUMENT_BYTES).await?;
 
-        // Decoded before caching: a stored body that does not parse would be
-        // served back on every 304 until the server's ETag changes.
+        // Decoded before caching, or a bad body is served on every 304.
         let value = serde_json::from_slice(&body).map_err(|e| NetError::Decode {
             url: url.to_owned(),
             source: e,
@@ -123,15 +98,9 @@ impl Http {
         Ok(Some(value))
     }
 
-    /// POST a body and read a small JSON answer back.
-    ///
-    /// The one thing the launcher ever *sends*: the screenshot that goes with
-    /// a bug report, which is uploaded so the report can carry a link rather
-    /// than a megabyte of base64. It has its own timeout because, unlike a
-    /// download, there is somebody watching a dialog wait for it, and
-    /// because the whole call is optional: a failure here means the picture
-    /// travels inside the report instead, so it must fail quickly rather than
-    /// sit on the read timeout.
+    /// POST a body and read a small JSON answer back: a bug report's
+    /// screenshot. Its own short timeout: someone is watching, and on failure
+    /// the picture travels inside the report.
     pub async fn post_bytes<T: serde::de::DeserializeOwned>(
         &self,
         url: &str,
@@ -144,14 +113,8 @@ impl Http {
             .map_err(|e| NetError::Decode { url: url.to_owned(), source: e })
     }
 
-    /// POST a body with whatever extra headers it needs, and hand back the
-    /// response.
-    ///
-    /// The second sender, and the reason this takes headers at all: a bug
-    /// report's event goes to our own Sentry server, which authenticates it
-    /// with an `X-Sentry-Auth` header. Sending it through this client rather
-    /// than through the one the sentry crate brings with it is what keeps a
-    /// second HTTP stack, and a second TLS verifier, out of the release.
+    /// POST a body with extra headers: a bug report to our Sentry server
+    /// (`X-Sentry-Auth`), through this client rather than a second HTTP stack.
     pub async fn post(
         &self,
         url: &str,
@@ -185,9 +148,7 @@ impl Http {
 
     /// Fetch a body, revalidating against `cache` when possible.
     ///
-    /// Returns `None` on `304 Not Modified`; the caller reads the cached copy
-    /// with [`ETagCache::read`]. Used for the themed art, which is binary and
-    /// wants its own ETag independent of the manifest that names it.
+    /// Returns `None` on `304`; the caller reads [`ETagCache::read`].
     pub async fn get_bytes_cached(
         &self,
         url: &str,
@@ -241,10 +202,6 @@ impl Http {
     }
 
     /// POST JSON and deserialize the reply.
-    ///
-    /// The addon catalog resolves a whole import list in one request, which is
-    /// a body rather than a query string, twenty round trips to answer one
-    /// paste is not a design.
     pub async fn post_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(
         &self,
         url: &str,
@@ -284,9 +241,7 @@ impl Http {
 
     /// Fetch a whole response into memory, refusing one past `max` bytes.
     ///
-    /// For manifests and configs, which are read whole and hashed whole.
-    /// Bulk content goes through [`Http::download`] instead, which streams to
-    /// disk rather than holding a multi-gigabyte archive in memory.
+    /// For manifests and configs; bulk content streams through [`Http::download`].
     pub async fn get_bytes(&self, url: &str, max: usize) -> Result<Vec<u8>, NetError> {
         let response = self
             .client
@@ -300,10 +255,7 @@ impl Http {
     /// Fetch a byte range. `range` is a `Range` header value such as
     /// `bytes=0-1023`.
     ///
-    /// The server is expected to answer 206; a 200 means it ignored the range
-    /// and sent the whole resource, which for a 256 MB archive is a very
-    /// expensive way to get one file and worth failing on rather than
-    /// silently accepting.
+    /// Anything but 206 fails: a 200 is the whole archive.
     pub async fn get_range(&self, url: &str, range: &str) -> Result<Vec<u8>, NetError> {
         let want = range_len(range).ok_or_else(|| NetError::BadRange(range.to_owned()))?;
         let response = self
@@ -320,8 +272,7 @@ impl Http {
             drop(response);
             return Err(NetError::Status { url: url.to_owned(), status: status.as_u16() });
         }
-        // Exactly the bytes asked for: a short body would be split into
-        // pieces that fail their checksums one by one, far from the cause.
+        // Exactly the bytes asked for, or the pieces fail far from the cause.
         let body = bounded_body(url, response, usize::try_from(want).unwrap_or(usize::MAX)).await?;
         if body.len() as u64 != want {
             return Err(NetError::Truncated { url: url.to_owned(), expected: want, got: body.len() as u64 });
@@ -331,15 +282,9 @@ impl Http {
 
     /// Stream `url` to `dest`, returning the SHA-512 of what was written.
     ///
-    /// Written to a fresh, randomly named file beside `dest` and renamed only
-    /// once complete, so `dest` existing means the whole file arrived. Callers
-    /// skip a download whose file is already there, and a truncated one in its
-    /// place used to be run, or unpacked, on every attempt after.
-    ///
-    /// The name is created exclusively, so nothing already sitting at it is
-    /// followed or truncated, and the file deletes itself when the transfer
-    /// fails or the future is dropped, a cancelled download included. The
-    /// fixed `<dest>.part` this replaces survived a cancel.
+    /// Into a randomly named file beside `dest`, created exclusively and
+    /// renamed once complete, so `dest` existing means it all arrived. It
+    /// deletes itself on failure or when the future is dropped.
     pub async fn download(
         &self,
         url: &str,
@@ -415,8 +360,7 @@ async fn bounded_body(url: &str, response: reqwest::Response, max: usize) -> Res
     if declared.is_some_and(|len| len > max as u64) {
         return Err(too_large());
     }
-    // Sized up front when declared: growing a 200 MiB body by doubling
-    // copies it several times over.
+    // Sized up front when declared.
     let mut body = Vec::with_capacity(declared.map_or(0, |len| len as usize));
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
@@ -438,9 +382,7 @@ fn range_len(range: &str) -> Option<u64> {
 
 /// Delete unfinished downloads a crash or a kill left in `dir`.
 ///
-/// Their names are random, so unlike the old `.part` no later attempt ever
-/// reuses one, and a Proton tarball is ~400 MB. Only stale ones go: another
-/// download may be writing beside this one right now.
+/// Only stale ones: another download may be writing beside this one.
 fn sweep_stale_downloads(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -462,8 +404,7 @@ fn check_status(url: &str, response: reqwest::Response) -> Result<reqwest::Respo
         return Ok(response);
     }
     tracing::debug!("http {} for {url}", status.as_u16());
-    // GitHub answers 403 with a rate-limit body; call it out by name, since
-    // "forbidden" sends people hunting for a credentials problem they don't have.
+    // GitHub's rate limit is a 403; name it, not "forbidden".
     if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::TOO_MANY_REQUESTS
     {
         if let Some(reset) = response.headers().get("x-ratelimit-remaining") {
@@ -505,8 +446,7 @@ impl ETagCache {
 
     /// The saved ETag, if the cached body is actually present.
     ///
-    /// Both must exist, sending `If-None-Match` without a body to fall back on
-    /// would turn a `304` into a failure.
+    /// Both must exist, or a `304` has nothing to serve.
     pub fn etag(&self) -> Option<String> {
         if !self.body_path.is_file() {
             return None;
@@ -535,9 +475,7 @@ impl ETagCache {
         let dir = self.body_path.parent().unwrap_or_else(|| Path::new("."));
         std::fs::create_dir_all(dir).map_err(io(dir))?;
 
-        // The old ETag goes first and the new one last, so an interruption
-        // anywhere in between leaves no ETag and the next request is
-        // unconditional, never a 304 validated against the wrong body.
+        // Old ETag first, new one last: an interruption leaves none.
         match std::fs::remove_file(self.etag_path()) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(io(&self.etag_path())(e)),
             _ => {}

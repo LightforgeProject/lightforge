@@ -1,17 +1,11 @@
 //! Per-product launch settings: host-side wrappers, environment variables and
 //! the user's own overrides.
 //!
-//! Two rules shape what is in here.
+//! **Nothing is assumed installed**: `game-performance` and `mangohud` are
+//! looked up on `PATH` and do nothing when absent.
 //!
-//! **Nothing is assumed installed.** `game-performance` and `mangohud` are
-//! looked up on `PATH` and simply do not do anything when they are absent, so
-//! a toggle can never produce a launch command that fails on a distribution
-//! that does not ship them.
-//!
-//! **Nothing here touches the game's own settings.** Client settings
-//! (`Config.wtf`) belong to the player and the client; Lightforge used to
-//! write a list of them on every launch and no longer does. All of this stays
-//! outside the game: a launch wrapper and environment variables.
+//! **The game's own settings (`Config.wtf`) are not touched**: only a launch
+//! wrapper and environment variables.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -22,19 +16,14 @@ use serde::{Deserialize, Serialize};
 
 /// What Game Settings can set for one product.
 ///
-/// An older config carries fields this no longer has (frame caps, mouse
-/// options, presets); `serde(default)` on the struct makes the load skip them
-/// rather than fail, and the next save drops them.
+/// Older configs' extra fields are skipped on load and dropped on save.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Tweaks {
     /// Launch through CachyOS' `game-performance`, which holds the CPU on its
     /// performance profile and inhibits idle for the life of the game.
     ///
-    /// `None` means "follow the default", which is *on wherever the tool
-    /// exists*: it is a system utility, it self-disables when the CPU driver
-    /// has no performance profile, and its effect is exactly what someone
-    /// launching a game wants. An explicit `Some(false)` turns it off.
+    /// `None` follows the default: on wherever the tool exists.
     pub game_performance: Option<bool>,
     /// Show the MangoHud overlay.
     pub mangohud: bool,
@@ -54,9 +43,7 @@ impl Tweaks {
         if self.mangohud && tools.mangohud.is_some() {
             env.push(("MANGOHUD".into(), "1".into()));
         }
-        // Proton's own Wayland backend. It ignores the request when
-        // `WAYLAND_DISPLAY` is unset, and so do we, so the variable is never
-        // handed to a session that cannot use it.
+        // Only with `WAYLAND_DISPLAY` set, as Proton itself requires.
         if self.wayland && tools.wayland {
             env.push(("PROTON_ENABLE_WAYLAND".into(), "1".into()));
         }
@@ -84,16 +71,14 @@ impl Tweaks {
 
 /// Which optional tools this machine actually has.
 ///
-/// Detected rather than assumed: a toggle for a binary that is not installed
-/// is a launch failure waiting to happen, so the panel says what is missing.
+/// Detected, so the panel can say what is missing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HostTools {
     /// CachyOS' performance-governor wrapper.
     pub game_performance: Option<PathBuf>,
     /// The MangoHud binary, taken as evidence its Vulkan layer is installed.
     pub mangohud: Option<PathBuf>,
-    /// Whether this is a Wayland session, which is what decides whether
-    /// Proton's Wayland backend can be offered at all.
+    /// Whether this is a Wayland session.
     pub wayland: bool,
     /// The proprietary NVIDIA driver's major version, when it is loaded.
     pub nvidia: Option<u32>,
@@ -129,8 +114,7 @@ pub struct EnvLineError {
 /// Read the environment editor's text: one `KEY=value` per line, blank lines
 /// and `#` comments skipped, a pair of matching quotes around a value removed.
 ///
-/// Every bad line is reported, not the first: someone pasting a block from a
-/// wiki wants to fix them in one go. A key that appears twice keeps the last.
+/// Every bad line is reported, not just the first. A repeated key keeps the last.
 pub fn parse_env(text: &str) -> (BTreeMap<String, String>, Vec<EnvLineError>) {
     let mut env = BTreeMap::new();
     let mut bad = Vec::new();
@@ -169,8 +153,7 @@ pub fn env_text(env: &BTreeMap<String, String>) -> String {
 
 /// Find an executable on `PATH`.
 ///
-/// Hand-rolled rather than shelling out to `which`, which is not guaranteed to
-/// be installed and would be one more binary dependency.
+/// Without `which`, which may not be installed.
 fn on_path(program: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
@@ -194,9 +177,7 @@ fn is_executable(path: &Path) -> bool {
 
 /// Rebuild `cmd` to run under `wrappers`, outermost first.
 ///
-/// A wrapper has to *become* the program with the original command as its
-/// arguments, which no method on [`Command`] can do in place, hence a rebuild
-/// carrying the program, arguments and environment across.
+/// [`Command`] cannot be wrapped in place, so it is rebuilt.
 pub fn wrapped(cmd: Command, wrappers: &[PathBuf]) -> Command {
     let Some((outer, rest)) = wrappers.split_first() else {
         return cmd;
@@ -321,10 +302,8 @@ mod tests {
         assert_eq!(outer.get_program(), "/proton/proton");
     }
 
-    // The shape a config written by the old Game Optimizations page has on
-    // disk. Fields that no longer exist must not fail the load, and what was
-    // kept must come through, including an explicit `game_performance = false`
-    // which is not the same as the default.
+    // A config from the old Game Optimizations page: dropped fields load,
+    // and an explicit `game_performance = false` survives.
     #[test]
     fn a_config_from_the_optimizations_page_still_loads() {
         let old = r#"

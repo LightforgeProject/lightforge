@@ -1,12 +1,7 @@
 //! Release notes, compiled in.
 //!
-//! The notes describe the version that is running, which the binary knows
-//! better than any server does, so they ship with it rather than being
-//! fetched. That also means they are there on a machine with no network, which
-//! is exactly the machine someone has just updated and restarted.
-//!
-//! The source is `RELEASES.md` at the repository root, so it doubles as the
-//! changelog a visitor reads. Its shape is the smallest thing worth parsing:
+//! From `RELEASES.md` at the repository root, compiled in, so they work
+//! offline:
 //!
 //! ```text
 //! ## 0.2.0
@@ -19,11 +14,9 @@
 //! - ...
 //! ```
 //!
-//! The file is hard-wrapped, so a line under a bullet that is not itself a
-//! bullet continues it, and the lines between a heading and its first bullet
-//! are the release's intro. Anything before the first heading, a title, an
-//! explanation, belongs to no release and is dropped, as is a release with
-//! no bullets under it: a popup with an empty body is worse than none.
+//! Hard-wrapped: a non-bullet line continues the bullet above, and lines
+//! before the first bullet are the intro. Text before the first heading and
+//! releases without bullets are dropped.
 
 /// The notes as they are written in the repository.
 pub const SOURCE: &str = include_str!("../../../RELEASES.md");
@@ -39,16 +32,12 @@ pub struct Release {
     pub notes: Vec<String>,
 }
 
-/// Every release in the file, newest first, which is the order it is written
-/// in. The order is the file's, not a parsed comparison of version numbers:
-/// sorting would need a semver dependency to tell `0.10.0` from `0.9.0`, and
-/// the file is hand-written in order anyway.
+/// Every release in the file, in the file's order (newest first).
 pub fn all() -> Vec<Release> {
     parse(SOURCE)
 }
 
-/// The notes for one version, or `None` when the file says nothing about it,
-/// which is the normal state of a development build between releases.
+/// The notes for one version, `None` for a development build.
 pub fn notes_for(version: &str) -> Option<Release> {
     parse(SOURCE).into_iter().find(|r| r.version == version)
 }
@@ -68,18 +57,12 @@ fn parse(source: &str) -> Vec<Release> {
             // Anything before the first heading belongs to no release.
             continue;
         };
-        // `-` and `*` both, because both are Markdown and the file is written
-        // by hand.
+        // `-` and `*` both.
         match line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
             Some(note) if !note.trim().is_empty() => {
                 release.notes.push(note.trim().to_owned());
             }
-            // A line that is not a bullet and not blank continues the bullet
-            // above it. The file is wrapped at the width everything else in
-            // the repository is wrapped at, so most notes are two lines; the
-            // first version of this read only the first of them and cut every
-            // long note off mid-sentence. The wrap is a fact about the file,
-            // not about the sentence.
+            // A non-bullet, non-blank line continues the bullet above.
             None if !line.is_empty() => match release.notes.last_mut() {
                 Some(last) => {
                     last.push(' ');
@@ -109,10 +92,7 @@ mod tests {
     fn the_shipped_file_parses_and_describes_this_build() {
         let releases = all();
         assert!(!releases.is_empty(), "RELEASES.md has no release in it");
-        // The popup exists to describe the version someone has just started.
-        // A build whose own version is missing from the file would ship with
-        // nothing to say, and that is a release-time mistake worth failing a
-        // test over rather than discovering on a user's machine.
+        // A release without its own notes fails here, not on a user's machine.
         assert!(
             notes_for(env!("CARGO_PKG_VERSION")).is_some(),
             "RELEASES.md has no section for {}",
@@ -138,9 +118,7 @@ mod tests {
         assert_eq!(parsed[1].intro.as_deref(), Some("Prose under a heading, wrapped."));
     }
 
-    /// The file is hard-wrapped like everything else in the repository, and a
-    /// wrapped note is one note. Reading only the first line cut most of them
-    /// off mid-sentence, which is what the popup showed on its first run.
+    /// A wrapped note is one note.
     #[test]
     fn a_wrapped_bullet_is_one_note() {
         let parsed = parse(

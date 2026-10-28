@@ -1,14 +1,8 @@
 //! Which *game family* a product belongs to, read from Blizzard's own data.
 //!
-//! The client works in game families, one per tile in its library, `WTCG`,
-//! `Fen`, `Pro`: and `--exec="launch <uid>"` wants that, not the TACT product
-//! code. Getting it wrong is not a no-op: the client falls back to the first
-//! family it knows, which is Warcraft III, and the user lands on a game they
-//! may not even own. That is why [`crate::battlenet::game_uid`] only ever
-//! listed families somebody had seen in a log.
-//!
-//! The client caches Blizzard's published catalogue in its own
-//! content-addressed store, as JSON fragments, and the chain is all there:
+//! `--exec="launch <uid>"` wants the family (`WTCG`, `Fen`, `Pro`), one per
+//! tile, not the TACT code; a wrong one lands on Warcraft III. The client
+//! caches Blizzard's catalogue as JSON fragments, and the chain is there:
 //!
 //! ```text
 //! products[].id                         WTCG      the game family
@@ -16,17 +10,9 @@
 //!       └ installs[<uid>].tact_product  hsb       the TACT product code
 //! ```
 //!
-//! So a product's family is a lookup rather than a table to maintain, and it
-//! covers every title Blizzard publishes rather than the two that happened to
-//! be observed. Nothing here is written, requested or decoded out of a running
-//! process: these are files the client left on disk, parsed as the JSON they
-//! are.
-//!
-//! The cache is Blizzard's data in Lightforge's hands, so it is read the way
-//! any foreign input is, a fragment that will not parse, or that has a shape
-//! this does not recognise, is skipped rather than trusted or fatal. An empty
-//! result is the normal state of a prefix whose client has never run, and the
-//! caller falls back to the families that are compiled in.
+//! Files the client left on disk, read as foreign input: an unparsable or
+//! unfamiliar fragment is skipped. Empty means the client never ran, and the
+//! caller falls back to compiled-in families.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -38,22 +24,16 @@ use crate::tact::version::Region;
 
 /// Largest cache fragment worth parsing.
 ///
-/// The catalogue fragments are kilobytes; the same directory also holds the
-/// artwork they refer to, which is most of its 70-odd megabytes. The first
-/// byte already rules those out, and this rules out anything pathological.
+/// Fragments are kilobytes; the directory's ~70 MB is mostly artwork.
 const MAX_FRAGMENT: u64 = 4 * 1024 * 1024;
 
 /// Game families, by every product code that names one.
 ///
-/// Keyed by both the install key (`hs_beta`) and the TACT product code
-/// (`hsb`), because a product is known by the first in Battle.net's registry
-/// and by the second in ours, and either may be what a caller holds.
+/// Keyed by both the install key (`hs_beta`) and the TACT code (`hsb`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Families {
     by_code: BTreeMap<String, String>,
-    /// The client's own install key for a product, which is what its install
-    /// flow is addressed by and is not always the TACT code: Hearthstone is
-    /// `hsb` to the CDN and `hs_beta` to Battle.net.
+    /// The client's install key per product, what its install flow takes.
     uids: BTreeMap<String, String>,
     /// Battle.net's selector name for a product, by install key, already
     /// resolved through [`Fragment::strings`]: locale to text.
@@ -70,11 +50,8 @@ type Localized = BTreeMap<String, String>;
 impl Families {
     /// Read every catalogue fragment the client has cached.
     ///
-    /// Cheap despite the size of the directory: only files that begin with
-    /// `{` are read past their first byte, which on a real prefix is about
-    /// three megabytes out of seventy.
-    ///
-    /// `region` is the login region, which some fragments are conditional on.
+    /// Only files starting with `{` are read past their first byte (about 3 of
+    /// 70 MB). `region` is the login region some fragments depend on.
     pub fn read(layout: &Layout, user: &str, region: Region) -> Self {
         Self::read_dir(&layout.battle_net_cache(user), region)
     }
@@ -82,9 +59,7 @@ impl Families {
     fn read_dir(cache: &Path, region: Region) -> Self {
         let mut uid_to_family: BTreeMap<String, String> = BTreeMap::new();
         let mut uid_to_tact: BTreeMap<String, String> = BTreeMap::new();
-        // String ids, not text: a type names its strings by id, and the id
-        // can live in another fragment (`world_of_warcraft#…` for a name
-        // given in the preload fragment).
+        // String ids, which can live in another fragment.
         let mut name_ids: BTreeMap<String, String> = BTreeMap::new();
         let mut release_ids: BTreeMap<String, String> = BTreeMap::new();
         let mut strings: BTreeMap<String, Localized> = BTreeMap::new();
@@ -106,9 +81,8 @@ impl Families {
             for product in fragment.products {
                 let Some(family) = product.id else { continue };
                 for (key, entry) in product.base.types {
-                    // The preload fragment states only messages, no uid; its
-                    // type key is the install key in every fragment seen.
-                    // Not trusted for the family, though: `retail` is a key too.
+                    // A preload fragment has no uid; its type key is the
+                    // install key, but `retail` is one too, so no family.
                     let named = entry.uid.clone().unwrap_or(key);
                     if let Some(name) = entry.selector_display_name.or(entry.name).filter(|_| in_effect) {
                         name_ids.insert(named.clone(), name);
@@ -133,15 +107,10 @@ impl Families {
             }
         }
 
-        // Both spellings point at the same family. The install key is what
-        // Battle.net's registry calls a product; the TACT code is what the
-        // CDN and Lightforge call it, and for most titles they differ.
+        // Install key and TACT code both point at the family.
         let mut by_code = BTreeMap::new();
         let mut uids = BTreeMap::new();
-        // Kept only for ids something refers to; the full table is every
-        // storefront line Blizzard ships, in a dozen languages.
-        // Cloned rather than taken: two types can share one id (the beta's
-        // name is the CN beta's too).
+        // Only referenced ids. Cloned: two types can share one.
         let resolve = |ids: BTreeMap<String, String>| -> BTreeMap<String, Localized> {
             ids.into_iter()
                 .filter_map(|(uid, id)| Some((uid.to_ascii_lowercase(), strings.get(&id)?.clone())))
@@ -174,9 +143,7 @@ impl Families {
     /// The version part of Battle.net's name for a product: `Stress Test` out
     /// of `WoW: Forever - Stress Test`.
     ///
-    /// Only for a name built as *game - version*. Taking the whole name would
-    /// bring expansion names in (`Midnight Beta`, `Mists of Pandaria
-    /// Classic`), and the version picker deliberately never shows those.
+    /// Only for *game - version* names: no expansion names in the picker.
     pub fn version_name(&self, code: &str, locale: &str) -> Option<&str> {
         let name = localized(self.names.get(&self.uid_key(code))?, locale)?;
         // `deDE` writes an en dash where `default` has a hyphen.
@@ -190,9 +157,7 @@ impl Families {
     /// When a pre-installed product becomes playable, as Battle.net words it:
     /// `Available October 19, 2026`.
     ///
-    /// A caption, never a gate. Whether play is open is the account's
-    /// business, decided on Blizzard's side, and this cache only refreshes
-    /// when the client runs, so on release day it can still be here.
+    /// A caption, never a gate: the cache can be stale on release day.
     pub fn release_date(&self, code: &str, locale: &str) -> Option<&str> {
         localized(self.release_dates.get(&self.uid_key(code))?, locale)
     }
@@ -202,8 +167,7 @@ impl Families {
         self.uids.get(&code).map(|uid| uid.to_ascii_lowercase()).unwrap_or(code)
     }
 
-    /// How many product codes resolve. Zero means a cache that has never been
-    /// filled, which is a reason to fall back rather than a failure.
+    /// How many product codes resolve; zero means fall back.
     pub fn len(&self) -> usize {
         self.by_code.len()
     }
@@ -215,9 +179,7 @@ impl Families {
 
 /// Cache files that could be a catalogue fragment.
 ///
-/// The store is two levels of hex directories; everything in it is named
-/// after its own content hash, so the only way to tell JSON from a PNG is to
-/// look at the first byte.
+/// Content-hash names, so the first byte tells JSON from a PNG.
 fn fragments(cache: &Path) -> Vec<std::path::PathBuf> {
     let mut found = Vec::new();
     let Ok(outer) = std::fs::read_dir(cache) else {
@@ -243,12 +205,9 @@ fn fragments(cache: &Path) -> Vec<std::path::PathBuf> {
 
 /// The fragments Battle.net would show right now, by hash.
 ///
-/// The cache keeps every revision ever fetched (six of `world_of_warcraft` on
-/// a real prefix), so the newest root fragment says which are current. A
-/// conditional fragment is kept only when the condition can be decided here
-/// and holds; account conditions cannot, and guessing one is how the Forever
-/// beta once read "Available November 4". Missing a caption is cheaper than
-/// telling someone their game is not open.
+/// The newest root fragment says which revision is current. A conditional
+/// fragment counts only when decidable here and true; a guessed account
+/// condition once showed "Available November 4" for an open beta.
 fn current(fragments: &[(std::path::PathBuf, Fragment)], region: Region) -> std::collections::HashSet<String> {
     let modified = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
     let Some((root_path, root)) = fragments
@@ -341,9 +300,7 @@ fn parse(path: &Path) -> Option<Fragment> {
 
 /// One catalogue fragment, reduced to the two parts that answer the question.
 ///
-/// Everything else the client caches, artwork ids, storefront copy, regional
-/// permissions, is left unparsed on purpose: a shape we do not read cannot
-/// break when Blizzard changes it.
+/// Everything else stays unparsed, so it cannot break.
 #[derive(Debug, Deserialize)]
 struct Fragment {
     #[serde(default)]
@@ -375,8 +332,7 @@ struct Product {
 
 #[derive(Debug, Default, Deserialize)]
 struct Base {
-    /// `retail`, `ptr`, `beta`, and whatever else a title ships. All of them
-    /// belong to the same family, which is the only thing being asked.
+    /// `retail`, `ptr`, `beta`, ..., all of one family.
     #[serde(default)]
     types: BTreeMap<String, TypeEntry>,
 }

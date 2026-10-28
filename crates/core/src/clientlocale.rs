@@ -1,19 +1,14 @@
 //! The language the WoW client starts in.
 //!
-//! `.build.info` says which language was *downloaded*; the client itself reads
-//! `textLocale` and `audioLocale` from `WTF/Config.wtf`, and asks in a dialog
-//! when they are absent. So changing a game's language means editing those two
-//! lines, and nothing else in a file that belongs to the player.
+//! The client reads `textLocale` and `audioLocale` from `WTF/Config.wtf`
+//! (asking when absent), not `.build.info`; only those two lines are edited.
 
 use std::io;
 use std::path::Path;
 
 const KEYS: [&str; 2] = ["textLocale", "audioLocale"];
 
-/// Point `config_wtf` at `locale`, keeping every other line as it was.
-///
-/// Written beside the file and renamed over it, so a crash leaves either the
-/// old settings or the new, never half of them.
+/// Point `config_wtf` at `locale` atomically, keeping every other line.
 pub fn set(config_wtf: &Path, locale: &str) -> io::Result<()> {
     let old = match std::fs::read_to_string(config_wtf) {
         Ok(text) => text,

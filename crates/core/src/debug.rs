@@ -1,13 +1,7 @@
 //! The "Copy Debug Info" bundle.
 //!
-//! One block of text a user can paste into a bug report without hunting for
-//! version numbers. It lives here rather than in the GUI because it is only
-//! gathering facts, and because the CLI wants the same block when someone is
-//! being helped over a terminal.
-//!
-//! Nothing here fails: a fact that cannot be read is reported as unavailable
-//! and the rest is still produced. A debug bundle that refuses to render
-//! because one file is missing is useless exactly when it is needed.
+//! One block of text to paste into a bug report, shared by GUI and CLI.
+//! Nothing here fails: an unreadable fact is reported as unavailable.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -33,22 +27,16 @@ pub struct DebugInfo {
     pub dxvk: Option<String>,
     pub vkd3d: Option<String>,
     pub prefix: PathBuf,
-    /// Distribution and kernel. Fields rather than looked up inside
-    /// [`DebugInfo::render`] so a caller can tag a report with them without
-    /// parsing the rendered block back apart.
+    /// Distribution and kernel, as fields so a report can be tagged with them.
     pub os: String,
     pub kernel: String,
     /// Display server and desktop, e.g. `wayland (KDE)`.
     pub session: Option<String>,
-    /// Kernel driver and PCI id behind each render node, e.g.
-    /// `amdgpu 1002:744c`. The single most useful line in a report about a
-    /// game that will not draw.
+    /// Kernel driver and PCI id behind each render node, e.g. `amdgpu 1002:744c`.
     pub gpu_driver: Option<String>,
     /// The proprietary NVIDIA module's version, when that is what is loaded.
     pub nvidia: Option<String>,
-    /// What the renderer actually picked, and over which API. Filled in by the
-    /// GUI, which is the only half of Lightforge that has a renderer, the CLI
-    /// leaves it empty rather than opening a window to find out.
+    /// What the renderer picked, and over which API; empty from the CLI.
     pub graphics: Option<String>,
     pub graphics_backend: Option<String>,
     /// Processor model and total RAM, from the same place.
@@ -65,8 +53,7 @@ pub struct CrashLog {
     pub tail: String,
 }
 
-/// Lines of a log to keep. Enough to show the failure, short enough to paste
-/// into a chat window without anyone complaining.
+/// Lines of a log to keep.
 const TAIL_LINES: usize = 40;
 
 impl DebugInfo {
@@ -165,20 +152,14 @@ impl DebugInfo {
 
 /// Take the person's name out of a rendered bundle.
 ///
-/// A bundle is pasted into chat rooms and uploaded to our own server, and on
-/// Linux the home directory is spelled with the account name. Rewriting
-/// `$HOME` to `~` is not enough on its own: a game library can sit on
-/// `/run/media/<name>/…`, nowhere near home, and the crash log tail carries
-/// whatever absolute paths the client happened to write. So the name itself is
-/// substituted too, wherever it survived the first pass.
+/// `$HOME` becomes `~`, and the name itself is replaced wherever it survived:
+/// `/run/media/<name>/…`, paths in a crash log.
 pub fn scrub(text: &str) -> String {
     let home = directories::UserDirs::new().map(|d| d.home_dir().to_path_buf());
     scrub_with(text, home.as_deref())
 }
 
-/// The shortest account name worth substituting on its own. A two-letter
-/// login would turn every "to" in a crash log into `<user>`; the home path
-/// rewrite above still covers such a name where it matters.
+/// The shortest account name substituted on its own: not "jo" in "going".
 const MIN_NAME: usize = 3;
 
 /// The body of [`scrub`], with the home directory passed in so it is testable
@@ -198,9 +179,7 @@ fn scrub_with(text: &str, home: Option<&Path>) -> String {
 
 /// Read a bundled component's version out of a Proton build.
 ///
-/// Proton ships these as plain text next to its own `version` file; the exact
-/// layout has moved between releases, so several known locations are tried
-/// rather than assuming one.
+/// Several locations: the layout has moved between releases.
 fn component_version(proton: &Path, component: &str) -> Option<String> {
     let candidates = [
         proton.join(format!("{component}.version")),
@@ -242,10 +221,7 @@ fn newest_log(install: &Path) -> Option<CrashLog> {
     Some(CrashLog { path, modified: Some(modified), tail })
 }
 
-/// Display server and desktop, as the two environment variables that every
-/// session manager sets. Read rather than detected: asking the compositor
-/// would mean talking to one, and this only has to be good enough to tell a
-/// Wayland bug from an X11 one.
+/// Display server and desktop, from the session's environment.
 fn session() -> Option<String> {
     let var = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
     match (var("XDG_SESSION_TYPE"), var("XDG_CURRENT_DESKTOP")) {
@@ -258,11 +234,7 @@ fn session() -> Option<String> {
 
 /// Which kernel driver sits behind each card, and which card it is.
 ///
-/// Read out of `/sys` rather than by running `vulkaninfo` or `glxinfo`:
-/// neither is installed by default on a gaming distro, and Lightforge does not
-/// depend on desktop binaries. `uevent` carries both facts in one file, and
-/// the PCI id is enough to identify the card against a public table without
-/// shipping one.
+/// From `/sys` (`uevent`), not `vulkaninfo` or `glxinfo`, which may be missing.
 fn gpu_driver() -> Option<String> {
     let entries = std::fs::read_dir("/sys/class/drm").ok()?;
     let mut cards: Vec<String> = Vec::new();
@@ -293,8 +265,7 @@ fn gpu_driver() -> Option<String> {
     (!cards.is_empty()).then(|| cards.join(", "))
 }
 
-/// The proprietary module's version, when it is the one loaded. Absent on an
-/// open-stack machine, which is itself the answer.
+/// The proprietary module's version, when it is the one loaded.
 pub(crate) fn nvidia_version() -> Option<String> {
     let text = std::fs::read_to_string("/proc/driver/nvidia/version").ok()?;
     // "NVRM version: NVIDIA UNIX x86_64 Kernel Module  580.82.07  ...", the
@@ -304,8 +275,7 @@ pub(crate) fn nvidia_version() -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Write the machine's identity to the log: the first thing anyone reading it
-/// for a bug report needs, and cheap enough to repeat at every start.
+/// Write the machine's identity to the log, at every start.
 pub fn log_environment() {
     tracing::info!(
         "system: {}, kernel {}, session {}, gpu {}, nvidia {}",

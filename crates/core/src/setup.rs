@@ -1,14 +1,7 @@
 //! First-run provisioning: Proton, the prefix, and Battle.net.
 //!
-//! The three steps a user otherwise has to run from the CLI before anything in
-//! the dashboard works, in the only order they can be done in, Proton has to
-//! exist before a prefix can be built with it, and the prefix has to exist
-//! before Battle.net can be installed into it.
-//!
-//! Every step is idempotent and reports itself skipped when there is nothing to
-//! do, so running setup again after a partial failure resumes rather than
-//! redoes. Like [`crate::tact::install`], it reports through an [`Event`]
-//! callback so both front-ends can drive it.
+//! In the only possible order. Every step is idempotent and reports itself
+//! skipped, so a rerun resumes. Reports through [`Event`]s.
 
 use std::path::{Path, PathBuf};
 
@@ -29,20 +22,10 @@ pub struct Status {
     pub installed: Vec<ProtonRelease>,
     pub prefix: PrefixStatus,
     pub battle_net: bool,
-    /// Whether Battle.net is wanted at all.
-    ///
-    /// Declining it during setup is a supported choice, WoW is downloaded and
-    /// launched by Lightforge alone, so a machine without it is not an
-    /// unfinished one. Everything that asks "is setup done" has to know the
-    /// difference, or the dashboard spends forever offering to finish a step
-    /// the user said no to.
+    /// Whether Battle.net is wanted at all; declining it still finishes setup.
     pub battle_net_wanted: bool,
-    /// Whether this machine has a 32-bit runtime at all.
-    ///
-    /// Only the cheap loader check ([`runtime::check_loader`]), one `stat`,
-    /// so inspecting is still free enough to do on every reload. The deeper
-    /// check that actually starts Proton's 32-bit wine runs in [`run`], where
-    /// Proton is guaranteed to exist and the cost is paid once.
+    /// Whether this machine has a 32-bit runtime: the cheap
+    /// [`runtime::check_loader`]. [`run`] does the deeper check.
     pub thirty_two_bit: bool,
 }
 
@@ -63,8 +46,7 @@ impl Status {
         }
     }
 
-    /// Nothing left to provision: the dashboard can install, launch and hand
-    /// off to Battle.net without help from the CLI.
+    /// Nothing left to provision.
     pub fn is_ready(&self) -> bool {
         self.proton.is_some() && self.prefix.is_ready() && (self.battle_net || !self.battle_net_wanted)
     }
@@ -102,8 +84,7 @@ impl Step {
         }
     }
 
-    /// Roughly what this step is about to do, for a UI that wants to say so
-    /// before it starts rather than after.
+    /// Roughly what this step is about to do.
     pub fn detail(&self) -> &'static str {
         match self {
             Self::Proton => "downloading and verifying a Proton-GE build (~400 MB)",
@@ -144,20 +125,13 @@ pub async fn run(
         status.battle_net_wanted,
     );
 
-    // Before anything is downloaded. Battle.net's installer is 32-bit, and it
-    // is the only 32-bit thing in this sequence, so a machine with no 32-bit
-    // userspace sails through Proton and prefix creation and dies on the last
-    // step. Checking here costs one `stat` and saves a 400 MB download the
-    // user could not have used. Only when Battle.net is still to come: WoW
-    // alone is 64-bit, and a setup that declined Battle.net needs none of it.
+    // Before any download: the installer is the only 32-bit step. Only when
+    // Battle.net is wanted.
     if !status.battle_net && status.battle_net_wanted {
         runtime::check_loader()?;
     }
 
-    // 1. Proton. Everything else runs *through* a Proton build, so this is
-    //    first whether the user cares about it or not.
-    //    Not "any build will do": a newer one found in Steam's folders is not
-    //    one Lightforge was tested on, and 11-9 could not install Battle.net.
+    // 1. Proton: the tested build, not just any (11-9 could not install Battle.net).
     let wanted = proton_version.unwrap_or(proton::TESTED);
     let build = match &status.proton {
         Some(build) if build.version == wanted => {
@@ -205,14 +179,8 @@ pub async fn run(
         status.prefix = prefix;
     }
 
-    // 3. Battle.net, which needs a built prefix to install into, and, unlike
-    //    every step before it, a working 32-bit wine. The loader check above
-    //    catches a system with no 32-bit userspace at all; this catches one
-    //    where it exists but a library Proton's wine needs does not, and the
-    //    dynamic loader says which.
-    //
-    //    Skipped entirely when it was declined: the user is told at that point
-    //    that only WoW will work, and Settings can install it later.
+    // 3. Battle.net, unless declined. Needs a working 32-bit wine; this check
+    //    names a missing library the loader check cannot see.
     if !status.battle_net && !status.battle_net_wanted {
         status.proton = Some(build);
         return Ok(status);
@@ -272,11 +240,7 @@ fn logged(mut on_event: impl FnMut(Event)) -> impl FnMut(Event) {
 
 /// Install one Proton build and nothing else.
 ///
-/// [`run`] also installs a build when one is missing, but it goes on to the
-/// prefix and Battle.net afterwards, which is right for "set this machine
-/// up" and wrong for "add this build to the list". Pressing Install beside a
-/// version on the Proton page should not create a Wine prefix as a side
-/// effect, and on a machine that is not provisioned yet it would.
+/// Unlike [`run`], creates no prefix as a side effect.
 pub async fn install_build(
     dirs: &AppDirs,
     version: &str,

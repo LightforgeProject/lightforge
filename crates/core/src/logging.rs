@@ -1,21 +1,11 @@
 //! The launcher's own log file.
 //!
-//! `tracing` events from the GUI and the CLI land in
-//! `~/.local/share/Lightforge/logs/<name>.log`, so a failure that scrolled out
-//! of a terminal, or happened under a desktop entry with no terminal at all,
-//! can still be read afterwards.
+//! `tracing` events land in `~/.local/share/Lightforge/logs/<name>.log`.
 //!
-//! Two promises shape the code:
-//!
-//! - **Bounded disk use.** A file is rotated at [`MAX_BYTES`] and [`KEEP`]
-//!   older ones are kept, so one binary never holds more than
-//!   `MAX_BYTES * (KEEP + 1)` (16 MiB). Rotation by size rather than by day
-//!   because a day is not a bound: one stuck retry loop fills a disk in an
-//!   afternoon.
-//! - **Logging never takes the app down.** If the directory cannot be
-//!   created, [`init`] returns the reason and the caller carries on without a
-//!   log. A write that fails later is dropped silently, because the only place
-//!   left to report it is the log.
+//! - **Bounded**: rotated by size at `MAX_BYTES`, `KEEP` kept, 16 MiB per
+//!   binary. By size, not by day: a retry loop fills a disk in an afternoon.
+//! - **Never fatal**: [`init`] returns why it could not start, and a failed
+//!   write is dropped (the log is the only place to report it).
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -63,9 +53,7 @@ pub enum LogError {
 
 /// Start logging to `<log dir>/<name>.log` and return the file's path.
 ///
-/// Also installs a panic hook that writes the panic, with its location, to
-/// the log before the default hook prints it, so a crash leaves a trace even
-/// when nobody was watching the terminal.
+/// Also installs a panic hook that logs the panic and its location.
 pub fn init(dirs: &AppDirs, name: &str) -> Result<PathBuf, LogError> {
     let dir = dirs.log_dir();
     fs::create_dir_all(&dir).map_err(|source| LogError::Dir { path: dir.clone(), source })?;
@@ -77,8 +65,7 @@ pub fn init(dirs: &AppDirs, name: &str) -> Result<PathBuf, LogError> {
         .ok()
         .and_then(|value| value.trim().parse::<LevelFilter>().ok())
         .unwrap_or(LevelFilter::INFO);
-    // Our crates at the chosen level, everything else (iced, wgpu, hyper) at
-    // warnings only: their info chatter would rotate the useful lines away.
+    // Other crates at warnings only, or their chatter rotates ours away.
     let filter = Targets::new()
         .with_default(LevelFilter::WARN)
         .with_target("lightforge_core", level)
@@ -112,10 +99,7 @@ pub fn error(context: &str, error: &dyn std::error::Error) {
 /// Lets one call in `every` seconds through, and says how many were held back
 /// since the last one that passed.
 ///
-/// For failures that repeat thousands of times in a minute (a CDN host that is
-/// down fails every request to it): the first and then a periodic line say
-/// what is happening, and the count says how bad it is, without the log
-/// rotating its own history away.
+/// For failures that repeat thousands of times (a CDN host that is down).
 ///
 /// ```ignore
 /// static SLOT: Throttle = Throttle::new();
@@ -217,8 +201,7 @@ impl RotatingFile {
         let file = open_append(path)?;
         let written = file.metadata()?.len();
         let mut inner = Inner { path: path.to_path_buf(), file: Some(file), written, max };
-        // A file left over the limit by an earlier run is rotated before the
-        // first line, not after another megabyte.
+        // An earlier run's oversized file is rotated first.
         if inner.written >= inner.max {
             inner.rotate();
         }
@@ -244,8 +227,7 @@ impl Inner {
             let _ = fs::rename(numbered(n), numbered(n + 1));
         }
         if fs::rename(&self.path, numbered(1)).is_err() {
-            // Cannot move it aside (read-only directory, say): truncating
-            // keeps the size bounded, which matters more than the history.
+            // Cannot move it aside: truncate, the bound matters more.
             let _ = fs::remove_file(&self.path);
         }
         self.file = open_append(&self.path).ok();

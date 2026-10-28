@@ -1,9 +1,7 @@
 //! WoW product identity and per-product profile.
 //!
-//! A "product" is one independently-managed WoW install: Retail, Classic, PTR,
-//! or a user-added custom entry. Each carries its own Proton-GE pin, its own
-//! realmlist/CDN overrides, and its own prefix state, switching one must never
-//! disturb another.
+//! A product is one independently managed install: Retail, Classic, a PTR, or
+//! a custom entry, each with its own pin and overrides.
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -15,9 +13,8 @@ use serde::{Deserialize, Serialize};
 /// Blizzard's TACT product code (the `--productcode=` argument, and the value
 /// in a `.build.info` `Product!` column).
 ///
-/// Official codes are modelled as variants so the common paths are
-/// exhaustively matchable; anything else round-trips through
-/// [`ProductCode::Custom`] so user-added entries are first-class.
+/// Official codes are variants; anything else round-trips through
+/// [`ProductCode::Custom`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum ProductCode {
@@ -89,15 +86,8 @@ impl ProductCode {
         }
     }
 
-    /// A few characters that identify this product in a space too small for
-    /// its display name, the dashboard's product bar, before a product has
-    /// artwork of its own.
-    ///
-    /// Distinguishing, not descriptive: every one of these is a World of
-    /// Warcraft, so the word that tells them apart is the only word worth the
-    /// room. The two betas are separated by line rather than both reading
-    /// "Beta", since a launcher that cannot tell them apart is exactly the
-    /// launcher that installs the wrong one.
+    /// A few characters for the product bar before a product has art: the
+    /// word that tells them apart, so the two betas differ.
     pub fn short_name(&self) -> &str {
         match self {
             Self::Retail => "Retail",
@@ -116,11 +106,7 @@ impl ProductCode {
 
     /// The game binary this product is expected to ship, by name only.
     ///
-    /// A hint, not an authority; see [`crate::paths::Layout::wow_exe`], which
-    /// prefers what is actually on disk. One real install carries three
-    /// different names: `_retail_/Wow.exe`, `_classic_era_/WowClassic.exe` and
-    /// `_classic_beta_/WowB.exe`, so a table alone would be guessing for any
-    /// flavor nobody has looked inside yet.
+    /// A hint; [`crate::paths::game_executable`] prefers what is on disk.
     pub fn executable(&self) -> &str {
         match self {
             // `wowf`'s product config names `Wow.exe`, not a Classic name.
@@ -136,9 +122,7 @@ impl ProductCode {
     /// The install subdirectory this product uses beneath the WoW root, e.g.
     /// `_retail_`.
     ///
-    /// Borrowed for every code with a fixed answer, owned only for the custom
-    /// `wow_*` codes whose directory is derived, which is why this is a
-    /// [`Cow`] rather than a `&str`.
+    /// Owned only for derived `wow_*` codes.
     pub fn install_dir(&self) -> Cow<'_, str> {
         Cow::Borrowed(match self {
             Self::Retail => "_retail_",
@@ -152,13 +136,8 @@ impl ProductCode {
             // A real install carries `_classic_beta_/WowB.exe`.
             Self::ClassicBeta => "_classic_beta_",
             // From `wowf`'s product config (`shared_container_default_subfolder`).
-            // The code is not `wow_<flavor>` shaped, so the fallback below
-            // would have answered a literal `wowf/`.
             Self::Forever => "_forever_",
-            // A code this build does not know still follows the convention
-            // every known one does: `wow_<flavor>` installs to `_<flavor>_`.
-            // Deriving it beats installing into a literal `wow_foo/` directory
-            // no WoW client would ever look in.
+            // An unknown `wow_<flavor>` installs to `_<flavor>_`, as all known ones do.
             Self::Custom(code) => match code.strip_prefix("wow_") {
                 Some(flavor) if !flavor.is_empty() => return Cow::Owned(format!("_{flavor}_")),
                 _ => code,
@@ -168,10 +147,8 @@ impl ProductCode {
 }
 
 impl ProductCode {
-    /// Whether a code can be used as a folder name: a custom code becomes one
-    /// (see [`Self::install_dir`]), so `../x` or `a/b` would install outside
-    /// the game folder. Every code Blizzard uses is ASCII letters, digits and
-    /// `_`.
+    /// Whether a code can be a folder name ([`Self::install_dir`]): ASCII
+    /// letters, digits and `_`, as all of Blizzard's are.
     pub fn is_well_formed(&self) -> bool {
         match self {
             Self::Custom(code) => is_well_formed(code),
@@ -233,22 +210,16 @@ impl fmt::Display for ProductCode {
 
 /// Which game a product is, with the branch factored out.
 ///
-/// PTR and beta are *versions of* a game, not games beside it, Blizzard's own
-/// launcher presents one tile per line with a version picker behind it, and
-/// showing five World of Warcrafts in a row implies five different games.
+/// PTR and beta are versions of a game: one tile per line, as Battle.net does.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ProductLine {
     Retail,
     Classic,
     ClassicEra,
-    /// "World of Warcraft: Forever": `wowf`, with the retired beta beside it. Its own line rather
-    /// than a branch of Era: Battle.net gives it its own game family (`WoWF`,
-    /// see [`crate::battlenet`]) and its own tile, and this bar is modelled on
-    /// that one. Its *addons* are still Era addons, compatibility and
-    /// identity are different questions.
+    /// "World of Warcraft: Forever": `wowf`, with the retired beta beside it.
+    /// Its own line, as Battle.net's `WoWF` family and tile; its addons are Era's.
     Forever,
-    /// A code Lightforge doesn't model. Its own line of one, since nothing
-    /// can be assumed about what a custom server is a branch of.
+    /// A code Lightforge doesn't model: a line of one.
     Custom(String),
 }
 
@@ -275,26 +246,20 @@ impl ProductLine {
         }
     }
 
-    /// The product this line *is* when nobody has picked a branch: its live
-    /// one. Also what the UI themes a branch from when the branch has no art
-    /// of its own, Classic's PTR should look like Classic, not like whatever
-    /// the manifest happens to default to.
+    /// The line's live product, also what a branch without art is themed from.
     pub fn head(&self) -> ProductCode {
         match self {
             Self::Retail => ProductCode::Retail,
             Self::Classic => ProductCode::Classic,
             Self::ClassicEra => ProductCode::ClassicEra,
-            // Live `wowf`. The beta it replaced is still a branch so an
-            // install of it keeps working, but it is no longer the head.
+            // Live `wowf`; the beta stays a branch.
             Self::Forever => ProductCode::Forever,
             Self::Custom(code) => ProductCode::Custom(code.clone()),
         }
     }
 
-    /// Every branch of this line Lightforge knows, live first.
-    ///
-    /// Knowing about a branch is not the same as having it installed or even
-    /// configured. This is the menu, not the inventory.
+    /// Every branch of this line Lightforge knows, live first: the menu, not
+    /// the inventory.
     pub fn branches(&self) -> Vec<ProductCode> {
         match self {
             Self::Retail => vec![ProductCode::Retail, ProductCode::Ptr, ProductCode::Ptr2, ProductCode::Beta],
@@ -370,9 +335,7 @@ impl FromStr for Branch {
 
 /// A manifest named a branch this build does not know.
 ///
-/// Unlike a line, a branch cannot be invented: the set is closed, and
-/// guessing would put a product in a version list under a name the UI cannot
-/// render. Callers treat it as "no branch stated" and fall back.
+/// The set is closed; callers fall back as if no branch were stated.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("unknown branch `{0}`")]
 pub struct UnknownBranch(pub String);
@@ -385,9 +348,7 @@ impl fmt::Display for Branch {
 
 /// Every product code this build knows by name, live builds first.
 ///
-/// The client's half of the catalog: what Lightforge can describe without
-/// asking anyone. [`Catalog`] layers the hosted manifest on top, so a product
-/// Blizzard adds after this binary shipped still lands in the right place.
+/// The built-in half of the catalog; [`Catalog`] layers the manifest on top.
 pub const KNOWN_CODES: &[ProductCode] = &[
     ProductCode::Retail,
     ProductCode::Ptr,
@@ -406,20 +367,13 @@ pub const KNOWN_CODES: &[ProductCode] = &[
 pub enum Kind {
     /// The WoW family: Lightforge plans, downloads and launches it.
     Managed,
-    /// Everything else. `SPEC.md` is explicit that Lightforge is
-    /// WoW-family-primary and a pass-through for the rest, so these are
-    /// listed and started, never downloaded or updated here.
+    /// Everything else: listed and started, never downloaded here (`SPEC.md`).
     HandOff,
 }
 
 impl Kind {
-    /// Which side of that line a product code falls on.
-    ///
-    /// By code shape rather than by a table, so a product Blizzard ships
-    /// after this binary lands in the right half. A custom server whose code
-    /// does not mention `wow` is read as a hand-off, which is the safe way to
-    /// be wrong: it offers less rather than promising an install Lightforge
-    /// cannot actually perform.
+    /// Which side a product code falls on, by its shape, so new codes work.
+    /// A code without `wow` is a hand-off: the safe way to be wrong.
     pub fn of(code: &ProductCode) -> Self {
         match matches!(code, ProductCode::Custom(_)) && !code.as_str().starts_with("wow") {
             true => Self::HandOff,
@@ -441,15 +395,9 @@ pub struct CatalogEntry {
 
 /// Which products exist, what they are called, and how they group.
 ///
-/// Built into the binary, then overridden by the hosted manifest. The split
-/// matters: Blizzard publishes no product listing, `tact::version` documents
-/// the dead `summary` endpoint, so the set of products is something someone
-/// has to *state*, and stating it in a document that revalidates on every
-/// launch beats stating it in a binary that ships every few weeks.
-///
-/// Only identity is server-driven. Where files go and what runs stays derived
-/// from the code, because a typo in a manifest should mis-*label* a product,
-/// never install one over another.
+/// Built in, then overridden by the hosted manifest: Blizzard publishes no
+/// product listing. Only identity comes from the manifest; paths stay derived
+/// from the code.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Catalog {
     entries: Vec<CatalogEntry>,
@@ -465,8 +413,7 @@ impl Catalog {
     /// What this binary knows on its own, with no manifest in hand.
     pub fn builtin() -> Self {
         let wow = KNOWN_CODES.iter().map(|code| CatalogEntry {
-            // A live branch is the line itself, and its label names the tile
-            // and the Add a game row: "Forever", not "Forever Live".
+            // "Forever", not "Forever Live".
             label: match code.branch() {
                 Branch::Live => code.line().label().to_owned(),
                 branch => format!("{} {}", code.line().label(), branch.label()),
@@ -477,14 +424,8 @@ impl Catalog {
             code: code.clone(),
         });
 
-        // Everything else Blizzard publishes, from the table the version
-        // service already probes against. This is why that table and this
-        // catalog are one list rather than two that drift.
-        //
-        // Filtered by what is already covered rather than by kind: the table
-        // holds WoW products that are not `ProductCode` variants,
-        // `wow_anniversary` is one, and dropping those would lose them from
-        // the catalog altogether.
+        // Everything else, from the version service's probe table. Filtered by
+        // what is covered, not by kind: `wow_anniversary` is no variant.
         let rest = crate::tact::version::KNOWN_PRODUCTS
             .iter()
             .map(|(code, label)| (ProductCode::from((*code).to_owned()), *label))
@@ -502,9 +443,8 @@ impl Catalog {
 
     /// Layer stated entries over the built-in ones.
     ///
-    /// A stated code replaces its built-in entry; an unknown one is appended.
-    /// Order follows the statement, then whatever built-ins it did not
-    /// mention, so a manifest controls how the bar reads.
+    /// A stated code replaces its built-in entry, an unknown one is appended,
+    /// in the manifest's order.
     pub fn with(stated: impl IntoIterator<Item = CatalogEntry>) -> Self {
         let mut entries: Vec<CatalogEntry> = stated.into_iter().collect();
         for builtin in Self::builtin().entries {
@@ -529,16 +469,8 @@ impl Catalog {
         self.get(code).map(|e| e.line.clone()).unwrap_or_else(|| code.line())
     }
 
-    /// Adopt the product codes Battle.net itself uses.
-    ///
-    /// `version::KNOWN_PRODUCTS` carries `hsb` for Hearthstone; the client and
-    /// `product.db` both say `hs_beta`. Nothing lines up while the catalog
-    /// holds one and the machine holds the other, the browse panel adds a
-    /// code that never matches what is installed.
-    ///
-    /// Two codes are the same game when they resolve to the same Battle.net
-    /// game family, which is the client's own notion of identity and the only
-    /// one available: the codes themselves share no pattern.
+    /// Adopt the product codes Battle.net itself uses (`hs_beta`, not `hsb`).
+    /// Two codes are one game when they share a Battle.net game family.
     pub fn reconcile(&mut self, known: &[String]) {
         for entry in &mut self.entries {
             if entry.kind != Kind::HandOff {
@@ -557,12 +489,7 @@ impl Catalog {
                 entry.code = ProductCode::from(code.clone());
             }
         }
-        // Two keys can name one game. The asset manifest carries both `hsb`
-        // and `hs_beta` on purpose, artwork is looked up by whichever code
-        // the machine reports, and every manifest key becomes a catalog
-        // entry, so Hearthstone arrives twice and the rewrite above makes the
-        // two identical. Keeping the first is what collapses the duplicate
-        // row in Add a game.
+        // The asset manifest names Hearthstone under both codes; keep the first.
         let mut seen: HashSet<ProductCode> = HashSet::new();
         self.entries.retain(|entry| seen.insert(entry.code.clone()));
     }
@@ -617,17 +544,15 @@ impl Product {
 
 /// Everything the user can configure per product.
 ///
-/// `None` on an override means "use the product's stock behavior"; this is the
-/// distinction that keeps a custom realmlist from leaking into Retail.
+/// `None` on an override means the product's stock behaviour.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProductProfile {
     /// Which Proton-GE build this product launches under. `None` means the
     /// app-wide default applies.
     pub proton_ge_version: Option<String>,
-    /// Id of the storage library this product is installed in. `None` means
-    /// the default one, which is also what a fresh product gets, the
-    /// assignment is written when the install is queued, not before.
+    /// Id of the storage library this product is in; `None` until the install
+    /// is queued, meaning the default.
     pub library: Option<String>,
     /// Contents written to the product's `realmlist`/portal config, if set.
     pub realmlist_override: Option<String>,
@@ -635,13 +560,9 @@ pub struct ProductProfile {
     pub cdn_override: Option<String>,
     /// Launch settings for this product: wrappers and environment.
     pub tweaks: crate::tweaks::Tweaks,
-    /// Optional content opted in to, by download-manifest tag name, e.g.
-    /// `HighRes`. Empty matches Battle.net, which installs none of it unless
-    /// asked.
+    /// Optional content opted in to, by tag name, e.g. `HighRes`.
     pub optional_content: Vec<String>,
-    /// What the last plan said this product offers. A cache, not a setting:
-    /// the list is only knowable after reading the build's download manifest,
-    /// so the panel would have nothing to show before the first refresh.
+    /// What the last plan said this product offers: a cache, not a setting.
     pub optional_available: Vec<String>,
     /// The language this product is installed in, e.g. `deDE`. `None` follows
     /// [`crate::config::Config::locale`], the one chosen at setup.
@@ -859,8 +780,7 @@ mod tests {
         assert_eq!(ProductCode::EraPtr.install_dir(), "_classic_era_ptr_");
     }
 
-    /// Measured from `wowf`'s product config, 2026-10-14. As an unknown code
-    /// it would have installed into a literal `wowf/`, where no client looks.
+    /// Measured from `wowf`'s product config, 2026-10-14.
     #[test]
     fn forever_installs_where_its_product_config_says() {
         let code: ProductCode = "wowf".parse().unwrap();

@@ -1,12 +1,7 @@
 //! The download queue as it stood, kept across restarts.
 //!
-//! Only the queue's shape is kept, what is in it, in what order, and how far
-//! each job had got. The bytes themselves are the store's business: it is
-//! checkpointed as it goes, and a restored transfer re-plans against it like
-//! any resume.
-//!
-//! Beside the config rather than in it: this is state the app writes on every
-//! pause and resume, not settings anyone edits.
+//! Only the queue's shape; a restored transfer re-plans against the store.
+//! Beside the config, not in it: state, not settings.
 
 use std::path::Path;
 
@@ -44,8 +39,7 @@ pub struct Saved {
     /// Bytes the job's first plan asked for, if it had planned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_bytes: Option<u64>,
-    /// Bytes done when it was paused. Not tracked while running, the store
-    /// knows that better, and the next plan reads it back.
+    /// Bytes done when it was paused.
     #[serde(default)]
     pub reached: u64,
 }
@@ -68,9 +62,7 @@ impl Queue {
             .map_err(|source| TransfersError::Parse { path: path.to_path_buf(), source })
     }
 
-    /// Write via a temporary file, flushed before the rename, so a crash
-    /// mid-save leaves the last good queue rather than half of one or an
-    /// empty file. An empty queue removes the file.
+    /// Write atomically; an empty queue removes the file.
     pub fn save(&self, path: &Path) -> Result<(), TransfersError> {
         let write = |source| TransfersError::Write { path: path.to_path_buf(), source };
         if self.entries.is_empty() {

@@ -1,19 +1,12 @@
 //! Snapshots of a game's `WTF/Account` folder.
 //!
-//! Everything a player has set up inside the client lives there: every
-//! addon's SavedVariables, key bindings, macros, the account-synced cvars. An
-//! addon update that migrates its saved data, or a client patch that rewrites
-//! it, can lose that in one login, and none of it is anywhere else.
+//! SavedVariables, bindings, macros: an addon migration or a client patch can
+//! lose them in one login.
 //!
 //! One backup is one `.tar.zst` in the app data directory, outside the game
-//! library, so uninstalling a game or losing its drive does not take the
-//! backups with it. The archive carries its own description as its first
-//! member, so a backup is a single file: it is written to a temp file and
-//! renamed into place, and there is no index that could disagree with it.
-//!
-//! A backup is skipped when nothing changed since the newest one on the same
-//! build. The unattended addon pass runs on every start, and without that
-//! check it would rotate the real history out with identical copies.
+//! library, describing itself in its first member: no index. A backup is
+//! skipped when nothing changed on the same build, or the addon pass on every
+//! start would rotate history out with copies.
 
 use std::fs;
 use std::io::{self, Read};
@@ -35,8 +28,7 @@ const META: &str = "lightforge-backup.toml";
 /// Where the folder's contents sit inside the archive.
 const ROOT: &str = "Account";
 const EXTENSION: &str = ".tar.zst";
-/// zstd's own default: well past the point where a higher level stops paying
-/// for itself on Lua text, and fast enough not to be noticed before a launch.
+/// zstd's default; higher levels buy little on Lua text.
 const LEVEL: i32 = 3;
 /// Beside `Account` in `WTF`, so both renames stay on one filesystem.
 const STAGING: &str = ".lightforge-restore";
@@ -81,8 +73,7 @@ impl Reason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Backup {
     pub path: PathBuf,
-    /// Milliseconds since the epoch. Finer than the clock a person reads, so
-    /// two backups a second apart still sort in the order they were taken.
+    /// Milliseconds since the epoch, so close backups still sort.
     pub created: u64,
     pub reason: Reason,
     /// The client build installed when it was taken.
@@ -148,9 +139,7 @@ impl Plan {
         }
     }
 
-    /// Every readable backup, newest first. Files that are not one are left
-    /// alone rather than reported: the directory is ours, but a stray file in
-    /// it should not hide the backups beside it.
+    /// Every readable backup, newest first; stray files are ignored.
     pub fn list(&self) -> Result<Vec<Backup>, BackupError> {
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
@@ -190,16 +179,14 @@ impl Plan {
 
     /// Replace `Account` with what `backup` holds. The client must be closed.
     ///
-    /// The archive is unpacked before anything is touched, so a damaged one
-    /// fails with the current folder intact. The current state is then backed
-    /// up, and the swap is two renames on one filesystem. Returns that safety
-    /// backup, or `None` when it was already identical to an existing one.
+    /// Unpacked first, so a damaged archive leaves the folder intact; the
+    /// current state is backed up, then two renames. Returns that safety
+    /// backup, or `None` when one identical existed.
     pub fn restore(&self, backup: &Backup) -> Result<Option<Backup>, BackupError> {
         let wtf = self.account_dir.parent().unwrap_or(Path::new("."));
         let staging = wtf.join(STAGING);
         let replaced = wtf.join(REPLACED);
-        // Leftovers from a restore that was interrupted. Neither is ever the
-        // live folder: that one is only ever called `Account`.
+        // Leftovers of an interrupted restore, never the live `Account`.
         remove_if_present(&staging)?;
         remove_if_present(&replaced)?;
 
@@ -220,8 +207,7 @@ impl Plan {
             }
             return Err(io(&self.account_dir)(e));
         }
-        // The restore has happened; failing to tidy up after it is not worth
-        // reporting as a failed restore, and the next one clears both.
+        // Restored; tidying is the next restore's job if this fails.
         let _ = fs::remove_dir_all(&replaced);
         let _ = fs::remove_dir_all(&staging);
         Ok(safety)
@@ -229,9 +215,7 @@ impl Plan {
 
     /// Delete one backup, the player's own decision.
     ///
-    /// Only a file this game's backup directory lists is removed: `backup`
-    /// is matched against [`Plan::list`] rather than trusted, so a stale or
-    /// foreign path is refused instead of deleted.
+    /// Only a file [`Plan::list`] returns; anything else is refused.
     pub fn delete(&self, backup: &Backup) -> Result<(), BackupError> {
         if !self.list()?.iter().any(|b| b.path == backup.path) {
             return Err(BackupError::NotABackup(backup.path.clone()));
@@ -249,10 +233,7 @@ impl Plan {
         let files = walk(&self.account_dir)?;
         let fingerprint = fingerprint(&files);
 
-        // Any backup on this build, not only the newest: after a restore the
-        // newest is the safety copy of what was replaced, and the restored
-        // folder is the older one. Matching only the newest wrote it again,
-        // and rotation then took out a real backup to make room.
+        // Any backup on this build: after a restore the newest is the safety copy.
         let unchanged = self
             .list()?
             .into_iter()
@@ -333,9 +314,7 @@ struct File {
     mtime: u128,
 }
 
-/// Every regular file under `root`, sorted. Symlinks are not followed and not
-/// kept: the client never writes one there, and following one could archive
-/// something far outside the game.
+/// Every regular file under `root`, sorted. Symlinks are skipped.
 fn walk(root: &Path) -> Result<Vec<File>, BackupError> {
     let mut files = Vec::new();
     let mut pending = vec![PathBuf::new()];
@@ -364,14 +343,9 @@ fn walk(root: &Path) -> Result<Vec<File>, BackupError> {
     Ok(files)
 }
 
-/// What the folder looks like, without reading it: names, sizes and
-/// modification times. The client rewrites a SavedVariables file whenever it
-/// saves one, so a change that leaves all three alone is not a change that
-/// happened. Restoring keeps modification times to the second, and that is
-/// the resolution kept here, so a restored folder fingerprints the same as
-/// the backup it came from. The cost is that two writes of one file within a
-/// second, at the same size, look like one; the client writes SavedVariables
-/// once, on exit, so that is not a case a real session produces.
+/// The folder by names, sizes and mtimes to the second, the resolution a
+/// restore keeps, so a restored folder matches its backup. The client writes
+/// SavedVariables once, on exit.
 fn fingerprint(files: &[File]) -> String {
     let mut hash = Sha256::new();
     for file in files {
@@ -408,9 +382,8 @@ fn read_backup(path: &Path) -> Result<Backup, BackupError> {
     })
 }
 
-/// Extract under `dest`, refusing anything that is not a plain file or folder
-/// inside `Account`. Our own archives never hold anything else, so one that
-/// does was not written by us and is not trusted.
+/// Extract under `dest`, refusing anything but plain files and folders inside
+/// `Account`.
 fn unpack(archive_path: &Path, dest: &Path) -> Result<(), BackupError> {
     let file = fs::File::open(archive_path).map_err(io(archive_path))?;
     let mut archive = tar::Archive::new(zstd::Decoder::new(file).map_err(io(archive_path))?);

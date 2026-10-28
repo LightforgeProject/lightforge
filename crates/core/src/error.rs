@@ -50,16 +50,13 @@ pub enum CoreError {
 
 /// Render an error together with everything that caused it, as one line.
 ///
-/// `thiserror`'s `Display` prints the variant's own message and nothing else,
-/// so `i/o error at {path}` reaches a bug report having dropped the only part
-/// that says what went wrong. Walking `source` puts it back:
+/// `thiserror`'s `Display` drops the cause; walking `source` puts it back:
 ///
 /// ```text
 /// i/o error at /home/u/games/World of Warcraft: Permission denied (os error 13)
 /// ```
 ///
-/// Used at the crate boundary, where an error stops being a type and becomes a
-/// string for the status line, the bug report and the CLI.
+/// Used where an error becomes a string.
 pub fn chain(error: &dyn std::error::Error) -> String {
     let mut out = error.to_string();
     let mut source = error.source();

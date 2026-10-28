@@ -1,22 +1,13 @@
 //! The primary action button's state machine.
 //!
-//! The UI renders exactly one of these per product. The resolver below
-//! decides which one a product is in.
+//! Three rules:
 //!
-//! Three rules are deliberate and none are obvious:
-//!
-//! 1. **`.build.info` is the completion marker.** The downloader writes it last
-//!    and only on a complete run, so a half-finished install has none and reads
-//!    as `Install` rather than offering `Play` on a broken game. During an
-//!    update it still names the *previous* build, which is the one the store is
-//!    complete for and therefore the one that is safe to launch.
-//! 2. **An unreachable version service does not block launching.** If the
-//!    install is complete and Blizzard cannot be asked whether it is current,
-//!    the answer is `Play`, not `Error`. A launcher that refuses to start a
-//!    working game because a metadata endpoint is down is broken.
-//! 3. **A live transfer outranks everything.** What the app is doing now
-//!    describes the button better than what the disk looked like when it was
-//!    last inspected.
+//! 1. **`.build.info` is the completion marker**, written last and only on a
+//!    complete run. During an update it still names the previous build, the
+//!    one safe to launch.
+//! 2. **An unreachable version service does not block launching**: a
+//!    complete install is `Play`.
+//! 3. **A live transfer outranks everything.**
 
 use std::path::PathBuf;
 
@@ -40,10 +31,7 @@ pub enum ActionState {
         local_build: String,
         remote_build: String,
     },
-    /// Waiting for another product's download to finish.
-    ///
-    /// One transfer runs at a time: two would split one connection and write
-    /// into the same CASC store, making both slower and both ETAs fiction.
+    /// Waiting for another product's download: one transfer at a time.
     Queued,
     /// A download or patch is running. Carries live progress for the speed/ETA UI.
     Downloading(Progress),
@@ -54,13 +42,8 @@ pub enum ActionState {
     Play,
     /// Something went wrong; the message is user-facing.
     Error { message: String },
-    /// The drive this product lives on is not mounted.
-    ///
-    /// Not an error, and never resolved by downloading: the files are intact
-    /// on a volume that is simply not here. Everything that writes, launch,
-    /// update, repair, is held, and the only action offered is to look
-    /// again. Decided outside [`decide`], because it is a fact about the
-    /// filesystem rather than about a build.
+    /// The drive this product lives on is not mounted. Everything that writes
+    /// waits; decided outside [`decide`].
     Offline { drive: String },
 }
 
@@ -96,8 +79,7 @@ pub struct Progress {
 }
 
 impl Progress {
-    /// Completion in `0.0..=1.0`. Returns 0.0 while the total is still unknown
-    /// rather than dividing by zero.
+    /// Completion in `0.0..=1.0`, 0.0 while the total is unknown.
     pub fn fraction(&self) -> f32 {
         if self.total_bytes == 0 {
             return 0.0;
@@ -122,8 +104,7 @@ impl Progress {
 
 /// What one product looks like on this machine, read without any network.
 ///
-/// Cheap enough to call on every refresh: the store is opened only to count
-/// its files, which is an index read rather than a scan of 4.5 GiB.
+/// Cheap: the store is only counted, by index.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Local {
     /// `Build Key` from `.build.info`, absent if the file or row is missing.
@@ -162,10 +143,8 @@ impl Local {
 
     /// Whether this is a finished install rather than a partial one.
     ///
-    /// All three have to hold. A `.build.info` naming a build proves a download
-    /// once completed, the binary proves the flavor directory was extracted,
-    /// and a non-empty store proves the content is there, any one alone is a
-    /// shape an interrupted run leaves behind.
+    /// A build key, the binary and a non-empty store: any one alone is what
+    /// an interrupted run leaves.
     pub fn is_installed(&self) -> bool {
         self.build_key.is_some() && self.executable.is_some() && self.store_files > 0
     }
@@ -182,9 +161,8 @@ pub enum Transfer {
 
 /// Decide which button a product shows.
 ///
-/// Pure, so every combination is testable without a disk or a network:
-/// [`Local::inspect`] supplies the disk half and the caller supplies `remote`,
-/// which is `None` when the version service could not be reached.
+/// Pure: [`Local::inspect`] supplies the disk half; `remote` is `None` when
+/// the version service could not be reached.
 pub fn decide(local: &Local, remote: Option<&Version>, transfer: Option<Transfer>) -> ActionState {
     // What is happening now beats what the disk said a moment ago.
     match transfer {
@@ -211,8 +189,7 @@ pub fn decide(local: &Local, remote: Option<&Version>, transfer: Option<Transfer
         crate::tact::version::Status::Behind { local_build, remote_build, .. } => {
             ActionState::Update { local_build, remote_build }
         }
-        // `NotInstalled` cannot happen here, `is_installed` already required a
-        // build key, and `Current` is the ordinary ready case.
+        // `is_installed` required a build key, so not `NotInstalled`.
         _ => ActionState::Play,
     }
 }
@@ -262,15 +239,12 @@ mod tests {
 
     #[test]
     fn an_unreachable_version_service_still_lets_a_finished_install_play() {
-        // Refusing to launch a working game because a metadata endpoint is
-        // down would be a broken launcher.
         assert_eq!(decide(&complete(), None, None), ActionState::Play);
     }
 
     #[test]
     fn every_partial_shape_reads_as_install_not_play() {
-        // Each of these is a shape an interrupted run leaves behind, and every
-        // one of them would launch a broken game if it offered Play.
+        // Shapes an interrupted run leaves; none may offer Play.
         let no_marker = Local { build_key: None, ..complete() };
         let no_binary = Local { executable: None, ..complete() };
         let no_content = Local { store_files: 0, ..complete() };
