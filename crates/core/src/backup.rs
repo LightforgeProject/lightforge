@@ -95,13 +95,10 @@ pub struct Backup {
 impl Backup {
     /// When it was taken, in local time: `2026-10-14 22:52`.
     pub fn when(&self) -> String {
-        let secs = (self.created / 1000) as libc::time_t;
-        // SAFETY: `localtime_r` is the reentrant form; it reads `secs` and
-        // writes only into `tm`, which outlives the call.
-        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-        if unsafe { libc::localtime_r(&secs, &mut tm) }.is_null() {
+        let secs = (self.created / 1000) as i64;
+        let Some(tm) = crate::text::local_time(secs) else {
             return secs.to_string();
-        }
+        };
         format!(
             "{:04}-{:02}-{:02} {:02}:{:02}",
             tm.tm_year + 1900,

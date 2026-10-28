@@ -176,15 +176,11 @@ struct LocalTime;
 
 impl FormatTime for LocalTime {
     fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
-        // SAFETY: `localtime_r` writes only into the `tm` we hand it, and
-        // `time` is a valid pointer for the duration of the call.
-        let tm = unsafe {
-            let now = libc::time(std::ptr::null_mut());
-            let mut tm: libc::tm = std::mem::zeroed();
-            if libc::localtime_r(&now, &mut tm).is_null() {
-                return write!(w, "{now}");
-            }
-            tm
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        let Some(tm) = crate::text::local_time(now) else {
+            return write!(w, "{now}");
         };
         write!(
             w,

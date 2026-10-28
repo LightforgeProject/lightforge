@@ -10,3 +10,15 @@ pub(crate) fn tail_lines(text: &str, n: usize) -> String {
     let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
     lines[lines.len().saturating_sub(n)..].join("\n")
 }
+
+/// `secs` since the epoch, broken down in the machine's time zone.
+pub(crate) fn local_time(secs: i64) -> Option<libc::tm> {
+    let secs = secs as libc::time_t;
+    // SAFETY: `localtime_r` is the reentrant form; it reads `secs` and
+    // writes only into `tm`, which outlives the call.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&secs, &mut tm) }.is_null() {
+        return None;
+    }
+    Some(tm)
+}
