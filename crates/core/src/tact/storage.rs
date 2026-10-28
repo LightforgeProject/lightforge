@@ -20,8 +20,6 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use ngdp_crypto::KeyService;
-
 use super::idx::{self, Entry, Index, IdxError, CASC_ENTRY_HEADER};
 use crate::text::hex;
 
@@ -30,13 +28,11 @@ pub type EKey = [u8; 16];
 
 /// A local CASC store opened for reading. Reads take `&mut self` to cache
 /// archive handles: reopening per entry dominates a bulk verify.
-// Hand-written `Debug`: `KeyService` has none, and its keys stay out of logs.
 pub struct Storage {
     data_dir: PathBuf,
     /// Newest generation per bucket, keyed by bucket number.
     indices: HashMap<u8, Index>,
     archives: HashMap<u16, File>,
-    keys: KeyService,
 }
 
 impl std::fmt::Debug for Storage {
@@ -67,12 +63,7 @@ impl Storage {
             return Err(StorageError::NoIndices(data_dir));
         }
 
-        // Encrypted blocks are normal (unreleased content); only a read that
-        // needs a missing key fails.
-        let mut keys = KeyService::new();
-        let _ = keys.load_from_standard_dirs();
-
-        Ok(Self { data_dir, indices, archives: HashMap::new(), keys })
+        Ok(Self { data_dir, indices, archives: HashMap::new() })
     }
 
     pub fn data_dir(&self) -> &Path {
@@ -132,13 +123,10 @@ impl Storage {
             offset: entry.offset,
         })?;
 
-        // One-shot: blte 0.4's streaming reader returns zero bytes here.
-        blte::decompress_blte(payload.to_vec(), Some(&self.keys)).map_err(|source| {
-            StorageError::Decode {
-                archive_id: entry.archive_id,
-                offset: entry.offset,
-                source: Box::new(source),
-            }
+        super::blte::decode(payload).map_err(|source| StorageError::Decode {
+            archive_id: entry.archive_id,
+            offset: entry.offset,
+            source,
         })
     }
 
@@ -272,7 +260,7 @@ pub enum StorageError {
         archive_id: u16,
         offset: u32,
         #[source]
-        source: Box<blte::Error>,
+        source: super::blte::BlteError,
     },
 
     #[error(transparent)]

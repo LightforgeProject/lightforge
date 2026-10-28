@@ -72,8 +72,8 @@ sysinfo = { version = "0.36", default-features = false, features = ["system"] }
 # For the screenshot a report carries: GlitchTip drops envelope attachments,
 # so the image travels inside the event as a data URI.
 base64 = "0.22"
+# Builds the tests' fixtures; core decodes BLTE itself (`tact::blte`).
 blte = "0.4"
-ngdp-crypto = "0.4"
 tact-parser = "0.4"
 tar = "0.4"
 tempfile = "3"
@@ -101,6 +101,10 @@ zstd = { version = "0.14", default-features = false }
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+[workspace.lints.rust]
+# Set by `cargo fuzz` for the harness in `core/src/fuzzing.rs`.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
 
 [workspace.lints.clippy]
 cast_possible_truncation = "warn"

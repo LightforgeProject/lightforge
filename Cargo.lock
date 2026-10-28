@@ -2462,7 +2462,6 @@ dependencies = [
  "libc",
  "liblzma",
  "md5",
- "ngdp-crypto",
  "reqwest",
  "semver",
  "serde",

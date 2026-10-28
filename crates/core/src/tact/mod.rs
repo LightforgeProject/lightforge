@@ -8,6 +8,7 @@
 //! synchronous.
 
 pub mod archive;
+pub mod blte;
 pub mod cdn;
 pub mod compact;
 pub mod config;

@@ -257,7 +257,7 @@ pub(crate) async fn cdn_archive(archive: Option<String>, product: String, region
             continue;
         };
         match client
-            .fetch_from_archive(&http, &archive, located, &ckey, None)
+            .fetch_from_archive(&http, &archive, located, &ckey)
             .await
         {
             Ok(decoded) => {

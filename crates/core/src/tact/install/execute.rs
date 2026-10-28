@@ -37,9 +37,7 @@ pub async fn execute(
     }
 
     let mut writer = StoreWriter::create(dest.join("Data").join("data"))?;
-    // As the reader does, or blte cannot name a missing key.
-    let keys = download::default_key_service();
-    let source = Source { http, client: &client, keys: Some(&keys) };
+    let source = Source { http, client: &client };
     let downloader = Downloader::new(DownloadOptions {
         concurrency: options.concurrency,
         limit: download::RateLimit::new(options.limit_bytes_per_second),

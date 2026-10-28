@@ -45,7 +45,7 @@ pub async fn extract_install(
     cancel: &Cancel,
     mut progress: impl FnMut(&Extracted),
 ) -> Result<InstallReport, DownloadError> {
-    let Source { http, client, keys } = source;
+    let Source { http, client } = source;
     let Catalog { encoding, locations, loose } = catalog;
     let mut report = InstallReport::default();
 
@@ -85,7 +85,7 @@ pub async fn extract_install(
             }
         };
 
-        let decoded = match blte::decompress_blte(encoded, keys) {
+        let decoded = match crate::tact::blte::decode(&encoded) {
             Ok(bytes) => bytes,
             Err(e) => {
                 fail(&mut report, e.to_string());

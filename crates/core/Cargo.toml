@@ -8,7 +8,6 @@ repository.workspace = true
 description = "UI-agnostic core: product models, path layout, .build.info engine, TACT/CASC, addons"
 
 [dependencies]
-blte.workspace = true
 directories.workspace = true
 flate2.workspace = true
 liblzma.workspace = true
@@ -22,7 +21,6 @@ serde_json.workspace = true
 sha2.workspace = true
 sysinfo.workspace = true
 md5.workspace = true
-ngdp-crypto.workspace = true
 tact-parser.workspace = true
 tar.workspace = true
 tempfile.workspace = true
@@ -37,6 +35,7 @@ zip.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]
+blte.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "time"] }
 
 [lints]

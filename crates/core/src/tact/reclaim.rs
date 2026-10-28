@@ -375,7 +375,7 @@ async fn download_manifest(
     let client = Client::from_cdn(&build.cdn).map_err(cdn_err)?;
     let pair = config.download.as_ref().ok_or_else(|| bad("no download manifest".to_owned()))?;
     let ekey = pair.ekey.ok_or_else(|| bad("no download manifest key".to_owned()))?;
-    let bytes = client.fetch_loose(http, &ekey, &pair.ckey, None).await.map_err(cdn_err)?;
+    let bytes = client.fetch_loose(http, &ekey, &pair.ckey).await.map_err(cdn_err)?;
     DownloadManifest::parse(&bytes).map_err(|e| bad(e.to_string()))
 }
 

@@ -266,7 +266,6 @@ impl Client {
         http: &Http,
         ekey: &super::storage::EKey,
         expect_ckey: &super::config::CKey,
-        keys: Option<&ngdp_crypto::KeyService>,
     ) -> Result<Vec<u8>, CdnError> {
         let hash = hex(ekey);
         let mut last: Option<CdnError> = None;
@@ -281,7 +280,7 @@ impl Client {
                 }
             };
 
-            match blte::decompress_blte(raw, keys) {
+            match super::blte::decode(&raw) {
                 Ok(decoded) => {
                     let actual = *md5::compute(&decoded);
                     if &actual == expect_ckey {
@@ -308,7 +307,6 @@ impl Client {
         archive: &str,
         located: &super::archive::Located,
         expect_ckey: &super::config::CKey,
-        keys: Option<&ngdp_crypto::KeyService>,
     ) -> Result<Vec<u8>, CdnError> {
         let range = located.range().ok_or_else(|| CdnError::EmptyRange { archive: archive.to_owned() })?;
         let mut last: Option<CdnError> = None;
@@ -324,7 +322,7 @@ impl Client {
             };
 
             // On the CDN there is no CASC entry header in front.
-            match blte::decompress_blte(raw, keys) {
+            match super::blte::decode(&raw) {
                 Ok(decoded) => {
                     let actual = *md5::compute(&decoded);
                     if &actual == expect_ckey {

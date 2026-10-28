@@ -2,9 +2,9 @@ use std::pin::pin;
 
 use futures_util::future::{self, Either};
 use futures_util::stream::{self, StreamExt};
-use ngdp_crypto::KeyService;
 
 use super::{cancelled, Cancel, DownloadError, Failure, Options, Outcome, Progress, Source};
+use crate::tact::blte::BlteError;
 use crate::tact::config::CKey;
 use crate::text::hex;
 use crate::tact::plan::Plan;
@@ -32,10 +32,9 @@ impl Downloader {
         cancel: &Cancel,
         mut progress: impl FnMut(Progress),
     ) -> Result<Outcome, DownloadError> {
-        let Source { http, client, keys } = source;
+        let Source { http, client } = source;
         let mut sink = Sink {
             writer,
-            keys,
             outcome: Outcome::default(),
             state: Progress {
                 files_total: plan.files(),
@@ -153,7 +152,6 @@ impl Downloader {
 /// The write side: one store, and the tally of what went into it.
 struct Sink<'a> {
     writer: &'a mut StoreWriter,
-    keys: Option<&'a KeyService>,
     outcome: Outcome,
     state: Progress,
     since_checkpoint: u64,
@@ -162,7 +160,7 @@ struct Sink<'a> {
 impl Sink<'_> {
     /// Verify one file and write it, counting what happened.
     fn store(&mut self, ekey: &EKey, ckey: Option<&CKey>, encoded: &[u8]) -> Result<(), DownloadError> {
-        match verify(encoded, ekey, ckey, self.keys) {
+        match verify(encoded, ekey, ckey) {
             Verified::Ok => {}
             Verified::Unverifiable => self.outcome.unverified += 1,
             Verified::Wrong(reason) => {
@@ -182,18 +180,18 @@ impl Sink<'_> {
 
 pub(super) enum Verified {
     Ok,
-    /// Encrypted without a key, or absent from encoding: store it anyway.
+    /// Encrypted, or absent from encoding: store it anyway.
     Unverifiable,
     Wrong(String),
 }
 
 /// Decode and check against the content key.
-pub(super) fn verify(encoded: &[u8], ekey: &EKey, ckey: Option<&CKey>, keys: Option<&KeyService>) -> Verified {
+pub(super) fn verify(encoded: &[u8], ekey: &EKey, ckey: Option<&CKey>) -> Verified {
     let Some(ckey) = ckey else {
         return unverifiable(encoded, ekey);
     };
 
-    match blte::decompress_blte(encoded.to_vec(), keys) {
+    match crate::tact::blte::decode(encoded) {
         Ok(decoded) => {
             let actual = *md5::compute(&decoded);
             if &actual == ckey {
@@ -206,15 +204,8 @@ pub(super) fn verify(encoded: &[u8], ekey: &EKey, ckey: Option<&CKey>, keys: Opt
                 ))
             }
         }
-        // Classify by the bytes, not the decoder's error: `blte` 0.4 cannot
-        // tell a withheld key from corruption (see [`has_encrypted_chunk`]).
-        Err(e) => {
-            if has_encrypted_chunk(encoded) {
-                unverifiable(encoded, ekey)
-            } else {
-                Verified::Wrong(e.to_string())
-            }
-        }
+        Err(BlteError::Encrypted { .. }) => unverifiable(encoded, ekey),
+        Err(e) => Verified::Wrong(e.to_string()),
     }
 }
 
@@ -235,58 +226,6 @@ fn unverifiable(encoded: &[u8], ekey: &EKey) -> Verified {
         None => Verified::Unverifiable,
         Some(fault) => Verified::Wrong(format!("does not match its encoding key: {}", fault.describe())),
     }
-}
-
-/// Whether any chunk of a BLTE payload is encrypted, from the chunk table:
-/// `blte` 0.4 misreads the one-byte key-name size as a u64 ("Invalid key name
-/// size: 9560733477763426568"). Agent stores these, and so do we, unverified.
-///
-/// ```text
-/// "BLTE"            4 bytes
-/// header_size       u32 BE   0 means one chunk, data immediately after
-/// flags             u8
-/// chunk_count       u24 BE
-/// chunk_count x     compressed u32 BE, decompressed u32 BE, md5 16 bytes
-/// <data>            each chunk starts with its mode byte
-/// ```
-pub(super) fn has_encrypted_chunk(blte: &[u8]) -> bool {
-    /// Mode byte of an encrypted chunk.
-    const ENCRYPTED: u8 = b'E';
-
-    if blte.len() < 8 || &blte[..4] != b"BLTE" {
-        return false;
-    }
-    let header_size = u32::from_be_bytes(blte[4..8].try_into().expect("4 bytes")) as usize;
-
-    // A zero header means a single chunk whose data starts right here.
-    if header_size == 0 {
-        return blte.get(8) == Some(&ENCRYPTED);
-    }
-    if header_size > blte.len() || blte.len() < 12 {
-        return false;
-    }
-
-    let chunk_count = u32::from_be_bytes([0, blte[9], blte[10], blte[11]]) as usize;
-    let mut table = 12;
-    let mut at = header_size;
-
-    for _ in 0..chunk_count {
-        let Some(entry) = blte.get(table..table + 24) else {
-            return false;
-        };
-        let compressed = u32::from_be_bytes(entry[..4].try_into().expect("4 bytes")) as usize;
-
-        if blte.get(at) == Some(&ENCRYPTED) {
-            return true;
-        }
-        table += 24;
-        match at.checked_add(compressed) {
-            Some(next) if next <= blte.len() => at = next,
-            _ => return false,
-        }
-    }
-
-    false
 }
 
 enum Work<'a> {

@@ -26,7 +26,7 @@ mod downloading {
     fn a_file_matching_its_content_key_verifies() {
         let encoded = blte(b"the real bytes");
         assert!(matches!(
-            verify(&encoded, &ekey_of(&encoded), Some(&ckey_of(b"the real bytes")), None),
+            verify(&encoded, &ekey_of(&encoded), Some(&ckey_of(b"the real bytes"))),
             Verified::Ok
         ));
     }
@@ -36,7 +36,7 @@ mod downloading {
         let encoded = blte(b"the real bytes");
         let wrong = ckey_of(b"something else entirely");
 
-        match verify(&encoded, &ekey_of(&encoded), Some(&wrong), None) {
+        match verify(&encoded, &ekey_of(&encoded), Some(&wrong)) {
             Verified::Wrong(reason) => {
                 // The message has to name both, or a mismatch is unactionable.
                 assert!(reason.contains(&hex(&wrong)), "{reason}");
@@ -50,15 +50,15 @@ mod downloading {
     fn a_file_encoding_does_not_list_is_stored_unverified() {
         // The 2-in-1.5-million case: no content key to check it against.
         let encoded = blte(b"x");
-        assert!(matches!(verify(&encoded, &ekey_of(&encoded), None, None), Verified::Unverifiable));
+        assert!(matches!(verify(&encoded, &ekey_of(&encoded), None), Verified::Unverifiable));
     }
 
     #[test]
     fn a_file_without_a_content_key_must_still_match_its_encoding_key() {
         let encoded = blte(b"x");
         let other = blte(b"something else");
-        assert!(matches!(verify(&other, &ekey_of(&encoded), None, None), Verified::Wrong(_)));
-        assert!(matches!(verify(b"not blte at all", &ekey_of(&encoded), None, None), Verified::Wrong(_)));
+        assert!(matches!(verify(&other, &ekey_of(&encoded), None), Verified::Wrong(_)));
+        assert!(matches!(verify(b"not blte at all", &ekey_of(&encoded), None), Verified::Wrong(_)));
     }
 
     /// A BLTE container with an explicit chunk table.
@@ -70,11 +70,21 @@ mod downloading {
         out.push(0x0F);
         out.extend_from_slice(&(modes.len() as u32).to_be_bytes()[1..]);
 
-        // Each chunk here is one mode byte plus three of payload, and its
-        // table row carries the MD5 of the chunk as stored, as Blizzard's do.
-        let chunks: Vec<[u8; 4]> = modes.iter().map(|&mode| [mode, b'a', b'b', b'c']).collect();
+        // Each chunk holds three bytes of content, and its table row carries
+        // the MD5 of the chunk as stored, as Blizzard's do.
+        let chunks: Vec<Vec<u8>> = modes
+            .iter()
+            .map(|&mode| match mode {
+                b'Z' => {
+                    let mut z = flate2::write::ZlibEncoder::new(vec![b'Z'], flate2::Compression::default());
+                    std::io::Write::write_all(&mut z, b"abc").unwrap();
+                    z.finish().unwrap()
+                }
+                _ => vec![mode, b'a', b'b', b'c'],
+            })
+            .collect();
         for chunk in &chunks {
-            out.extend_from_slice(&4u32.to_be_bytes());
+            out.extend_from_slice(&(chunk.len() as u32).to_be_bytes());
             out.extend_from_slice(&3u32.to_be_bytes());
             out.extend_from_slice(&md5::compute(chunk).0);
         }
@@ -85,62 +95,19 @@ mod downloading {
     }
 
     #[test]
-    fn an_encrypted_chunk_is_recognised_wherever_it_sits() {
-        assert!(has_encrypted_chunk(&blte_chunks(b"E")));
-        // Blizzard mixes modes within one file, so a later chunk counts too.
-        assert!(has_encrypted_chunk(&blte_chunks(b"ZZE")));
-        assert!(has_encrypted_chunk(&blte_chunks(b"ZEZ")));
-
-        assert!(!has_encrypted_chunk(&blte_chunks(b"Z")));
-        assert!(!has_encrypted_chunk(&blte_chunks(b"ZNZ")));
-    }
-
-    #[test]
-    fn a_single_chunk_container_declares_no_header() {
-        // header_size 0: one chunk, its mode byte immediately after.
-        let mut encrypted = Vec::from(*b"BLTE");
-        encrypted.extend_from_slice(&0u32.to_be_bytes());
-        encrypted.extend_from_slice(b"Epayload");
-        assert!(has_encrypted_chunk(&encrypted));
-
-        let mut plain = Vec::from(*b"BLTE");
-        plain.extend_from_slice(&0u32.to_be_bytes());
-        plain.extend_from_slice(b"Zpayload");
-        assert!(!has_encrypted_chunk(&plain));
-    }
-
-    #[test]
-    fn malformed_containers_are_not_encrypted_and_do_not_panic() {
-        assert!(!has_encrypted_chunk(b""));
-        assert!(!has_encrypted_chunk(b"BLTE"));
-        assert!(!has_encrypted_chunk(b"not blte at all"));
-
-        // A header claiming more than the file holds must not index past it.
-        let mut lying = Vec::from(*b"BLTE");
-        lying.extend_from_slice(&9999u32.to_be_bytes());
-        lying.extend_from_slice(&[0u8; 8]);
-        assert!(!has_encrypted_chunk(&lying));
-
-        // A chunk count larger than the table.
-        let mut truncated = blte_chunks(b"ZZE");
-        truncated.truncate(20);
-        assert!(!has_encrypted_chunk(&truncated));
-    }
-
-    #[test]
     fn an_encrypted_file_is_stored_unverified_rather_than_refused() {
         // The end-to-end shape of the Classic Era bug: a real encrypted file
         // fails to decode, and must still reach the store.
         let encrypted = blte_chunks(b"E");
         assert!(matches!(
-            verify(&encrypted, &ekey_of(&encrypted), Some(&ckey_of(b"whatever")), None),
+            verify(&encrypted, &ekey_of(&encrypted), Some(&ckey_of(b"whatever"))),
             Verified::Unverifiable
         ));
 
         // Corruption that is not encrypted is still refused.
         let plain = blte_chunks(b"Z");
         assert!(matches!(
-            verify(&plain, &ekey_of(&plain), Some(&ckey_of(b"whatever")), None),
+            verify(&plain, &ekey_of(&plain), Some(&ckey_of(b"whatever"))),
             Verified::Wrong(_)
         ));
     }
@@ -154,18 +121,18 @@ mod downloading {
         // Bytes changed inside the encrypted chunk itself.
         let mut altered = published.clone();
         *altered.last_mut().unwrap() ^= 0xff;
-        assert!(matches!(verify(&altered, &ekey, Some(&ckey), None), Verified::Wrong(_)));
+        assert!(matches!(verify(&altered, &ekey, Some(&ckey)), Verified::Wrong(_)));
 
         // A whole file rebuilt around an encrypted chunk: its own table is
         // consistent, but it is not the one the encoding key names.
         let forged = blte_chunks(b"EZ");
-        assert!(matches!(verify(&forged, &ekey, Some(&ckey), None), Verified::Wrong(_)));
+        assert!(matches!(verify(&forged, &ekey, Some(&ckey)), Verified::Wrong(_)));
     }
 
     #[test]
     fn junk_is_refused_rather_than_counted_as_unverifiable() {
         // Corruption must not pass as encryption.
-        match verify(b"not blte at all", &[0; 16], Some(&ckey_of(b"x")), None) {
+        match verify(b"not blte at all", &[0; 16], Some(&ckey_of(b"x"))) {
             Verified::Wrong(_) => {}
             _ => panic!("junk must be refused"),
         }
@@ -456,7 +423,7 @@ mod pausing {
         let started = Instant::now();
         let outcome = Downloader::new(Options::default())
             .run(
-                Source { http: &http, client: &client, keys: None },
+                Source { http: &http, client: &client },
                 &plan,
                 &mut writer,
                 &cancel,

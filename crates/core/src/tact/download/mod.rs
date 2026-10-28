@@ -34,8 +34,6 @@ pub use rate::RateLimit;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use ngdp_crypto::KeyService;
-
 use super::cdn::{CdnError, Client};
 use super::storage::EKey;
 use super::writer::WriteError;
@@ -156,24 +154,11 @@ pub struct Failure {
     pub reason: String,
 }
 
-/// Where bytes come from: the HTTP client, the CDN endpoints, and whatever
-/// decryption keys this machine has. No `Debug`: keys stay out of logs.
+/// Where bytes come from: the HTTP client and the CDN endpoints.
 #[derive(Clone, Copy)]
 pub struct Source<'a> {
     pub http: &'a Http,
     pub client: &'a Client,
-    /// Keys for encrypted content. `None` is normal: most machines have none,
-    /// and the files that need them are stored unverified.
-    pub keys: Option<&'a KeyService>,
-}
-
-/// A key service loaded the way [`super::storage::Storage`] loads one, so a
-/// front end never names a cascette type. No key files is normal: the
-/// built-in keys still decrypt some content.
-pub fn default_key_service() -> KeyService {
-    let mut keys = KeyService::new();
-    let _ = keys.load_from_standard_dirs();
-    keys
 }
 
 #[derive(Debug, thiserror::Error)]

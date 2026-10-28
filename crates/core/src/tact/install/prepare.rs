@@ -127,7 +127,7 @@ pub async fn offerings(
     let pair = build.download.ok_or(InstallError::MissingManifest("download"))?;
     let ekey = pair.ekey.ok_or(InstallError::MissingManifest("download"))?;
     let manifest =
-        DownloadManifest::parse(&client.fetch_loose(http, &ekey, &pair.ckey, None).await?)?;
+        DownloadManifest::parse(&client.fetch_loose(http, &ekey, &pair.ckey).await?)?;
 
     let locale = shipped_locale(&options.locale, manifest.tags());
     let base_tags = TagSet::parse(&options.tag_column_for(&locale));
@@ -201,7 +201,7 @@ pub async fn prepare(
         async move {
             let pair = pair.ok_or(InstallError::MissingManifest(what))?;
             let ekey = pair.ekey.ok_or(InstallError::MissingManifest(what))?;
-            Ok::<_, InstallError>(client.fetch_loose(http, &ekey, &pair.ckey, None).await?)
+            Ok::<_, InstallError>(client.fetch_loose(http, &ekey, &pair.ckey).await?)
         }
     };
 
