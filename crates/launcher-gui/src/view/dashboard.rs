@@ -4,6 +4,11 @@ use crate::*;
 use iced::widget::column;
 
 impl Lightforge {
+    /// The action panel for a game Battle.net installs and starts.
+    ///
+    /// Deliberately bare: no Install, no Update, no Play, not even greyed out.
+    /// Offering those disabled would say Lightforge could manage this game and
+    /// merely will not.
     pub(crate) fn handoff_panel(&self) -> Element<'_, Message> {
         let mut left = column![].spacing(theme::SM).width(Length::Fill);
         left = left.push(match &self.error {
@@ -101,7 +106,6 @@ impl Lightforge {
         .into()
     }
 
-    /// A screen that is not the dashboard: header, title, content.
     /// A page with a title, optionally something at the far end of that line,
     /// and a scrolling body.
     ///

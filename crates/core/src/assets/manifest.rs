@@ -111,10 +111,6 @@ impl Manifest {
         Ok(manifest)
     }
 
-    /// The theme for a product: its own entry, else the one `default` names.
-    ///
-    /// A `default` pointing at a product that isn't in the map is treated as
-    /// absent, a broken pointer shouldn't read as a themed product.
     /// This product's own entry, with no fallback.
     ///
     /// [`Manifest::theme`]'s fallback to `default` is right for a logo and a

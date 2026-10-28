@@ -286,7 +286,6 @@ pub(super) fn join(base: &str, rel: &str) -> String {
     format!("{dir}{rel}")
 }
 
-/// Lowercase file extension of a URL path, ignoring query and fragment.
 /// Whether a file name is one [`Store::cache_name`] would have produced:
 /// sixteen lowercase hex characters, optionally followed by an extension.
 ///
@@ -297,6 +296,7 @@ pub(super) fn is_cache_name(name: &str) -> bool {
     stem.len() == 16 && stem.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
+/// Lowercase file extension of a URL path, ignoring query and fragment.
 pub(super) fn extension(url: &str) -> Option<String> {
     let path = url.split(['?', '#']).next()?;
     let name = path.rsplit('/').next()?;

@@ -343,6 +343,7 @@ impl Lightforge {
         popover::popover(face, menu).align_left().into()
     }
 
+    /// The cog menu: what you do *about* a game rather than to play it.
     pub(crate) fn gear_menu(&self) -> Element<'_, Message> {
         let item = |label: &'static str, message: Message, enabled: bool| {
             self.ring(

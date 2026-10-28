@@ -476,10 +476,6 @@ fn read_token(token: &str) -> Result<String> {
     }
 }
 
-/// The configured default addon channel, or stable when there is no config.
-///
-/// The CLI has no settings UI, so it reads the same `addon_channel` the GUI
-/// writes rather than inventing a second default.
 /// Where this game's settings backups go, and how many it keeps.
 fn settings_backup(layout: &Layout, dirs: &AppDirs, code: &ProductCode) -> backup::Plan {
     let keep = Config::load_or_default(&dirs.config_file())
@@ -487,6 +483,10 @@ fn settings_backup(layout: &Layout, dirs: &AppDirs, code: &ProductCode) -> backu
     backup::Plan::for_product(layout, dirs, code, keep)
 }
 
+/// The configured default addon channel, or stable when there is no config.
+///
+/// The CLI has no settings UI, so it reads the same `addon_channel` the GUI
+/// writes rather than inventing a second default.
 fn addon_channel(dirs: &AppDirs) -> lightforge_core::addons::Channel {
     Config::load_or_default(&dirs.config_file())
         .map(|config| config.addon_channel)

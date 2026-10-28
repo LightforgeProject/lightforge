@@ -4,7 +4,6 @@ use crate::*;
 use iced::widget::column;
 
 impl Lightforge {
-    /// Speed caps, ours and Battle.net's, and pausing while playing.
     /// The Addons section: what every addon follows unless it says otherwise.
     pub(crate) fn addons_section(&self) -> Element<'_, Message> {
         let choices: Vec<ChannelChoice> = Channel::ALL.map(ChannelChoice).to_vec();
@@ -201,6 +200,7 @@ impl Lightforge {
         .into()
     }
 
+    /// Speed caps, ours and Battle.net's, and pausing while playing.
     pub(crate) fn downloads_section(&self) -> Element<'_, Message> {
         let speed = |input: &str, placeholder: &str, on_input: fn(String) -> Message| -> Element<'_, Message> {
             row![

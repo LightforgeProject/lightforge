@@ -74,8 +74,6 @@ impl Lightforge {
         self.bnet_env_editor = Content::with_text(&env(&self.config.battle_net_tweaks.env));
     }
 
-    /// Rebuild the layout from the config, after a library is added, removed,
-    /// made main, or assigned to a product.
     /// Re-read what is provisioned, off the UI thread.
     pub(crate) fn setup_status(&self) -> Task<Message> {
         Task::perform(
@@ -123,6 +121,8 @@ impl Lightforge {
         self.choices.push(choice);
     }
 
+    /// Rebuild the layout from the config, after a library is added, removed,
+    /// made main, or assigned to a product.
     pub(crate) fn rebuild_layout(&mut self) {
         if let Ok(layout) = self.config.layout() {
             self.layout = layout;
@@ -294,6 +294,7 @@ impl Lightforge {
         Ok(())
     }
 
+    /// Persist the config, surfacing a write failure rather than swallowing it.
     pub(crate) fn save_config(&mut self) {
         // Never over a file that did not load: it is the user's to fix.
         if self.config_error.is_some() {

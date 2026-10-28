@@ -450,7 +450,6 @@ pub(crate) enum Message {
     AddonUpdatesChecked(ProductCode, Result<Vec<lightforge_core::addons::manage::UpdateStatus>, String>),
 }
 
-/// Which of the two report dialogs is open.
 /// Where a press that moves the ring came from; see [`Message::Nav`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NavFrom {

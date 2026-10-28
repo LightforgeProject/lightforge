@@ -9,12 +9,6 @@ mod mine;
 mod sharing;
 
 impl Lightforge {
-    /// Whether any dismissable panel is showing.
-    ///
-    /// One list, used both to arm the click-anywhere dismissal and to clear
-    /// everything in [`Message::Dismiss`]. Adding a panel and forgetting to
-    /// name it here is what left the wordmark menu unable to be closed by
-    /// clicking the page, so the two now read from the same place.
     /// Whether this provider/id pair is in the ledger for the open game.
     ///
     /// Asked by the detail card twice over, once to pick the opening tab,

@@ -73,7 +73,6 @@ impl Lightforge {
         .into()
     }
 
-    /// First-run provisioning: what is missing, and one button to fix it.
     /// Proton, the prefix and Battle.net: what is there, and the button that
     /// provisions whatever isn't.
     pub(crate) fn setup_section(&self) -> Element<'_, Message> {

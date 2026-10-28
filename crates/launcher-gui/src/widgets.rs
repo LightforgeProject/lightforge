@@ -265,7 +265,6 @@ pub(crate) fn mono<'a>(content: String) -> iced::widget::Text<'a> {
         .color(theme::MUTED)
 }
 
-/// A status pill.
 /// Draw one block of an addon's description or changelog.
 ///
 /// The proxy has already reduced the HTML to these few shapes (see
@@ -381,6 +380,7 @@ pub(crate) fn tag<'a>(content: String, color: iced::Color) -> Element<'a, Messag
         .into()
 }
 
+/// A status pill.
 pub(crate) fn pill<'a>(content: String, color: iced::Color) -> Element<'a, Message> {
     container(text(content).size(theme::CAPTION))
         .padding([2.0, theme::SM])
@@ -516,8 +516,6 @@ pub(crate) fn section<'a>(title: impl Into<String>, body: Element<'a, Message>) 
         .into()
 }
 
-/// A fixed-width label beside its control, so every control in a section
-/// starts on the same line.
 /// Width of each fact column on an addon row. One number, so the header and
 /// the rows cannot drift apart.
 pub(crate) const ADDON_COLUMN: f32 = 92.0;
@@ -548,6 +546,8 @@ pub(crate) fn column_head<'a>(label: &str) -> Element<'a, Message> {
         .into()
 }
 
+/// A fixed-width label beside its control, so every control in a section
+/// starts on the same line.
 pub(crate) fn field_row<'a>(label: String, control: Element<'a, Message>) -> Element<'a, Message> {
     row![muted(label, theme::LABEL).width(Length::Fixed(160.0)), control]
         .spacing(theme::MD)

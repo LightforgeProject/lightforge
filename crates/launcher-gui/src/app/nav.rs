@@ -208,11 +208,6 @@ impl Lightforge {
         Task::none()
     }
 
-    /// Where the ring appears when it is not on anything yet.
-    ///
-    /// Back on the control that opened the menu just closed, then PLAY, the
-    /// thing a controller user came for, then wherever reading starts, which
-    /// in a menu is its first entry.
     /// Ask Steam for its on-screen keyboard for `field`, on a console that
     /// Steam started. Where the field is goes with it, the way SDL asks, so
     /// Steam can keep the keyboard off it.
@@ -250,6 +245,11 @@ impl Lightforge {
         }
     }
 
+    /// Where the ring appears when it is not on anything yet.
+    ///
+    /// Back on the control that opened the menu just closed, then PLAY, the
+    /// thing a controller user came for, then wherever reading starts, which
+    /// in a menu is its first entry.
     pub(crate) fn focus_start(&mut self, spots: &[focus::Place]) -> Option<focus::Target> {
         let drawn = |target: &focus::Target| spots.iter().any(|p| &p.target == target);
         // Kept until it can be gone back to: a button that vanishes inside
@@ -311,6 +311,12 @@ impl Lightforge {
         focus::ring(target, press, content)
     }
 
+    /// Whether any dismissable panel is showing.
+    ///
+    /// One list, used both to arm the click-anywhere dismissal and to clear
+    /// everything in [`Message::Dismiss`]. Adding a panel and forgetting to
+    /// name it here is what left the wordmark menu unable to be closed by
+    /// clicking the page, so the two now read from the same place.
     pub(crate) fn panel_open(&self) -> bool {
         self.picker_open.is_some()
             || self.gear_open

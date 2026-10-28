@@ -3,7 +3,6 @@
 use crate::*;
 
 impl Lightforge {
-    /// Clear the way for a launch, then let [`Message::PreflightDone`] start it.
     /// Get out of the way, where the user asked for that.
     ///
     /// The window id has to be asked for rather than kept: this is a
@@ -21,6 +20,7 @@ impl Lightforge {
         }
     }
 
+    /// Clear the way for a launch, then let [`Message::PreflightDone`] start it.
     pub(crate) fn preflight(&mut self, what: Launch) -> Task<Message> {
         // Before anything is told to start: the prefix is shared by every
         // product and one Battle.net login, and Proton only ever migrates it
@@ -231,12 +231,6 @@ impl Lightforge {
         self.catalog.get(code).map(|e| e.kind).unwrap_or_else(|| Kind::of(code))
     }
 
-    /// The action panel for a game Battle.net installs and starts.
-    ///
-    ///
-    /// Deliberately bare: no Install, no Update, no Play, not even greyed out.
-    /// Offering those disabled would say Lightforge could manage this game and
-    /// merely will not.
     /// What a hand-off game's button can honestly be, in order of how much
     /// is known. Without a game family the client cannot be told which tile
     /// to open, and a guess lands on somebody else's game, so that case
@@ -268,7 +262,6 @@ impl Lightforge {
         state::decide(&self.local, self.remote.as_ref(), transfer)
     }
 
-    /// The one transfer actually moving bytes, if any.
     /// What, other than a download, is writing to a game store right now.
     ///
     /// Every WoW flavour in a library shares one CASC store, and nothing in
@@ -300,6 +293,7 @@ impl Lightforge {
             })
     }
 
+    /// The one transfer actually moving bytes, if any.
     pub(crate) fn running(&self) -> Option<&Download> {
         self.queue.iter().find(|d| matches!(d.stage, Stage::Running { .. }))
     }
@@ -421,13 +415,6 @@ impl Lightforge {
         Ok(())
     }
 
-    /// The cog menu: what you do *about* a game rather than to play it.
-    ///
-    /// Laid out above the action panel rather than stacked over the page,
-    /// because iced 0.13 has no popover and a floating layer would need the
-    /// panel's height as a magic number to sit clear of it. Taking its room
-    /// from the spacer above the panel puts it in the right place by
-    /// construction, at any window size.
     /// Which of the store's maintenance actions would go ahead now, for the
     /// cog menu and Game Settings alike, so the two cannot disagree.
     ///

@@ -45,6 +45,7 @@ pub(crate) enum DialogStage {
     Failed(String),
 }
 
+/// Which of the two report dialogs is open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReportKind {
     /// Something is broken, so the diagnostic bundle goes with it.

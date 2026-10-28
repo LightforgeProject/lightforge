@@ -84,7 +84,6 @@ impl Lightforge {
         .into()
     }
 
-    /// The uninstall confirmation's card.
     /// The builds one addon offers, for choosing an older one on purpose.
     ///
     /// Choosing here always pins. Installing an older build without pinning

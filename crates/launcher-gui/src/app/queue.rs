@@ -78,7 +78,6 @@ impl Lightforge {
         left.push(progress_bar(0.0..=1.0, done).girth(6)).push(muted(caption, theme::CAPTION))
     }
 
-    /// Every configured product, in the order the bar draws them.
     /// Every product whose mark the UI may draw.
     ///
     /// Not just the configured ones: the browse panel lists the whole catalog
@@ -96,10 +95,6 @@ impl Lightforge {
         codes
     }
 
-    /// Progress against the whole product, not against this run.
-    ///
-    /// A resumed run plans only what is missing, so run-relative numbers read
-    /// as "starting over" every time a download is paused and picked up again.
     /// Refresh only when the finished product is the one on screen.
     pub(crate) fn reload_if_showing(&mut self, code: &ProductCode) -> Task<Message> {
         match code == &self.selected.code {
@@ -310,11 +305,6 @@ impl Lightforge {
         )
     }
 
-    /// Record what a build offers, if it has changed.
-    ///
-    /// Saved rather than held in memory: the list is the only thing standing
-    /// between the settings panel and a hardcoded guess, and a guess is what
-    /// put a 37 GiB texture pack in a plan nobody asked for.
     /// The optional downloads a product is opted into, limited to the ones
     /// Lightforge offers; see [`OFFERED_OPTIONAL`]. An opt-in to anything
     /// else, from before that list existed, is ignored rather than fetched
@@ -325,6 +315,11 @@ impl Lightforge {
         )
     }
 
+    /// Record what a build offers, if it has changed.
+    ///
+    /// Saved rather than held in memory: the list is the only thing standing
+    /// between the settings panel and a hardcoded guess, and a guess is what
+    /// put a 37 GiB texture pack in a plan nobody asked for.
     pub(crate) fn remember_optional(&mut self, code: &ProductCode, offered: Vec<String>) {
         let changed = self
             .config
@@ -339,7 +334,6 @@ impl Lightforge {
         self.save_config();
     }
 
-    /// Persist the config, surfacing a write failure rather than swallowing it.
     /// The queue as the next start should find it.
     pub(crate) fn queue_snapshot(&self) -> transfers::Queue {
         // Paused only because a game is running: owed a restart, and one the

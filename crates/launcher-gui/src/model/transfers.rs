@@ -59,6 +59,10 @@ pub(crate) struct Job {
 }
 
 impl Download {
+    /// Progress against the whole product, not against this run.
+    ///
+    /// A resumed run plans only what is missing, so run-relative numbers read
+    /// as "starting over" every time a download is paused and picked up again.
     pub(crate) fn progress(&self) -> state::Progress {
         job_progress(self.job, &self.sample, self.rate.per_second)
     }

@@ -2,10 +2,6 @@
 
 use super::*;
 
-/// Launch the game directly under Proton, the `[ PLAY ]` path.
-///
-/// Blocking from start to finish: pre-flight spawns processes and the returned
-/// future only resolves when the game exits.
 /// Everything that must be settled before a launch: no stale processes in the
 /// prefix, no transfer mid-flight.
 ///
@@ -521,10 +517,6 @@ pub async fn stop_game(layout: Layout) -> Result<String, Problem> {
     }
 }
 
-/// What Battle.net reports as installed, keyed by product code.
-///
-/// Read when the browse panel opens, never on a timer and never to decide
-/// what the header shows, it labels a list the user asked to see.
 /// Battle.net's own download limit, in MB/s, or `None` when it has none.
 pub async fn battle_net_limit(layout: Layout, user: String) -> Option<u64> {
     tokio::task::spawn_blocking(move || {

@@ -101,17 +101,6 @@ pub fn same_marks(a: &HashMap<ProductCode, Mark>, b: &HashMap<ProductCode, Mark>
             .all(|(code, mark)| b.get(code).is_some_and(|other| other.path == mark.path))
 }
 
-/// Fetch every product's artwork into the cache, without decoding any of it.
-///
-/// The first run's "it looks weird for the first second or two on every game"
-/// fix: a panel's background and wordmark are revalidated the first time it is
-/// opened, and until they land the card is empty. Pulling them all down while
-/// the wizard's first slide is on screen means every panel opens from disk.
-///
-/// Deliberately not decoded and not kept: decoding thirteen 4K backgrounds to
-/// hold them all in memory would cost more than it saves, and [`cached_theme`]
-/// reads them off disk per product in tens of milliseconds. Returns how many
-/// products now have art cached.
 /// Nothing, after a wait. The one thing a `Task` cannot express on its own.
 pub async fn after(delay: std::time::Duration) {
     tokio::time::sleep(delay).await;
@@ -138,6 +127,17 @@ pub async fn prefetch_within(
     }
 }
 
+/// Fetch every product's artwork into the cache, without decoding any of it.
+///
+/// The first run's "it looks weird for the first second or two on every game"
+/// fix: a panel's background and wordmark are revalidated the first time it is
+/// opened, and until they land the card is empty. Pulling them all down while
+/// the wizard's first slide is on screen means every panel opens from disk.
+///
+/// Deliberately not decoded and not kept: decoding thirteen 4K backgrounds to
+/// hold them all in memory would cost more than it saves, and [`cached_theme`]
+/// reads them off disk per product in tens of milliseconds. Returns how many
+/// products now have art cached.
 pub async fn prefetch(
     http: Option<Http>,
     pipeline: Option<Pipeline>,

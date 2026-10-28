@@ -394,9 +394,6 @@ fn the_ring_comes_back_where_the_mouse_took_it() {
     assert_eq!(app.focus, Some(focus::Target::AppMenu));
 }
 
-/// The Deck's controls arrive as keys: the D-pad as arrows, A as Enter,
-/// B as Escape. They have to reach a game and back out of a dialog with
-/// no mouse at all.
 /// Buttons that are gone once pressed. Install inside the addon details:
 /// the ring moves on inside the dialog, and closing the dialog still takes
 /// it back to the Details button that opened it. Keep on an addon row:
@@ -482,6 +479,9 @@ fn right_from_the_settings_index_goes_in_and_left_comes_back_out() {
     assert_eq!(app.focus, Some(tab));
 }
 
+/// The Deck's controls arrive as keys: the D-pad as arrows, A as Enter,
+/// B as Escape. They have to reach a game and back out of a dialog with
+/// no mouse at all.
 #[test]
 fn the_keyboard_alone_picks_a_game_and_closes_the_release_notes() {
     let (mut app, _) = Lightforge::new();

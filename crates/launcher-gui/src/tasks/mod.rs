@@ -88,7 +88,6 @@ impl std::fmt::Display for Problem {
     }
 }
 
-/// The Proton build a product launches under, with its per-product caches.
 /// Which workload a runner is being built for.
 ///
 /// They pin separately: `SPEC.md` asks for a Proton build chosen for
@@ -141,6 +140,7 @@ pub fn prefix_fit(
     (Some(build.version.clone()), fit)
 }
 
+/// The Proton build a product launches under, with its per-product caches.
 fn runner_for(
     layout: &Layout,
     code: &ProductCode,

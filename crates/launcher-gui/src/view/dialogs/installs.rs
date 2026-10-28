@@ -260,6 +260,7 @@ impl Lightforge {
             .into()
     }
 
+    /// The uninstall confirmation's card.
     pub(crate) fn uninstall_card<'a>(&'a self, dialog: &'a UninstallDialog) -> Element<'a, Message> {
         let mut body = column![].spacing(theme::MD);
         let mut ready = false;

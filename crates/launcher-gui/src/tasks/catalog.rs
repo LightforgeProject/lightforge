@@ -188,6 +188,7 @@ pub(crate) fn by_every_name(
     found
 }
 
+/// What Battle.net reports as installed, keyed by product code.
 pub async fn installed_versions(layout: Layout) -> HashMap<String, String> {
     tokio::task::spawn_blocking(move || {
         use lightforge_core::tact::productdb;

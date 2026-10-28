@@ -88,8 +88,6 @@ pub const PANEL: Color = Color::from_rgba(0.043, 0.055, 0.070, 0.88);
 
 // ------------------------------------------------------------------ scales --
 
-/// Spacing scale. Four values cover every gap on every screen; a fifth would
-/// only invite eyeballing.
 /// Height of a primary control, so the halves of a split button match exactly.
 ///
 /// Pinned rather than left to content: the action half is sized by a line of
@@ -97,6 +95,8 @@ pub const PANEL: Color = Color::from_rgba(0.043, 0.055, 0.070, 0.88);
 /// its own content leaves the tab visibly short of the button it belongs to.
 pub const CONTROL_HEIGHT: f32 = 56.0;
 
+/// Spacing scale. Four values cover every gap on every screen; a fifth would
+/// only invite eyeballing.
 pub const XS: f32 = 4.0;
 
 pub const SM: f32 = 8.0;

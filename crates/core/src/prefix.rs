@@ -220,13 +220,13 @@ impl ProtonRunner {
         cmd
     }
 
-    /// Run a program in the prefix and wait for it, failing on a non-zero exit.
     /// Proton's runtime directory, `files` or `dist`, whichever this build
     /// ships. The wine binaries and `wineserver` live under its `bin`.
     pub fn dist(&self) -> &Path {
         &self.dist
     }
 
+    /// Run a program in the prefix and wait for it, failing on a non-zero exit.
     pub fn run<I, S>(&self, program: impl AsRef<OsStr>, args: I) -> Result<(), PrefixError>
     where
         I: IntoIterator<Item = S>,
