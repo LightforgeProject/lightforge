@@ -1,7 +1,6 @@
 //! The canonical on-disk layout.
 //!
-//! Everything in Lightforge resolves paths through [`Layout`] so the dual
-//! directory structure lives in exactly one place:
+//! Every path goes through [`Layout`]:
 //!
 //! ```text
 //! ~/Games/Blizzard/
@@ -15,9 +14,9 @@
 //!     └── World of Warcraft/
 //! ```
 //!
-//! Game data deliberately lives outside the prefix and is symlinked in, so
-//! Wine and CEF see a conventional Windows storage path (the storefront
-//! gray-screen fix) while a prefix rebuild never endangers a 100 GB install.
+//! Game data lives outside the prefix and is symlinked in: Wine and CEF see a
+//! conventional Windows path (the storefront grey-screen fix), and a prefix
+//! rebuild never touches a 100 GB install.
 
 use std::path::{Path, PathBuf};
 
@@ -27,21 +26,15 @@ use crate::product::ProductCode;
 /// Directory name used for the WoW install on both sides of the symlink.
 pub const WOW_DIR: &str = "World of Warcraft";
 
-/// The install root as Windows sees it inside the prefix.
-///
-/// Not cosmetic: `.product.db` records this string, and Battle.net matches the
-/// install by it. It must be the path the symlink presents, not the Linux one.
+/// The install root as Windows sees it: `.product.db` records this string,
+/// and Battle.net matches the install by it.
 pub const WINDOWS_WOW_PATH: &str = "C:/Program Files (x86)/World of Warcraft";
 /// Windows-side parent the install is presented under, for Battle.net's sake.
 const WINDOWS_PROGRAM_FILES: &str = "Program Files (x86)";
 
-/// Resolved filesystem layout: one Wine prefix, and the storage libraries
-/// games are installed into.
-///
-/// The prefix is always at `root`: on the user's home drive, where a Wine
-/// prefix belongs, whatever drives the games are spread over. Each library
-/// reaches into the prefix through its own `dosdevices` entries rather than
-/// moving anything about; see [`crate::library`].
+/// Resolved filesystem layout: one Wine prefix at `root`, and the storage
+/// libraries games go into, each reaching the prefix through its own
+/// `dosdevices` entries ([`crate::library`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layout {
     root: PathBuf,
@@ -59,11 +52,7 @@ impl Layout {
         }
     }
 
-    /// The same layout with its games somewhere else; `None` keeps them at
-    /// `root/games`.
-    ///
-    /// Shorthand for a single-library layout, which is what the CLI and the
-    /// tests mostly want. [`Layout::with_libraries`] is the general form.
+    /// One library, at `games` or else `root/games`. See [`Layout::with_libraries`].
     pub fn with_games(self, games: Option<PathBuf>) -> Self {
         let games = games.unwrap_or_else(|| self.root.join("games"));
         self.with_libraries(Libraries::new(vec![Library::main_at(games, "home")]))
@@ -104,19 +93,13 @@ impl Layout {
         &self.root
     }
 
-    /// The Proton compat-data directory, the value of
-    /// `STEAM_COMPAT_DATA_PATH`. Proton creates the Wine prefix one level
-    /// inside it, at `pfx/`.
+    /// The Proton compat-data directory, `STEAM_COMPAT_DATA_PATH`.
     pub fn compat_data(&self) -> PathBuf {
         self.root.join("prefix")
     }
 
-    /// The Wine prefix itself, `prefix/pfx`. Treated as disposable, never
-    /// store game or user data here that isn't reproducible.
-    ///
-    /// The `pfx` component is Proton's, not Lightforge's: Proton always builds
-    /// the prefix at `$STEAM_COMPAT_DATA_PATH/pfx`, so a layout that skipped it
-    /// would describe a directory Proton never writes to.
+    /// The Wine prefix itself, `prefix/pfx` (Proton's naming). Disposable:
+    /// nothing irreplaceable goes here.
     pub fn prefix(&self) -> PathBuf {
         self.compat_data().join("pfx")
     }
@@ -127,25 +110,16 @@ impl Layout {
     }
 
     /// The WoW install's own Windows drive letter, as a `dosdevices` entry.
-    ///
-    /// Not interchangeable with [`Layout::wow_symlink`]: the in-game shop's
-    /// browser (`Utils/BlizzardBrowser.exe`) only starts its GPU child when the
-    /// install is a drive of its own; through `C:` or `Z:` it dies and the shop
-    /// is a grey box (measured 2026-10-02, `Logs/BlizzardBrowser/CEF-*.log`).
-    /// One per library, recorded and never moved, or recorded paths break.
+    /// The in-game shop's browser only starts its GPU child on a drive of its
+    /// own; through `C:` or `Z:` it is a grey box (measured 2026-10-02,
+    /// `Logs/BlizzardBrowser/CEF-*.log`). One per library, never moved.
     pub fn wow_drive(&self, library: &Library) -> PathBuf {
         self.dosdevices().join(&library.wow_letter)
     }
 
-    /// A library's `games/` directory as a Windows drive, the directory
-    /// Battle.net is told to install other titles into.
-    ///
-    /// Separate from [`Layout::wow_drive`] because the two want opposite
-    /// things: the shop needs the WoW install to *be* a drive root, while
-    /// Battle.net needs a drive it can create a game folder *inside*. Wine
-    /// resolves a Unix path to the most specific drive mapped over it, so both
-    /// hold at once, the install is on its own letter even though its parent
-    /// is on another.
+    /// A library's `games/` directory as a Windows drive, for Battle.net to
+    /// install other titles into. Wine resolves to the most specific drive, so
+    /// the install still gets [`Layout::wow_drive`].
     pub fn games_drive(&self, library: &Library) -> PathBuf {
         self.dosdevices().join(&library.games_letter)
     }
@@ -155,16 +129,8 @@ impl Layout {
         self.prefix().join("dosdevices")
     }
 
-    /// Resolve a Windows path the way Wine would, into a real one.
-    ///
-    /// Reads `dosdevices` rather than assuming anything, so it answers for
-    /// every letter the prefix has, `C:` for the prefix's own `drive_c`, and
-    /// each library's two letters, without this needing to know which is
-    /// which. `None` for a letter the prefix does not map.
-    ///
-    /// Used to turn the install paths in Battle.net's `product.db` back into
-    /// directories that can be measured. Those are the client's own strings,
-    /// in its own spelling, and this is the only place that has to care.
+    /// Resolve a Windows path the way Wine would, through `dosdevices`, for
+    /// the install paths in Battle.net's `product.db`. `None` for an unmapped letter.
     pub fn resolve_windows(&self, windows: &str) -> Option<PathBuf> {
         resolve_windows_in(&self.dosdevices(), windows)
     }
@@ -179,11 +145,8 @@ impl Layout {
         battle_net_dir_in(&self.prefix())
     }
 
-    /// `%APPDATA%/Battle.net/Battle.net.config`: the file automated setup
-    /// injects `GameLaunchWindowBehavior` and `DefaultInstallPath` into.
-    ///
-    /// `user` is the prefix's Windows user name; Proton prefixes conventionally
-    /// use `steamuser`.
+    /// `%APPDATA%/Battle.net/Battle.net.config`. `user` is the prefix's
+    /// Windows user, `steamuser` under Proton.
     pub fn battle_net_config(&self, user: &str) -> PathBuf {
         self.drive_c()
             .join("users")
@@ -194,12 +157,8 @@ impl Layout {
             .join("Battle.net.config")
     }
 
-    /// `%LOCALAPPDATA%/Battle.net/Logs`: where the client writes its own
-    /// running commentary, one timestamped file per start.
-    ///
-    /// Read, never written. It is the only place the client says out loud
-    /// that it has finished starting and signed in, which is what a hand-off
-    /// has to wait for.
+    /// `%LOCALAPPDATA%/Battle.net/Logs`, one file per start: the only place
+    /// the client says it has signed in. Read, never written.
     pub fn battle_net_logs(&self, user: &str) -> PathBuf {
         self.drive_c()
             .join("users")
@@ -210,12 +169,8 @@ impl Layout {
             .join("Logs")
     }
 
-    /// `%LOCALAPPDATA%/Battle.net/Cache`: the client's content-addressed
-    /// cache, where it keeps Blizzard's published product catalogue.
-    ///
-    /// Read, never written. It is the only place in the prefix that says
-    /// which game family a product belongs to, which is what a hand-off has
-    /// to name; see [`crate::families`].
+    /// `%LOCALAPPDATA%/Battle.net/Cache`, holding Blizzard's product catalogue
+    /// with each game's family ([`crate::families`]). Read, never written.
     pub fn battle_net_cache(&self, user: &str) -> PathBuf {
         self.drive_c()
             .join("users")
@@ -228,15 +183,11 @@ impl Layout {
 
     /// The Battle.net mark, as Wine left it in the prefix.
     ///
-    /// `winemenubuilder` rasterises each program's icon into
-    /// `drive_c/proton_shortcuts/icons/`, so the client's mark is already on
-    /// disk and nothing of Blizzard's is bundled. The file name is Wine's own
-    /// hash, so the directory is searched. `None` before Battle.net is
-    /// installed or before Wine built a menu for it.
+    /// `winemenubuilder` rasterises it into `drive_c/proton_shortcuts/icons/`
+    /// under a hash name, so the directory is searched. `None` until then.
     pub fn battle_net_icon(&self) -> Option<PathBuf> {
         let icons = self.drive_c().join("proton_shortcuts").join("icons");
-        // Largest first: the button draws small, and downscaling a 256 is
-        // kinder than upscaling a 32.
+        // Largest first: downscaling looks better.
         ["256x256", "128x128", "64x64", "48x48"].into_iter().find_map(|size| {
             let apps = icons.join(size).join("apps");
             let mut found: Vec<PathBuf> = std::fs::read_dir(apps)
@@ -247,21 +198,14 @@ impl Layout {
                     name.contains("Battle.net") && name.ends_with(".png")
                 })
                 .collect();
-            // A prefix that has seen more than one Battle.net build keeps a
-            // file per build; any of them is the same mark, so the answer is
-            // pinned rather than left to the order the directory came back in.
+            // One file per Battle.net build, the same mark; pick one stably.
             found.sort();
             found.into_iter().next()
         })
     }
 
-    /// The bootstrapper's staging directory inside the Battle.net install.
-    ///
-    /// `Battle.net-Setup.exe` unpacks the client here and then promotes it to
-    /// `Battle.net.<build>/` alongside. A setup that was torn down at the
-    /// moment of promotion leaves a full duplicate behind, roughly 750 MB,
-    /// which the client only clears on its next successful launch. Pre-flight
-    /// removes it once nothing in the prefix is alive.
+    /// The bootstrapper's staging directory. A setup torn down mid-promotion
+    /// leaves a ~750 MB duplicate here, which pre-flight removes.
     pub fn battle_net_staging(&self) -> PathBuf {
         self.battle_net_dir().join(".battle.net").join(".extract")
     }
@@ -271,22 +215,14 @@ impl Layout {
         self.agent_dir().join("data").join("cache")
     }
 
-    /// Agent's own directory. **Never delete this**: it holds `product.db`,
-    /// the registry of every game Battle.net knows is installed. Wiping it
-    /// makes the client forget every located install, so the user has to point
-    /// it at their games again after every launch, which is exactly what
-    /// Lightforge did until this was split out.
+    /// Agent's own directory. **Never delete this**: its `product.db` is
+    /// every install Battle.net knows.
     pub fn agent_dir(&self) -> PathBuf {
         agent_dir_in(&self.prefix())
     }
 
-    /// The default library's game assets root: `~/Games/Blizzard/games` unless
-    /// the games were put somewhere else.
-    ///
-    /// The default install target, and what a product with no library of its
-    /// own resolves to. Anything addressing a *particular* product's files
-    /// goes through [`Layout::wow_install`] instead, because two libraries can
-    /// each hold a WoW install.
+    /// The default library's games root. A particular product's files go
+    /// through [`Layout::wow_install`]: libraries each hold an install.
     pub fn games_root(&self) -> PathBuf {
         self.libraries
             .default()
@@ -294,11 +230,7 @@ impl Layout {
             .unwrap_or_else(|| self.root.join("games"))
     }
 
-    /// Where a product's WoW install lives on the native filesystem.
-    ///
-    /// Per product rather than per layout: each library holds its own
-    /// `World of Warcraft/`, with its own `.build.info` and its own CASC
-    /// store, so Retail can be on one drive and Classic Era on another.
+    /// Where a product's WoW install lives, per library.
     pub fn wow_install(&self, code: &ProductCode) -> PathBuf {
         self.library(code)
             .map(|l| l.games().join(WOW_DIR))
@@ -310,20 +242,13 @@ impl Layout {
         library.games().join(WOW_DIR)
     }
 
-    /// Symlink *source*: the Windows-visible `C:` path inside the prefix.
-    ///
-    /// There is exactly one of these and it points at the **main** library,
-    /// because `C:\Program Files (x86)\World of Warcraft` is a single path
-    /// and an install Battle.net has already adopted has that string recorded
-    /// on disk. Every other library presents its install under its own
-    /// `games/` drive instead; see [`Library::windows_wow_path`].
+    /// The `C:` symlink, for the **main** library only: adopted installs have
+    /// that path recorded. Others use [`Library::windows_wow_path`].
     pub fn wow_symlink(&self) -> PathBuf {
         self.program_files_x86().join(WOW_DIR)
     }
 
-    /// The `.build.info` at a product's install root. One file holds a row
-    /// per product sharing that install, which is why mutation must isolate a
-    /// single row.
+    /// The `.build.info` at a product's install root, a row per product.
     pub fn build_info(&self, code: &ProductCode) -> PathBuf {
         self.wow_install(code).join(".build.info")
     }
@@ -343,28 +268,14 @@ impl Layout {
         self.product_dir(code).join("WTF")
     }
 
-    /// The product's game binary, launched directly under Proton for `[ PLAY ]`.
-    ///
-    /// Resolved against the directory rather than assumed, because the name
-    /// varies per flavor and not in a pattern worth guessing: one real install
-    /// holds `_retail_/Wow.exe`, `_classic_era_/WowClassic.exe` and
-    /// `_classic_beta_/WowB.exe`. The expected name wins when it is there; a
-    /// probe covers the rest, including flavors that do not exist yet.
-    ///
-    /// Falls back to the expected name when nothing is installed, so the error
-    /// a caller reports names a plausible file instead of nothing.
+    /// The product's game binary, for `[ PLAY ]`; see [`game_executable`].
     pub fn wow_exe(&self, code: &ProductCode) -> PathBuf {
         game_executable(&self.product_dir(code), code)
     }
 }
 
-/// Flatten `.` and `..` out of a path without touching the filesystem.
-///
-/// Resolve a Windows path against any prefix's `dosdevices` directory.
-///
-/// Free of [`Layout`] on purpose: a first run reads the install paths out of
-/// *another* launcher's Battle.net, whose prefix Lightforge does not own and
-/// has no layout for. See [`crate::discover`].
+/// Resolve a Windows path against any prefix's `dosdevices`, including
+/// another launcher's ([`crate::discover`]).
 pub fn resolve_windows_in(dosdevices: &Path, windows: &str) -> Option<PathBuf> {
     let windows = windows.replace('\\', "/");
     let (letter, rest) = windows.split_once(':')?;
@@ -373,8 +284,7 @@ pub fn resolve_windows_in(dosdevices: &Path, windows: &str) -> Option<PathBuf> {
         return None;
     }
     let link = dosdevices.join(format!("{}:", letter.to_ascii_lowercase()));
-    // The entry is a symlink, and Wine writes `c:` as a *relative* one
-    // (`../drive_c`), so it is resolved against the directory it lives in.
+    // Wine writes `c:` as a relative link (`../drive_c`).
     let target = std::fs::read_link(&link).ok()?;
     let target = match target.is_absolute() {
         true => target,
@@ -385,8 +295,7 @@ pub fn resolve_windows_in(dosdevices: &Path, windows: &str) -> Option<PathBuf> {
         true => target,
         false => target.join(relative),
     };
-    // `..` components from a relative `dosdevices` entry would otherwise
-    // survive into every comparison made against this path.
+    // Drop the relative link's `..`.
     Some(normalize(&resolved))
 }
 
@@ -406,9 +315,8 @@ pub fn is_prefix(dir: &Path) -> bool {
     dir.join("drive_c").is_dir()
 }
 
-/// Not `canonicalize`: that resolves symlinks, and the whole point of the
-/// paths this is used on is that one of them *is* the symlink putting a game
-/// where Windows expects it.
+/// Flatten `.` and `..` without touching the filesystem. Not `canonicalize`:
+/// one of these paths is the game symlink itself.
 fn normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for part in path.components() {
@@ -425,15 +333,9 @@ fn normalize(path: &Path) -> PathBuf {
 
 /// The game binary inside a flavor directory, resolved by probing it.
 ///
-/// The name varies per flavor and not in a pattern worth guessing: one real
-/// install holds `_retail_/Wow.exe`, `_classic_era_/WowClassic.exe` and
-/// `_classic_beta_/WowB.exe`. The expected name wins when it is there, a probe
-/// covers the rest, and the expected name is the fallback so a caller that
-/// finds nothing can still name a plausible file in its error.
-///
-/// Takes the directory rather than a [`Layout`] because the launch path goes
-/// through the prefix symlink, Wine has to see the conventional Windows path,
-/// while everything else addresses the install directly.
+/// One real install holds `_retail_/Wow.exe`, `_classic_era_/WowClassic.exe`
+/// and `_classic_beta_/WowB.exe`. The expected name wins, a probe covers the
+/// rest, and with nothing found the expected name comes back for the error.
 pub fn game_executable(flavor_dir: &Path, code: &ProductCode) -> PathBuf {
     let expected = flavor_dir.join(code.executable());
     if expected.is_file() {
@@ -461,8 +363,7 @@ pub fn game_executable(flavor_dir: &Path, code: &ProductCode) -> PathBuf {
         .unwrap_or(expected)
 }
 
-/// XDG locations for Lightforge's own data, kept separate from the game root
-/// so wiping `~/Games/Blizzard` doesn't take the user's configuration with it.
+/// XDG locations for Lightforge's own data, apart from the game root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppDirs {
     config: PathBuf,
@@ -533,10 +434,7 @@ impl AppDirs {
     /// Shader caches for one product: DXVK's and VKD3D's, and the NVIDIA and
     /// Mesa drivers' below it, see [`crate::prefix::ProtonRunner::with_shader_cache`].
     ///
-    /// Keyed per product deliberately. All products share a single prefix, so
-    /// letting DXVK pool its cache there would mean clearing Retail's stale
-    /// shaders after a Proton swap also discards Classic's, a stutter penalty
-    /// on a product the user never touched.
+    /// Per product, so a Proton swap on one does not clear another's.
     pub fn shader_cache_dir(&self, code: &ProductCode) -> PathBuf {
         self.cache.join("dxvk").join(code.as_str())
     }
@@ -551,12 +449,9 @@ pub enum PathError {
 
 /// Prove `dir` will take a new file, repairing the one case we own.
 ///
-/// A directory can exist and be readable and still refuse a file of its own
-/// (a root carried over from another tool or a backup), which only shows when
-/// `.product.db` or `.build.info` is written, at the end of a long operation.
-/// A missing owner-write bit on a directory this user owns is added and the
-/// probe retried; anything else (another owner, read-only mount, full disk) is
-/// reported with its cause. Returns whether the mode had to be repaired.
+/// A root from another tool can refuse a file of its own, which otherwise
+/// shows only at the end of a download. A missing owner-write bit on our own
+/// directory is added; anything else is reported with its cause.
 pub fn ensure_writable(dir: &Path) -> Result<Repaired, std::io::Error> {
     std::fs::create_dir_all(dir)?;
     match probe(dir) {
@@ -569,7 +464,6 @@ pub fn ensure_writable(dir: &Path) -> Result<Repaired, std::io::Error> {
             let Ok(meta) = std::fs::metadata(dir) else { return Err(e) };
             let mode = std::os::unix::fs::PermissionsExt::mode(&meta.permissions());
             // Only the owner-write bit, and only when it is the bit missing.
-            // Nothing else about the directory is this function's business.
             if mode & 0o200 != 0 {
                 return Err(e);
             }
@@ -597,18 +491,14 @@ fn probe(dir: &Path) -> Result<(), std::io::Error> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Repaired {
     No,
-    /// The owner-write bit was missing and was added. Worth saying out loud:
-    /// the user's install folder is not the same afterwards as before.
+    /// The owner-write bit was missing and was added; worth reporting.
     Yes,
 }
 
 #[cfg(test)]
 mod tests {
-    /// A directory that exists, that the run would happily write *into*
-    /// through its subdirectories, and that refuses a file of its own. This is
-    /// the shape an install root carried over from another tool arrives in,
-    /// and it used to surface as `i/o error at <that directory>` after an
-    /// hours-long download had already finished.
+    /// A directory writable through its subdirectories that refuses a file
+    /// of its own: an install root from another tool.
     #[test]
     fn a_root_that_refuses_a_file_is_repaired_when_we_own_it() {
         use std::os::unix::fs::PermissionsExt;
@@ -640,8 +530,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A refusal that is not ours to fix keeps its cause, which is the half a
-    /// bug report needs and the half `i/o error at {path}` never carried.
+    /// A refusal that is not ours to fix keeps its cause.
     #[test]
     fn a_refusal_we_cannot_fix_comes_back_with_its_cause() {
         let root = std::env::temp_dir()
