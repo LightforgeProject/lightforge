@@ -1,4 +1,4 @@
-//! Replacing a file on disk without a window where it is half written.
+//! Filesystem operations several modules share: atomic replace, directory size.
 
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -32,6 +32,25 @@ pub(crate) fn write_atomic_with_mode(path: &Path, bytes: &[u8], mode: u32) -> io
         let _ = handle.sync_all();
     }
     Ok(())
+}
+
+/// Recursive size, best-effort: an unreadable entry counts as nothing rather
+/// than failing the whole report.
+///
+/// Symlinks are not followed. The prefix holds one pointing at the game
+/// install, and following it would count the game twice.
+pub(crate) fn dir_size(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| match entry.file_type() {
+            Ok(t) if t.is_dir() => dir_size(&entry.path()),
+            Ok(t) if t.is_file() => entry.metadata().map(|m| m.len()).unwrap_or(0),
+            _ => 0,
+        })
+        .sum()
 }
 
 #[cfg(test)]

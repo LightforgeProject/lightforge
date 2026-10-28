@@ -262,7 +262,7 @@ pub fn inspect(prefix: &Path, origin: Origin) -> Option<Found> {
                 code: record.product,
                 label: folder_name(&path),
                 version: record.version,
-                bytes: crate::storage::dir_size(&path),
+                bytes: crate::fsutil::dir_size(&path),
                 path,
             }),
         }
@@ -284,7 +284,7 @@ pub fn inspect(prefix: &Path, origin: Origin) -> Option<Found> {
             continue;
         }
         entry.wow.push(WowInstall {
-            bytes: crate::storage::dir_size(&path),
+            bytes: crate::fsutil::dir_size(&path),
             blocked: None,
             products,
             path,
@@ -335,7 +335,7 @@ pub fn wow_install_at(path: &Path) -> Option<WowInstall> {
     Some(WowInstall {
         path: path.to_path_buf(),
         products,
-        bytes: crate::storage::dir_size(path),
+        bytes: crate::fsutil::dir_size(path),
         blocked: None,
     })
 }

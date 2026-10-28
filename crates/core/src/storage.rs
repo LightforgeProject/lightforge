@@ -8,6 +8,7 @@ use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
+use crate::fsutil::dir_size;
 use crate::paths::{AppDirs, Layout};
 
 #[derive(Debug, thiserror::Error)]
@@ -443,25 +444,6 @@ fn entry_size(path: &Path) -> u64 {
         Ok(meta) if meta.is_file() => meta.len(),
         _ => 0,
     }
-}
-
-/// Recursive size, best-effort: an unreadable entry counts as nothing rather
-/// than failing the whole report.
-///
-/// Symlinks are not followed. The prefix holds one pointing at the game
-/// install, and following it would count the game twice.
-pub fn dir_size(dir: &Path) -> u64 {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return 0;
-    };
-    entries
-        .flatten()
-        .map(|entry| match entry.file_type() {
-            Ok(t) if t.is_dir() => dir_size(&entry.path()),
-            Ok(t) if t.is_file() => entry.metadata().map(|m| m.len()).unwrap_or(0),
-            _ => 0,
-        })
-        .sum()
 }
 
 #[cfg(test)]

@@ -197,7 +197,7 @@ pub(super) fn remove_dir(dir: &Path) -> Result<Option<u64>, PreflightError> {
     if !dir.is_dir() {
         return Ok(None);
     }
-    let bytes = crate::storage::dir_size(dir);
+    let bytes = crate::fsutil::dir_size(dir);
     std::fs::remove_dir_all(dir)
         .map_err(|source| PreflightError::Io { path: dir.to_path_buf(), source })?;
     Ok(Some(bytes))

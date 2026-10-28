@@ -83,7 +83,7 @@ pub fn plan(install: &Path, code: &ProductCode) -> Result<Plan, UninstallError> 
     let others_on_disk = info.is_none() && has_other_flavor(install, flavor_dir.as_deref());
     let store = (remaining.is_empty() && !others_on_disk && store.is_dir()).then_some(store);
 
-    let bytes = flavor_dir.iter().chain(store.iter()).map(|p| dir_size(p)).sum();
+    let bytes = flavor_dir.iter().chain(store.iter()).map(|p| crate::fsutil::dir_size(p)).sum();
 
     Ok(Plan {
         has_row: info.as_ref().is_some_and(|i| i.row(code).is_some()),
@@ -216,21 +216,6 @@ fn has_other_flavor(install: &Path, own: Option<&Path>) -> bool {
             && entry.file_type().is_ok_and(|t| t.is_dir())
             && own != Some(entry.path().as_path())
     })
-}
-
-/// Recursive size of a directory, ignoring anything unreadable.
-fn dir_size(path: &Path) -> u64 {
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return 0;
-    };
-    entries
-        .flatten()
-        .map(|entry| match entry.file_type() {
-            Ok(t) if t.is_dir() => dir_size(&entry.path()),
-            Ok(t) if t.is_file() => entry.metadata().map(|m| m.len()).unwrap_or(0),
-            _ => 0,
-        })
-        .sum()
 }
 
 #[derive(Debug, thiserror::Error)]

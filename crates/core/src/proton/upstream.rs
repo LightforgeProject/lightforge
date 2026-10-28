@@ -207,17 +207,7 @@ pub fn remove_build(
 /// Best effort: an unreadable entry contributes nothing rather than failing
 /// the total, since this only ever labels a button.
 pub fn size_on_disk(path: &Path) -> u64 {
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return 0;
-    };
-    entries
-        .flatten()
-        .map(|entry| match entry.file_type() {
-            Ok(kind) if kind.is_dir() => size_on_disk(&entry.path()),
-            Ok(kind) if kind.is_file() => entry.metadata().map(|m| m.len()).unwrap_or(0),
-            _ => 0,
-        })
-        .sum()
+    crate::fsutil::dir_size(path)
 }
 
 /// Download, verify, and unpack a release into `dest_root`.
