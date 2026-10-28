@@ -1,32 +1,24 @@
 //! Giving back the shared store's space: when one WoW version is uninstalled,
 //! and for data no version uses any more.
 //!
-//! Every version in one install writes into the same CASC store, so deleting
-//! a version's folder frees only its executables, its game data stays in
-//! `Data/`, interleaved with the others'. [`plan`] finds the store entries only
-//! the departing version uses; [`plan_unused`] finds the ones no version uses,
-//! which is what every patch leaves behind. Either drops them from the
-//! indices and compacts the archives that leaves mostly dead, see
-//! [`super::compact`].
+//! Every version in an install shares one CASC store, so deleting a
+//! version's folder frees only its executables. [`plan`] finds the entries
+//! only the departing version uses, [`plan_unused`] the ones no version uses
+//! (what patches leave behind). Either drops them from the indices and
+//! compacts the archives left mostly dead ([`super::compact`]).
 //!
-//! Three rules keep it from ever touching another version's files:
+//! Three rules keep other versions' files safe:
 //!
-//! * The keep-set comes from the builds that are **on disk**, not from what
-//!   the CDN serves today: every `.build.info` row, and every product
-//!   `.product.db` still records without one. Agent takes a pre-installed
-//!   build's row away and keeps its data, the WoW Forever stress test lost its
-//!   row that way on 2026-10-17 with all 1.2 M of its files still in the
-//!   store. A version a patch behind still needs files its newer build
-//!   dropped.
-//! * A build keeps more than its download manifest: everything its build
-//!   config names, encoding, root, `vfs-*`, the patch manifests, which the
-//!   client reads out of the store and no manifest lists.
-//! * If any version's manifests cannot be read, there is no plan. Nothing is
-//!   reclaimed on a guess.
+//! * The keep-set comes from the builds **on disk**: every `.build.info` row,
+//!   and every `.product.db` record without one (Agent drops a pre-installed
+//!   build's row and keeps its data, as the Forever stress test showed on
+//!   2026-10-17).
+//! * A build keeps everything its build config names too (encoding, root,
+//!   `vfs-*`, patch manifests), which no manifest lists.
+//! * If any version's manifests cannot be read, there is no plan.
 //!
-//! Entries dropped from an archive not worth rewriting, under a quarter of it
-//! dead afterwards, stay behind as dead space: invisible to every client, but
-//! still on disk until a later compaction gets to it.
+//! Entries in an archive under a quarter dead stay as dead space until a
+//! later compaction.
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
@@ -85,8 +77,7 @@ pub struct Reclaim {
     pub moved: u64,
     /// Bytes of disk freed.
     pub freed: u64,
-    /// Dead bytes left in the archives it touches that are not worth
-    /// rewriting.
+    /// Dead bytes left in touched archives not worth rewriting.
     pub stranded: u64,
     /// The store as planned against; execution refuses if it has moved.
     pub snapshot: Snapshot,
@@ -122,11 +113,8 @@ impl Build {
         })
     }
 
-    /// A build named by the version service rather than by `.build.info`.
-    ///
-    /// What a cancelled download was fetching. There is no installed row to
-    /// read it from, and the data it wrote into the shared store is there all
-    /// the same, so this is the only way to say which entries were its.
+    /// A build named by the version service, not `.build.info`: what a
+    /// cancelled download was fetching, which has no installed row.
     pub fn remote(product: ProductCode, build_key: String, cdn: Cdn) -> Self {
         Self { product, build_key, cdn }
     }
@@ -135,9 +123,8 @@ impl Build {
 /// Every build whose data lives in the store under `install`: each
 /// `.build.info` row, then each product `.product.db` records without one.
 ///
-/// A record with no build key, or with no row anywhere to say which CDN
-/// serves it, is an error rather than skipped: skipping it would class its
-/// whole build as unused.
+/// A record with no build key or no CDN row is an error: skipped, its whole
+/// build would count as unused.
 pub fn builds(install: &Path) -> Result<Vec<Build>, ReclaimError> {
     let info = BuildInfo::load(install.join(".build.info"))?;
     let mut builds = info
@@ -159,8 +146,7 @@ pub fn builds(install: &Path) -> Result<Vec<Build>, ReclaimError> {
         }
         let unaccounted = || ReclaimError::Unaccounted { product: record.product.clone() };
         let build_key = record.build_key.clone().ok_or_else(unaccounted)?;
-        // Every WoW version in one install comes from the same CDN path, so
-        // a sibling's row says where this one is served from.
+        // Every WoW version comes from the same CDN path as its siblings.
         let cdn = builds.first().map(|b| b.cdn.clone()).ok_or_else(unaccounted)?;
         builds.push(Build { product, build_key, cdn });
     }
@@ -171,9 +157,8 @@ pub fn builds(install: &Path) -> Result<Vec<Build>, ReclaimError> {
 /// would free. Every other build in [`builds`] is kept. Reads the indices and
 /// each build's manifests; changes nothing.
 ///
-/// `departing` is usually [`Build::installed`] read just before the product's
-/// row goes; it can also name a build already uninstalled, whose data was
-/// left behind.
+/// `departing` is usually [`Build::installed`] read just before the row goes,
+/// or a build already uninstalled whose data stayed.
 pub async fn plan(
     http: &Http,
     install: &Path,
@@ -193,12 +178,8 @@ pub async fn plan(
     Ok(select(store.files(), gone, store.data_dir(), snapshot))
 }
 
-/// Every build in `all` but `departing` itself.
-///
-/// Matched on the build key as well as the product: the departing build can be
-/// an old one left behind while the same product is installed at a newer build,
-/// and filtering by product alone would count the installed build's files as
-/// gone too.
+/// Every build in `all` but `departing`, matched on build key too: the same
+/// product may be installed at a newer build.
 fn kept<'a>(all: &'a [Build], departing: &'a Build) -> impl Iterator<Item = &'a Build> {
     all.iter()
         .filter(move |b| !(b.product == departing.product && b.build_key == departing.build_key))
@@ -207,9 +188,8 @@ fn kept<'a>(all: &'a [Build], departing: &'a Build) -> impl Iterator<Item = &'a 
 /// Work out what dropping every entry no build in [`builds`] uses would
 /// free: what patches, repairs and old builds left behind. Changes nothing.
 ///
-/// Refuses, rather than guessing, when any build cannot be accounted for.
-/// Never act on it while a download is running or paused: what that has
-/// written so far belongs to no build yet.
+/// Refuses when any build cannot be accounted for. Never while a download is
+/// running or paused: what it wrote belongs to no build yet.
 pub async fn plan_unused(http: &Http, install: &Path) -> Result<Reclaim, ReclaimError> {
     let mut store = Storage::open(install)?;
     let mut keep = HashSet::new();
@@ -225,11 +205,8 @@ pub async fn plan_unused(http: &Http, install: &Path) -> Result<Reclaim, Reclaim
 /// installed build of `product`: only the files that option alone brought in,
 /// and only those no other build on disk needs. Changes nothing.
 ///
-/// `remaining` is every other option still opted in to, so what they brought
-/// stays. The install's own tags come from `.build.info`, the same column
-/// the download that fetched it was made with, so this selects what that
-/// download selected rather than a guess at it. Nothing but the option's own
-/// files is ever a candidate, where [`plan_unused`] takes anything unneeded.
+/// `remaining` is every other option still opted in to. The tags come from
+/// `.build.info`, as the download's did.
 pub async fn plan_optional(
     http: &Http,
     install: &Path,
@@ -274,8 +251,7 @@ fn select<'a>(
 ) -> Reclaim {
     let (entries, live): (Vec<Entry>, Vec<Entry>) = files.copied().partition(|e| gone(e));
 
-    // Only archives the dropped files were in. Dead space elsewhere is a
-    // whole-store compaction's business, not this pass's.
+    // Only archives the dropped files were in.
     let touched: BTreeSet<u16> = entries.iter().map(|e| e.archive_id).collect();
     let usage = compact::usage(data_dir, live.iter(), entries.iter());
     let Compaction { archives, moved, freed, left } =
@@ -287,9 +263,8 @@ fn select<'a>(
 /// Carry out `reclaim` against the store under `install`, returning the
 /// bytes freed. `progress` hears the bytes the compaction has copied.
 ///
-/// Refuses if the store changed since the plan was made, its entries are
-/// positions in files, and a store that moved may hold something else there
-/// now. Never call against a live client.
+/// Refuses if the store changed since the plan: its entries are positions.
+/// Never against a live client.
 pub fn execute(
     install: &Path,
     reclaim: &Reclaim,
@@ -353,8 +328,7 @@ async fn keep_keys(
         product: product.clone(),
         reason: "no encoding key".to_owned(),
     })?;
-    // Verified: what is deleted is decided from this, and a damaged copy
-    // would list too little to keep.
+    // Verified: a damaged copy would keep too little.
     let raw = store.read_verified(&ekey, &config.encoding.ckey).map_err(|e| match e {
         StorageError::ContentMismatch { .. } => ReclaimError::Storage(e),
         _ => ReclaimError::NotInStore { product: product.clone(), what: "encoding manifest" },
@@ -373,9 +347,8 @@ async fn keep_keys(
     Ok(keep)
 }
 
-/// Every file an installed build's download manifest lists, as the 9-byte
-/// keys the indices store: all of them, regardless of tags, since a keep-set
-/// that is too large only costs space, and one too small costs files.
+/// Every file an installed build's download manifest lists, as 9-byte index
+/// keys, regardless of tags: too large a keep-set only costs space.
 async fn manifest_keys(
     http: &Http,
     build: &Build,

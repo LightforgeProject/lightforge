@@ -8,32 +8,18 @@
 //! <server>/<path>/data/<h0h1>/<h2h3>/<hash>      archives and loose files
 //! ```
 //!
-//! **What each name can actually verify differs, and getting this wrong means
-//! either rejecting good content or accepting bad.** Measured against a live
-//! 12.1.0 install and CDN:
+//! **Each kind of name verifies differently** (measured on 12.1.0):
 //!
 //! | name | relationship to the bytes |
 //! |---|---|
-//! | config hash | MD5 of the file. Verifiable on arrival. |
-//! | content key (CKey) | MD5 of the **decoded** content. Verifiable after BLTE decode. |
-//! | encoding key (EKey) | **Not** an MD5 of the encoded file. Not recomputable. |
+//! | config hash | MD5 of the file. |
+//! | content key (CKey) | MD5 of the **decoded** content. |
+//! | encoding key (EKey) | MD5 of the BLTE chunk table, **not** of the file. |
 //!
-//! The EKey result is the surprising one and it is worth stating plainly,
-//! because "EKey is the MD5 of the encoded file" is the usual description and
-//! it does not hold here. The root manifest is served loose at
-//! `data/d1/75/d175f4af…`, decodes correctly, and its bytes hash to
-//! `c95b92c6…`: nothing like the key it is published under. The same is true
-//! of every archived file checked.
-//!
-//! So a BLTE download is verified by decoding it and checking the result
-//! against its **content** key, which is a stronger check anyway: it validates
-//! the bytes the game will actually read rather than one particular encoding
-//! of them. BLTE's own per-chunk MD5s catch transport damage before that.
-//!
-//! This is why the transport is a convenience and not the security boundary,
-//! but the boundary still holds, because content only becomes usable after it
-//! matches a content key that came from a manifest chain rooted in the build
-//! config.
+//! The root manifest, served at `data/d1/75/d175f4af…`, hashes to
+//! `c95b92c6…`. So a BLTE download is decoded and checked against its
+//! content key, the bytes the game reads. That key comes from a manifest
+//! chain rooted in the build config, which is the security boundary, not TLS.
 
 use crate::net::{Http, NetError, MAX_CDN_BYTES};
 
@@ -71,15 +57,10 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
-    /// Every usable endpoint for a CDN row, TLS first.
-    ///
-    /// The `Servers` column carries full URLs with query parameters
-    /// (`https://level3.ssl.blizzard.com/?maxhosts=8&fallback=1`), which are
-    /// hints to Blizzard's own client and not part of the content path, so
-    /// they are stripped. TLS entries are ordered first, and the plain-HTTP
-    /// ones are kept as fallbacks rather than discarded, a download that
-    /// verifies by hash is safe over either, and refusing to fall back would
-    /// strand users whose networks block the TLS host.
+    /// Every usable endpoint for a CDN row, TLS first. `Servers` query
+    /// parameters (`?maxhosts=8&fallback=1`) are hints for Blizzard's client
+    /// and are stripped. Plain HTTP stays as a fallback: content is verified
+    /// by hash, and some networks block the TLS host.
     pub fn from_cdn(cdn: &Cdn) -> Vec<Self> {
         let mut out: Vec<Self> = Vec::new();
         let mut push = |origin: String| {
@@ -120,19 +101,15 @@ impl Endpoint {
 }
 
 impl Endpoint {
-    /// The URL an index lives at: the archive's own URL with `.index` on it.
-    ///
-    /// Indices sit beside their archives rather than under a path of their
-    /// own, and the file index is fetched the same way despite indexing
-    /// nothing but loose files.
+    /// The URL an index lives at: the archive's URL plus `.index`, the file
+    /// index included.
     pub fn index_url(&self, hash: &str) -> Result<String, CdnError> {
         Ok(format!("{}.index", self.url(Kind::Data, hash)?))
     }
 }
 
-/// One endpoint failed; the next is tried. Debug per request and a throttled
-/// warning, because an outage fails every request and a line each would drown
-/// the log. The error that finally escapes carries the last URL either way.
+/// One endpoint failed; the next is tried. Logged at debug, with a throttled
+/// warning: an outage fails every request.
 fn endpoint_failed(url: String, source: NetError) -> CdnError {
     static SLOT: crate::logging::Throttle = crate::logging::Throttle::new();
     tracing::debug!("cdn request failed, trying the next host: {url}: {}", crate::error::chain(&source));
@@ -179,12 +156,8 @@ impl Client {
         &self.endpoints
     }
 
-    /// Fetch a name across the endpoints, without checking the bytes.
-    ///
-    /// Each endpoint is tried in turn, so a host that is down or
-    /// rate-limiting falls through to the next. Callers are expected to verify
-    /// by whichever rule applies to what they asked for; see the module docs,
-    /// because the rule is not the same for every kind of name.
+    /// Fetch a name, trying each endpoint in turn, without checking the bytes:
+    /// the caller verifies by the rule for its kind of name (module docs).
     pub async fn fetch(&self, http: &Http, kind: Kind, hash: &str) -> Result<Vec<u8>, CdnError> {
         let mut last: Option<CdnError> = None;
         for endpoint in &self.endpoints {
@@ -197,12 +170,9 @@ impl Client {
         Err(last.unwrap_or(CdnError::NoEndpoints))
     }
 
-    /// Fetch a file whose name really is the MD5 of its bytes, and check it.
-    ///
-    /// Only correct for [`Kind::Config`]. A mismatch falls through to the next
-    /// endpoint rather than failing outright, one bad mirror should not make
-    /// the content unreachable, but if every endpoint disagrees the error
-    /// reports the mismatch, since that is the more alarming explanation.
+    /// Fetch a file named by the MD5 of its bytes ([`Kind::Config`] only) and
+    /// check it. A mismatch tries the next endpoint; if all disagree, the
+    /// error reports the mismatch.
     pub async fn fetch_md5_verified(
         &self,
         http: &Http,
@@ -233,19 +203,14 @@ impl Client {
         Err(last.unwrap_or(CdnError::NoEndpoints))
     }
 
-    /// Fetch a config and verify it: configs are the one kind named by the MD5
-    /// of their own bytes.
+    /// Fetch a config and verify it by its MD5.
     pub async fn fetch_config(&self, http: &Http, hash: &str) -> Result<String, CdnError> {
         let bytes = self.fetch_md5_verified(http, Kind::Config, hash).await?;
         String::from_utf8(bytes).map_err(|e| CdnError::NotText { hash: hash.to_owned(), source: e })
     }
 
     /// Fetch an index, checking it against the size its CDN config declares.
-    ///
-    /// That size is the only external check an index gets, an index is not
-    /// named by the hash of its own bytes the way a config is. A response of
-    /// the wrong length falls through to the next endpoint, since a truncated
-    /// mirror is the likeliest cause and the next one may be fine.
+    /// A wrong length (a truncated mirror) tries the next endpoint.
     pub async fn fetch_index(
         &self,
         http: &Http,
@@ -273,13 +238,8 @@ impl Client {
         Err(last.unwrap_or(CdnError::NoEndpoints))
     }
 
-    /// Fetch a byte range of an archive, exactly as served.
-    ///
-    /// Deliberately unverified and undecoded: a downloader storing into CASC
-    /// needs the encoded bytes the CDN sent, since that is what an archive
-    /// holds, and a run covers several files at once so there is no single
-    /// key to check it against. Verification happens per file, after the run
-    /// is split up.
+    /// Fetch a byte range of an archive, as served. Unverified: a run covers
+    /// several files, each checked after the run is split.
     pub async fn fetch_range(
         &self,
         http: &Http,
@@ -299,11 +259,8 @@ impl Client {
         Err(last.unwrap_or(CdnError::NoEndpoints))
     }
 
-    /// Fetch a loose file, decode it, and verify it against its content key.
-    ///
-    /// Loose files are the ones the file index lists, too large to archive,
-    /// so served whole at their own URL. Everything else answers 403 here and
-    /// must come out of an archive by range request.
+    /// Fetch a loose file (one the file index lists), decode it, and verify it
+    /// against its content key.
     pub async fn fetch_loose(
         &self,
         http: &Http,
@@ -344,11 +301,7 @@ impl Client {
     }
 
     /// Fetch one file out of an archive by range request, decode it, and
-    /// verify the result against the content key it is supposed to be.
-    ///
-    /// This is the verification that matters for game content: the encoding
-    /// key names the bytes but cannot check them, while the content key
-    /// describes exactly what the game will read.
+    /// verify it against its content key.
     pub async fn fetch_from_archive(
         &self,
         http: &Http,
@@ -370,8 +323,7 @@ impl Client {
                 }
             };
 
-            // Archived entries on the CDN are bare BLTE files: unlike local
-            // storage, there is no CASC entry header in front of them.
+            // On the CDN there is no CASC entry header in front.
             match blte::decompress_blte(raw, keys) {
                 Ok(decoded) => {
                     let actual = *md5::compute(&decoded);
@@ -479,8 +431,7 @@ mod tests {
 
     #[test]
     fn server_query_parameters_are_not_part_of_the_content_path() {
-        // `?maxhosts=8&fallback=1` is a hint to Blizzard's client. Leaving it
-        // in produces a URL with the query in the middle of the path.
+        // Left in, the query lands in the middle of the path.
         assert_eq!(
             origin_of("https://level3.ssl.blizzard.com/?maxhosts=8&fallback=1"),
             "https://level3.ssl.blizzard.com"
@@ -493,8 +444,7 @@ mod tests {
     fn tls_endpoints_are_tried_before_plain_ones() {
         let endpoints = Endpoint::from_cdn(&cdn_row());
         assert!(endpoints[0].origin.starts_with("https://"));
-        // The plain host is kept as a fallback, not discarded: verification is
-        // by hash, so a plain mirror is still safe to read from.
+        // Plain HTTP stays as a fallback; content is verified by hash.
         assert!(endpoints.iter().any(|e| e.origin.starts_with("http://")));
         assert!(endpoints.iter().all(|e| e.path == "tpr/wow"));
     }
@@ -519,8 +469,7 @@ mod tests {
 
     #[test]
     fn a_mismatch_error_names_both_hashes() {
-        // The message has to make it obvious that the content was wrong rather
-        // than unreachable; those have very different causes.
+        // The message must say wrong content, not unreachable.
         let err = CdnError::HashMismatch {
             url: "https://cdn/x".into(),
             expected: "9712ae9c84cc54111e9e3ddf9a6b8019".into(),
@@ -533,10 +482,8 @@ mod tests {
 
     #[test]
     fn an_encoding_key_is_not_the_md5_of_its_bytes() {
-        // Measured, not assumed: the root manifest is served loose under
-        // `d175f4af…`, decodes correctly, and its 50,502,156 bytes hash to
-        // `c95b92c6…`. Any code that "verifies" a BLTE download against its
-        // encoding key rejects every healthy file.
+        // Measured: the root manifest under `d175f4af…` decodes correctly, and
+        // its 50,502,156 bytes hash to `c95b92c6…`.
         let ekey = "d175f4afe795101d0cf3660228b3283b";
         let actual_md5_of_bytes = "c95b92c6350e33fca118d05d54d2e296";
         assert_ne!(ekey, actual_md5_of_bytes);
