@@ -147,7 +147,7 @@ async fn run() -> Result<()> {
         Command::AddonUpdate { product, catalog } => commands::addons::addon_update(ctx, product, catalog).await,
         Command::BackupList { product } => commands::addons::backup_list(ctx, product),
         Command::BackupCreate { product } => commands::addons::backup_create(ctx, product),
-        Command::BackupRestore { backup: which, product } => commands::addons::backup_restore(ctx, which, product),
+        Command::BackupRestore { backup: which, product, account } => commands::addons::backup_restore(ctx, which, product, account),
         Command::AddonRemove { id, provider, product } => commands::addons::addon_remove(ctx, id, provider, product),
         Command::AddonToken { token } => commands::addons::addon_token(token),
         Command::Verify { path, deep, repair, all } => commands::storage::verify(ctx, path, deep, repair, all),

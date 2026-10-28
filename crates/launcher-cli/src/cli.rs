@@ -383,6 +383,10 @@ pub(crate) enum Command {
         backup: String,
         #[arg(long, default_value = "wow", value_parser = commands::product_code)]
         product: String,
+        /// Only this game account's folder, as `backup-list` names it; the
+        /// other accounts and what they share stay as they are.
+        #[arg(long)]
+        account: Option<String>,
     },
     #[command(hide = true)]
     /// Decode a WoWUp import token and print what it contains.

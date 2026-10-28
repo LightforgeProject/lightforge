@@ -383,6 +383,9 @@ pub(crate) fn backup_list(ctx: Ctx, product: String) -> Result<()> {
             b.size as f64 / 1048576.0,
             b.name(),
         );
+        if !b.accounts.is_empty() {
+            println!("    accounts: {}", b.accounts.join(", "));
+        }
     }
     Ok(())
 }
@@ -400,7 +403,7 @@ pub(crate) fn backup_create(ctx: Ctx, product: String) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn backup_restore(ctx: Ctx, which: String, product: String) -> Result<()> {
+pub(crate) fn backup_restore(ctx: Ctx, which: String, product: String, account: Option<String>) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
@@ -415,8 +418,14 @@ pub(crate) fn backup_restore(ctx: Ctx, which: String, product: String) -> Result
         Err(_) => backups.iter().find(|b| b.name() == which),
     }
     .with_context(|| format!("no backup {which}; see `lightforge backup-list`"))?;
-    let safety = plan.restore(chosen).context("restoring")?;
-    println!("restored {} ({})", chosen.name(), chosen.when());
+    let safety = match &account {
+        Some(name) => plan.restore_account(chosen, name).context("restoring")?,
+        None => plan.restore(chosen).context("restoring")?,
+    };
+    match &account {
+        Some(name) => println!("restored {name} from {} ({})", chosen.name(), chosen.when()),
+        None => println!("restored {} ({})", chosen.name(), chosen.when()),
+    }
     if let Some(safety) = safety {
         println!("the replaced settings are in {}", safety.name());
     }

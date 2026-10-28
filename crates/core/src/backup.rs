@@ -33,6 +33,9 @@ const LEVEL: i32 = 3;
 /// Beside `Account` in `WTF`, so both renames stay on one filesystem.
 const STAGING: &str = ".lightforge-restore";
 const REPLACED: &str = ".lightforge-replaced";
+/// Beside the game accounts in `Account`: what the Battle.net account keeps
+/// for all of them. Never one account's to restore.
+const SHARED: &str = "SavedVariables";
 
 /// Why a backup was taken, shown beside it so a player can tell which one
 /// predates the thing that went wrong.
@@ -80,6 +83,9 @@ pub struct Backup {
     pub build: Option<String>,
     /// Compressed size in bytes.
     pub size: u64,
+    /// The game accounts it holds, e.g. `478511984#1`. Empty for a backup
+    /// taken before they were recorded: it restores whole.
+    pub accounts: Vec<String>,
     fingerprint: String,
 }
 
@@ -113,6 +119,8 @@ struct Meta {
     reason: Reason,
     build: Option<String>,
     fingerprint: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    accounts: Vec<String>,
 }
 
 /// Where one game's settings are and where its backups go.
@@ -183,6 +191,20 @@ impl Plan {
     /// current state is backed up, then two renames. Returns that safety
     /// backup, or `None` when one identical existed.
     pub fn restore(&self, backup: &Backup) -> Result<Option<Backup>, BackupError> {
+        self.replace(backup, None)
+    }
+
+    /// [`Plan::restore`] for one game account: its folder only, the other
+    /// accounts and the `SavedVariables` they share left as they are. The
+    /// safety backup still covers everything.
+    pub fn restore_account(&self, backup: &Backup, account: &str) -> Result<Option<Backup>, BackupError> {
+        if !backup.accounts.iter().any(|a| a == account) {
+            return Err(BackupError::NoAccount { archive: backup.path.clone(), account: account.to_owned() });
+        }
+        self.replace(backup, Some(account))
+    }
+
+    fn replace(&self, backup: &Backup, account: Option<&str>) -> Result<Option<Backup>, BackupError> {
         let wtf = self.account_dir.parent().unwrap_or(Path::new("."));
         let staging = wtf.join(STAGING);
         let replaced = wtf.join(REPLACED);
@@ -191,21 +213,27 @@ impl Plan {
         remove_if_present(&replaced)?;
 
         unpack(&backup.path, &staging)?;
-        let fresh = staging.join(ROOT);
+        let (fresh, target) = match account {
+            None => (staging.join(ROOT), self.account_dir.clone()),
+            Some(name) => (staging.join(ROOT).join(name), self.account_dir.join(name)),
+        };
         // A backup of an empty folder has no members under it.
         fs::create_dir_all(&fresh).map_err(io(&fresh))?;
 
         let safety = self.snapshot(Reason::BeforeRestore)?;
 
-        let had_current = self.account_dir.exists();
-        if had_current {
-            fs::rename(&self.account_dir, &replaced).map_err(io(&self.account_dir))?;
+        if account.is_some() {
+            fs::create_dir_all(&self.account_dir).map_err(io(&self.account_dir))?;
         }
-        if let Err(e) = fs::rename(&fresh, &self.account_dir) {
+        let had_current = target.exists();
+        if had_current {
+            fs::rename(&target, &replaced).map_err(io(&target))?;
+        }
+        if let Err(e) = fs::rename(&fresh, &target) {
             if had_current {
-                let _ = fs::rename(&replaced, &self.account_dir);
+                let _ = fs::rename(&replaced, &target);
             }
-            return Err(io(&self.account_dir)(e));
+            return Err(io(&target)(e));
         }
         // Restored; tidying is the next restore's job if this fails.
         let _ = fs::remove_dir_all(&replaced);
@@ -242,9 +270,23 @@ impl Plan {
             return Ok(None);
         }
 
-        let meta = Meta { created: now(), reason, build: self.build.clone(), fingerprint };
+        let meta = Meta { created: now(), reason, build: self.build.clone(), fingerprint, accounts: self.accounts() };
         let path = self.write(&files, &meta)?;
         read_backup(&path).map(Some)
+    }
+
+    /// The game account folders in `Account`, by name.
+    fn accounts(&self) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(&self.account_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|t| t.is_dir()))
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != SHARED)
+            .collect();
+        names.sort();
+        names
     }
 
     fn write(&self, files: &[File], meta: &Meta) -> Result<PathBuf, BackupError> {
@@ -378,6 +420,8 @@ fn read_backup(path: &Path) -> Result<Backup, BackupError> {
         reason: meta.reason,
         build: meta.build,
         size,
+        // Joined onto `Account` by a restore: folder names only.
+        accounts: meta.accounts.into_iter().filter(|a| !a.is_empty() && a != ".." && !a.contains('/')).collect(),
         fingerprint: meta.fingerprint,
     })
 }
@@ -433,6 +477,9 @@ pub enum BackupError {
 
     #[error("{archive} holds {entry}, which a backup never contains")]
     UnsafeEntry { archive: PathBuf, entry: PathBuf },
+
+    #[error("{archive} holds no account {account}")]
+    NoAccount { archive: PathBuf, account: String },
 }
 
 fn io(path: &Path) -> impl FnOnce(io::Error) -> BackupError + '_ {
@@ -539,6 +586,33 @@ mod tests {
         // And the restore is itself undoable.
         plan.restore(&safety).unwrap();
         assert_eq!(fs::read_to_string(&saved).unwrap(), "X = 2, migrated");
+    }
+
+    #[test]
+    fn one_account_is_restored_without_touching_the_others_or_what_they_share() {
+        let root = tempfile::tempdir().unwrap();
+        let plan = plan(root.path());
+        // The shape of a real `Account`: one folder per game account, and the
+        // Battle.net account's own `SavedVariables` beside them.
+        let first = plan.account_dir.join("478511984#1/SavedVariables/Details.lua");
+        let second = plan.account_dir.join("478511984#2/SavedVariables/Details.lua");
+        let shared = plan.account_dir.join("SavedVariables/Blizzard_SavedSets.lua");
+        for path in [&first, &second, &shared] {
+            write(path, "before");
+        }
+        let backup = plan.create(Reason::Manual).unwrap().unwrap();
+        assert_eq!(backup.accounts, ["478511984#1", "478511984#2"]);
+
+        for path in [&first, &second, &shared] {
+            write(path, "after");
+        }
+        let safety = plan.restore_account(&backup, "478511984#1").unwrap();
+
+        assert_eq!(fs::read_to_string(&first).unwrap(), "before");
+        assert_eq!(fs::read_to_string(&second).unwrap(), "after");
+        assert_eq!(fs::read_to_string(&shared).unwrap(), "after");
+        assert!(safety.is_some_and(|s| s.reason == Reason::BeforeRestore));
+        assert!(matches!(plan.restore_account(&backup, "nobody#9"), Err(BackupError::NoAccount { .. })));
     }
 
     #[test]

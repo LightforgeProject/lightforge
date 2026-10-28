@@ -624,6 +624,7 @@ Arguments:
 Options:
       --product <PRODUCT>  [default: wow]
       --root <ROOT>        Override the Blizzard root (default: ~/Games/Blizzard)
+      --account <ACCOUNT>  Only this game account's folder, as `backup-list` names it; the other accounts and what they share stay as they are
   -h, --help               Print help
 ```
 

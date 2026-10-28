@@ -388,7 +388,7 @@ impl Lightforge {
                 Task::none()
             }
 
-            Message::ConfirmRestore => {
+            Message::ConfirmRestore(account) => {
                 let Some(settings) = self.game_settings.as_mut() else {
                     return Ok(Task::none());
                 };
@@ -397,7 +397,7 @@ impl Lightforge {
                 };
                 settings.working = true;
                 Task::perform(
-                    tasks::restore_backup(self.layout.clone(), settings.code.clone(), archive),
+                    tasks::restore_backup(self.layout.clone(), settings.code.clone(), archive, account),
                     Message::BackupFinished,
                 )
             }

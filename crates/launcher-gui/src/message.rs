@@ -427,7 +427,8 @@ pub(crate) enum Message {
     AskDeleteBackup(PathBuf),
     /// Back out of whichever confirmation a backup row is showing.
     CancelRestore,
-    ConfirmRestore,
+    /// Restore the asked-about backup: every account, or the one named.
+    ConfirmRestore(Option<String>),
     ConfirmDeleteBackup,
     BackupFinished(Result<String, String>),
     /// Open the detail view for one addon: provider, id, name.

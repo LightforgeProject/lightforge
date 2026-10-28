@@ -447,6 +447,9 @@ impl Lightforge {
                     // The question replaces the details under the date while
                     // it is asked, so the row only ever holds two buttons.
                     let about = match asking {
+                        Some(BackupAction::Restore) if backup.accounts.len() > 1 => {
+                            "Restore every account's settings from this backup, or one account's?".to_owned()
+                        }
                         Some(BackupAction::Restore) => {
                             "Replace the current settings with this backup?".to_owned()
                         }
@@ -462,9 +465,17 @@ impl Lightforge {
                         .join(" · "),
                     };
                     let controls = match asking {
+                        Some(BackupAction::Restore) if backup.accounts.len() > 1 => row![
+                            secondary("Cancel", Message::CancelRestore).enabled(true),
+                            action_button("All accounts", theme::UPDATE, Message::ConfirmRestore(None))
+                                .enabled(idle),
+                        ]
+                        .extend(backup.accounts.iter().map(|name| {
+                            secondary(name, Message::ConfirmRestore(Some(name.clone()))).enabled(idle)
+                        })),
                         Some(BackupAction::Restore) => row![
                             secondary("Cancel", Message::CancelRestore).enabled(true),
-                            action_button("Restore", theme::UPDATE, Message::ConfirmRestore)
+                            action_button("Restore", theme::UPDATE, Message::ConfirmRestore(None))
                                 .enabled(idle),
                         ],
                         Some(BackupAction::Delete) => row![
