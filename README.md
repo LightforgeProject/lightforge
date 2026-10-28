@@ -2,11 +2,11 @@
 
 <img src="docs/banner.png" alt="Lightforge" width="640">
 
-**A native Linux launcher for World of Warcraft, and a proper home for the rest of Battle.net.**
+**A native Linux launcher for World of Warcraft that also runs the rest of Battle.net.**
 
 [![CI](https://github.com/LightforgeProject/lightforge/actions/workflows/ci.yml/badge.svg)](https://github.com/LightforgeProject/lightforge/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-E9AB28?style=flat-square)](LICENSE)
-[![Status: beta](https://img.shields.io/badge/status-1.0.0--beta.6-00B4FF?style=flat-square)](RELEASES.md)
+[![Status: beta](https://img.shields.io/badge/status-1.0.0--beta.7-00B4FF?style=flat-square)](RELEASES.md)
 [![Linux](https://img.shields.io/badge/platform-Linux-8A94A3?style=flat-square)](#install)
 [![Discord](https://img.shields.io/badge/chat-Discord-5865F2?style=flat-square)](https://discord.gg/vtTgmUV9Bq)
 
@@ -22,9 +22,9 @@ without the Battle.net client. It speaks Blizzard's own distribution protocols
 your game lands in a store the real client can read: point Battle.net at the
 folder and it adopts it, no re-download.
 
-For everything else (Diablo, Overwatch, Hearthstone, StarCraft) it keeps one
-well-maintained Battle.net prefix and hands off to the client. They get a tile
-here and start with one press.
+For everything else (Diablo, Overwatch, Hearthstone, StarCraft) it sets up
+one Battle.net prefix and hands the launch to the client. Those games get a
+tile here and start with one press.
 
 ## Install
 
@@ -127,7 +127,7 @@ package Battle.net's installer needs, and how to remove Lightforge again.
 | openSUSE Tumbleweed | 🟠 | not tested yet |
 | NixOS | 🟠 | not tested yet |
 
-Running it on something else, or on one of the orange ones? Tell me how it
+If you run it on another distro, or on one of the orange ones, tell me how it
 went in [Discord](https://discord.gg/vtTgmUV9Bq) or through the in-app
 reporter (`☰ › Report a bug`).
 
@@ -146,23 +146,25 @@ Steam, Lutris or a system Wine.
 
 - **Installs and updates WoW itself:** Retail, Classic, Classic Era,
   Anniversary and WoW: Forever, with their PTR and beta branches. Resumable
-  downloads, real CASC storage, and verification of every stored byte.
+  downloads, pre-downloads before a patch, real CASC storage, and
+  verification of every stored byte.
 - **Finds the games you already have** and adopts them where they are, from
   Lutris, Bottles, Heroic, Faugus or a hand-made prefix.
-- **Puts games on any drive** you add, Battle.net's own included.
+- **Puts games on any drive** you add, Battle.net's own included, and moves
+  them between drives without downloading them again.
 - **Manages addons** from CurseForge, WoWInterface, Tukui and GitHub, with
   update channels, changelogs, pinning, and WoWUp import and export.
 - **Tunes the game** with the CPU performance profile, MangoHud, Proton's
   Wayland backend, optional high-resolution textures and your own environment
   variables.
 - **Sets Battle.net up for you**, then launches its games with one press. The
-  in-game shop works too, [which took some finding](TECHDOC.md#the-in-game-shop).
+  in-game shop works too ([how](TECHDOC.md#the-in-game-shop)).
 - **Plays well on a controller**, with a handheld mode for the Steam Deck and
   similar devices.
-- **Stays out of your way:** one native binary, no background service, nothing
-  running when the launcher is closed.
+- **Runs only while it's open:** one native binary, no background service,
+  nothing running when the launcher is closed.
 
-## What it deliberately doesn't do
+## What it doesn't do
 
 - **No credential handling.** You sign in to Battle.net yourself, in
   Blizzard's own window.
@@ -198,14 +200,12 @@ version is in [RELEASES.md](RELEASES.md).
 
 ## What's next
 
-No dates, no promises, one person's spare time:
+I work on this in my spare time, so there are no dates:
 
 - A Flatpak, and the AUR once registrations reopen.
-- Moving a game to another drive without re-downloading it.
-- Staging pre-downloads, so a patch day is minutes instead of an evening.
 - Adding your games to Steam's library.
 
-Something missing? Say so in [Discord](https://discord.gg/vtTgmUV9Bq).
+If something is missing for you, tell me in [Discord](https://discord.gg/vtTgmUV9Bq).
 
 ## Documentation
 
@@ -222,8 +222,8 @@ Something missing? Say so in [Discord](https://discord.gg/vtTgmUV9Bq).
 
 ## Support the project
 
-Lightforge is free and built in my spare time. If it saved you an evening of
-fighting Battle.net:
+Lightforge is free and I build it in my spare time. If you'd like to support
+it:
 
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/simplykenny)
 [![PayPal](https://img.shields.io/badge/PayPal-support-003087?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/simplykenny)
