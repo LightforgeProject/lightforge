@@ -1,4 +1,4 @@
-//! Addon descriptions and changelogs, as blocks rather than markup.
+//! Addon descriptions and changelogs, as blocks, not markup.
 //!
 //! The proxy reduces CurseForge's HTML to blocks, so a markup change is a
 //! redeploy, not a release. Only headings, bullets, links and images survive.

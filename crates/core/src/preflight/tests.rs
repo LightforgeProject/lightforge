@@ -166,7 +166,7 @@ fn only_the_processes_that_cause_the_deadlock_are_classified() {
     );
 
     // The game itself is never touched. That is the legal guardrail, and
-    // it is enforced here rather than by remembering not to.
+    // it is enforced here, not by remembering not to.
     assert_eq!(
         ProcKind::classify(&argv(&[r"C:\...\_retail_\Wow.exe"]), "Wow.exe"),
         None
@@ -242,7 +242,7 @@ fn a_process_in_another_prefix_is_never_ours() {
         &environ(&["WINEPREFIX=/games/Blizzard/prefix/pfx"]),
         &prefixes
     ));
-    // Proton exports the compat-data dir rather than the prefix itself.
+    // Proton exports the compat-data dir, not the prefix itself.
     assert!(belongs_to(
         &environ(&["STEAM_COMPAT_DATA_PATH=/games/Blizzard/prefix"]),
         &prefixes

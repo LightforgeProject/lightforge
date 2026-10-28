@@ -2,7 +2,7 @@
 fn the_window_state_key_is_qts_own_and_is_written_as_a_string() {
     // The client stores every one of these as a string, and a real
     // integer here is a value it reads back as zero, the booleans
-    // included, which is why `"true"` is quoted below.
+    // included, so `"true"` is quoted below.
     let minimized = window_state_tweaks(true);
     assert_eq!(minimized.len(), 2);
     assert_eq!(minimized[0].path, WINDOW_STATE_KEY.split('.').collect::<Vec<_>>());
@@ -307,7 +307,7 @@ fn tweaks_create_missing_objects_without_touching_anything_else() {
     assert_eq!(config["Client"]["GameLaunchWindowBehavior"], json!("2"));
     assert_eq!(config["Client"]["HardwareAcceleration"], json!("false"));
     // The default library's `games/` drive, so a title Battle.net installs
-    // itself lands on the drive the user picked rather than inside the
+    // itself lands on the drive the user picked, not inside the
     // prefix.
     assert_eq!(config["Client"]["Install"]["DefaultInstallPath"], json!(r"E:\"));
     // Login state and per-game settings share this file; losing them would

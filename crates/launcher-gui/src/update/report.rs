@@ -38,10 +38,7 @@ impl Lightforge {
 
             Message::OpenReport(kind) => {
                 self.close_panels();
-                // Gathered here because this is where the four things
-                // `DebugInfo::gather` needs are in scope, and gathered once:
-                // the card shows exactly the text that gets sent, not a
-                // second rendering of it.
+                // Gathered once: the card shows exactly what is sent.
                 let shown: Vec<String> = match kind {
                     ReportKind::Bug => {
                         self.history.iter().map(|line| lightforge_core::debug::scrub(line)).collect()
@@ -66,11 +63,7 @@ impl Lightforge {
                             info.memory = Some(system.memory_total);
                         }
                         let tags = report_tags(&info);
-                        // The recent status lines go into the shown block as
-                        // well as into the breadcrumbs, because the card
-                        // promises that this is what gets sent, and they are
-                        // scrubbed like everything else, since a failure
-                        // message can carry a path.
+                        // Status lines too, scrubbed: a message can carry a path.
                         let mut text = info.render();
                         if !shown.is_empty() {
                             text.push_str("\n--- recent activity ---\n");
@@ -161,15 +154,8 @@ impl Lightforge {
     fn update_report_screenshot(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
             Message::ReportShotPick => Task::perform(
-                // The desktop's own dialog, asked for over the XDG portal.
-                //
-                // Spoken directly rather than through a file-dialog crate:
-                // `rfd` drives the portal through `libdbus` on a thread of its
-                // own, and inside this process that call never returns, the
-                // dialog does not appear and the thread sits in a futex. The
-                // same call from a bare test binary works, so it is this
-                // process it dislikes, not the machine. `ashpd` is pure Rust
-                // over the `zbus` connection iced already builds.
+                // The XDG portal through `ashpd`: `rfd`'s `libdbus` call never
+                // returns in this process (it works from a test binary).
                 async {
                     let request = ashpd::desktop::file_chooser::OpenFileRequest::default()
                         .title("Choose a screenshot")
@@ -184,10 +170,8 @@ impl Lightforge {
                         );
 
                     let files = request.send().await.ok()?.response().ok()?;
-                    // Cancelling comes back as an empty list, which is not an
-                    // error and means nothing happened. `to_file_path` rather
-                    // than the URL's own `path`, which is still percent-encoded,
-                    // and "Screenshot 2026-10-09.png" is the normal case.
+                    // Cancel is an empty list. `to_file_path`: `path` is still
+                    // percent-encoded.
                     files.uris().first().and_then(|uri| uri.to_file_path().ok())
                 },
                 Message::ReportShotPicked,
@@ -237,7 +221,7 @@ impl Lightforge {
                     return Ok(Task::none());
                 };
                 // What they wrote first, then the diagnostics: pasted into a
-                // chat window it reads as a report rather than a dump.
+                // chat window it reads as a report, not a dump.
                 let mut text = dialog.note.text();
                 if !dialog.debug.is_empty() {
                     text.push('\n');

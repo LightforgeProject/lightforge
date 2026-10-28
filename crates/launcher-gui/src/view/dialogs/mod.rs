@@ -46,17 +46,9 @@ impl Lightforge {
 
     /// What changed in the version that has just started.
     ///
-    /// A dialog rather than a page, because it is the one thing in the app
-    /// that opens itself: it has to be read and closed, and every other
-    /// screen stays reachable afterwards from the navigation. The same notes
-    /// live on the Lightforge Updates page for anyone who wants them again,
-    /// including after the checkbox has been ticked.
+    /// A dialog, the one thing that opens itself; also on the Updates page.
     pub(crate) fn patch_notes_card<'a>(&'a self, notes: &'a PatchNotes) -> Element<'a, Message> {
-        // Only the notes scroll; the heading and the button stay put, so a
-        // long release can always be dismissed. This cap plus the rest comes
-        // to about 630pt, inside the 820 minimum window. The scrollbar's
-        // spacing (`theme::scrollbar_shape`) keeps it beside the text, not
-        // over it.
+        // Only the notes scroll; about 630pt in all, inside the 820 minimum.
         const NOTES_MAX: f32 = 480.0;
 
         let body = column![

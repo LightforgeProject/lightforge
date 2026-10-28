@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn the_real_root_key_shape_survives_a_lookup() {
         // Values lifted from a real 12.1.0 install, so the test carries the
-        // actual bytes rather than a synthetic pattern.
+        // actual bytes, not a synthetic pattern.
         let ckey = parse_hash("669be7c403ea35a20f73ea7effcaa544").unwrap();
         let ekey = parse_hash("d175f4afe795101d0cf3660228b3283b").unwrap();
         let enc = Encoding::parse(&manifest(&[(ckey, ekey, 44_876)], 4096, b"z\0")).unwrap();

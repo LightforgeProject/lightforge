@@ -54,7 +54,7 @@ pub(super) fn read_varint(bytes: &[u8]) -> Option<(u64, usize)> {
 pub(super) enum Wire<'a> {
     Bytes(&'a [u8]),
     /// A varint or fixed-width field. Nothing this reader wants is stored as
-    /// one, so the value is skipped rather than carried.
+    /// one, so the value is skipped, not carried.
     Scalar,
 }
 

@@ -16,9 +16,8 @@ pub(crate) struct Complete {
 
 /// Where one product's transfer has got to.
 ///
-/// Keyed to a product rather than held app-wide, which is the whole point:
-/// the old single `Option<Transfer>` meant every product you switched to
-/// inherited whichever one happened to be running.
+/// Keyed to a product: held app-wide, every product would show whichever
+/// transfer is running.
 pub(crate) enum Stage {
     /// Accepted, waiting for the running one to finish.
     Queued,
@@ -54,7 +53,7 @@ pub(crate) struct Job {
     /// Bytes the first run planned. `None` until one has planned.
     pub(crate) total: Option<u64>,
     /// Bytes done when the current run started, shown while a resumed run
-    /// is still planning, so the bar holds rather than dropping to zero.
+    /// is still planning, so the bar holds instead of dropping to zero.
     pub(crate) reached: u64,
 }
 
@@ -125,7 +124,7 @@ impl Rate {
         }
 
         let instant = bytes.saturating_sub(self.last_bytes) as f64 / elapsed;
-        // Weighting by the time that passed rather than by the tick keeps the
+        // Weighting by the time that passed, not by the tick, keeps the
         // smoothing the same whether ticks arrive on time, late or in a burst.
         self.average = match self.shown_at {
             None => instant,

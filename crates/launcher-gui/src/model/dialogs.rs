@@ -33,7 +33,7 @@ pub(crate) struct InstallTarget {
     pub(crate) disk: Option<storage::Disk>,
     pub(crate) state: library::State,
     /// A WoW install is already there, so this version joins it and shares
-    /// its data store rather than starting a second one.
+    /// its data store instead of starting a second one.
     pub(crate) shares: bool,
 }
 

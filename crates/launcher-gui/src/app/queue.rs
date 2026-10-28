@@ -20,7 +20,7 @@ impl Lightforge {
                 },
             ),
             // Fires first and usually lands first: it reads the cache and
-            // nothing else, so the window opens themed rather than snapping
+            // nothing else, so the window opens themed instead of snapping
             // to art once the revalidation below comes back.
             Task::perform(
                 tasks::cached_theme(self.pipeline.clone(), self.product_codes(), code.clone()),
@@ -181,7 +181,7 @@ impl Lightforge {
     /// remove a cancelled download's files, or start the first queued
     /// transfer, in that order. Called whenever a writer finishes.
     ///
-    /// One at a time on purpose: two downloads would split one connection and
+    /// One at a time: two downloads would split one connection and
     /// write into the same CASC store, making both slower and both ETAs
     /// fiction.
     pub(crate) fn pump(&mut self) -> Task<Message> {
@@ -307,7 +307,7 @@ impl Lightforge {
 
     /// The optional downloads a product is opted into, limited to the ones
     /// Lightforge offers; see [`OFFERED_OPTIONAL`]. An opt-in to anything
-    /// else, from before that list existed, is ignored rather than fetched
+    /// else, from before that list existed, is ignored, not fetched
     /// behind a switch the user can no longer see.
     pub(crate) fn opted_optional(&self, code: &ProductCode) -> Vec<String> {
         offered_only(
@@ -317,7 +317,7 @@ impl Lightforge {
 
     /// Record what a build offers, if it has changed.
     ///
-    /// Saved rather than held in memory: the list is the only thing standing
+    /// Saved, not held in memory: the list is the only thing standing
     /// between the settings panel and a hardcoded guess, and a guess is what
     /// put a 37 GiB texture pack in a plan nobody asked for.
     pub(crate) fn remember_optional(&mut self, code: &ProductCode, offered: Vec<String>) {
@@ -337,7 +337,7 @@ impl Lightforge {
     /// The queue as the next start should find it.
     pub(crate) fn queue_snapshot(&self) -> transfers::Queue {
         // Paused only because a game is running: owed a restart, and one the
-        // next start should give it rather than leave it waiting.
+        // next start should give it, not leave it waiting.
         let owed = {
             let mut owed = self.downloads.pending();
             owed.extend(self.resume_after_play.iter().cloned());

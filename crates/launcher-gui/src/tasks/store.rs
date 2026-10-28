@@ -293,7 +293,7 @@ pub async fn unused_plan(http: Option<Http>, install: PathBuf) -> Result<Unused,
 }
 
 /// Free the unused data in the store under `install`: drop what no version
-/// uses, then compact. Planned again here rather than trusted from when the
+/// uses, then compact. Planned again here, not trusted from when the
 /// page opened. Returns the bytes freed; `copied` hears the copy's progress.
 pub async fn free_unused(
     http: Option<Http>,

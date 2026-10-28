@@ -63,7 +63,7 @@ impl Lightforge {
                 if let Err(e) = manage::set_ignored(&options, &provider, &id, ignored) {
                     self.error = Some(Problem::of(&e));
                 }
-                // Re-list rather than patch the row in place: the ledger on
+                // Re-list, not patch the row in place: the ledger on
                 // disk is the truth the rest of the page is drawn from.
                 Task::perform(
                     addonwork::list(self.layout.clone(), self.selected.code.clone()),
@@ -230,9 +230,7 @@ impl Lightforge {
         Ok(match message {
             Message::ShowAddonDetail(provider, id, name) => {
                 self.addon_menu_open = None;
-                // Changelog first for something already installed, About for
-                // something being browsed: the question is different in each
-                // case, and the tab that answers it should not need a click.
+                // Changelog first if installed, About when browsing.
                 let installed = self.addon_is_installed(&provider, &id);
                 self.addon_detail = Some(AddonDetail {
                     provider: provider.clone(),
@@ -252,9 +250,7 @@ impl Lightforge {
             }
 
             Message::AddonDetailLoaded(result) => {
-                // Dropped if the card was closed while the request was out,
-                // the same as the version picker: an answer to a question
-                // nobody is asking any more.
+                // Dropped if the card was closed meanwhile.
                 if let Some(detail) = self.addon_detail.as_mut() {
                     match *result {
                         Ok(loaded) => detail.loaded = Some(loaded),
@@ -360,11 +356,8 @@ impl Lightforge {
     fn update_addon_updates(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
             Message::AutoUpdateAddons => {
-                // Never against a running game, which writes SavedVariables
-                // beside the addons and loads them, and never on top of work
-                // the user started: both write the same directory. A game
-                // that was already running when Lightforge started is not a
-                // launch of ours, so the prefix itself is asked as well.
+                // Not while a game runs (the prefix is asked too) or the user's
+                // own addon work is: both write the same directory.
                 if self.addon_auto_running
                     || self.addons_busy
                     || self.launching.is_some()
@@ -563,14 +556,9 @@ impl Lightforge {
             Message::AddonTab(tab) => {
                 self.addon_tab = tab;
                 self.error = None;
-                // Leaving the list disarms it: a Remove waiting to be
-                // confirmed must not survive out of sight of the row it
-                // belongs to.
+                // Leaving the list disarms Remove.
                 self.addon_remove_armed = None;
-                // Browse opens on the most-downloaded addons instead of on an
-                // empty list: "what is there?" has a useful answer before
-                // anybody types, and the catalogue it comes out of is already
-                // on disk.
+                // Browse opens on the most-downloaded addons.
                 match tab == AddonTab::Browse && self.search_input.trim().is_empty() {
                     true => self.popular_if_unasked(),
                     false => Task::none(),
@@ -582,15 +570,8 @@ impl Lightforge {
                 self.search_seq += 1;
                 let seq = self.search_seq;
 
-                // Typing is the search. The button stays. It is how you ask
-                // again after a provider was down, and pressing Enter has to
-                // do something, but nobody should have to reach for it.
-                //
-                // Two letters is where a search stops matching half the
-                // catalogue, and the pause is long enough that a word typed at
-                // speed goes out once rather than letter by letter.
-                // Emptying the box is not "no search", it is the question
-                // the tab opened with: back to the popular list.
+                // Typing searches, from two letters, after a pause. An empty
+                // box goes back to the popular list.
                 if self.search_input.trim().is_empty() {
                     return Ok(self.popular_if_unasked());
                 }
@@ -615,9 +596,7 @@ impl Lightforge {
             }
 
             Message::RunSearch => {
-                // An empty query is not a no-op: it asks for the most
-                // downloaded addons, which is what the tab shows before the
-                // first keystroke.
+                // An empty query asks for the most-downloaded addons.
                 let query = self.search_input.trim().to_owned();
                 self.searching = true;
                 Task::perform(

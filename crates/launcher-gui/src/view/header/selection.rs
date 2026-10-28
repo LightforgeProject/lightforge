@@ -15,8 +15,7 @@ impl Lightforge {
 
     /// Every branch of the selected line, configured or not.
     ///
-    /// `None` when the line has exactly one branch to offer, a picker with a
-    /// single entry is furniture.
+    /// `None` when the line has one branch.
     pub(crate) fn branch_choices(&self) -> Option<(Vec<BranchChoice>, BranchChoice)> {
         let line = self.catalog.line_of(&self.selected.code);
         let choices: Vec<BranchChoice> = self
@@ -84,7 +83,7 @@ impl Lightforge {
         self.remote = None;
         self.branding = None;
         self.status = "checking…".to_owned();
-        // These are per-product, so they follow the selection rather than
+        // These are per-product, so they follow the selection instead of
         // carrying Retail's frame cap over to Classic's panel.
         self.load_tweak_inputs();
         self.reset_addon_screen();
@@ -102,10 +101,7 @@ impl Lightforge {
 
     /// Load the popular list, unless a search is already in flight.
     ///
-    /// Three things ask for it, opening Browse, clearing the box, switching
-    /// product, and all three can happen while a typed search is still out.
-    /// Its reply would be dropped by the query check anyway; not sending it is
-    /// cheaper and keeps the spinner honest.
+    /// A typed search's reply would be dropped anyway.
     pub(crate) fn popular_if_unasked(&mut self) -> Task<Message> {
         match self.searching {
             true => Task::none(),

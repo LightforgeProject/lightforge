@@ -33,9 +33,7 @@ impl Lightforge {
                     self.queue_frozen = true;
                     self.pause(&code);
                 }
-                // Anything else writing to a store, a pause still winding
-                // down, a repair, a compaction, is let finish too: `pump`
-                // closes the window once the last of them reports back.
+                // Other store writers finish too; `pump` closes the window after.
                 match self.store_writer() {
                     Some(what) => {
                         self.closing = Some(id);
@@ -47,9 +45,7 @@ impl Lightforge {
             }
 
             Message::SplashDone(count) => {
-                // The wizard's own count comes off this run: it is the same
-                // fetch, and starting a second one on the first slide would
-                // revalidate everything the splash just revalidated.
+                // The wizard counts off this same fetch.
                 if let Some(wizard) = self.wizard.as_mut() {
                     wizard.prefetched = Some(count);
                 }
@@ -63,13 +59,9 @@ impl Lightforge {
 
             Message::Exit => iced::exit(),
 
-            // Sizes arrive in points, converted with whatever scale iced had
-            // applied by then, and a reading taken across a scale change
-            // carries the old one (measured: 1080 px read back as 1458 and a
-            // scale of 1.8). So each reading is tagged with the generation it
-            // was asked under, a stale one is asked for again, and a fresh
-            // one, a moment after the change has been applied, times
-            // `ui_scale` is the pixels.
+            // Sizes come in points at iced's scale then; across a scale change
+            // they are stale (measured: 1080 px read as 1458). Tagged by
+            // generation, a stale reading is asked again.
             Message::WindowResized => {
                 let generation = self.ui_scale_gen;
                 Task::perform(
@@ -180,9 +172,6 @@ impl Lightforge {
     fn update_pages(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
             Message::Show(screen) => {
-                // Asking for the page you are on is not a history step, or
-                // back would walk through a page repeated however many times
-                // its tab was clicked.
                 self.go_to(screen);
                 // Including when the page did not change: the menu entry was
                 // still a click, and it has had its answer.

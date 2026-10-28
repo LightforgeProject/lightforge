@@ -216,7 +216,7 @@ pub(crate) fn content(path: PathBuf, product: String, locale: String, fdid: Opti
         // Nothing asked for: prove the chain works on the first file
         // that is actually present locally. The first file id overall
         // is usually *not* installed, since root covers the whole
-        // build rather than this install's subset.
+        // build, not this install's subset.
         (None, None) => content
             .file_ids()
             .find(|id| content.ekey_for_fdid(*id).is_some_and(|k| storage.contains(&k))),

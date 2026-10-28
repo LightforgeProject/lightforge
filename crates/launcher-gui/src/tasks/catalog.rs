@@ -148,7 +148,7 @@ pub async fn game_families(layout: Layout, user: String, region: Region) -> Fami
 }
 
 /// The product codes Battle.net's own config lists, so the catalog can use
-/// the codes the client uses rather than the ones our table happens to carry.
+/// the codes the client uses, not the ones our table happens to carry.
 pub async fn known_codes(layout: Layout, user: String) -> Vec<String> {
     tokio::task::spawn_blocking(move || {
         lightforge_core::battlenet::known_product_codes(&layout, &user)

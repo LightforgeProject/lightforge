@@ -114,10 +114,7 @@ impl Lightforge {
             let mut line = row![info].spacing(theme::SM).align_y(Alignment::Center);
 
             line = line.push(Space::new().width(Length::Fill));
-            // "Details" where there is something to show and "Page" where
-            // there is not: only CurseForge publishes a description and a
-            // changelog, and the detail card offers the page anyway, so
-            // carrying both buttons would just crowd the row.
+            // "Details" for CurseForge (it has a description), "Page" otherwise.
             match provider.eq_ignore_ascii_case("curse") {
                 true => {
                     let open = Message::ShowAddonDetail(

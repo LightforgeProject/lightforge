@@ -367,7 +367,7 @@ fn dragging_a_tile_reorders_the_band() {
 }
 
 /// The mouse moving takes the ring away, and the next key brings it back
-/// where it was rather than to the start of the page: Steam's keyboard
+/// where it was, not to the start of the page: Steam's keyboard
 /// moves the pointer as it closes, and the ring went to the logo.
 #[test]
 fn the_ring_comes_back_where_the_mouse_took_it() {

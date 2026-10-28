@@ -25,9 +25,7 @@ pub(super) fn welcome(app: &Lightforge) -> Element<'_, Message> {
     ]
     .spacing(theme::MD);
 
-    // The one thing on this machine Lightforge cannot fix on the user's behalf,
-    // said before anything is downloaded rather than after 400 MB of Proton:
-    // Battle.net's installer is 32-bit and it is the last step of setup.
+    // Said before 400 MB of Proton: the Battle.net installer is 32-bit.
     if app.setup.as_ref().is_some_and(|s| !s.thirty_two_bit) {
         body = body.push(Lightforge::runtime_row());
     }
@@ -143,9 +141,7 @@ pub(super) fn place<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, 
                 )
             }
         }
-        // Same two refusals as the Storage page: the default drive goes only
-        // after another one is made default, and the last one never goes at
-        // all, since every path resolves through it.
+        // As on the Storage page: not the default, never the last.
         actions = actions.push(
             secondary("Remove", Message::Wizard(Msg::RemoveDrive(library.id.clone())))
                 .enabled(!library.is_default && app.config.libraries.len() > 1),
@@ -485,9 +481,7 @@ pub(super) fn done<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, M
         .size(theme::BODY),
     );
 
-    // The same two marks the logo menu carries, and dimmed by the same rule:
-    // no destination yet means no press. They sit in the middle of the slide
-    // because this is the one page whose job is to hand the user somewhere.
+    // The logo menu's two marks, dimmed without a destination.
     body = body.push(
         container(
             row![
@@ -501,11 +495,7 @@ pub(super) fn done<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, M
         .padding(theme::LG),
     );
 
-    // Asked once, at the end of the one flow where the work is visibly done,
-    // and never again anywhere a person is trying to get something finished.
-    // Below the rule and below the marks for getting help, because help comes
-    // first: this slide's job is to hand someone somewhere, and this is the
-    // least important of the places.
+    // Asked once, here, below the help links.
     body = body.push(
         container(Space::new().height(Length::Fixed(1.0)))
             .width(Length::Fill)

@@ -176,7 +176,7 @@ pub fn row_button(_theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-/// The shape of a scrollbar: narrow, and embedded rather than floating.
+/// The shape of a scrollbar: narrow, and embedded instead of floating.
 ///
 /// With [`SM`] spacing it takes its own space, not drawn over row buttons.
 pub fn scrollbar_shape() -> scrollable::Scrollbar {

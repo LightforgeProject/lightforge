@@ -298,7 +298,7 @@ pub async fn send(report: Report, http: Option<Http>) -> bool {
             event.tags.insert(key, value);
         }
 
-        // Breadcrumbs rather than another block of text: GlitchTip draws them
+        // Breadcrumbs, not another block of text: GlitchTip draws them
         // as a timeline under the event, which is what they are.
         event.breadcrumbs = history
             .into_iter()

@@ -437,7 +437,7 @@ mod tests {
     }
 
     /// Someone's own shortcuts stay, byte for byte, and adding Lightforge a
-    /// second time updates its entry rather than adding another.
+    /// second time updates its entry instead of adding another.
     #[test]
     fn adding_keeps_every_other_shortcut_and_never_adds_twice() {
         let (_dir, root, account) = steam("lf-steam-add");

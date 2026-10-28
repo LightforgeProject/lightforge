@@ -98,9 +98,7 @@ impl Lightforge {
             }
 
             Message::GameStopped(result) => {
-                // The launch's own watcher sees the process go and sends
-                // `Launched`, which is what hands PLAY back; this only
-                // reports how the stop went.
+                // The watcher's `Launched` hands PLAY back; this only reports.
                 self.stopping = false;
                 self.game_up = false;
                 match result {
@@ -120,10 +118,7 @@ impl Lightforge {
                     Ok(note) => self.status = note,
                     Err(e) => self.error = Some(e),
                 }
-                // A launch may have paused transfers, its own product through
-                // pre-flight's guard, and the rest of the queue through the
-                // setting. Both are owed a restart, and resuming means
-                // planning afresh.
+                // Transfers a launch paused are owed a restart.
                 for code in std::mem::take(&mut self.resume_after_play) {
                     if let Some(at) = self.queue.iter().position(|d| d.code == code) {
                         self.queue[at].stage = Stage::Queued;
@@ -136,10 +131,7 @@ impl Lightforge {
                         self.queue[at].stage = Stage::Queued;
                     }
                 }
-                // A Battle.net session may have filled a cache that was
-                // empty when the app started, the first non-WoW install in
-                // a prefix is exactly when its catalogue first appears. It is
-                // 25 ms of reading, so it costs less than remembering not to.
+                // The session may have filled the catalogue cache; 25 ms to re-read.
                 Task::batch([
                     self.pump(),
                     self.reload(self.selected.code.clone()),
@@ -151,9 +143,7 @@ impl Lightforge {
                         ),
                         |families| Message::FamiliesRead(Box::new(families)),
                     ),
-                    // And what it has installed: an install handed over to
-                    // Battle.net finishes in Battle.net, so Agent's registry
-                    // is the only thing that knows it happened.
+                    // And what it installed: only Agent's registry knows.
                     Task::perform(
                         tasks::installed_versions(self.layout.clone()),
                         Message::InstalledVersions,
@@ -169,9 +159,7 @@ impl Lightforge {
         Ok(match message {
             Message::HandoffStarted(result) => {
                 match result {
-                    // Found it. `busy` stays set and the queue stays paused
-                    // for the length of the session, exactly as a direct
-                    // launch does, the whole point of watching.
+                    // `busy` and the paused queue last the session, as on PLAY.
                     Ok(tasks::Handoff::Playing(game)) => {
                         self.status = format!(
                             "{} is running — this unlocks when it exits",
@@ -187,18 +175,13 @@ impl Lightforge {
                             self.minimize_if_asked(),
                         ])
                     }
-                    // The client is up and waiting on a person, two-factor,
-                    // an outage, an update of its own. Said plainly, with the
-                    // client left running so it can be finished there.
-                    // Closed while we were waiting for it to sign in. Not a
-                    // failure to report as one, just nothing to hand off to.
+                    // Closed while signing in: nothing to hand off to.
                     Ok(tasks::Handoff::ClientClosed) => self.update(Message::Launched(Ok(
                         "Battle.net was closed before the game could start".to_owned(),
                     ))),
                     Ok(tasks::Handoff::NeedsAttention { minimized }) => {
-                        // Where it is matters as much as that it needs
-                        // something: a client started minimized is in the
-                        // tray, and "its window" is not on screen to look at.
+                        // Waiting on a person (two-factor, an update); left
+                        // running, and said where: a minimized client is in the tray.
                         self.update(Message::Launched(Ok(match minimized {
                             true => "Battle.net needs attention — open it from the tray, \
                                      finish there and press Play"
@@ -238,10 +221,7 @@ impl Lightforge {
                     self.error = Some(e);
                     return Ok(self.pump());
                 }
-                // Pre-flight trips the paused downloads' tokens and returns;
-                // the runs themselves are still flushing what was in flight
-                // and checkpointing their indices. The client opening the
-                // store under them is the overlap this whole gate exists for.
+                // Paused runs still checkpoint; the client must not open the store yet.
                 if self.launch_must_wait() {
                     self.launch_when_quiet = Some(what);
                     self.status = "pre-flight… waiting for the download to pause".to_owned();

@@ -7,9 +7,7 @@ impl Lightforge {
     pub(crate) fn input_events() -> Subscription<Message> {
         let closing = iced::window::close_requests().map(Message::CloseRequested);
 
-        // The hint chord, and the keys that move the selection ring. Only
-        // keys no widget took, so arrows in a text field stay the field's,
-        // and only these produce a message, so typing wakes nothing else.
+        // The hint chord and ring keys, only those no widget took.
         let hints = iced::keyboard::listen().filter_map(|event| {
             use iced::keyboard::key::Named;
             let iced::keyboard::Event::KeyPressed { ref key, modifiers, .. } = event else {
@@ -30,7 +28,7 @@ impl Lightforge {
             Some(Message::Nav(NavFrom::Keys, input))
         });
 
-        // Gamepads, for when Steam hands us a pad rather than keys. Read on a
+        // Gamepads, for when Steam hands us a pad, not keys. Read on a
         // thread of their own for the whole run; see [`pad`].
         let pads = Subscription::run(pad::inputs).map(|input| Message::Nav(NavFrom::Pad, input));
         let window_focus = iced::event::listen_with(|event, _, _| match event {
@@ -59,9 +57,7 @@ impl Lightforge {
             false => Subscription::none(),
         };
 
-        // A held tile follows the cursor, and only a held one: hover alone
-        // comes from the tiles' own mouse areas, so moving across the window
-        // wakes nothing.
+        // Only a held tile follows the cursor.
         let dragging = match self.tile_drag.is_some() {
             true => iced::event::listen_with(|event, _, _| match event {
                 iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
@@ -80,9 +76,7 @@ impl Lightforge {
 
     /// Polls, each only while there is something for it to watch.
     pub(crate) fn watches(&self) -> Subscription<Message> {
-        // Resize events are only interesting to a human reading a trace, and
-        // subscribing to them makes every resize step rebuild the view, so
-        // this stays out of a normal run entirely.
+        // Only when tracing: it rebuilds the view on every resize step.
         let resizes = match trace::frames() {
             true => iced::window::resize_events().map(|(_, size)| Message::ResizeTraced(size)),
             false => Subscription::none(),
@@ -105,9 +99,7 @@ impl Lightforge {
 
     /// The clock the progress bars and the splash animate off.
     pub(crate) fn tick(&self) -> Subscription<Message> {
-        // Only while something is moving: an idle dashboard should wake up for
-        // nothing. The splash's bar sweeps off the clock, so it needs the tick
-        // as much as a live transfer does.
+        // Only while something moves, the splash's sweep included.
         match self.splash.is_some()
             || self.running().is_some()
             || self.setup_running

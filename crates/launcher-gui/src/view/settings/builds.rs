@@ -27,7 +27,7 @@ impl Lightforge {
             .spacing(theme::SM)
             .align_y(Alignment::Center);
 
-            // Absent until the measuring task answers, rather than a zero
+            // Absent until the measuring task answers, not a zero
             // that would read as an empty directory.
             if let Some(size) = self.proton_sizes.get(&build.path) {
                 facts = facts.push(dot());
@@ -235,7 +235,7 @@ impl Lightforge {
 
     /// What the pins mean, a downgrade they cause, and the shop's build.
     fn pin_notes(&self, games: &[(ProductCode, String)]) -> Element<'_, Message> {
-        // One line for the whole list rather than one under each game: the
+        // One line for the whole list, not one under each game: the
         // reason is the same every time it applies.
         let shop = games
             .iter()

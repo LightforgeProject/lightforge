@@ -5,9 +5,7 @@ use iced::widget::column;
 use lightforge_core::upgrade::{Package, Route};
 
 impl Lightforge {
-    /// A newer Lightforge exists. What the card offers follows how this copy
-    /// was installed: a button where Lightforge or a package manager can
-    /// replace it, the commands to copy where neither may.
+    /// A newer Lightforge exists: a button, or commands to copy, by install route.
     pub(crate) fn update_card<'a>(
         &'a self,
         available: &'a lightforge_core::update::Available,

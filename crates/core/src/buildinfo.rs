@@ -383,7 +383,7 @@ mod tests {
         assert_eq!(info.get(&code, "Install Key").unwrap(), "");
         assert_eq!(info.get(&code, "Product").unwrap(), "wow");
 
-        // A second call replaces the row rather than appending a duplicate.
+        // A second call replaces the row instead of appending a duplicate.
         info.set_product(&code, &[(COL_VERSION, "12.1.5.70000")]).unwrap();
         assert_eq!(info.rows().len(), 1);
         assert_eq!(info.get(&code, COL_VERSION).unwrap(), "12.1.5.70000");

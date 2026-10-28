@@ -94,7 +94,7 @@ mod tests {
 
         assert_eq!(details[0].uid, "5086");
         assert_eq!(details[0].version.as_deref(), Some("v424.8"));
-        // The MD5 is the point: it makes this provider's downloads verifiable.
+        // The MD5 makes this provider's downloads verifiable.
         assert_eq!(details[0].md5.as_deref(), Some("f02f41bd451882f08907fed3a2b1a4e5"));
     }
 }

@@ -500,7 +500,7 @@ mod tests {
         assert_eq!(families.version_name("wowf", "deDE"), Some("Belastungstest"));
         assert_eq!(families.release_date("wowf", "enUS"), Some("Available October 19, 2026"));
         assert_eq!(families.release_date("wowf", "deDE"), Some("Verfügbar ab 19. Oktober 2026"));
-        // A name with no version part says nothing, rather than an expansion.
+        // A name with no version part says nothing, not an expansion.
         assert_eq!(families.version_name("wow_beta", "enUS"), None);
         assert_eq!(families.release_date("wow_classic_beta", "enUS"), None, "licence-gated");
         assert_eq!(families.release_date("wow", "enUS"), None, "another region's");

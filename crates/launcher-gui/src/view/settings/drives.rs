@@ -74,8 +74,8 @@ impl Lightforge {
              drive with two partitions can hold two drives here.",
         );
 
-        // ---- Lightforge's own directories, which follow XDG rather than the
-        // drives, so they are listed apart rather than attributed to one.
+        // ---- Lightforge's own directories, which follow XDG, not the
+        // drives, so they are listed apart, not attributed to one.
         let mut usage = column![].spacing(theme::SM);
         match report {
             None => usage = usage.push(muted("measuring…".to_owned(), theme::LABEL)),
@@ -139,10 +139,7 @@ impl Lightforge {
         let mut card = column![drive_title(library), muted(tilde(&library.path), theme::LABEL)]
             .spacing(theme::SM)
             .extend(drive_space(library, same_disk_as));
-        // Only where it is actually true: a library can be unclaimed and still
-        // hold games, which is every install from before multi-drive storage,
-        // and the drive holding the prefix always has Battle.net's own titles
-        // on it.
+        // Only when true: an unclaimed library can still hold games.
         if library.state == library::State::New && library.total() == 0 {
             card = card.push(muted(
                 "Nothing installed here yet. The folder is created with the first game.".to_owned(),
@@ -196,10 +193,7 @@ impl Lightforge {
         let mut actions = row![Space::new().width(Length::Fill)]
             .spacing(theme::SM)
             .align_y(Alignment::Center);
-        // `is_present` rather than `is_ready`: a drive with nothing of ours on
-        // it yet can still be opened and can still be made the default, it is
-        // set up by the first install, not before. Only a drive that is *away*
-        // can do neither.
+        // `is_present`: only a drive that is away cannot be opened or made default.
         actions = actions.push(
             secondary("Open folder", Message::OpenDrive(id.clone()))
                 .enabled(library.state.is_present()),
@@ -208,9 +202,7 @@ impl Lightforge {
             secondary("Make default", Message::SetDefaultDrive(id.clone()))
                 .enabled(!library.is_default && library.state.is_present()),
         );
-        // The default drive cannot be removed while another exists, make a
-        // different one the default first, and the last one cannot be
-        // removed at all, since every path resolves through it.
+        // Not the default while another exists, never the last.
         actions = actions.push(
             secondary("Remove", Message::RemoveDrive(id.clone()))
                 .enabled(!library.is_default && self.config.libraries.len() > 1),
@@ -331,9 +323,7 @@ fn drive_space<'a>(
                 .into(),
             ]
         }
-        // A drive that is not here is not measured at all: walking its
-        // mount point would report whatever filesystem is *under* it as
-        // if the library's games were on it.
+        // An absent drive is not measured: its mount point shows what is beneath.
         None => vec![muted(
             "Nothing is measured while the drive is away. The games on it are \
              untouched, and come back with it."

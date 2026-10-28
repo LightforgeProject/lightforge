@@ -34,7 +34,7 @@ impl Plan {
         self.flavor_dir.is_none() && self.store.is_none() && !self.has_row
     }
 
-    /// Whether this removes the entire install rather than one product.
+    /// Whether this removes the entire install, not one product.
     pub fn is_whole_install(&self) -> bool {
         self.store.is_some()
     }

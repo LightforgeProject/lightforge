@@ -103,7 +103,7 @@ impl Lightforge {
             });
 
         // The menu hangs under the tile, where the tooltip would, so the
-        // tooltip gives way while it is open rather than being drawn over it.
+        // tooltip gives way while it is open instead of being drawn over it.
         if self.tile_menu.as_ref() == Some(line) {
             return popover::popover(tile, Some(self.tile_menu_panel(line))).align_left().below().into();
         }

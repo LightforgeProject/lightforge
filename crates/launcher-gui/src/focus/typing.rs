@@ -74,10 +74,8 @@ pub(super) fn pretend(
     );
 }
 
-/// How far down the window Steam's keyboard starts, as a share of its
-/// height. Measured 2026-10-17 at 1280x838: the keyboard took the bottom
-/// 250 points, so from about 0.7; a field ending below half is taken as
-/// covered, with room to spare for a taller one.
+/// How far down Steam's keyboard starts, as a share of the height: measured
+/// at about 0.7 (2026-10-17, 1280x838); half leaves room for a taller one.
 const KEYBOARD_TOP: f32 = 0.5;
 
 /// A copy of the field being typed in, across the top of the window.
@@ -177,7 +175,7 @@ impl overlay::Overlay<Message, iced::Theme, iced::Renderer> for TypingBar<'_, '_
         cursor: mouse::Cursor,
         _renderer: &iced::Renderer,
     ) -> mouse::Interaction {
-        // `Idle` rather than `None`, which would leave what is under the bar
+        // `Idle`, not `None`, which would leave what is under the bar
         // live; see the popover's note on the same thing.
         match cursor.is_over(layout.bounds()) {
             true => mouse::Interaction::Idle,

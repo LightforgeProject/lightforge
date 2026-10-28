@@ -17,7 +17,7 @@ pub fn step(places: &[Place], current: &Target, step: Step) -> Option<Target> {
     // How far apart two spans are, zero when they overlap.
     let apart = |a0: f32, a1: f32, b0: f32, b1: f32| (b0 - a1).max(a0 - b1).max(0.0);
     // Two pixels of slack: neighbours drawn edge to edge, like PLAY and its
-    // cog, share a border rather than leaving a gap.
+    // cog, share a border instead of leaving a gap.
     const SLACK: f32 = 2.0;
     // How far down a row may straggle and still be one row: a checkbox and
     // a button beside it do not share a top edge.
@@ -93,10 +93,7 @@ pub fn step(places: &[Place], current: &Target, step: Step) -> Option<Target> {
             if !line.is_empty() {
                 return pick(line, &|c| c.ahead + 0.01 * c.centres);
             }
-            // Inside a group, a page or a card, sideways never leaves the
-            // line: left from the first control in an addon row is nothing,
-            // not the filter above it or the Shop tab up in the header,
-            // which were the nearest things to the left.
+            // Inside a group, sideways never leaves the line.
             if here.group.is_some() {
                 return None;
             }
@@ -175,9 +172,7 @@ mod tests {
         assert_eq!(step(&cards, &Target::Key("glow".to_owned()), Step::Down), key("api"));
     }
 
-    /// An addon row inside the page: left from its first control is nothing,
-    /// where it used to be the Shop tab or the filter field, whichever was
-    /// the nearest thing to the left.
+    /// An addon row inside the page: left from its first control is nothing.
     #[test]
     fn left_out_of_a_page_row_goes_nowhere() {
         let page = |name: &str, x: f32, y: f32| Place {
@@ -236,7 +231,7 @@ mod tests {
         let page = page();
         assert_eq!(step(&page, &Target::Tile(ProductLine::Retail), Step::Up), Some(Target::AppMenu));
         assert_eq!(step(&page, &Target::Tile(ProductLine::Classic), Step::Up), Some(Target::AppMenu));
-        // Under a tab rather than the wordmark, the tab straight above wins.
+        // Under a tab, not the wordmark, the tab straight above wins.
         assert_eq!(
             step(&page, &Target::Tile(ProductLine::Forever), Step::Up),
             Some(Target::Tab(Screen::Dashboard))

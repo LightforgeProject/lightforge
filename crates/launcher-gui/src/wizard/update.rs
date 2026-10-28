@@ -43,15 +43,10 @@ fn flow(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
             // Marks the first run as seen; Settings keeps the button for a
             // second one.
             app.config.setup_complete = true;
-            // A fresh install has nothing to be told what is new about: the
-            // notes describe the version it has just been set up with. Marked
-            // seen here so the *second* start does not open a popup about the
-            // build the wizard was running.
+            // A fresh install has seen this version's notes.
             app.config.patch_notes_seen = Some(env!("CARGO_PKG_VERSION").to_owned());
             app.save_config();
-            // Played from Game Mode, so it belongs in the Steam library
-            // there. A failure is said in Settings, under the button that
-            // tries again; setup is done either way.
+            // Into the Steam library; a failure shows in Settings.
             if app.console() {
                 app.add_to_steam();
             }
@@ -300,9 +295,7 @@ fn advance(app: &mut Lightforge) -> iced::Task<Message> {
             }
         }
 
-        // After setup the prefix and Battle.net are there already, so a
-        // found game is linked as it is added, and the slide stays up to say
-        // how that went.
+        // After setup a found game is linked as it is added.
         Step::Found if app.wizard.as_ref().is_some_and(|w| w.scan_only) => {
             adopt_taken(app);
             let pending = app.wizard.as_mut().map(|w| std::mem::take(&mut w.pending)).unwrap_or_default();

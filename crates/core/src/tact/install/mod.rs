@@ -105,7 +105,7 @@ impl Options {
         format!("Windows x86_64 {r} {locale} speech:Windows x86_64 {r} {locale} text")
     }
 
-    /// True when any option deliberately truncates the plan.
+    /// True when any option truncates the plan.
     pub fn limited(&self) -> bool {
         self.limit_archives.is_some() || self.limit_runs.is_some() || self.skip_loose
     }

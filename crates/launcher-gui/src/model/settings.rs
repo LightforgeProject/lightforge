@@ -89,11 +89,7 @@ impl SettingsTab {
 
 /// Where the Settings sections sat when the page was last laid out.
 ///
-/// In layout coordinates, which are the page's own: a scrolled page is laid
-/// out once at its full height, and scrolling only moves where it is drawn.
-/// So a section's `y` less `top` is the offset that brings it to the top of
-/// the page, and its bounds compare directly with where [`focus`] recorded a
-/// control.
+/// In layout coordinates, the page's own, as [`focus`] records controls.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SettingsLayout {
     /// Where the page's content starts.
@@ -126,15 +122,9 @@ impl SettingsLayout {
     /// [`SettingsLayout::reading`] for a page scrolled to `y`, showing
     /// `shown` of `height`.
     ///
-    /// The section under a reading line near the top of the view. Over the
-    /// last screenful of the page that line slides down to the bottom of the
-    /// view, because the last few sections are too short to ever reach the
-    /// top: a fixed line left the mark on Storage with Setup and About in
-    /// full view. Sliding, each later heading takes the mark as it passes,
-    /// and the very bottom marks the last section.
-    ///
-    /// At the very bottom a section the index already marks, Setup after a
-    /// click, keeps its mark while its heading is on screen.
+    /// The section under a reading line near the top, which slides down over
+    /// the last screenful, where short sections never reach the top. At the
+    /// bottom, a marked section keeps its mark while its heading shows.
     pub(crate) fn reading_at(&self, y: f32, shown: f32, height: f32, marked: SettingsTab) -> Option<SettingsTab> {
         let max = (height - shown).max(0.0);
         if y >= max - 1.0 && self.offset(marked).is_some_and(|top| top >= y && top < y + shown) {

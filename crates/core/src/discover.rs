@@ -304,7 +304,7 @@ pub fn wow_install_at(path: &Path) -> Option<WowInstall> {
     })
 }
 
-/// Whether an Agent record describes a WoW flavour rather than another game.
+/// Whether an Agent record describes a WoW flavour, not another game.
 ///
 /// By family (`wow`), else by code prefix for older records; `w1r` is not WoW.
 fn is_wow(record: &productdb::Installed) -> bool {
@@ -540,7 +540,7 @@ mod tests {
         std::fs::create_dir_all(prefix.join("dosdevices")).unwrap();
         std::os::unix::fs::symlink("../drive_c", prefix.join("dosdevices").join("c:")).unwrap();
         // A second drive letter over a directory outside the prefix: the whole
-        // reason the install paths are resolved rather than assumed.
+        // reason the install paths are resolved, not assumed.
         std::fs::create_dir_all(games).unwrap();
         std::os::unix::fs::symlink(games, prefix.join("dosdevices").join("f:")).unwrap();
 

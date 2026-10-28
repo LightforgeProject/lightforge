@@ -459,7 +459,7 @@ mod tests {
 
         assert_eq!(plan.already_present, 1);
         assert_eq!(plan.files(), 2);
-        // The hole left behind is bridged rather than split, since the bytes
+        // The hole left behind is bridged, not split, since the bytes
         // in between are below the gap threshold.
         assert_eq!(plan.requests(), 1);
         assert_eq!(plan.runs[0].padding(), 100);

@@ -305,7 +305,7 @@ mod downloading {
         assert!(interval < options.checkpoint_bytes);
         assert!(classic_era / interval >= 6, "only {} checkpoints", classic_era / interval);
 
-        // A big install still honours the cap rather than checkpointing on an
+        // A big install still honours the cap instead of checkpointing on an
         // eighth of 123 GiB.
         let retail = 132_000_000_000u64;
         assert_eq!(options.interval_for(retail), options.checkpoint_bytes);

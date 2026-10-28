@@ -229,7 +229,7 @@ mod tests {
              a file that is not there are all out"
         );
 
-        // A folder with nothing declared has no fingerprint rather than a
+        // A folder with nothing declared has no fingerprint, not a
         // hash of whatever happened to be lying in it.
         let bare = dir.parent().unwrap().join("Empty");
         std::fs::create_dir_all(&bare).unwrap();

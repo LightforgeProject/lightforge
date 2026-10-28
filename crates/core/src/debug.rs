@@ -168,7 +168,7 @@ fn scrub_with(text: &str, home: Option<&Path>) -> String {
     let Some(home) = home else { return text.to_owned() };
 
     // Home first, so the longer match wins: `/home/ann/Games` becomes
-    // `~/Games` rather than `/home/<user>/Games`.
+    // `~/Games`, not `/home/<user>/Games`.
     let out = text.replace(&home.display().to_string(), "~");
 
     match home.file_name().and_then(|n| n.to_str()).filter(|n| n.len() >= MIN_NAME) {

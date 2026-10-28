@@ -344,10 +344,10 @@ impl Lightforge {
             ),
         };
 
-        // Everything that is a setting rather than an action lives
+        // Everything that is a setting, not an action, lives
         // behind this, so the row keeps its width as the settings
         // grow. Only one menu is open at a time, and the panel hangs
-        // off the button itself rather than the row's corner.
+        // off the button itself, not the row's corner.
         let key = (managed.provider.clone(), managed.id.clone());
         let open = self.addon_menu_open.as_ref() == Some(&key);
         let toggle = Message::AddonMenu(match open {
@@ -382,8 +382,8 @@ fn mine_header() -> Element<'static, Message> {
             column_head("RELEASED"),
             column_head("INSTALLED"),
             // Standing in for the controls each row carries, so
-            // the three headings sit over their own columns
-            // rather than over the buttons.
+            // the three headings sit over their own columns,
+            // not over the buttons.
             Space::new().width(Length::Fixed(ADDON_ACTIONS)),
         ]
         .spacing(theme::SM)

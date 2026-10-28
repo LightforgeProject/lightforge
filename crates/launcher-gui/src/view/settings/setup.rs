@@ -96,7 +96,7 @@ impl Lightforge {
             .spacing(theme::SM);
 
         // Where all three steps below install to. Only offered while nothing
-        // is installed: after that, moving it is a data migration rather than
+        // is installed: after that, moving it is a data migration, not
         // a setting; see `relocate`. Once the prefix is built, the Wine
         // prefix step below says where it is, so nothing is lost by hiding it.
         if self.library_empty && !in_wizard {
@@ -109,7 +109,7 @@ impl Lightforge {
                 Vec::new()
             }
             Some(status) => {
-                // A precondition rather than a step: nothing below can be
+                // A precondition, not a step: nothing below can be
                 // provisioned without it, and unlike the three steps it is not
                 // something Lightforge can do on the user's behalf. It leads
                 // the list for the same reason it blocks setup.
@@ -132,7 +132,7 @@ impl Lightforge {
 
         // Where the progress was, so a failed run says why. The Settings page
         // shows its errors above every section; the wizard covers that, and a
-        // step that failed used to look like a button that did nothing.
+        // failed step would look like a button that did nothing.
         if in_wizard && !self.setup_running {
             if let Some(e) = &self.error {
                 body = body.push(problem(e));

@@ -371,7 +371,7 @@ const SYSTEM_PREFIXES: &[&str] = &[
 /// mounted, which is exactly what this is all for.
 const REMOVABLE_PREFIXES: &[&str] = &["/run/media", "/media"];
 
-/// Whether a mount point is the system's rather than the user's.
+/// Whether a mount point is the system's, not the user's.
 fn is_system_path(point: &Path) -> bool {
     if point == Path::new("/") {
         return true;
@@ -713,7 +713,7 @@ mod tests {
         assert!(is_system_path(Path::new("/var/tmp")));
         assert!(is_system_path(Path::new("/")));
         assert!(is_system_path(Path::new("/boot/efi")));
-        // Where a removable drive lands, which is the whole point.
+        // Where removable drives land.
         assert!(!is_system_path(Path::new("/run/media/kenny/games")));
         assert!(!is_system_path(Path::new("/media/games")));
         assert!(!is_system_path(Path::new("/mnt/games")));

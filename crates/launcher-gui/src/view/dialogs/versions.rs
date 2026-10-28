@@ -84,7 +84,7 @@ impl Lightforge {
         .into()
     }
 
-    /// The builds one addon offers, for choosing an older one on purpose.
+    /// The builds one addon offers, for choosing an older one.
     ///
     /// Choosing here always pins. Installing an older build without pinning
     /// would be undone by the next pass within the minute, which is not a

@@ -34,7 +34,7 @@ fn the_one_mark_too_wide_for_the_page_is_cut_back() {
     assert_eq!(sw, LOGO_BOX_WIDTH);
     assert!(sw * sh < LOGO_AREA * 0.8, "{}", sw * sh);
     // The next widest is not touched: cutting a second mark back would
-    // make this a rule about wide marks rather than about this one.
+    // make this a rule about wide marks, not about this one.
     let (w2, h2) = logo_size(704.0 / 202.0, 1.0);
     assert!(w2 < LOGO_BOX_WIDTH);
     assert!((w2 * h2 - LOGO_AREA).abs() / LOGO_AREA < 0.01);

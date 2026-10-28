@@ -50,7 +50,7 @@ pub struct AssetRef {
     /// Absolute, or relative to the manifest's own location.
     pub url: String,
     /// Lowercase hex SHA-256 of the image bytes. Optional, but when present a
-    /// mismatch discards rather than caches.
+    /// mismatch discards, not caches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
     /// Logical height to draw a [`Slot::Logo`] at, in pixels: a wide wordmark

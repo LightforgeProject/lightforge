@@ -5,7 +5,7 @@ use super::*;
 mod writing {
     use super::*;
 
-    /// Minimal wire-format reader, so the tests check the bytes rather than
+    /// Minimal wire-format reader, so the tests check the bytes instead of
     /// checking that `encode` agrees with itself.
     fn fields(buf: &[u8]) -> Vec<(u32, u8, Vec<u8>)> {
         let mut out = Vec::new();
@@ -106,7 +106,7 @@ mod writing {
     #[test]
     fn a_product_without_a_key_ring_omits_the_field_entirely() {
         // Classic Era has no key ring, and a real record for such a product
-        // leaves field 19 out rather than writing an empty string.
+        // leaves field 19 out instead of writing an empty string.
         let bytes = encode(&[sample()]);
         let install = fields(&fields(&bytes)[0].2);
         let cached = fields(&install.iter().find(|(f, _, _)| *f == 4).unwrap().2);
@@ -158,7 +158,7 @@ mod writing {
              Windows x86_64 EU? acct-AUT? geoip-AT? enUS text?"
                 .replace("\\\n             ", "")
         );
-        // Without an account, the acct/geoip tags are left out rather than
+        // Without an account, the acct/geoip tags are left out, not
         // written empty.
         assert_eq!(
             agent_tags("us", "deDE", "", ""),
@@ -478,7 +478,7 @@ mod reading {
             .expect("a registry with trailing fields is still readable");
 
         // The trailing fields survive, and the new record went in with the
-        // records rather than after them.
+        // records, not after them.
         assert!(merged.ends_with(&tail), "trailing top-level fields were lost");
         let read = decode(&merged);
         assert_eq!(read.len(), 2);

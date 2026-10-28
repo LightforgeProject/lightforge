@@ -6,9 +6,7 @@ use iced::widget::column;
 impl Lightforge {
     /// The catalog: everything that could be added to the header.
     ///
-    /// Two halves, because they behave differently and saying so once here
-    /// beats a surprise at the button. The WoW family Lightforge downloads;
-    /// everything else is Battle.net's to install and start.
+    /// Two halves: the WoW family, and Battle.net's games.
     pub(crate) fn browse(&self) -> Element<'_, Message> {
         use lightforge_core::product::CatalogEntry;
 
@@ -19,9 +17,7 @@ impl Lightforge {
 
         let row_for = |entry: &CatalogEntry| -> Element<Message> {
             let mut facts = column![text(entry.label.clone()).size(theme::BODY)];
-            // Whether it is installed, not which build: the version belongs to
-            // the panel you launch from, and this list is for choosing which
-            // games to keep in the band.
+            // Installed or not; the version belongs to the game's panel.
             if self.installed_versions.contains_key(entry.code.as_str()) {
                 facts = facts.push(muted("installed".to_owned(), theme::CAPTION));
             }
@@ -37,10 +33,7 @@ impl Lightforge {
                 false => secondary("Add", Message::AddProduct(entry.code.clone()))
                     .keyed(format!("game {}", entry.code.as_str()), true),
             };
-            // The mark the band would wear, so a row and its tile are plainly
-            // the same game. The column is held even when there is no icon,
-            // hand-offs have none, and art arrives one product at a time, so
-            // the labels stay in line instead of stepping in and out.
+            // The band's mark; the column is held without one, so labels align.
             let mark: Element<Message> = match self.icons.get(&entry.code) {
                 Some(mark) => image(mark.handle.clone())
                     .content_fit(ContentFit::Contain)
@@ -49,9 +42,7 @@ impl Lightforge {
                     .into(),
                 None => Space::new().width(Length::Fixed(BROWSE_MARK)).into(),
             };
-            // The whole row opens the game's page, tracked or not; Add and
-            // Remove inside it take their own clicks first and stay the only
-            // things that change the band.
+            // The row opens the game's page; Add and Remove take their own clicks.
             let open = Message::OpenProduct(entry.code.clone());
             tappable(
                 format!("open {}", entry.code.as_str()),
@@ -68,10 +59,7 @@ impl Lightforge {
             )
         };
 
-        // Only line heads: a line's other branches are reached from the
-        // version picker, not added here as games of their own.
-        // Tracked lines stay listed, or there would be no way to remove one.
-        // By head, not by `Branch::Live`: Forever's head is its beta.
+        // Line heads only (Forever's head is its beta), tracked ones included.
         let managed: Vec<&CatalogEntry> =
             self.catalog.managed().filter(|e| e.code == e.line.head()).collect();
         if !managed.is_empty() {
@@ -100,9 +88,7 @@ impl Lightforge {
             }
         }
 
-        // Embedded rather than floating: the default scrollbar is drawn over
-        // the content, and the rows end in a button, so it landed on top of
-        // Add and Remove. Given its own column it sits beside them instead.
+        // An embedded scrollbar, not over the row buttons.
         let panel = container(
             focus::region(
                 "browse",
@@ -119,8 +105,7 @@ impl Lightforge {
 
     /// The download manager: every transfer this session knows about.
     ///
-    /// One row each, with the controls that row can actually offer, a queued
-    /// transfer has no progress to show and a running one cannot be resumed.
+    /// One row each, with the controls that row can offer.
     pub(crate) fn manager(&self) -> Element<'_, Message> {
         let mut rows = column![
             row![

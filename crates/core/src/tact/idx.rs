@@ -559,7 +559,7 @@ mod tests {
     fn an_entry_round_trips_through_its_packed_form() {
         // The real first entry of bucket 00 in a 12.1.0 install: archive 27 at
         // offset 1049269890, which is past the 2-bit boundary and so exercises
-        // the split archive id rather than a value that happens to fit.
+        // the split archive id, not a value that happens to fit.
         let e = entry([0x00, 0x00, 0x52, 0xe5, 0x14, 0xf8, 0x9d, 0x30, 0x2b], 27, 1_049_269_890, 18_355);
         let mut buf = Vec::new();
         e.write(&mut buf);
@@ -748,7 +748,7 @@ mod tests {
 
     #[test]
     fn a_small_file_from_the_client_is_grown_rather_than_treated_as_a_budget() {
-        // Round-trip a deliberately small index, then add enough to overflow it.
+        // Round-trip a small index, then add enough to overflow it.
         let mut idx = Index::new(3);
         idx.insert(entry([1; 9], 0, 0, 10));
         let small = idx.to_bytes().unwrap();

@@ -63,7 +63,7 @@ pub(crate) async fn addon_fingerprints(ctx: Ctx, product: String, path: Option<P
 
     // What the catalog says each folder of each installed build
     // should hash to, gathered per addon so the comparison below is
-    // a lookup rather than a guess.
+    // a lookup, not a guess.
     let mut expected: std::collections::BTreeMap<String, u32> = Default::default();
     if let Some(origin) = addon_origin(catalog.as_deref(), &dirs) {
         let client = Catalog::new(origin);
@@ -486,7 +486,7 @@ fn settings_backup(layout: &Layout, dirs: &AppDirs, code: &ProductCode) -> backu
 /// The configured default addon channel, or stable when there is no config.
 ///
 /// The CLI has no settings UI, so it reads the same `addon_channel` the GUI
-/// writes rather than inventing a second default.
+/// writes instead of inventing a second default.
 fn addon_channel(dirs: &AppDirs) -> lightforge_core::addons::Channel {
     Config::load_or_default(&dirs.config_file())
         .map(|config| config.addon_channel)
@@ -503,7 +503,7 @@ fn addon_origin(
     use lightforge_core::config::Config;
 
     // A `--catalog` flag wins; otherwise the config decides, and the config
-    // falls back to the built-in proxy rather than to nothing.
+    // falls back to the built-in proxy, not to nothing.
     if let Some(source) = flag {
         return Some(match source.contains("://") {
             true => Origin::Http(source.to_owned()),

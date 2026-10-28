@@ -75,10 +75,7 @@ pub(crate) fn print_preflight(report: &lightforge_core::preflight::Report) {
         println!("download        paused for the session");
     }
 
-    // Last, because it is the answer to a different question: not what the
-    // pass did, but where it spent the time. A launch that feels stuck is one
-    // of these stages, and a signal grace is five seconds where a scan is
-    // sixty milliseconds.
+    // Last: where the time went (a scan is 60 ms, a signal grace 5 s).
     for timing in &report.timings {
         println!("timing          {:<18} {:>6} ms", timing.stage, timing.took.as_millis());
     }
@@ -86,8 +83,7 @@ pub(crate) fn print_preflight(report: &lightforge_core::preflight::Report) {
 
 /// Products Lightforge patches, read fresh from `config.toml`.
 ///
-/// Read per call rather than threaded through: pre-flight runs once per
-/// launch, and a stale list here would leave a product's auto-update on.
+/// Read per call, so the list is never stale.
 pub(crate) fn managed_products() -> Vec<lightforge_core::product::ProductCode> {
     AppDirs::discover()
         .ok()

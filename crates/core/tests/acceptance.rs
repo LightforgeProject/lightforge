@@ -1,19 +1,15 @@
 //! End-to-end acceptance: a real download, and every artifact that has to come
 //! out of it.
 //!
-//! **Ignored by default.** These hit Blizzard's CDN and write gigabytes, so
-//! they are not part of `cargo test`. Run them deliberately:
+//! **Ignored by default**: they hit Blizzard's CDN and write gigabytes.
 //!
 //! ```text
 //! cargo test -p lightforge-core --test acceptance -- --ignored --nocapture
 //! cargo test -p lightforge-core --test acceptance -- --ignored --nocapture bounded
 //! ```
 //!
-//! **Why an integration test rather than more unit tests.** Every bug worth
-//! catching lately lived in a seam, not in a function: the store writer was
-//! fine and the registry splice was fine, but the splice silently did nothing
-//! against a registry shaped like a real one. Unit tests are written against
-//! the data the author imagined. This drives the same path the launcher does.
+//! The bugs lived in seams: the registry splice did nothing against a real
+//! registry. This drives the launcher's own path.
 
 use std::path::{Path, PathBuf};
 
@@ -41,10 +37,7 @@ fn scratch(name: &str) -> PathBuf {
 
 /// Agent's registry, seeded with records Lightforge does not own.
 ///
-/// The point is not that it looks real. It is that these records must come
-/// back out untouched. Registering into a registry we cannot read, or one
-/// whose other products we quietly drop, is the failure mode that would cost
-/// someone their library.
+/// These records must come back out untouched.
 fn seed_agent_registry(root: &Path) -> PathBuf {
     let agent = root
         .join("prefix/pfx/drive_c/ProgramData/Battle.net/Agent");
@@ -83,10 +76,7 @@ fn http() -> Http {
 /// A download that is cut short, which is the common case: a launcher gets
 /// closed, a network drops, someone hits pause.
 ///
-/// What must hold afterwards is that the store is still a store, readable,
-/// and re-indexable without touching an archive. An interrupted run that
-/// leaves an unreadable store is the `NeedsRepair` this project already hit
-/// once.
+/// The store must stay readable and re-indexable (no `NeedsRepair`).
 #[tokio::test]
 #[ignore = "downloads from Blizzard's CDN"]
 async fn bounded_run_leaves_a_readable_store() {
@@ -106,7 +96,7 @@ async fn bounded_run_leaves_a_readable_store() {
         .await
         .expect("the run itself must not fail");
 
-    // Deliberately incomplete, and it must say so rather than claim an
+    // A truncated plan must say so, not claim an
     // install: `.build.info` is the completion marker and gates `Play`.
     assert!(!summary.complete, "a truncated plan must not report a complete install");
     assert!(summary.version.is_none());
@@ -130,8 +120,7 @@ async fn bounded_run_leaves_a_readable_store() {
 /// The whole chain, on a complete install: store, `.build.info`,
 /// `.product.db`, Agent's registry, and then removing it again.
 ///
-/// Slow, Classic Era is a few GiB, and the only test that proves the thing
-/// the user actually cares about, which is that Battle.net says `Play`.
+/// Slow (Classic Era is a few GiB); proves Battle.net says `Play`.
 #[tokio::test]
 #[ignore = "downloads all of Classic Era from Blizzard's CDN"]
 async fn a_complete_install_produces_every_artifact() {

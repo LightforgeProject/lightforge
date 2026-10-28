@@ -97,7 +97,7 @@ fn a_default_naming_a_missing_product_is_not_a_theme() {
     let mut m = manifest();
     m.default = Some("nonexistent".into());
     // A custom code, not a WoW branch: a branch would reach its line's
-    // head and be themed after all, which is the point of `head_theme`.
+    // head and be themed after all, as `head_theme` intends.
     assert!(m.theme(&ProductCode::Custom("turtle_wow".into())).is_none());
 }
 
@@ -250,7 +250,7 @@ fn a_mark_only_entry_still_inherits_the_default_artwork() {
 }
 
 /// A mark is identity: a product with no entry of its own must show no
-/// mark rather than another game's. This put World of Warcraft's icon
+/// mark, not another game's. This put World of Warcraft's icon
 /// beside "Hearthstone" in the browse list, because Battle.net calls
 /// Hearthstone `hs_beta` on a machine where it is installed and the
 /// manifest entry was under `hsb`.
@@ -383,8 +383,7 @@ fn a_manifest_states_the_catalog_over_the_builtin_one() {
     assert_eq!(entry.branch, Branch::Ptr);
     assert_eq!(entry.label, "Midnight PTR");
 
-    // And it joins retail's version list rather than standing alone,
-    // which is the whole point of stating it.
+    // And it joins retail's version list instead of standing alone.
     let retail = catalog.branches(&crate::product::ProductLine::Retail);
     assert!(retail.iter().any(|e| e.code == code));
     assert!(retail.iter().any(|e| e.code == ProductCode::Retail));

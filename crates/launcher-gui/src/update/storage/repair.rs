@@ -13,9 +13,7 @@ impl Lightforge {
         Ok(match message {
             Message::ScanAndRepair => {
                 self.gear_open = false;
-                // It drops damaged entries from the indices, so nothing else
-                // may be writing the store, and the client may not have it
-                // open.
+                // Rewrites indices: nothing else may write or open the store.
                 if let Some(what) = self.store_writer() {
                     self.error = Some(format!("wait for {what} to finish first").into());
                     return Ok(Task::none());
@@ -50,10 +48,7 @@ impl Lightforge {
                         self.pump()
                     }
                     Ok(scan) => {
-                        // Either way the download path runs: repair works by
-                        // removing damaged entries so the planner counts them
-                        // missing, and the same plan also covers whatever was
-                        // never fetched in the first place.
+                        // The download refetches what repair dropped.
                         self.status = match scan.damaged {
                             0 => format!(
                                 "{} files verified — none damaged; checking for anything missing",
@@ -137,9 +132,7 @@ impl Lightforge {
                         );
                         self.pump()
                     }
-                    // Repaired before the queue is released: a transfer
-                    // landing first would move the store and void the
-                    // findings.
+                    // Before the queue is released, or the findings go stale.
                     Ok(report) => {
                         self.status = format!(
                             "{} damaged of {} — repairing…",
@@ -157,7 +150,7 @@ impl Lightforge {
                 let Some((code, report)) = self.owed_repair.clone() else {
                     return Ok(Task::none());
                 };
-                // Kept owed, and said so, rather than started: the game has
+                // Kept owed, and said so, not started: the game has
                 // the store open, or something else is writing it.
                 let held = match self.store_writer() {
                     Some(what) => Some(format!("wait for {what} to finish")),
@@ -170,9 +163,7 @@ impl Lightforge {
                     );
                     return Ok(self.pump());
                 }
-                // A writer of its own rather than `busy`, which belongs to a
-                // launch and a session: clearing it here once re-enabled Play
-                // in the middle of one.
+                // Not `busy`, which belongs to a launch.
                 self.repairing = Some(code.clone());
                 Task::perform(tasks::repair(self.layout.clone(), code, *report), Message::Repaired)
             }

@@ -255,7 +255,7 @@ pub enum MatchedBy {
 }
 
 impl MatchedBy {
-    /// Whether this match is exact rather than inferred from a name.
+    /// Whether this match is exact, not inferred from a name.
     pub fn is_certain(&self) -> bool {
         matches!(self, Self::ProviderId)
     }
@@ -678,7 +678,7 @@ mod tests {
         assert!(Provider::Curse.is_supported());
         // Wago is known but unresolvable: listed, never attempted.
         assert!(!Provider::Wago.is_supported());
-        // An unknown provider is kept, so it can be reported rather than lost.
+        // An unknown provider is kept, so it can be reported, not lost.
         assert_eq!(Provider::parse("Fancy"), Provider::Other("fancy".into()));
         assert!(!Provider::Other("fancy".into()).is_supported());
     }

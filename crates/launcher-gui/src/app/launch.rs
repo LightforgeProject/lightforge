@@ -293,7 +293,7 @@ impl Lightforge {
             self.install_dialog = None;
             return Task::none();
         }
-        // Re-checked rather than trusted from when the dialog opened: the
+        // Re-checked, not trusted from when the dialog opened: the
         // drive may have gone away while the user read the size.
         if let Some(target) = dialog.target() {
             if let Err(e) = self.target_install(&dialog.code, &target.id) {

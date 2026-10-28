@@ -21,10 +21,9 @@ pub fn field(_theme: &Theme, status: text_input::Status) -> text_input::Style {
     }
 }
 
-/// The multi-line twin of [`field`], for prose rather than a value.
+/// The multi-line twin of [`field`], for prose, not a value.
 ///
-/// Same surface, same border states, a report's description should look like
-/// the field above it and simply be taller.
+/// Same surface and borders as [`field`].
 pub fn editor(_theme: &Theme, status: text_editor::Status) -> text_editor::Style {
     let border = match status {
         text_editor::Status::Focused { .. } => ACCENT,

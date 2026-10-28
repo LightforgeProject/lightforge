@@ -26,21 +26,13 @@ impl Lightforge {
             Screen::Addons => self.addons_screen(),
         };
 
-        // The manager hangs under its button on every screen, not just the
-        // dashboard: a download keeps running while you are in Settings, and
-        // that is exactly when you want to look at it. Its button is at the
-        // end of the ribbon, so a stacked layer pinned to the top right lands
-        // under it, padded clear of the ribbon it drops out of. (Add-a-game
-        // used to share this corner; it now hangs off the `+` itself, see
-        // [`Lightforge::strip`].)
+        // The download manager, top right on every screen, under its button.
         let overlay: Option<Element<Message>> =
             match self.manager_open && !self.queue.is_empty() {
                 true => Some(self.manager()),
                 false => None,
             };
-        // Clicks inside a panel are absorbed so they never reach the dismissal
-        // beneath it; without this, clicking the gap between two rows of the
-        // download manager would close it.
+        // Clicks inside a panel never reach the dismissal beneath.
         let overlay = overlay.map(|panel| focus::layer(mouse_area(panel).on_press(Message::MenuClick)));
 
         let screen = match overlay {
@@ -57,10 +49,7 @@ impl Lightforge {
             None => screen,
         };
 
-        // Modal: over everything, including the panels above. The scrim takes
-        // every press that the card itself does not, and a `Stack` stops
-        // delivering an event once a layer captures it, so nothing beneath
-        // can be clicked while the dialog is up.
+        // Modal: the scrim captures every press the card does not.
         let screen = match self.dialog() {
             Some((card, on_scrim)) => stack![
                 screen,
@@ -73,25 +62,15 @@ impl Lightforge {
             None => screen,
         };
 
-        // Anything open closes on a click that no widget wanted. `mouse_area`
-        // hands the event to its child first and only fires when the child
-        // ignored it, so a button still does its own job rather than being
-        // swallowed by the dismissal.
-        //
-        // Wrapped whether or not anything is open, and only the press comes
-        // and goes. Adding the wrapper when a dropdown opened changed the
-        // widget tree above the page, iced dropped the page's scroll state,
-        // and Settings jumped back to the top.
+        // A click no widget wanted closes what is open. Always wrapped: adding
+        // the wrapper later changes the tree and iced drops the scroll state.
         let screen = mouse_area(screen);
         let screen = Element::from(match self.panel_open() {
             true => screen.on_press(Message::Dismiss),
             false => screen,
         });
 
-        // The lit corner goes behind everything, last, so every screen gets it
-        // and nothing has to opt in. Where a page lays key art over the whole
-        // window the art simply wins, which is the right order: the glow is
-        // for the chrome, not for the picture.
+        // The lit corner, behind everything; key art covers it.
         let screen = Element::from(
             container(screen)
                 .width(Length::Fill)
@@ -124,14 +103,11 @@ impl Lightforge {
             (_, _, _, _, _, Some(detail), ..) => Some(self.detail_card(detail)),
             (_, _, _, _, _, _, Some(dialog), ..) => Some(self.report_card(dialog)),
             // Closes on a click outside it, so a click inside that no control
-            // wanted has to stop at the card rather than reach the scrim.
+            // wanted has to stop at the card, not reach the scrim.
             (_, _, _, _, _, _, _, Some(settings), ..) => Some(
                 mouse_area(self.game_settings_card(settings)).on_press(Message::MenuClick).into(),
             ),
-            // Last, so a dialog someone opened themselves is never buried
-            // under the one the app opened for them. The notes come before
-            // the update notice: they are about the build that is running,
-            // which is the one the user can do something with right now.
+            // Last, under dialogs the user opened; notes before the update notice.
             (.., Some(notes), _) => Some(self.patch_notes_card(notes)),
             (.., Some(available)) => Some(self.update_card(available)),
             _ => None,

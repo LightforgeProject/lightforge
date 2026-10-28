@@ -32,7 +32,7 @@ pub(crate) async fn download(dest: PathBuf, product: String, region: String, loc
 
     // Event printing, shared by the dry run and the real one. The
     // index prelude and the transfer are both far too chatty to print
-    // per event, so both are throttled here rather than in core.
+    // per event, so both are throttled here, not in core.
     let start = Instant::now();
     let mut last_index = 0usize;
     let mut last_report = Instant::now();

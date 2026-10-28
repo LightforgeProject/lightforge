@@ -248,7 +248,7 @@ impl InstallEntry {
     }
 }
 
-/// The install manifest: files that live on disk rather than in the store.
+/// The install manifest: files that live on disk, not in the store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallManifest {
     tags: Vec<Tag>,
@@ -782,7 +782,7 @@ mod tests {
         assert_eq!(manifest.select(&tags).len(), 2);
         assert_eq!(manifest.selected_size(&tags), 300);
 
-        // And it is on offer rather than hidden: the user can find it.
+        // And it is on offer, not hidden: the user can find it.
         assert_eq!(manifest.optional_names(&tags), ["HighRes"]);
     }
 

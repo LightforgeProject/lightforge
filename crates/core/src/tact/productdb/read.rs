@@ -28,7 +28,7 @@ pub struct Installed {
 }
 
 impl Installed {
-    /// Battle.net's own plumbing rather than a game someone plays.
+    /// Battle.net's own plumbing, not a game someone plays.
     pub fn is_infrastructure(&self) -> bool {
         matches!(self.product.as_str(), "agent" | "bna" | "battle.net")
     }

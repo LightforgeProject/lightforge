@@ -104,9 +104,8 @@ pub(crate) async fn assets(product: String, source: Option<String>) -> Result<()
 
     let pipeline = Pipeline::new(origin, store);
 
-    // The cache-only path the GUI paints its first frame from. Shown
-    // before the network runs, because "the dashboard opens unthemed"
-    // is almost always this returning None.
+    // The cache-only path the GUI's first frame uses; `None` here is why
+    // the dashboard opens unthemed.
     let started = std::time::Instant::now();
     match pipeline.cached(&code) {
         Some(branding) => println!(
@@ -182,9 +181,7 @@ pub(crate) async fn status(ctx: Ctx, product: String, region: String, offline: b
     println!("store files     {}", local.store_files);
     println!("installed       {}", local.is_installed());
 
-    // `None` here is the offline case the resolver is required to
-    // survive: a complete install stays playable when the service
-    // cannot be reached.
+    // `None`: offline, and a complete install stays playable.
     let remote = if offline {
         None
     } else {

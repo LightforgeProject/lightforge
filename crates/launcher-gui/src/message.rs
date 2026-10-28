@@ -179,7 +179,7 @@ pub(crate) enum Message {
     ReportSent(bool),
     ReportCancel,
     /// Open Settings at a particular section, for a link that means a
-    /// specific page rather than "settings somewhere".
+    /// specific page, not "settings somewhere".
     ShowSettingsTab(SettingsTab),
     /// The Settings page scrolled, by any means.
     SettingsScrolled(scrollable::Viewport),
@@ -232,8 +232,8 @@ pub(crate) enum Message {
     /// A click that no widget consumed, close whatever is open, the way
     /// every other context menu on the desktop behaves.
     Dismiss,
-    /// A click *inside* an open panel. Does nothing, and that is the point:
-    /// it stops the click reaching [`Message::Dismiss`] underneath.
+    /// A click *inside* an open panel. It only stops the click reaching
+    /// [`Message::Dismiss`] underneath.
     MenuClick,
     /// Ask the version service what is current, and read what the build
     /// offers.
@@ -536,7 +536,7 @@ pub(crate) struct BranchChoice {
     /// The catalog's name for this product, used when adding it to config.
     pub(crate) label: String,
     /// Battle.net's name for this version where it has one of its own,
-    /// `Stress Test` rather than `Live`; see `Families::version_name`.
+    /// `Stress Test`, not `Live`; see `Families::version_name`.
     pub(crate) name: Option<String>,
     pub(crate) configured: bool,
 }

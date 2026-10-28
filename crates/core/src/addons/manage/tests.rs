@@ -253,7 +253,7 @@ fn every_folder_of_a_package_matches_but_it_is_still_one_addon() {
     assert_eq!(grouped["2382"].1, ["BigWigs", "BigWigs_Core"]);
     assert_eq!(grouped["1477613"].1, ["EllesmereUI"]);
 
-    // A hash nobody claimed contributes nothing rather than an entry
+    // A hash nobody claimed contributes nothing, not an entry
     // with no project.
     assert!(grouped.values().all(|(_, folders)| !folders.contains(&"NotMatched".to_owned())));
 }

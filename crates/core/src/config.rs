@@ -45,7 +45,7 @@ pub struct Config {
     /// for trying out art. Not in the UI; `None` is [`DEFAULT_ASSETS_SOURCE`].
     pub assets_source: Option<String>,
     /// Base URL of the addon catalog proxy, or a local fixture directory.
-    /// `None` disables addon management rather than failing at use.
+    /// `None` disables addon management instead of failing at use.
     pub addon_catalog: Option<String>,
     /// Which addon builds to accept for an addon that has no channel of its
     /// own. Stable by default; a per-addon override lives in the ledger.
@@ -114,7 +114,7 @@ pub struct Config {
     #[serde(default = "yes")]
     pub check_for_updates: bool,
     /// The newest version already mentioned, so the notice opens once per
-    /// release rather than on every start.
+    /// release, not on every start.
     #[serde(default)]
     pub update_seen: Option<String>,
     /// How many `WTF/Account` backups each game keeps.
@@ -136,7 +136,7 @@ pub const DEFAULT_ADDON_CATALOG: &str = "https://lightforge.tuxcore.pro/";
 /// Bytes in the megabyte this config counts in.
 const BYTES_PER_MB: u64 = 1_000_000;
 
-/// `true`, for a `serde(default)` that is on rather than off.
+/// `true`, for a `serde(default)` that is on, not off.
 fn yes() -> bool {
     true
 }
@@ -535,7 +535,7 @@ mod tests {
         // No pin of its own: the client's build, which is the old behaviour.
         assert_eq!(config.handoff_proton(&diablo), Some("GE-Proton11-8"));
 
-        // Pinned, and the hand-off follows the game rather than the client.
+        // Pinned, and the hand-off follows the game, not the client.
         config.product_mut(&diablo).unwrap().profile.proton_ge_version =
             Some("GE-Proton10-34".to_owned());
         assert_eq!(config.handoff_proton(&diablo), Some("GE-Proton10-34"));

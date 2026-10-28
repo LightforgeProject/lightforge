@@ -10,9 +10,8 @@ pub(crate) fn play(ctx: Ctx, product: String, proton: Option<String>, dry_run: b
 
     let code: ProductCode = product.parse().expect("product codes are infallible");
 
-    // The game is launched through the symlink, so Wine sees the
-    // conventional Windows path, the same thing that keeps CEF happy
-    // for the in-game store.
+    // Through the `C:` symlink. The GUI launches the native path instead,
+    // which the in-game shop needs (see `Layout::wow_drive`).
     let flavor_dir = layout.wow_symlink().join(&*code.install_dir());
     let exe = lightforge_core::paths::game_executable(&flavor_dir, &code);
     if !exe.is_file() {
@@ -31,9 +30,7 @@ pub(crate) fn play(ctx: Ctx, product: String, proton: Option<String>, dry_run: b
     let (runner, build) = proton_runner(&layout, proton.as_deref())?;
     let mut runner = runner
         .with_compat_mount(&target)
-        // Per-product shader cache: the prefix is shared, so pooling
-        // it would mean a Proton swap for one product discarding
-        // another's accumulated shaders.
+        // Per product: the prefix is shared.
         .with_shader_cache(dirs.shader_cache_dir(&code));
 
     // The same per-product settings Game Settings writes. A launcher that honoured them from one entry point and

@@ -140,7 +140,7 @@ fn main() -> iced::Result {
     fit::take_over_scale();
     trace::begin();
     // 0.14 takes the boot function where 0.13 took the title, and runs it
-    // from `run` rather than `run_with`.
+    // from `run`, not `run_with`.
     iced::application(
         || {
             let (app, task) = Lightforge::new();
@@ -202,7 +202,7 @@ struct Lightforge {
     /// Every configured product's bar icon, for those that have one.
     icons: HashMap<ProductCode, tasks::Mark>,
     /// The branch last used in each line, so returning to a tile returns to
-    /// the build you were on rather than snapping back to live.
+    /// the build you were on instead of snapping back to live.
     last_branch: HashMap<ProductLine, ProductCode>,
     /// Which products exist and how they group, built in, then whatever the
     /// manifest states over it.
@@ -285,7 +285,7 @@ struct Lightforge {
     /// was running in the prefix. Repaired from the cog menu.
     owed_repair: Option<(ProductCode, Box<lightforge_core::tact::verify::Report>)>,
     /// The product a store scan, deep or not, is checking, so its result
-    /// lands on that product rather than whichever tile is selected by then.
+    /// lands on that product, not whichever tile is selected by then.
     scan_for: Option<ProductCode>,
     /// A repair of damaged entries is rewriting the store's indices.
     repairing: Option<ProductCode>,
@@ -402,7 +402,7 @@ struct Lightforge {
     launch_when_quiet: Option<Launch>,
     report_dialog: Option<ReportDialog>,
     /// Filled in once, shortly after startup. `None` until then, and a report
-    /// sent in that window simply says so rather than blocking on it.
+    /// sent in that window simply says so instead of blocking on it.
     system: Option<iced::system::Information>,
     downgrade_dialog: Option<DowngradeDialog>,
     /// Builds the user agreed to launch under despite a downgrade, this
@@ -595,7 +595,7 @@ const STEAM_KEYBOARD_CLOSE: &str = "steam://close/keyboard";
 const DISCORD_URL: Option<&str> = Some("https://discord.gg/vtTgmUV9Bq");
 const X_URL: Option<&str> = Some("https://x.com/simplyKennybtw");
 /// Where someone can say thanks. Offered, never asked for: these sit beside
-/// the places to get help rather than in front of anything.
+/// the places to get help, not in front of anything.
 const KOFI_URL: Option<&str> = Some("https://ko-fi.com/simplykenny");
 const PAYPAL_URL: Option<&str> = Some("https://paypal.me/simplykenny");
 

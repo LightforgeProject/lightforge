@@ -27,7 +27,7 @@ pub struct Row {
     /// Set when Lightforge installed it, only these can be updated or removed.
     pub managed: Option<Managed>,
     /// Folders belonging to a managed addon other than its first are shown as
-    /// children rather than as separate addons.
+    /// children, not as separate addons.
     pub child_of: Option<String>,
 }
 
@@ -209,7 +209,7 @@ mod tests {
         // With no repository the author's provider page is better than nothing.
         assert_eq!(with(None, Some("https://x/author")).support_url(), Some("https://x/author"));
         // And an addon installed before the ledger kept these offers neither,
-        // which is the menu one line shorter rather than a link to nowhere.
+        // which is the menu one line shorter, not a link to nowhere.
         assert_eq!(with(None, None).support_url(), None);
     }
 
@@ -337,7 +337,7 @@ mod tests {
         let rows = rows_from(&[installed("BigWigs", "1.0")], &ledger);
         // `None` and `Some(false)` mean different things to the row, one
         // follows the app's default, the other overrides it, so the row has
-        // to carry the choice itself rather than a resolved boolean.
+        // to carry the choice itself, not a resolved boolean.
         assert_eq!(rows[0].managed.as_ref().unwrap().auto_update, Some(false));
         assert!(manage::auto_update_requests(&ledger, Channel::Stable, true).is_empty());
     }

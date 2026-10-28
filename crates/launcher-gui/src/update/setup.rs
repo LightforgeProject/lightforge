@@ -31,13 +31,9 @@ impl Lightforge {
                     None => Task::none(),
                 };
                 let mut opened = Task::none();
-                // Open on settings, at its setup section, when the machine
-                // cannot launch anything yet, but never yank the user out of
-                // a screen they chose.
+                // Open on Settings' setup section if nothing can launch yet.
                 if let Some(status) = &status {
-                    // Not while the first run is up: it has a setup step of its
-                    // own, and moving the screen underneath it would be where
-                    // the user lands the moment they dismiss it.
+                    // Not under the first run, which has its own setup step.
                     if !status.is_ready()
                         && self.screen == Screen::Dashboard
                         && !self.setup_running
@@ -45,17 +41,13 @@ impl Lightforge {
                     {
                         self.screen = Screen::Settings;
                         self.settings_jump = Some(SettingsTab::Setup);
-                        // Behind the splash on a first start, where nothing
-                        // of the page is drawn to be jumped into yet. Taking
-                        // the splash away arrives on the page, jump and all.
+                        // Behind the splash, the jump waits for it.
                         if self.splash.is_none() {
                             opened = self.arrived();
                         }
                     }
                 }
-                // Installing Battle.net is what puts its mark in the prefix,
-                // and setup is the only thing that installs it, so this is the
-                // one moment the answer can have changed.
+                // Setup is what installs Battle.net's mark.
                 self.bnet_icon =
                     self.layout.battle_net_icon().and_then(|path| art::try_mark(&path));
                 // Not under the first run or another install, and once a
@@ -226,9 +218,7 @@ impl Lightforge {
     fn update_proton_builds(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
             Message::CheckProton => {
-                // Runs with no build installed too: the release list is what
-                // fills the install picker, and needing a build before you can
-                // find one to install is the wrong way round.
+                // With no build installed too: it fills the install picker.
                 let installed = self
                     .setup
                     .as_ref()
@@ -302,16 +292,8 @@ impl Lightforge {
                 self.setup_sample = provision::Progress::default();
                 self.setup_running = true;
                 self.error = None;
-                // Stays on the Proton page, which is the point of the
-                // progress now being drawn in the Builds card. It used to
-                // switch to Settings > Setup because that was the only place
-                // a bar existed, and pressing Install and landing somewhere
-                // else reads as a misclick.
-                //
-                // `install_build` rather than `provision::run` with a pinned
-                // version: that one goes on to the prefix and Battle.net
-                // afterwards, so on a machine that is not set up yet, adding
-                // a Proton build would quietly provision the whole thing.
+                // Stays on the Proton page. `install_build`, not `provision::run`,
+                // which would go on to build the prefix and install Battle.net.
                 Task::perform(provision::install_build(version, tx), Message::ProtonInstalled)
             }
 

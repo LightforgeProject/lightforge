@@ -27,9 +27,7 @@ impl Lightforge {
                 }
             }
             Message::SetDefaultDrive(id) => {
-                // The button is held for a drive that is away, but this also
-                // decides where the *next* install goes and what Battle.net is
-                // told, neither is worth pointing at a drive that is not here.
+                // Never a drive that is away.
                 if let Some(drive) = self
                     .config
                     .libraries
@@ -46,20 +44,13 @@ impl Lightforge {
                 }
                 self.save_config();
                 self.rebuild_layout();
-                // Battle.net's `DefaultInstallPath` follows the default drive,
-                // and it is only written where nothing in the prefix is running,
-                // so it is re-asserted by the next pre-flight, not here. The
-                // client itself does not move: it lives in the prefix.
+                // `DefaultInstallPath` follows at the next pre-flight.
                 self.status = "new installs will go to this drive".to_owned();
                 self.measure_storage()
             }
             Message::RemoveDrive(id) => {
                 match self.remove_drive(&id) {
-                    // `refresh_drives` as well as the measurement: a drive
-                    // that is no longer ours goes back to being a partition
-                    // the page can offer, and that list is only rebuilt here.
-                    // Without it the row stays gone until you leave Settings
-                    // and come back.
+                    // `refresh_drives` too: the drive is offered again.
                     Ok(()) => {
                         self.refresh_drives();
                         self.measure_storage()
@@ -100,9 +91,7 @@ impl Lightforge {
                 if self.downloading_into(&install) {
                     return Ok(Task::none());
                 }
-                // Compaction moves and deletes archives for minutes; nothing
-                // else may write the store meanwhile, and the client may not
-                // have it open. `pump` and pre-flight both hold while it runs.
+                // Minutes of moving archives: `pump` and pre-flight hold meanwhile.
                 if let Some(what) = self.store_writer() {
                     self.error = Some(format!("wait for {what} to finish first").into());
                     return Ok(Task::none());
@@ -140,9 +129,7 @@ impl Lightforge {
             }
             Message::OpenDrive(id) => {
                 if let Some(library) = self.config.libraries.iter().find(|l| l.id == id) {
-                    // A drive with nothing installed on it yet has no `games/`
-                    // folder, so this opens the nearest thing that does exist,
-                    // the place the folder would appear.
+                    // The nearest existing folder, before `games/` exists.
                     let path = library
                         .games()
                         .ancestors()

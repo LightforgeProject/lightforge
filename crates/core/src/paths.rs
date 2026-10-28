@@ -688,7 +688,7 @@ mod exe_tests {
     fn the_crash_reporter_is_never_mistaken_for_the_game() {
         let (_t, layout, code) = layout_with("wow", &["BlizzardError.exe"]);
         // Nothing launchable is present, so the expected name comes back for
-        // the error message rather than the crash reporter.
+        // the error message, not the crash reporter.
         assert_eq!(layout.wow_exe(&code).file_name().unwrap(), "Wow.exe");
     }
 

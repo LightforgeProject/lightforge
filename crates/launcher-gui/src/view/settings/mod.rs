@@ -12,10 +12,7 @@ impl Lightforge {
     /// Settings: every section on one page, with an index down the left
     /// that jumps to each and marks the one being read.
     ///
-    /// It used to be one section at a time, the way Battle.net lays out its
-    /// own, and half the sections were a switch or two on an empty page.
-    /// Rows stay flat at one shared width rather than a stack of boxes that
-    /// each size themselves.
+    /// Rows share one width.
     pub(crate) fn settings(&self) -> Element<'_, Message> {
         let mut nav = column![].spacing(theme::XS).width(Length::Fixed(SETTINGS_NAV_WIDTH));
         for tab in SettingsTab::ALL {
@@ -32,14 +29,8 @@ impl Lightforge {
             nav = nav.push(self.ring(focus::Target::SettingsTab(tab), Some(Message::SettingsTab(tab)), entry));
         }
 
-        // The error leads rather than trails: a failed setup run is reported
-        // here, and at the foot of the page it would go unseen.
-        //
-        // Every section takes the width it is given. The column used to be
-        // capped at a form's measure, which left two thirds of the window
-        // empty on a wide monitor and crammed every figure into the left of
-        // it; the rows inside already right-align their controls, so the space
-        // goes where it is useful rather than being thrown away.
+        // The error leads, where it is seen. Sections take the full width;
+        // rows right-align their controls.
         let mut content = column![].spacing(theme::XL).width(Length::Fill);
         if let Some(e) = &self.error {
             content = content.push(problem(e));
@@ -97,9 +88,7 @@ impl Lightforge {
 
     /// The build a product's row resolves to, pin or no pin.
     ///
-    /// Judged the way that product actually starts: a WoW version under its
-    /// own pin or the app default, a hand-off title under its pin or
-    /// Battle.net's. Only the fallback differs, a pin wins on either path.
+    /// A pin wins; the fallback is the app default, or Battle.net's for a hand-off.
     pub(crate) fn row_build(&self, code: &ProductCode) -> Option<&proton::ProtonRelease> {
         let pin = match Kind::of(code) {
             Kind::Managed => self.config.effective_proton(code),
@@ -123,10 +112,7 @@ impl Lightforge {
     /// The games this page has anything to say about: every configured
     /// product that is actually installed.
     ///
-    /// Installed rather than configured, because the list is otherwise
-    /// fourteen rows of which three can launch. Read from Battle.net's own
-    /// `product.db`, which is the one place that knows about every install in
-    /// the prefix, Lightforge's own and the client's alike.
+    /// Installed, by Battle.net's `product.db`, not merely configured.
     pub(crate) fn installed_products(&self) -> Vec<(ProductCode, String)> {
         self.config
             .products

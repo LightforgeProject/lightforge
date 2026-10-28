@@ -45,7 +45,7 @@ impl Lightforge {
     }
 
     /// What the launcher does around a launch: the settings that are about
-    /// the app itself rather than about a product, a transfer or a prefix.
+    /// the app itself, not about a product, a transfer or a prefix.
     pub(crate) fn general_section(&self) -> Element<'_, Message> {
         let shortcut: Option<Element<'_, Message>> = self.steam_shortcut.as_ref().map(|outcome| match outcome {
             Ok(done) => muted(done.clone(), theme::LABEL).into(),

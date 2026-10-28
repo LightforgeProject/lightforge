@@ -31,7 +31,7 @@ pub struct Release {
 pub struct Available {
     /// The version running, as the binary was built with it.
     pub current: String,
-    /// The version found, spelled as SemVer rather than as the tag.
+    /// The version found, spelled as SemVer, not as the tag.
     pub latest: String,
     /// That release's own page, or the releases page when it has none.
     pub url: String,

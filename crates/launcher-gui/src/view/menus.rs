@@ -74,7 +74,7 @@ impl Lightforge {
         focus::layer(container(rows).padding(theme::SM).style(theme::menu))
     }
 
-    /// One addon's own settings: what is true of this addon rather than what
+    /// One addon's own settings: what is true of this addon, not what
     /// to do to it right now.
     ///
     /// A menu: the row is full.
@@ -131,7 +131,7 @@ impl Lightforge {
             ));
         }
 
-        // An older build on purpose; only CurseForge publishes a build list.
+        // Choosing an older build; only CurseForge publishes a build list.
         if managed.provider.eq_ignore_ascii_case("curse") {
             rows = rows.push(entry(
                 "Details and changelog…".to_owned(),
@@ -314,7 +314,7 @@ impl Lightforge {
         popover::popover(face, menu).align_left().into()
     }
 
-    /// The cog menu: what you do *about* a game rather than to play it.
+    /// The cog menu: what you do *about* a game, not to play it.
     pub(crate) fn gear_menu(&self) -> Element<'_, Message> {
         let item = |label: &'static str, message: Message, enabled: bool| {
             self.ring(
@@ -361,7 +361,7 @@ impl Lightforge {
         )
         .padding(theme::XS)
         // The width of the split button beneath it, so the menu reads as
-        // belonging to that control rather than floating near it.
+        // belonging to that control instead of floating near it.
         .width(Length::Fixed(240.0))
         .style(theme::floating);
 

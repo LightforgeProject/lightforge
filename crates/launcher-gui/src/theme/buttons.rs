@@ -17,11 +17,7 @@ pub fn filled(color: Color) -> impl Fn(&Theme, button::Status) -> button::Style 
 /// The two halves of a split button: a wide primary action and a narrow menu
 /// tab welded to its right, the way Battle.net's Play control is built.
 ///
-/// Rounded on their outer edges only, so the pair reads as one control rather
-/// than as two buttons that happen to touch. The tab is shaded a little darker
-/// than the action so the divide is visible without a border between them,
-/// a border would read as a seam, which is exactly what a split button is
-/// trying not to be.
+/// Rounded on the outer edges only; the tab is a shade darker instead of a border.
 pub fn filled_left(color: Color) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_theme, status| button::Style {
         border: Border {
@@ -99,20 +95,12 @@ pub fn ghost(_theme: &Theme, status: button::Status) -> button::Style {
 
 /// A whole card that is also a button.
 ///
-/// [`card`] as a button rather than a container: the card *is* the click
-/// target, so the hover has to happen on the card itself. A row-sized hover
-/// highlight inside a static card would say the row is pressable and leave
-/// the rest of the card looking like it is not.
-///
-/// Translucent, and wearing [`BORDER_OVER_ART`], the same pair [`floating`]
-/// uses, so it can sit over artwork without covering it.
+/// [`card`] as a button: the whole card lights on hover. Translucent with
+/// [`BORDER_OVER_ART`], like [`floating`].
 pub fn card_button(_theme: &Theme, status: button::Status) -> button::Style {
     let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
     button::Style {
-        // [`RAISED`] on hover, the existing "a panel on a panel" step, so a
-        // hovered card lifts by the same amount as every other surface in the
-        // app rather than by a brightness invented here. Both carry PANEL's
-        // alpha, so hovering changes the colour and not the transparency.
+        // [`RAISED`] on hover, at PANEL's alpha.
         background: Some(Background::Color(match hovered {
             true => Color { a: PANEL.a, ..RAISED },
             false => Color { a: PANEL.a, ..SURFACE },
@@ -147,9 +135,7 @@ pub fn selected(_theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-/// A dropdown's face: the button of a picker whose list is a menu of our own,
-/// since a `pick_list` keeps its open state to itself and a keyboard can
-/// neither open it nor move through it.
+/// A dropdown's face, for a picker with our own menu (see `view::menus`).
 pub fn picker_button(_theme: &Theme, status: button::Status) -> button::Style {
     let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
     button::Style {

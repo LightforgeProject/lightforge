@@ -69,14 +69,14 @@ pub async fn download(
                     // Tighter than the CLI's 4 GiB: nobody watches a launcher.
                     checkpoint_bytes: 512 * 1024 * 1024,
                     limit_bytes_per_second,
-                    // So Battle.net lists the product as installed rather than
+                    // So Battle.net lists the product as installed instead of
                     // offering to install what is already there.
                     agent_dir: Some(layout.agent_dir()),
                     windows_path: Some(windows_path),
                     ..InstallOptions::default()
                 };
 
-                // Coalesce here rather than in core: stages are rare and always
+                // Coalesce here, not in core: stages are rare and always
                 // worth publishing, progress is not.
                 let mut last = Instant::now() - Duration::from_secs(1);
                 let mut stage = String::from("preparing");

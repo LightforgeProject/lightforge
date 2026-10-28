@@ -365,7 +365,7 @@ mod tests {
         execute(root.path(), &compaction, &snapshot, |_| {}).unwrap();
         assert!(!data.join(archive_name(0)).exists());
 
-        // The next pass copies into the hole rather than past the top.
+        // The next pass copies into the hole, not past the top.
         drop_keys(&data, |k| k % 2 == 0);
         let (compaction, snapshot) = plan(root.path()).unwrap();
         execute(root.path(), &compaction, &snapshot, |_| {}).unwrap();

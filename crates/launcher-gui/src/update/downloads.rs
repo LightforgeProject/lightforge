@@ -72,7 +72,7 @@ impl Lightforge {
                     self.status = "resumes when the game closes".to_owned();
                     return Ok(Task::none());
                 }
-                // Back to the end of the queue rather than jumping the line:
+                // Back to the end of the queue instead of jumping the line:
                 // whatever is running was started first.
                 if let Some(at) = self.queue.iter().position(|d| d.code == code) {
                     self.queue[at].stage = Stage::Queued;

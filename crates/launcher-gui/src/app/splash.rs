@@ -106,7 +106,7 @@ impl Lightforge {
         const SPIN: f32 = 30.0;
         let note = match splash.products {
             // No tracked products at all is a machine that has never been set
-            // up, which is a wizard away rather than an artwork fetch.
+            // up, which is a wizard away, not an artwork fetch.
             0 => "Getting ready…".to_owned(),
             1 => "Fetching artwork for 1 game…".to_owned(),
             n => format!("Fetching artwork for {n} games…"),

@@ -40,7 +40,7 @@ pub struct Popover<'a, Message, Theme, Renderer> {
     /// `None` when nothing is showing, which costs no overlay at all.
     panel: Option<Element<'a, Message, Theme, Renderer>>,
     edge: Edge,
-    /// Hang under the anchor rather than over it.
+    /// Hang under the anchor, not over it.
     below: bool,
 }
 
@@ -51,7 +51,7 @@ impl<'a, Message, Theme, Renderer> Popover<'a, Message, Theme, Renderer> {
         self
     }
 
-    /// Open downwards, the way a menu reads, rather than above the anchor.
+    /// Open downwards, the way a menu reads, not above the anchor.
     /// Still flips when there is no room on the preferred side.
     pub fn below(mut self) -> Self {
         self.below = true;
@@ -90,8 +90,8 @@ where
         renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        // Only the anchor is laid out here. That is the whole point: the panel
-        // takes no room, so opening it moves nothing.
+        // Only the anchor is laid out: the panel takes no room, so opening it
+        // moves nothing.
         self.anchor.as_widget_mut().layout(&mut tree.children[0], renderer, limits)
     }
 

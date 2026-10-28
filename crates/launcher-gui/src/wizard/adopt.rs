@@ -2,12 +2,8 @@
 
 use super::*;
 
-/// Untick and explain what Lightforge already has, so a second look offers
-/// only what is new rather than the install it has been playing for a week.
-///
-/// A WoW install is had when its folder is a library's and every product in
-/// it is assigned there; a Battle.net game when the link to it is already in
-/// the default library.
+/// Untick and explain what Lightforge already has: a WoW install whose folder
+/// is a library with every product assigned, a Battle.net game already linked.
 pub(super) fn mark_known(app: &mut Lightforge) {
     let config = &app.config;
     let default = config.libraries.iter().find(|l| l.is_default);
@@ -37,14 +33,8 @@ pub(super) fn mark_known(app: &mut Lightforge) {
 
 /// Adopt every ticked WoW install, and remember the ticked hand-offs for later.
 ///
-/// In place, in the time it takes to write a marker file: the install's parent
-/// directory becomes a storage library and the products in it are assigned to
-/// it. Nothing is copied and nothing is verified, the files are already there,
-/// and `.build.info` says what they are.
-///
-/// Hand-offs cannot be done here. Linking one needs a prefix to link into and a
-/// Battle.net registry to graft its record onto, and neither exists until the
-/// next step has run.
+/// In place: the parent becomes a library, nothing is copied. Hand-offs wait
+/// for the prefix and registry the next step creates.
 pub(super) fn adopt_taken(app: &mut Lightforge) {
     let Some(rows) = app.wizard.as_ref().map(|w| w.rows.clone()) else {
         return;
@@ -62,10 +52,7 @@ pub(super) fn adopt_taken(app: &mut Lightforge) {
                 ))),
             },
             RowKind::Game(game) => {
-                // Into the band here, not at the Games step. Ticking a game on
-                // this slide is the user saying they play it; making them say
-                // it again two slides later is asking the same question twice.
-                // The link itself still waits for the prefix, see `pending`.
+                // Into the band now; the link waits for the prefix (`pending`).
                 track_hand_off(app, game);
                 pending.push((game.clone(), row.prefix.clone()));
             }
@@ -88,9 +75,7 @@ pub(super) fn adopt_taken(app: &mut Lightforge) {
 
 /// Add one found install to the config, in place.
 ///
-/// Returns every line worth showing about it, not just one: an install can be
-/// adopted *and* have something to say, and the something is the part that
-/// explains why Battle.net still cannot see the game.
+/// Returns every line worth showing: adopted, and why Battle.net cannot see it.
 fn adopt_one(app: &mut Lightforge, install: &WowInstall) -> Result<Vec<Note>, String> {
     let mut notes = Vec::new();
 
@@ -115,11 +100,7 @@ fn adopt_one(app: &mut Lightforge, install: &WowInstall) -> Result<Vec<Note>, St
             app.config.libraries.push(adopted.library);
             (id, label)
         }
-        // The folder is already inside a library Lightforge knows: a second
-        // run of the wizard, or an install sitting in a drive that was added
-        // by hand. There is nothing to adopt, but the products in it may still
-        // be unassigned, which is the whole difference between a tile that
-        // says Play and one that offers to download 100 GB again.
+        // Already in a known library; its products may still need assigning.
         Err(discover::AdoptError::AlreadyOurs) => {
             let parent = install.path.parent().unwrap_or(&install.path);
             let library = app
@@ -149,9 +130,7 @@ fn adopt_one(app: &mut Lightforge, install: &WowInstall) -> Result<Vec<Note>, St
     app.save_config();
     app.rebuild_layout();
     app.sync_choices();
-    // Only when there is a prefix: a library is linked into one when it is
-    // built, and `link_libraries` is the one call that must never run against a
-    // drive that is not there.
+    // Only with a prefix; otherwise building it links the library.
     if lightforge_core::prefix::PrefixStatus::inspect(&app.layout).initialized {
         if let Err(e) = lightforge_core::prefix::link_libraries(&app.layout) {
             notes.push(Note::warning(format!("the prefix could not be relinked: {}", chain(&e))));
@@ -174,14 +153,8 @@ fn adopt_one(app: &mut Lightforge, install: &WowInstall) -> Result<Vec<Note>, St
 
 /// Put a found Battle.net game in the band, if it is not there already.
 ///
-/// The code on disk and the code in the catalog are not always the same
-/// string: Battle.net calls Hearthstone `hs_beta` on a machine where it is
-/// installed and the catalog ships it as `hsb`. `Catalog::reconcile` rewrites
-/// the catalog to whatever the machine reports, but it only runs once the
-/// client's own code list has been read, which a first run may not have done
-/// yet. So the family is the fallback: two codes name one game when they
-/// resolve to the same Battle.net game family, which is the client's own
-/// notion of identity and the only one available.
+/// On a first run `Catalog::reconcile` may not have run (`hs_beta` vs
+/// `hsb`), so two codes are one game when they share a game family.
 fn track_hand_off(app: &mut Lightforge, game: &HandOff) {
     let (code, label) = hand_off_entry(&app.catalog, game);
     if app.config.products.iter().any(|p| p.code == code) {
@@ -194,9 +167,7 @@ fn track_hand_off(app: &mut Lightforge, game: &HandOff) {
 
 /// Which catalog entry a found game is, and what to call it.
 ///
-/// Split out and pure because the matching is the part that can be wrong: a
-/// game added under the code on disk when the catalog holds another one is a
-/// tile with no artwork that never matches what is installed.
+/// Pure, so the matching can be tested.
 pub(super) fn hand_off_entry(
     catalog: &lightforge_core::product::Catalog,
     game: &HandOff,

@@ -167,11 +167,8 @@ pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<St
     }
 
     println!("running {}{}", exe.display(), if args.is_empty() { String::new() } else { format!(" {}", args.join(" ")) });
-    // The shared Battle.net profile, the same one the GUI applies,
-    // a launcher that honoured it from one entry point and not the
-    // other would make every measurement unreproducible. Unlike the
-    // GUI this always *is* the client (the CLI has no running-client
-    // fast path), so the wrappers always belong here.
+    // The shared Battle.net profile, as the GUI applies it. This is always
+    // the client, so the wrappers belong here.
     let shared = AppDirs::discover()
         .ok()
         .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
@@ -193,9 +190,7 @@ pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<St
         }
     }
 
-    // Battle.net exits non-zero on perfectly ordinary paths (a window
-    // closed mid-update, a hand-off to the game), so a code is worth
-    // printing but not worth failing the command over.
+    // Battle.net exits non-zero on ordinary paths: printed, not fatal.
     match status.code() {
         Some(0) | None => println!("exited"),
         Some(code) => println!("exited with code {code}"),
@@ -211,9 +206,8 @@ pub(crate) fn product_db(ctx: Ctx, path: Option<PathBuf>, products: Vec<String>,
     let info = BuildInfo::load(install.join(".build.info"))
         .with_context(|| format!("reading {}/.build.info", install.display()))?;
 
-    // Every product the install actually has a row for, unless told
-    // otherwise, a `.product.db` naming a product that is not there is
-    // exactly the inconsistency Agent refuses.
+    // Every product with a row, unless told otherwise: Agent refuses a
+    // record for a product that is not there.
     let codes: Vec<ProductCode> = match products.is_empty() {
         false => products
             .iter()
@@ -230,9 +224,7 @@ pub(crate) fn product_db(ctx: Ctx, path: Option<PathBuf>, products: Vec<String>,
             .with_countries(&account_country, &geo_country);
         if agent_tags {
             record = record.with_agent_tags();
-            // Keep `.build.info` saying the same thing; the two
-            // disagreeing is exactly the kind of inconsistency Agent
-            // refuses an install for.
+            // `.build.info` must agree, or Agent refuses the install.
             info.set(code, "Tags", record.tags.clone())?;
         }
         println!(
@@ -270,13 +262,8 @@ fn print_tweaks(tweaks: &[lightforge_core::battlenet::Tweak]) {
 /// The build a Battle.net verb should use: `--proton` if given, else the pin
 /// from `config.toml`, else the newest installed.
 ///
-/// With a product named, that product's own pin comes first, the client is
-/// being told to start that game, and a pin set for it means it. Without one,
-/// the verb is about the client itself and takes Battle.net's pin.
-///
-/// Leaks a `String` so the borrowed `&str` outlives the call. That is fine for
-/// a CLI process that is about to exec a game and exit, and beats threading a
-/// lifetime through every call site for one value read once.
+/// A named product's own pin first, else Battle.net's. Leaks a `String`: the
+/// process is about to exit.
 fn battle_net_pin<'a>(explicit: Option<&'a str>, code: Option<&ProductCode>) -> Option<&'a str> {
     if explicit.is_some() {
         return explicit;
@@ -294,8 +281,7 @@ fn battle_net_pin<'a>(explicit: Option<&'a str>, code: Option<&ProductCode>) -> 
 /// Say so when the build about to run is older than the one that built the
 /// prefix every product shares.
 ///
-/// A line on stderr rather than a refusal: the CLI is where an older build is
-/// deliberately tried, and `--proton` is how you try it. The GUI asks first.
+/// A line on stderr, not a refusal: `--proton` is how one tries an older build.
 fn warn_on_downgrade(layout: &Layout, build: &lightforge_core::proton::ProtonRelease) {
     use lightforge_core::proton;
 

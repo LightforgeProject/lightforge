@@ -11,7 +11,7 @@
 //!    so it runs before a 400 MB download the user could not have used.
 //! 2. [`check_wine`] starts Proton's own 32-bit wine. Catches the case where
 //!    i386 is enabled but a library is missing; the loader names that
-//!    library, so its stderr is kept rather than summarised.
+//!    library, so its stderr is kept, not summarised.
 //!
 //! Both are only a floor: the 32-bit graphics stack is dlopened and invisible
 //! to them. On Fedora 44 `glibc.i686` + `freetype.i686` passes both and the
@@ -132,7 +132,7 @@ pub fn check_wine(dist: &Path) -> Result<(), RuntimeError> {
 }
 
 /// Whether a 32-bit runtime is present, for a debug bundle or a settings
-/// panel that wants to state a fact rather than fail.
+/// panel that wants to state a fact, not fail.
 pub fn has_32bit_loader() -> bool {
     check_loader().is_ok()
 }
@@ -276,9 +276,7 @@ pub fn remedy() -> Remedy {
     remedy_for(&OsRelease::read())
 }
 
-/// The table, kept deliberately short.
-///
-/// Only the common families; the rest get [`ADVICE`] and no command.
+/// The table: only the common families; the rest get [`ADVICE`] and no command.
 pub fn remedy_for(os: &OsRelease) -> Remedy {
     let distro = match os.pretty_name.is_empty() {
         false => os.pretty_name.clone(),
@@ -478,7 +476,7 @@ mod remedy_tests {
     }
 
     /// The case that started all this: Ubuntu is `ID=ubuntu ID_LIKE=debian`,
-    /// and must get Debian's answer rather than falling through to nothing.
+    /// and must get Debian's answer instead of falling through to nothing.
     #[test]
     fn derivatives_inherit_their_family() {
         let ubuntu = remedy_for(&os("ubuntu", "debian"));
@@ -552,7 +550,7 @@ pub fn required_runtime(proton_root: &Path) -> Option<u32> {
 }
 
 /// The runtime's entry point, if Steam has `appid` installed in any of
-/// `libraries`. Found through the app manifest's `installdir` rather than a
+/// `libraries`. Found through the app manifest's `installdir`, not a
 /// folder name, which differs between runtimes.
 pub fn find_steam_runtime(libraries: &[PathBuf], appid: u32) -> Option<PathBuf> {
     libraries.iter().find_map(|library| {

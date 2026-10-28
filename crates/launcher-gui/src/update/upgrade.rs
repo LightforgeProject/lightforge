@@ -11,9 +11,7 @@ impl Lightforge {
         Ok(match message {
             Message::UpdateChecked(found) => {
                 let Some(available) = found else { return Ok(Task::none()) };
-                // Once per release. Someone who has read "beta.3 is out" and
-                // decided to stay on beta.2 should not be told again on every
-                // start until they give in.
+                // Once per release.
                 if self.config.update_seen.as_deref() == Some(available.latest.as_str()) {
                     return Ok(Task::none());
                 }
@@ -108,9 +106,7 @@ impl Lightforge {
                 if !self.can_restart() {
                     return Ok(Task::none());
                 }
-                // Steam's Game Mode started this process and watches it: a
-                // copy started from here would not be its game. Closing is
-                // all that can be done; Steam starts the new one.
+                // Under Game Mode, only close: Steam starts the new one.
                 if fit::under_gamescope() {
                     return Ok(iced::exit());
                 }

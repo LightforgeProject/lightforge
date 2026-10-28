@@ -1,7 +1,6 @@
 //! Headless consumer of `lightforge-core`.
 //!
-//! Exists to exercise and inspect core without the GUI in the loop, useful
-//! when debugging a prefix or a `.build.info` on a machine with no display.
+//! For inspecting core without the GUI, on a machine with no display.
 
 use std::path::PathBuf;
 
@@ -65,10 +64,7 @@ async fn run() -> Result<()> {
     restore_sigpipe();
     let cli = Cli::parse();
 
-    // A config that exists but cannot be read stops every command, the way
-    // the GUI stops. Falling back to the defaults would point the command at
-    // `~/Games/Blizzard` whatever the file said, and the helpers further down
-    // that read the config again rely on this having parsed.
+    // An unreadable config stops every command, as in the GUI.
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let config = Config::load_or_default(&dirs.config_file())
         .with_context(|| format!("reading {}", dirs.config_file().display()))?;

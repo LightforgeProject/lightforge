@@ -22,7 +22,7 @@ pub use inputs::*;
 // ---------------------------------------------------------------- palette --
 
 /// Page background, near black, slightly blue, so art laid behind it reads as
-/// part of the page rather than a picture on a grey wall.
+/// part of the page, not a picture on a grey wall.
 pub const BG: Color = rgb(0x0B, 0x0D, 0x10);
 
 /// A panel sitting on the page.
@@ -130,7 +130,7 @@ pub const LOGO_INSET: f32 = XL;
 /// largest that fits every mark in the box; StarCraft's sets it.
 const LOGO_AREA: f32 = 56_000.0;
 
-/// The least of a logo [`logo_size`] will believe is the mark rather than its
+/// The least of a logo [`logo_size`] will believe is the mark, not its
 /// glow.
 ///
 /// A floor on the divisor; the lowest real one is Retail's 0.59.
@@ -219,7 +219,7 @@ pub const LIFT: Shadow = Shadow {
 /// Face for versions, paths and ids.
 pub const MONO: Font = Font::MONOSPACE;
 
-/// The emphasis weight, for the words that name a place rather than describe
+/// The emphasis weight, for the words that name a place, not describe
 /// one: the page tabs and the band's label.
 ///
 pub const BOLD: Font = Font {
@@ -229,8 +229,8 @@ pub const BOLD: Font = Font {
     style: iced::font::Style::Normal,
 };
 
-// The scales are invariants, so they are checked when the crate compiles
-// rather than when a test happens to run.
+// The scales are invariants, so they are checked when the crate compiles,
+// not when a test happens to run.
 const _: () = assert!(XS < SM && SM < MD && MD < LG && LG < XL);
 
 const _: () = assert!(CAPTION < LABEL && LABEL < BODY && BODY < HEADING);
@@ -259,7 +259,7 @@ pub fn base() -> Theme {
     )
 }
 
-/// `a` laid over `b` at `amount`, resolved now rather than by the compositor.
+/// `a` laid over `b` at `amount`, resolved now, not by the compositor.
 ///
 /// So both backends agree: a translucent gradient stop blends against clear.
 const fn mix(a: Color, b: Color, amount: f32) -> Color {

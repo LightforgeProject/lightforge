@@ -4,7 +4,7 @@
 //!
 //! 1. fetch `Battle.net-Setup.exe` from Blizzard's downloader,
 //! 2. run it under Proton with an explicit install path, waiting for the
-//!    install to appear rather than for the process to exit,
+//!    install to appear, not for the process to exit,
 //! 3. apply the Wine registry tweaks Battle.net benefits from,
 //! 4. inject Lightforge's defaults into `Battle.net.config`.
 //!

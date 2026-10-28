@@ -5,9 +5,7 @@ use super::*;
 // Named, not globbed: std's own `column!` would otherwise win the glob.
 use iced::widget::column;
 
-/// How big the Discord and X marks are drawn on the last slide. Larger than the
-/// logo menu's glyph: there they label a row of text, here they are the thing
-/// being offered.
+/// The Discord and X marks on the last slide, larger than in the logo menu.
 const MARK: f32 = 32.0;
 
 /// The whole wizard: one card, centred, with the step's own body in it.
@@ -70,9 +68,7 @@ fn dots(step: Step) -> Element<'static, Message> {
 
 /// Back, and the step's own button.
 ///
-/// No way out halfway: every step can be passed without doing anything, so
-/// the button that skipped them all only ever caught a stray press, and on a
-/// controller one press of A was enough to lose the setup.
+/// No skip-all: every step can be passed, and A once lost the setup.
 fn footer<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     let mut actions = row![].spacing(theme::SM).align_y(Alignment::Center);
 
@@ -104,7 +100,7 @@ fn footer<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
             },
             !wizard.scanning,
         ),
-        // Deliberately pressable while nothing has been provisioned: someone
+        // Pressable while nothing has been provisioned: someone
         // who cannot install Battle.net today should still reach the end.
         Step::Install => ("Continue", !app.setup_running),
         Step::Games => ("Continue", true),
@@ -126,9 +122,7 @@ fn footer<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
 pub(super) fn note(note: &Note) -> Element<'_, Message> {
     match note.level {
         Level::Done => muted(note.text.clone(), theme::CAPTION).into(),
-        // Loud on purpose. A game that was not added is the one thing on
-        // this slide the user has to act on, and it used to look exactly
-        // like the receipts around it.
+        // A game not added is what the user must act on.
         Level::Warning => text(note.text.clone()).size(theme::LABEL).color(theme::PAUSE).into(),
         Level::Failed => text(note.text.clone()).size(theme::BODY).color(theme::ERROR).into(),
     }

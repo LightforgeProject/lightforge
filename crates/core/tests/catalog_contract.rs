@@ -1,22 +1,16 @@
 //! The addon catalog's wire contract, pinned against the proxy that serves it.
 //!
-//! The fixtures under `fixtures/catalog/` are **generated** by the addon
-//! proxy's own test suite (`lightforge-assets/addon-proxy`, `go test ./...`),
-//! from its real handlers. They are copied in here rather than written by
-//! hand, which is the whole point: one artifact, produced by the server,
-//! parsed by the client, so the two cannot drift apart unnoticed.
+//! The fixtures under `fixtures/catalog/` are **generated** by the proxy's own
+//! tests (`lightforge-assets/addon-proxy`, `go test ./...`) and copied here.
 //!
-//! They had drifted. All three of these shipped at once, and none was caught,
-//! because a rejected API key meant the proxy never produced a successful
-//! response for anyone to parse:
+//! Three drifts once shipped unnoticed, while a rejected API key hid them:
 //!
 //! - `file_id` was emitted as a JSON number against [`Resolved`]'s
 //!   `Option<String>`;
 //! - `/search` answered with a bare array against [`SearchReply`]'s envelope;
 //! - project ids were numbers against [`Project`]'s `String`.
 //!
-//! Each one fails the *entire* response rather than a single entry, so any one
-//! of them would have emptied a user's addon list rather than degrading it.
+//! Each fails the whole response, emptying the addon list.
 //!
 //! Regenerate after changing the proxy's output:
 //!
@@ -47,8 +41,7 @@ fn request(id: &str) -> Request {
     }
 }
 
-/// The fixture carries one of each outcome on purpose, so the happy path is
-/// not the only thing exercised.
+/// The fixture carries one of each outcome, not only the happy path.
 #[tokio::test]
 async fn resolve_parses_every_outcome() {
     let http = Http::new().expect("client");
@@ -83,14 +76,9 @@ async fn resolve_parses_every_outcome() {
     assert!(ok.downloadable().is_some());
     assert!(ok.unavailable_reason().is_none());
     assert_eq!(ok.folders, ["BigWigs", "BigWigs_Core"]);
-    // Which build this is, in the same vocabulary the request's channel uses.
-    // "release" on CurseForge is "stable" here, and the proxy does that
-    // translation so the client has one set of names.
+    // The proxy translates CurseForge's "release" to "stable".
     assert_eq!(ok.channel, Some(lightforge_core::addons::Channel::Stable));
-    // The two links the row menu's "Support the author" and "Open project
-    // page" open. They are recorded in the ledger at install time, so losing
-    // them in the proxy's flattening would show up as entries that quietly
-    // stop appearing rather than as an error.
+    // The row menu's links; lost, the entries would vanish silently.
     assert_eq!(
         ok.website_url.as_deref(),
         Some("https://curseforge.example/BigWigs"),
@@ -131,10 +119,8 @@ async fn search_parses_the_results_envelope() {
         .await
         .expect("search must read `{\"results\": [...]}`, not a bare array");
 
-    // Two: the project the proxy pinned from an exact slug, then the text
-    // hit. The pin is the contract, a search for an addon by name must
-    // contain that addon, which CurseForge's own text search does not
-    // guarantee.
+    // The project pinned from an exact slug, then the text hit: CurseForge's
+    // own search does not guarantee the named addon.
     assert_eq!(hits.len(), 2);
     assert_eq!(hits[0].id, "3358", "a project id is a string");
     assert_eq!(hits[0].name, "BigWigs", "the exact slug match comes first");
@@ -162,17 +148,10 @@ async fn project_parses() {
     assert_eq!(project.source_url.as_deref(), Some("https://github.example/BigWigs"));
 }
 
-/// Why the server has to quote its ids, stated as a test rather than a comment.
+/// Why the server has to quote its ids, stated as a test, not a comment.
 ///
-/// This is the exact payload the proxy used to emit. serde rejects an integer
-/// for `Option<String>`, and because the field sits inside a list element the
-/// failure takes the whole batch down, forty working addons reported as
-/// nothing at all, not thirty-nine plus one bad entry.
-///
-/// Deliberately *not* fixed by making the field lenient: the strictness is
-/// what makes the generated fixtures a real check. A tolerant deserializer
-/// would absorb server drift silently, which is how this went unnoticed for
-/// two weeks in the first place.
+/// The payload the proxy once emitted: an integer for `Option<String>` fails
+/// the whole batch. Not made lenient: strictness keeps the fixtures a check.
 #[test]
 fn a_numeric_file_id_is_rejected_rather_than_coerced() {
     let numeric = r#"{"id":"3358","status":"ok","file_id":800800}"#;

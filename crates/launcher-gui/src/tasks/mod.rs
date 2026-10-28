@@ -115,7 +115,7 @@ impl Runs {
 
 /// The build a launch would use, and how it sits against the prefix.
 ///
-/// Read before a launch rather than during it: the prefix is shared, Proton
+/// Read before a launch instead of during it: the prefix is shared, Proton
 /// only migrates it forward, and an older build opening a prefix a newer one
 /// rewrote is the one way this arrangement breaks. The caller decides what to
 /// do about it. Nothing here refuses a launch.
@@ -199,7 +199,7 @@ fn client_runner(
 
 /// The shared profile Battle.net and its games launch under.
 ///
-/// Not per-product on purpose; see `Config::battle_net_tweaks`.
+/// Not per product; see `Config::battle_net_tweaks`.
 fn config_tweaks() -> Tweaks {
     AppDirs::discover()
         .ok()

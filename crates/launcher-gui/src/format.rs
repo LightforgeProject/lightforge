@@ -59,7 +59,7 @@ pub(crate) fn optional_label(tag: &str) -> String {
     }
 }
 
-/// `~/Games/Blizzard` rather than `/home/ann/Games/Blizzard`. Only the home
+/// `~/Games/Blizzard`, not `/home/ann/Games/Blizzard`. Only the home
 /// prefix: `/run/media/ann/ssd` names the drive.
 pub(crate) fn home_relative(path: &Path) -> String {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {

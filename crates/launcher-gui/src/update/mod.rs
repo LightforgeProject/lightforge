@@ -92,9 +92,7 @@ mod tests {
             .collect()
     }
 
-    /// The router can only find a handler that exists: a message with no arm
-    /// in any area would fall through to `Task::none()` in a release build.
-    /// This is the compiler's old exhaustiveness check, kept as a test.
+    /// An unhandled message would fall through to `Task::none()` in a release build.
     #[test]
     fn every_message_is_handled_by_exactly_one_area() {
         let names = variants();

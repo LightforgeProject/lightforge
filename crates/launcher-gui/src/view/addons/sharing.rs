@@ -6,9 +6,7 @@ use iced::widget::column;
 impl Lightforge {
     /// Bringing a collection over from WoWUp.
     ///
-    /// Its own tab rather than a field above the list: it is something you do
-    /// once, when you arrive, and it had the most prominent box on a page
-    /// whose job is the addons you already have.
+    /// Its own tab: a one-time thing.
     pub(crate) fn addons_import(&self) -> Element<'_, Message> {
         let box_ = container(
             column![
@@ -35,10 +33,7 @@ impl Lightforge {
                 ]
                 .spacing(theme::SM)
                 .align_y(Alignment::Center),
-                // A WoWUp token names a file for every addon. Taking them is
-                // reproducing someone's setup exactly, which is a pin and is
-                // recorded as one; leaving them is taking their list of
-                // addons and tracking each from there.
+                // Taking the token's files pins them; leaving them tracks each addon.
                 clickable(
                     "import pinned",
                     tick(self.import_pinned)
@@ -63,9 +58,7 @@ impl Lightforge {
 
     /// Handing this collection to somewhere else.
     ///
-    /// Beside Import rather than inside it: the two are opposite directions of
-    /// the same idea, and a tab that does both is a tab you have to read before
-    /// you can use.
+    /// Beside Import, as its opposite.
     pub(crate) fn addons_export(&self) -> Element<'_, Message> {
         let managed = self.addons.managed;
         let box_ = container(

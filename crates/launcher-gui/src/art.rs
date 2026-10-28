@@ -505,7 +505,7 @@ pub fn load_shot(path: &Path) -> Result<Shot, String> {
 
     let (bytes, scaled) = best.expect("SHOT_STEPS is not empty");
     let size = (scaled.width(), scaled.height());
-    // From the pixels already in hand rather than the JPEG: iced has no
+    // From the pixels already in hand, not the JPEG: iced has no
     // decoder of its own, and these are the same pixels the encoder was given.
     let rgba = image::DynamicImage::ImageRgb8(scaled).into_rgba8();
     let preview = Handle::from_rgba(rgba.width(), rgba.height(), rgba.into_raw());

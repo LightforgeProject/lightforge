@@ -7,9 +7,7 @@ impl Lightforge {
     /// One addon's project page: what it is, and what changed in the build
     /// you would get.
     ///
-    /// The two halves are tabs rather than one long scroll because they
-    /// answer different questions and a description can be thousands of words,
-    /// the changelog would never be found under it.
+    /// Tabs: under a long description the changelog would be lost.
     pub(crate) fn detail_card<'a>(&'a self, detail: &'a AddonDetail) -> Element<'a, Message> {
         let title = detail
             .loaded
@@ -31,7 +29,7 @@ impl Lightforge {
 
         let mut body = column![head].spacing(theme::SM).width(Length::Fixed(620.0));
 
-        // The author line sits under the name rather than beside it: addons
+        // The author line sits under the name, not beside it: addons
         // with four maintainers are common and the row would wrap badly.
         if let Some(loaded) = &detail.loaded {
             if !loaded.project.authors.is_empty() {
@@ -61,18 +59,14 @@ impl Lightforge {
             }
         }
 
-        // Reading the changelog and then having to find the row again to act
-        // on it is the whole reason this card is worth having, so the action
-        // is here. Which action depends on whether it is already installed.
+        // The action is here, so nobody has to find the row again.
         let installed = self.addon_is_installed(&detail.provider, &detail.id);
 
         let mut footer = row![Space::new().width(Length::Fill)].spacing(theme::SM);
         if let Some(url) = detail.loaded.as_ref().and_then(|d| d.project.website_url.clone()) {
             footer = footer.push(secondary("Open the page", Message::OpenUrl(url)).enabled(true));
         }
-        // The same offer the installed row's menu makes, in the panel someone
-        // reads *before* installing, where a project's own repository is
-        // often the thing they came to find.
+        // As in the installed row's menu.
         if let Some(url) = detail
             .loaded
             .as_ref()
@@ -134,9 +128,7 @@ impl Lightforge {
 
     /// The two tab buttons, each naming what it holds.
     ///
-    /// A tab with nothing behind it is shown disabled rather than hidden:
-    /// hiding it would move the other one, and "this addon has no changelog"
-    /// is itself an answer worth being able to see.
+    /// An empty tab is disabled, not hidden: that is an answer too.
     pub(crate) fn detail_tabs<'a>(
         &'a self,
         detail: &'a AddonDetail,

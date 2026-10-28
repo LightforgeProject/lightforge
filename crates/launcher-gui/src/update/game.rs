@@ -38,9 +38,7 @@ impl Lightforge {
             }
 
             Message::VersionsListed(result) => {
-                // Dropped on the floor if the picker was closed while the
-                // request was out: an answer to a question nobody is asking
-                // any more.
+                // Dropped if the picker was closed meanwhile.
                 if let Some(picker) = self.version_picker.as_mut() {
                     match *result {
                         Ok(builds) => picker.builds = Some(builds),
@@ -143,9 +141,7 @@ impl Lightforge {
                     textures_bytes: None,
                     textures: TexturesStep::Idle,
                 });
-                // The manifest says whether this build has textures behind
-                // the option; retail's does not, and a switch for nothing is
-                // not a choice.
+                // Only if the manifest offers it (retail's does not).
                 let code = self.selected.code.clone();
                 Task::batch([
                     self.list_backups(),
@@ -174,9 +170,7 @@ impl Lightforge {
 
             Message::Tweak(scope, which, on) => {
                 self.edit_tweaks(scope, |tweaks| match which {
-                    // Stored as an explicit refusal rather than a bare `false`:
-                    // the default is on wherever the tool exists, so "off" has
-                    // to be recorded to survive a restart.
+                    // `Some`: the default is on, so off must be recorded.
                     Tweak::GamePerformance => tweaks.game_performance = Some(on),
                     Tweak::MangoHud => tweaks.mangohud = on,
                     Tweak::Wayland => tweaks.wayland = on,
@@ -194,13 +188,11 @@ impl Lightforge {
                 if !edited {
                     return Ok(Task::none());
                 }
-                // In effect as it is typed, the lines that parse. A bad line
-                // is shown under the editor and left out of the launch rather
-                // than refusing the rest, so a half-typed name costs nothing.
+                // The lines that parse apply as typed; bad ones show under it.
                 let (env, _) = lightforge_core::tweaks::parse_env(&editor.text());
                 self.change_tweaks(scope, |tweaks| tweaks.env = env);
                 // On disk once typing pauses: a save is a full rewrite with
-                // two fsyncs, on this thread, and used to run per keystroke.
+                // two fsyncs, on this thread.
                 self.env_edits += 1;
                 self.env_unsaved = true;
                 let edit = self.env_edits;
@@ -240,8 +232,8 @@ impl Lightforge {
                 let code = self.selected.code.clone();
                 self.set_optional(&code, &name, on);
                 if on {
-                    // The download is the point of switching it on. Out of the
-                    // popup, onto the page where its bar is.
+                    // Switching it on starts a download: out of the popup,
+                    // onto the page with its bar.
                     self.game_settings = None;
                     return Ok(self.enqueue_for(code));
                 }

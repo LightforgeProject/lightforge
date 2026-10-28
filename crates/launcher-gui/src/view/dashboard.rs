@@ -6,7 +6,7 @@ use iced::widget::column;
 impl Lightforge {
     /// The action panel for a game Battle.net installs and starts.
     ///
-    /// Deliberately bare: no Install, no Update, no Play, not even greyed out.
+    /// Bare: no Install, no Update, no Play, not even greyed out.
     /// Offering those disabled would say Lightforge could manage this game and
     /// merely will not.
     pub(crate) fn handoff_panel(&self) -> Element<'_, Message> {
@@ -439,7 +439,7 @@ impl Lightforge {
         .style(theme::filled_left(color))
         .padding([theme::MD, theme::LG])
         // 190 + the tab's 50 is 240: the width of the Battle.net button
-        // underneath, so the two stack flush rather than nearly flush.
+        // underneath, so the two stack flush, not nearly flush.
         .width(Length::Fixed(190.0))
         .height(Length::Fixed(theme::CONTROL_HEIGHT));
         let battle_net = button(

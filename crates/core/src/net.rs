@@ -114,7 +114,7 @@ impl Http {
     }
 
     /// POST a body with extra headers: a bug report to our Sentry server
-    /// (`X-Sentry-Auth`), through this client rather than a second HTTP stack.
+    /// (`X-Sentry-Auth`), through this client, not a second HTTP stack.
     pub async fn post(
         &self,
         url: &str,

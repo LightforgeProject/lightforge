@@ -278,7 +278,7 @@ impl Lightforge {
         Ok(())
     }
 
-    /// Persist the config, surfacing a write failure rather than swallowing it.
+    /// Persist the config, surfacing a write failure instead of swallowing it.
     pub(crate) fn save_config(&mut self) {
         // Never over a file that did not load: it is the user's to fix.
         if self.config_error.is_some() {

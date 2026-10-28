@@ -141,7 +141,7 @@ impl Local {
         }
     }
 
-    /// Whether this is a finished install rather than a partial one.
+    /// Whether this is a finished install, not a partial one.
     ///
     /// A build key, the binary and a non-empty store: any one alone is what
     /// an interrupted run leaves.
@@ -341,7 +341,7 @@ mod queue_tests {
     #[test]
     fn a_queued_product_says_so_rather_than_looking_ready() {
         // Not installed and waiting its turn: neither Install nor Downloading
-        // is honest, which is why Queued exists.
+        // is honest, hence Queued.
         assert_eq!(
             decide(&Local::default(), None, Some(Transfer::Queued)),
             ActionState::Queued

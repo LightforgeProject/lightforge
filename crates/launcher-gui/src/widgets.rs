@@ -16,7 +16,7 @@ pub(crate) fn muted<'a>(content: String, size: f32) -> iced::widget::Text<'a> {
     text(content).size(size).color(theme::MUTED)
 }
 
-/// Centre a line of text on its *letters* rather than on its line box.
+/// Centre a line of text on its *letters*, not on its line box.
 ///
 /// Centring the line box leaves the empty descent below, so a word without
 /// descenders (`GAMES`) sits high. The line height collapses to the glyphs,
@@ -48,7 +48,7 @@ pub(crate) const HINTS_CHORD: &str = "h";
 /// than an estimate of how wide a glyph renders.
 pub(crate) const BAND_BUTTON: f32 = 48.0;
 
-/// How far a held tile has to travel before it is a drag rather than a click
+/// How far a held tile has to travel before it is a drag, not a click
 /// with a shaky hand.
 pub(crate) const DRAG_SLOP: f32 = 6.0;
 
@@ -282,7 +282,7 @@ pub(crate) fn rich_paragraph(block: &richtext::Block) -> Element<'_, Message> {
     }
 
     // A link the proxy could not seat inside the text keeps its destination
-    // as a reference after it, rather than being lost.
+    // as a reference after it instead of being lost.
     for link in trailing {
         spans.push(span(" "));
         spans.push(
@@ -335,7 +335,7 @@ pub(crate) fn empty<'a>(headline: &str, hint: &str) -> Element<'a, Message> {
     .into()
 }
 
-/// A button that is disabled rather than absent when it cannot be used,
+/// A button that is disabled, not absent when it cannot be used,
 /// buttons appearing and disappearing makes a UI feel unstable.
 pub(crate) struct Action<'a> {
     pub(crate) inner: button::Button<'a, Message>,

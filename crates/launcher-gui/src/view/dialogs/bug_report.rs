@@ -6,10 +6,8 @@ use iced::widget::column;
 impl Lightforge {
     /// What a bug report in this category carries beyond the base bundle.
     ///
-    /// Only what answers that category's first question: the addon list for
-    /// an addon problem, the queue and the drives for a download problem, the
-    /// settings for a settings problem. Read when the category is picked, so
-    /// the card shows it before anything is sent, and scrubbed like the rest.
+    /// The addon list, the queue and drives, or the settings; read when the
+    /// category is picked, shown, and scrubbed.
     pub(crate) fn report_attachment(&self, category: report::Category) -> String {
         use std::fmt::Write as _;
         use report::Category;
@@ -120,22 +118,15 @@ impl Lightforge {
                     }
                 }
             }
-            // The base bundle is already the game's own: build, Proton, DXVK,
-            // the newest client log. Battle.net's log names the account, so
-            // it stays on the machine; the launcher's own state is in the
-            // recent activity.
+            // The base bundle covers it. Battle.net's log names the account,
+            // so it stays on the machine.
             Category::Game | Category::BattleNet | Category::Launcher | Category::General => {}
         }
         lightforge_core::debug::scrub(&out)
     }
 
-    /// The bug report and the feedback dialog, which are one card.
-    // (`report_tags` sits below the impl, since it needs nothing from `self`.)
-    ///
-    /// They differ in three things: the prompt, whether the diagnostic bundle
-    /// is shown, and whether it is sent. Everything else, the stages, the
-    /// outcome line, the two buttons, is the same, and splitting them in two
-    /// would mean maintaining that twice.
+    /// The bug report and the feedback dialog, one card: they differ in the
+    /// prompt and in whether the bundle is shown and sent.
     pub(crate) fn report_card<'a>(&'a self, dialog: &'a ReportDialog) -> Element<'a, Message> {
         let (title, prompt) = match dialog.kind {
             ReportKind::Bug => ("Report a Bug", "What were you doing when this occurred?"),
@@ -157,11 +148,8 @@ impl Lightforge {
                 Length::Fill,
                 theme::BODY,
             ),
-            // Five lines: enough that a paragraph looks invited rather than
-            // tolerated, and the card still fits a laptop screen.
-            // Pressing a field puts the typing in it: Steam's own keyboard
-            // (Steam and X on a Deck) then writes there. Escape leaves the
-            // field, and a second one closes the card.
+            // Five lines, and still fits a laptop. Escape leaves the field,
+            // a second closes the card.
             clickable(
                 "report note",
                 text_editor(&dialog.note)
@@ -172,9 +160,7 @@ impl Lightforge {
                     .size(theme::BODY)
                     .padding(theme::SM),
             ),
-            // Required on a bug, and said so in the box itself: a bug nobody
-            // can be asked about usually cannot be reproduced. Feedback can
-            // stay anonymous, it rarely needs a reply.
+            // Required on a bug, said in the box; feedback can be anonymous.
             clickable(
                 "report contact",
                 text_input(
@@ -195,9 +181,7 @@ impl Lightforge {
         .spacing(theme::MD);
 
         body = match dialog.kind {
-            // Shown in full, and shown before it is sent: the only way a
-            // promise about what leaves the machine is checkable is if the
-            // person can read the thing that leaves it.
+            // Shown in full before sending, so the promise can be checked.
             ReportKind::Bug => body
                 .push(muted(
                     "This exact diagnostic data will be sent to my private server securely."
@@ -249,9 +233,7 @@ impl Lightforge {
 
     /// The screenshot line of the bug report card.
     ///
-    /// A button rather than a drop target: iced has no file dialog of its own,
-    /// so this opens the desktop's through the XDG portal, which is also the
-    /// only one that works when the launcher is sandboxed.
+    /// A button for the desktop's file dialog, through the XDG portal.
     pub(crate) fn shot_row<'a>(&self, dialog: &'a ReportDialog) -> Element<'a, Message> {
         let choose = |label: &'static str| {
             tappable(
@@ -323,9 +305,7 @@ fn report_actions(dialog: &ReportDialog, writing: bool) -> Element<'_, Message> 
         ],
         _ => row![
             Space::new().width(Length::Fill),
-            // Only once there is something to lose. The screenshot is not
-            // in it, the clipboard carries text, which the Discord
-            // route solves on its own, since an image is pasted there.
+            // Only once there is something to lose; text only.
             match dialog.stage {
                 ReportStage::Failed => tappable(
                     "copy report",
@@ -337,9 +317,7 @@ fn report_actions(dialog: &ReportDialog, writing: bool) -> Element<'_, Message> 
             tappable("cancel", Some(Message::ReportCancel), choice("Cancel").style(theme::outlined)),
             tappable(
                 "send",
-                // Nothing is sent without a description, a category, and
-                // for a bug a way back: each one missing is an issue
-                // nobody can act on.
+                // A description, a category, and for a bug a contact.
                 (writing && dialog.stage != ReportStage::TooSoon && dialog.can_send())
                     .then_some(Message::ReportSend),
                 choice(match dialog.stage {

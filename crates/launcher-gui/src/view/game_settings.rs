@@ -6,10 +6,7 @@ use iced::widget::{column, text_editor};
 impl Lightforge {
     /// The Game Settings popup.
     ///
-    /// Every row has the shape Settings uses, what it is and what it does on
-    /// the left, the control at the right edge, so the two read as one
-    /// application. The sections scroll under a fixed title and Close, the way
-    /// the patch notes do.
+    /// Rows shaped as in Settings; sections scroll under a fixed title.
     pub(crate) fn game_settings_card<'a>(&'a self, settings: &'a GameSettings) -> Element<'a, Message> {
         // The figure is [`WINDOW_MIN`]'s height less the title, the footer and
         // the padding.
@@ -57,7 +54,7 @@ impl Lightforge {
     }
 
     /// A switch for a tool that may not be installed: dimmed, and said so,
-    /// when it is missing, rather than gone, so nobody wonders where it went.
+    /// when it is missing, not gone, so nobody wonders where it went.
     pub(crate) fn tool_switch<'a>(
         &self,
         key: &'static str,

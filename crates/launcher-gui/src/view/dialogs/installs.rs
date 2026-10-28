@@ -130,7 +130,7 @@ impl Lightforge {
 
     /// The card asking whether to open the shared prefix with an older build.
     ///
-    /// Two buttons and no third option on purpose. "Launch anyway" is the one
+    /// Two buttons, no third option. "Launch anyway" is the one
     /// the user came for, so it is not hidden behind an explanation; the
     /// explanation is there because the cost falls on games they are not
     /// looking at.
@@ -201,12 +201,9 @@ impl Lightforge {
     /// Two shapes, because an update and a first install are not the same
     /// question. An update's files are never removed: the game on disk plays
     /// right now, and what has already come down is a head start on the next
-    /// attempt rather than waste.
+    /// attempt, not waste.
     ///
-    /// One line of consequence under the title and two buttons, deliberately.
-    /// The earlier version offered a third way out, cancel but keep the files,
-    /// and stated the figure it would free; both made the reader do work to
-    /// answer a question they had already decided.
+    /// One line of consequence under the title, and two buttons.
     pub(crate) fn cancel_card<'a>(&'a self, dialog: &'a CancelDialog) -> Element<'a, Message> {
         let updating = dialog.installed.is_some();
         let (title, hint, keep, give_up) = match &dialog.installed {
@@ -413,7 +410,7 @@ fn install_target_row(index: usize, target: &InstallTarget, chosen: bool) -> Ele
     ]
     .align_y(Alignment::Center)]
     .spacing(2);
-    // `~/Games/...` rather than `/home/<name>/Games/...`: the home
+    // `~/Games/...`, not `/home/<name>/Games/...`: the home
     // prefix is the longest and least informative part of the path,
     // and this row is where the width is tightest.
     left = left.push(muted(home_relative(&target.install), theme::CAPTION));
