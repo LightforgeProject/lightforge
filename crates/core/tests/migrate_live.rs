@@ -2,6 +2,7 @@
 //!
 //! **Ignored by default**: it copies a whole game. The source is only read
 //! (and locked against writers while it is); nothing is released from it.
+//! Symlinks in its game folder, a linked `WTF` say, must arrive as links.
 //!
 //! ```text
 //! LIGHTFORGE_MOVE_FROM=/mnt/games/Battle.net/games \
@@ -70,4 +71,30 @@ async fn a_game_copied_to_another_filesystem_reads_back_whole() {
         BuildInfo::load(layout.wow_install_in(&from).join(".build.info")).unwrap().row(&code).is_some(),
         "the source keeps the game until it is released"
     );
+
+    let flavor = layout.flavor(&code);
+    let links = symlinks(&layout.wow_install_in(&from).join(&*flavor));
+    eprintln!("{} symlinks in the flavour folder", links.len());
+    for (relative, target) in links {
+        let copied = dest.join(&*flavor).join(&relative);
+        assert_eq!(std::fs::read_link(&copied).ok(), Some(target), "{} is still the same link", relative.display());
+    }
+}
+
+/// Every symlink under `dir`, relative to it, with its target text.
+fn symlinks(dir: &Path) -> Vec<(PathBuf, PathBuf)> {
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(at) = pending.pop() {
+        for entry in std::fs::read_dir(&at).expect("a readable game folder").flatten() {
+            let kind = entry.file_type().expect("a readable entry");
+            if kind.is_symlink() {
+                let relative = entry.path().strip_prefix(dir).expect("found under dir").to_path_buf();
+                found.push((relative, std::fs::read_link(entry.path()).expect("a readable link")));
+            } else if kind.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    found
 }

@@ -37,6 +37,9 @@ pub(crate) fn write_atomic_with_mode(path: &Path, bytes: &[u8], mode: u32) -> io
 
 /// Copy every file under `from` into the same place under `to`, modes
 /// included. The error names the path it failed on.
+///
+/// Symlinks stay links with the same target text: a `WTF` or `AddOns` linked
+/// to a shared folder must not become a second copy of it.
 pub(crate) fn copy_tree(from: &Path, to: &Path) -> Result<(), (PathBuf, io::Error)> {
     fn at(path: &Path) -> impl FnOnce(io::Error) -> (PathBuf, io::Error) + '_ {
         move |e| (path.to_path_buf(), e)
@@ -48,6 +51,19 @@ pub(crate) fn copy_tree(from: &Path, to: &Path) -> Result<(), (PathBuf, io::Erro
             kind if kind.is_dir() => copy_tree(&source, &target)?,
             kind if kind.is_file() => {
                 std::fs::copy(&source, &target).map_err(at(&target))?;
+            }
+            kind if kind.is_symlink() => {
+                let link = std::fs::read_link(&source).map_err(at(&source))?;
+                std::os::unix::fs::symlink(&link, &target).map_err(at(&target))?;
+                // A relative link into a sibling flavour of the old install.
+                if !target.exists() {
+                    tracing::warn!(
+                        "{} points at {}, which is not there from {}",
+                        source.display(),
+                        link.display(),
+                        target.display()
+                    );
+                }
             }
             _ => {}
         }
@@ -98,5 +114,27 @@ mod tests {
         assert_eq!(siblings.len(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_copied_tree_keeps_its_symlinks_as_links() {
+        let root = tempfile::tempdir().unwrap();
+        let (from, to, shared) = (root.path().join("from"), root.path().join("to"), root.path().join("shared"));
+        std::fs::create_dir_all(from.join("Interface")).unwrap();
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(from.join("Config.wtf"), b"SET locale \"enUS\"").unwrap();
+        std::fs::write(from.join("Interface/AddOns.txt"), b"BigWigs: enabled").unwrap();
+        std::os::unix::fs::symlink(&shared, from.join("WTF")).unwrap();
+        std::os::unix::fs::symlink("Config.wtf", from.join("Config.link")).unwrap();
+
+        copy_tree(&from, &to).unwrap();
+
+        assert_eq!(std::fs::read(to.join("Config.wtf")).unwrap(), b"SET locale \"enUS\"");
+        assert_eq!(std::fs::read(to.join("Interface/AddOns.txt")).unwrap(), b"BigWigs: enabled");
+        for (name, target) in [("WTF", shared.as_path()), ("Config.link", Path::new("Config.wtf"))] {
+            let link = to.join(name);
+            assert!(link.symlink_metadata().unwrap().file_type().is_symlink(), "{name} is still a link");
+            assert_eq!(std::fs::read_link(&link).unwrap(), target);
+        }
     }
 }
