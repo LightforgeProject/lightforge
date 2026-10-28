@@ -160,7 +160,7 @@ pub(crate) fn prefix(ctx: Ctx) -> Result<()> {
         "built by        {}",
         status.built_by.as_deref().unwrap_or("—")
     );
-    println!("symlink         {}", describe_link(&status.link));
+    println!("symlink         {}", status.link.describe());
     println!(
         "ready           {}",
         if status.is_ready() { "yes" } else { "no" }
@@ -176,7 +176,7 @@ pub(crate) fn prefix_init(ctx: Ctx, proton: Option<String>) -> Result<()> {
 
     let status = lightforge_core::prefix::provision(&runner, &layout)
         .context("provisioning the prefix")?;
-    println!("symlink         {}", describe_link(&status.link));
+    println!("symlink         {}", status.link.describe());
     println!(
         "ready           {}",
         if status.is_ready() { "yes" } else { "no" }
@@ -192,7 +192,7 @@ pub(crate) fn prefix_link(ctx: Ctx) -> Result<()> {
     let (link, target) = (layout.wow_symlink(), layout.wow_install_in(main));
     let before = lightforge_core::prefix::ensure_link(&link, &target)
         .with_context(|| format!("linking {} -> {}", link.display(), target.display()))?;
-    println!("was             {}", describe_link(&before));
+    println!("was             {}", before.describe());
     println!("now             {} -> {}", link.display(), target.display());
     Ok(())
 }
@@ -265,16 +265,4 @@ pub(crate) async fn setup(ctx: Ctx, status: bool, proton: Option<String>) -> Res
 
     println!("\nready           {}", final_status.is_ready());
     Ok(())
-}
-
-/// One-line rendering of the symlink's state for the CLI.
-fn describe_link(state: &LinkState) -> String {
-    match state {
-        LinkState::Correct => "ok".to_owned(),
-        LinkState::Missing => "missing".to_owned(),
-        LinkState::Pending(t) => format!("ok -> {} (not downloaded yet)", t.display()),
-        LinkState::Mislinked(t) => format!("points at {}", t.display()),
-        LinkState::OccupiedEmpty => "empty directory in the way".to_owned(),
-        LinkState::Occupied => "a real directory with files in it".to_owned(),
-    }
 }

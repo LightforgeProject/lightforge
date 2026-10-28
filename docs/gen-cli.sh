@@ -18,7 +18,7 @@ OUT=docs/CLI.md
 # the run: a new subcommand should be filed deliberately, not dropped on the
 # floor because this list was not updated with it.
 group_names='Everyday|Setup, Proton and the prefix|Battle.net|Games: install, update, remove|Addons and settings backups|Catalogue and artwork'
-group_cmds='paths config status update-check play preflight
+group_cmds='paths config doctor status update-check play preflight
 setup proton proton-check proton-install prefix prefix-init prefix-link
 battlenet-fetch battlenet-setup battlenet-run
 download verify reindex uninstall prune compact build-info

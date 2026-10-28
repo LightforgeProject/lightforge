@@ -24,6 +24,28 @@ impl Lightforge {
                 iced::clipboard::write(info.render())
             }
 
+            Message::RunDiagnostics => {
+                let Some(dirs) = &self.dirs else {
+                    return Ok(Task::none());
+                };
+                self.diagnostics = Diagnostics::Running;
+                Task::perform(
+                    tasks::diagnose(self.config.clone(), self.layout.clone(), dirs.proton_dir()),
+                    Message::DiagnosticsDone,
+                )
+            }
+            Message::DiagnosticsDone(checks) => {
+                self.diagnostics = Diagnostics::Done(checks);
+                Task::none()
+            }
+            Message::CopyDiagnostics => {
+                let Diagnostics::Done(checks) = &self.diagnostics else {
+                    return Ok(Task::none());
+                };
+                self.status = "diagnostics copied".to_owned();
+                iced::clipboard::write(lightforge_core::doctor::render(checks))
+            }
+
             Message::SystemInfo(info) => {
                 tracing::info!(
                     "renderer: {} over {}; {}, {} B RAM",

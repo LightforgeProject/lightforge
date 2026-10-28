@@ -20,6 +20,7 @@ pub mod clientlocale;
 pub mod config;
 pub mod debug;
 pub mod discover;
+pub mod doctor;
 pub mod error;
 pub mod families;
 pub(crate) mod fsutil;

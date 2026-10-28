@@ -29,6 +29,15 @@ pub(crate) enum LauncherCheck {
     Failed(String),
 }
 
+/// The Diagnostics block in Settings, About.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) enum Diagnostics {
+    #[default]
+    Idle,
+    Running,
+    Done(Vec<lightforge_core::doctor::Check>),
+}
+
 /// An update of Lightforge itself, from "Update" on.
 #[derive(Debug)]
 pub(crate) struct Upgrade {

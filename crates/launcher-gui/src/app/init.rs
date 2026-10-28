@@ -152,6 +152,7 @@ impl Lightforge {
             exe: std::env::current_exe().ok(),
             upgrade: None,
             launcher_check: LauncherCheck::default(),
+            diagnostics: Diagnostics::default(),
             delete_after_cancel: Vec::new(),
             discarding: None,
             launching: None,

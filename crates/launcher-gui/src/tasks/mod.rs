@@ -35,6 +35,7 @@ mod transfer;
 mod store;
 mod launch;
 mod backups;
+mod doctor;
 pub(crate) mod upgrade;
 
 pub(crate) use branding::*;
@@ -43,6 +44,7 @@ pub(crate) use transfer::*;
 pub(crate) use store::*;
 pub(crate) use launch::*;
 pub(crate) use backups::*;
+pub(crate) use doctor::*;
 pub(crate) use upgrade::{Prepared, Stamp};
 
 

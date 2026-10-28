@@ -6,6 +6,9 @@ with problems nobody has hit, so if yours isn't here, it probably isn't here
 yet: come and tell me in [Discord](https://discord.gg/vtTgmUV9Bq) and it
 gets added.
 
+Start with `lightforge doctor`, or Settings → About → Diagnostics in the app.
+It checks the usual suspects below and gives you a report to paste.
+
 ## Setting up
 
 ### Battle.net's installer dies after about a second

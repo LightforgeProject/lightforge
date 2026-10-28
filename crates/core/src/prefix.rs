@@ -369,6 +369,16 @@ impl LinkState {
         matches!(self, Self::Correct | Self::Pending(_))
     }
 
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Correct => "ok".to_owned(),
+            Self::Missing => "missing".to_owned(),
+            Self::Pending(t) => format!("ok -> {} (not downloaded yet)", t.display()),
+            Self::Mislinked(t) => format!("points at {}", t.display()),
+            Self::OccupiedEmpty => "empty directory in the way".to_owned(),
+            Self::Occupied => "a real directory with files in it".to_owned(),
+        }
+    }
 }
 
 /// Classify what sits at `link` relative to the intended `target`.

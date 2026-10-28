@@ -56,6 +56,19 @@ Options:
   -h, --help         Print help
 ```
 
+### `lightforge doctor`
+
+```text
+Check this system for what Battle.net and the games need under Proton
+
+Usage: lightforge doctor [OPTIONS]
+
+Options:
+      --json         Print the checks as JSON
+      --root <ROOT>  Override the Blizzard root (default: ~/Games/Blizzard)
+  -h, --help         Print help
+```
+
 ### `lightforge status`
 
 ```text

@@ -1,6 +1,17 @@
-//! What Lightforge sees: paths, config, catalogue, status.
+//! What Lightforge sees: paths, config, the system, catalogue, status.
 
 use crate::*;
+
+pub(crate) fn doctor(ctx: Ctx, json: bool) -> Result<()> {
+    let Ctx { layout, config } = ctx;
+    let dirs = AppDirs::discover().context("resolving XDG directories")?;
+    let checks = lightforge_core::doctor::run(&config, &layout, &dirs.proton_dir());
+    match json {
+        true => println!("{}", serde_json::to_string_pretty(&checks)?),
+        false => print!("{}", lightforge_core::doctor::render(&checks)),
+    }
+    Ok(())
+}
 
 pub(crate) fn paths(ctx: Ctx) -> Result<()> {
     let Ctx { layout, .. } = ctx;

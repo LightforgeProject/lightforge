@@ -567,12 +567,15 @@ pub fn find_steam_runtime(libraries: &[PathBuf], appid: u32) -> Option<PathBuf> 
 /// `None` when that cache cannot be read: no `ldconfig` (NixOS), or one that
 /// fails. Not knowing is not a reason to change how setup runs.
 pub fn has_32bit_tls() -> Option<bool> {
+    has_32bit_lib("libgnutls.so.30")
+}
+
+/// Whether the dynamic loader's cache has a 32-bit `lib`; `None` when that
+/// cache cannot be read.
+pub fn has_32bit_lib(lib: &str) -> Option<bool> {
     ["ldconfig", "/sbin/ldconfig", "/usr/sbin/ldconfig"].iter().find_map(|ldconfig| {
         let output = Command::new(ldconfig).arg("-p").stdin(Stdio::null()).output().ok()?;
-        output
-            .status
-            .success()
-            .then(|| has_32bit(&String::from_utf8_lossy(&output.stdout), "libgnutls.so.30"))
+        output.status.success().then(|| has_32bit(&String::from_utf8_lossy(&output.stdout), lib))
     })
 }
 

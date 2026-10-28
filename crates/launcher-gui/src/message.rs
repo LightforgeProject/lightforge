@@ -155,6 +155,10 @@ pub(crate) enum Message {
     ManageSubscription,
     OpenFiles,
     CopyDebug,
+    /// Run [`lightforge_core::doctor`] for the Diagnostics block.
+    RunDiagnostics,
+    DiagnosticsDone(Vec<lightforge_core::doctor::Check>),
+    CopyDiagnostics,
     /// What the renderer picked and what it is running on, answered once at
     /// startup so a report never has to wait for it.
     SystemInfo(Box<iced::system::Information>),

@@ -10,7 +10,7 @@ use lightforge_core::backup;
 use lightforge_core::buildinfo::BuildInfo;
 use lightforge_core::config::Config;
 use lightforge_core::paths::{AppDirs, Layout};
-use lightforge_core::prefix::{LinkState, PrefixStatus};
+use lightforge_core::prefix::PrefixStatus;
 use lightforge_core::ProductCode;
 
 mod cli;
@@ -86,6 +86,7 @@ async fn run() -> Result<()> {
     match cli.command {
         Command::Paths => commands::info::paths(ctx),
         Command::Config => commands::info::config(),
+        Command::Doctor { json } => commands::info::doctor(ctx, json),
         Command::Proton => commands::proton::proton(),
         Command::ProtonCheck => commands::proton::proton_check().await,
         Command::ProtonInstall { version } => commands::proton::proton_install(version).await,

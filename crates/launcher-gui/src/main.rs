@@ -388,6 +388,7 @@ struct Lightforge {
     /// The update of Lightforge itself, once "Update" was pressed.
     upgrade: Option<Upgrade>,
     launcher_check: LauncherCheck,
+    diagnostics: Diagnostics,
     /// A cancelled transfer whose files go once `Downloaded` says the run stopped.
     delete_after_cancel: Vec<ProductCode>,
     /// A given-up download's files being removed right now.

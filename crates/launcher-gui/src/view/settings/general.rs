@@ -251,7 +251,7 @@ impl Lightforge {
         ])
     }
 
-    /// The version, and where its configuration lives.
+    /// The version, where its configuration lives, and the system checks.
     pub(crate) fn about_section(&self) -> Element<'_, Message> {
         let (status, asking) = match &self.launcher_check {
             LauncherCheck::Idle => (String::new(), false),
@@ -281,6 +281,44 @@ impl Lightforge {
                 secondary("Open folder", Message::OpenConfigFolder).enabled(true),
             ));
         }
+        column![setting_group(rows), self.diagnostics_group()].spacing(theme::MD).into()
+    }
+
+    /// `lightforge doctor`, one row per check, and a copy for a bug report.
+    fn diagnostics_group(&self) -> Element<'_, Message> {
+        let running = self.diagnostics == Diagnostics::Running;
+        let checks: &[lightforge_core::doctor::Check] = match &self.diagnostics {
+            Diagnostics::Done(checks) => checks,
+            _ => &[],
+        };
+        let controls = row![
+            secondary(if running { "Checking" } else { "Run checks" }, Message::RunDiagnostics)
+                .enabled(!running && self.dirs.is_some()),
+            secondary("Copy", Message::CopyDiagnostics).enabled(!checks.is_empty()),
+        ]
+        .spacing(theme::SM);
+
+        let mut rows = vec![setting(
+            "Diagnostics",
+            "What this system has, against what Battle.net and the games need.",
+            None,
+            controls,
+        )];
+        rows.extend(checks.iter().map(|check| {
+            use lightforge_core::doctor::Status;
+            let color = match check.status {
+                Status::Ok => theme::OK,
+                Status::Warn => theme::WARN,
+                Status::Fail => theme::ERROR,
+            };
+            let more = check.hint.as_ref().map(|hint| muted(hint.clone(), theme::CAPTION));
+            setting(
+                check.name.clone(),
+                lightforge_core::debug::scrub(&check.detail),
+                more,
+                text(check.status.label()).size(theme::LABEL).font(theme::MONO).color(color),
+            )
+        }));
         setting_group(rows)
     }
 }

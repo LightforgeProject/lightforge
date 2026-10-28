@@ -2453,6 +2453,7 @@ dependencies = [
  "clap",
  "libc",
  "lightforge-core",
+ "serde_json",
  "tokio",
  "tracing",
 ]

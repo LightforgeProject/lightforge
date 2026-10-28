@@ -63,6 +63,10 @@ pub const OK: Color = rgb(0x4C, 0xAF, 0x50);
 
 pub const PAUSE: Color = rgb(0x78, 0x86, 0x96);
 
+/// Works, with something worth a look: a status, never an action. The
+/// wordmark's darker gold, so it never reads as [`PLAY`].
+pub const WARN: Color = rgb(0xD7, 0x99, 0x21);
+
 pub const ERROR: Color = rgb(0xE5, 0x73, 0x73);
 
 /// Panel over artwork. Opaque enough to read against a bright background,

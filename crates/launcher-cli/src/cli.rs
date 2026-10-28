@@ -19,6 +19,12 @@ pub(crate) enum Command {
     Paths,
     /// Print the effective configuration as TOML.
     Config,
+    /// Check this system for what Battle.net and the games need under Proton.
+    Doctor {
+        /// Print the checks as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// List Proton builds installed on this system.
     Proton,
     /// Check upstream Proton-GE releases and report whether a newer one exists.
