@@ -208,6 +208,11 @@ pub(crate) enum Message {
     GameCopied(ProductCode, Result<lightforge_core::migrate::Moved, String>),
     /// The old copy is gone, with the bytes it freed.
     GameMoved(ProductCode, Result<u64, String>),
+    /// Remove was pressed on a copy left in another library, by its id; it
+    /// waits for its confirmation.
+    AskRemoveLeftover(String),
+    CancelRemoveLeftover,
+    RemoveLeftover,
     /// Throw away this product's shader cache, e.g. after a Proton swap.
     ClearShaderCache,
     /// `true` when there was a cache to delete.

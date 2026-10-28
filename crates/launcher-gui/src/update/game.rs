@@ -141,6 +141,8 @@ impl Lightforge {
                     textures_bytes: None,
                     textures: TexturesStep::Idle,
                     move_to: None,
+                    leftovers: lightforge_core::migrate::leftovers(&self.layout, &self.selected.code),
+                    leftover_confirm: None,
                 });
                 // Only if the manifest offers it (retail's does not).
                 let code = self.selected.code.clone();

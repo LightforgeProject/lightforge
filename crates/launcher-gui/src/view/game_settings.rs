@@ -278,7 +278,7 @@ impl Lightforge {
             None => dir.display().to_string(),
         };
 
-        setting_group([
+        let mut rows = vec![
             setting(
                 "Location",
                 shown,
@@ -286,6 +286,9 @@ impl Lightforge {
                 secondary("Show in Explorer", Message::OpenFiles).enabled(true),
             ),
             self.drive_row(settings, can.move_game),
+        ];
+        rows.extend(self.leftover_rows(settings, can.move_game));
+        rows.extend([
             setting(
                 "Game files",
                 "Check them against the build and fetch what is damaged.",
@@ -318,7 +321,37 @@ impl Lightforge {
                 )
                 .enabled(can.uninstall),
             ),
-        ])
+        ]);
+        setting_group(rows)
+    }
+
+    /// A copy a move left in another library, offered for removal. Hidden
+    /// while a move runs: its own last step is what removes it.
+    fn leftover_rows<'a>(&'a self, settings: &'a GameSettings, can_remove: bool) -> Vec<Element<'a, Message>> {
+        if self.moving.as_ref().is_some_and(|m| m.code == settings.code) {
+            return Vec::new();
+        }
+        settings
+            .leftovers
+            .iter()
+            .map(|library| {
+                let controls = match settings.leftover_confirm.as_deref() == Some(library.id.as_str()) {
+                    true => row![
+                        secondary("Cancel", Message::CancelRemoveLeftover).enabled(true),
+                        action_button("Delete", theme::ERROR, Message::RemoveLeftover).enabled(can_remove),
+                    ],
+                    false => row![
+                        secondary("Remove", Message::AskRemoveLeftover(library.id.clone())).enabled(can_remove),
+                    ],
+                };
+                setting(
+                    format!("Old copy on {}", library.label),
+                    "A move could not delete it. The game plays from where it is now.",
+                    self.hint("Its settings and addons are older than the ones in use and go with it."),
+                    controls.spacing(theme::SM),
+                )
+            })
+            .collect()
     }
 
     /// Which library the game is on, and moving it to another one.

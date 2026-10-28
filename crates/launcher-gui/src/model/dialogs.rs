@@ -233,6 +233,11 @@ pub(crate) struct GameSettings {
     pub(crate) textures: TexturesStep,
     /// The library picked to move the game to, by id.
     pub(crate) move_to: Option<String>,
+    /// Other libraries still holding the game, left by a move that could
+    /// not remove its old copy.
+    pub(crate) leftovers: Vec<lightforge_core::library::Library>,
+    /// The leftover whose Remove was pressed, by library id.
+    pub(crate) leftover_confirm: Option<String>,
 }
 
 /// The question asked when the high-resolution textures are switched off.

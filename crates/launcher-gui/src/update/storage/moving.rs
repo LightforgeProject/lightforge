@@ -92,7 +92,56 @@ impl Lightforge {
                         self.error = Some(format!("moved to {}, but the old copy is still on {}: {e}", moving.to.label, moving.from.label).into());
                     }
                 }
+                if let Some(settings) = self.game_settings.as_mut().filter(|s| s.code == code) {
+                    settings.leftovers = lightforge_core::migrate::leftovers(&self.layout, &code);
+                }
                 Task::batch([self.measure_storage(), self.reload_if_showing(&code), self.pump()])
+            }
+            Message::AskRemoveLeftover(id) => {
+                if let Some(settings) = self.game_settings.as_mut() {
+                    settings.leftover_confirm = Some(id);
+                }
+                Task::none()
+            }
+            Message::CancelRemoveLeftover => {
+                if let Some(settings) = self.game_settings.as_mut() {
+                    settings.leftover_confirm = None;
+                }
+                Task::none()
+            }
+            // The last step of a move, again, for a copy it left behind.
+            Message::RemoveLeftover => {
+                let Some(settings) = self.game_settings.as_mut() else {
+                    return Ok(Task::none());
+                };
+                let Some(id) = settings.leftover_confirm.take() else {
+                    return Ok(Task::none());
+                };
+                let code = settings.code.clone();
+                let from = settings.leftovers.iter().find(|l| l.id == id).cloned();
+                let (Some(from), Some(to)) = (from, self.layout.library(&code).cloned()) else {
+                    return Ok(Task::none());
+                };
+                if let Some(what) = self.store_writer() {
+                    self.error = Some(format!("wait for {what} to finish first").into());
+                    return Ok(Task::none());
+                }
+                if self.launching.is_some() {
+                    self.error = Some("close the game first".into());
+                    return Ok(Task::none());
+                }
+                self.moving = Some(Moving {
+                    code: code.clone(),
+                    from: from.clone(),
+                    to,
+                    progress: Arc::default(),
+                    cancel: Cancel::new(),
+                    releasing: true,
+                });
+                Task::perform(
+                    tasks::move_release(self.http.clone(), self.layout.clone(), code.clone(), from),
+                    move |result| Message::GameMoved(code.clone(), result),
+                )
             }
             other => return Err(other),
         })

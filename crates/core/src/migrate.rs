@@ -314,6 +314,28 @@ pub async fn release(http: &Http, layout: &Layout, code: &ProductCode, from: &Li
     Ok(freed)
 }
 
+/// Libraries besides `code`'s own whose install still holds it: what a move
+/// leaves when [`release`] failed. Releasing from one removes it. None while
+/// the game's own library is not mounted, since release registers that one.
+pub fn leftovers(layout: &Layout, code: &ProductCode) -> Vec<Library> {
+    if layout.library(code).is_some_and(|own| !own.state().is_present()) {
+        return Vec::new();
+    }
+    let own = layout.wow_install(code);
+    layout
+        .libraries()
+        .all()
+        .iter()
+        .filter(|library| library.state().is_present())
+        .filter(|library| layout.wow_install_in(library) != own)
+        .filter(|library| {
+            BuildInfo::load(layout.wow_install_in(library).join(".build.info"))
+                .is_ok_and(|info| info.row(code).is_some())
+        })
+        .cloned()
+        .collect()
+}
+
 fn device(path: &Path) -> Result<u64, MoveError> {
     Ok(std::fs::metadata(path).map_err(io(path))?.dev())
 }
@@ -398,5 +420,19 @@ mod tests {
 
         assert!(matches!(refused, Err(MoveError::AlreadyThere { .. })));
         assert!(layout.wow_install_in(&from).join("_classic_era_/WowClassic.exe").is_file());
+    }
+
+    #[test]
+    fn a_copy_in_another_library_is_a_leftover_and_the_game_s_own_is_not() {
+        let root = tempfile::tempdir().unwrap();
+        let (layout, from, to) = libraries(root.path());
+        let code = ProductCode::ClassicEra;
+        install(&layout.wow_install_in(&from), &code);
+        assert!(leftovers(&layout, &code).is_empty());
+
+        install(&layout.wow_install_in(&to), &code);
+        let found: Vec<String> = leftovers(&layout, &code).into_iter().map(|l| l.label).collect();
+        assert_eq!(found, ["B"]);
+        assert!(leftovers(&layout, &ProductCode::Retail).is_empty(), "another game's row is not this one");
     }
 }
