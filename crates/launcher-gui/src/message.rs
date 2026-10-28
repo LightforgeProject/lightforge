@@ -199,6 +199,15 @@ pub(crate) enum Message {
     EnvEdit(Scope, iced::widget::text_editor::Action),
     /// Typing in the env editor paused; the number says after which edit.
     EnvSettled(u64),
+    /// The library picked in Game Settings to move the game to, by id.
+    MoveTargetPicked(String),
+    /// Move the game in Game Settings to the picked library.
+    MoveGame,
+    CancelMove,
+    /// The game is in the new library and recorded there; the old copy is next.
+    GameCopied(ProductCode, Result<lightforge_core::migrate::Moved, String>),
+    /// The old copy is gone, with the bytes it freed.
+    GameMoved(ProductCode, Result<u64, String>),
     /// Throw away this product's shader cache, e.g. after a Proton swap.
     ClearShaderCache,
     /// `true` when there was a cache to delete.

@@ -231,6 +231,8 @@ pub(crate) struct GameSettings {
     pub(crate) textures_bytes: Option<u64>,
     /// Where deleting the texture pack stands.
     pub(crate) textures: TexturesStep,
+    /// The library picked to move the game to, by id.
+    pub(crate) move_to: Option<String>,
 }
 
 /// The question asked when the high-resolution textures are switched off.

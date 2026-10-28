@@ -377,6 +377,7 @@ struct Lightforge {
     location_input: String,
     install_dialog: Option<InstallDialog>,
     uninstall_dialog: Option<UninstallDialog>,
+    moving: Option<Moving>,
     cancel_dialog: Option<CancelDialog>,
     /// A newer Lightforge on GitHub, found at start-up. Shown once per
     /// release; see `core::update`, and `core::upgrade` for installing it.

@@ -28,6 +28,7 @@ pub(crate) mod fsutil;
 pub mod fuzzing;
 pub mod library;
 pub mod logging;
+pub mod migrate;
 pub mod net;
 pub mod paths;
 pub mod prefix;

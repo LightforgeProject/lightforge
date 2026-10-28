@@ -1,8 +1,9 @@
-//! Filesystem operations several modules share: atomic replace, directory size.
+//! Filesystem operations several modules share: atomic replace, copying a
+//! tree, directory size.
 
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Replace `path` with `bytes` via a temp file in the same directory and a
 /// rename, so a crash leaves the old file or the new one, never a torn one.
@@ -30,6 +31,26 @@ pub(crate) fn write_atomic_with_mode(path: &Path, bytes: &[u8], mode: u32) -> io
     // Durability of the rename, not of the contents.
     if let Ok(handle) = std::fs::File::open(dir) {
         let _ = handle.sync_all();
+    }
+    Ok(())
+}
+
+/// Copy every file under `from` into the same place under `to`, modes
+/// included. The error names the path it failed on.
+pub(crate) fn copy_tree(from: &Path, to: &Path) -> Result<(), (PathBuf, io::Error)> {
+    fn at(path: &Path) -> impl FnOnce(io::Error) -> (PathBuf, io::Error) + '_ {
+        move |e| (path.to_path_buf(), e)
+    }
+    std::fs::create_dir_all(to).map_err(at(to))?;
+    for entry in std::fs::read_dir(from).map_err(at(from))?.filter_map(Result::ok) {
+        let (source, target) = (entry.path(), to.join(entry.file_name()));
+        match entry.file_type().map_err(at(&source))? {
+            kind if kind.is_dir() => copy_tree(&source, &target)?,
+            kind if kind.is_file() => {
+                std::fs::copy(&source, &target).map_err(at(&target))?;
+            }
+            _ => {}
+        }
     }
     Ok(())
 }

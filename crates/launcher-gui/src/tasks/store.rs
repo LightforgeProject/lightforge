@@ -361,6 +361,48 @@ pub async fn clear_cache(dirs: AppDirs) -> Result<u64, String> {
         .map_err(|e| chain(&e))
 }
 
+/// Copy `code` into `to` and commit it there; see [`migrate::copy`].
+pub async fn move_copy(
+    http: Option<Http>,
+    layout: Layout,
+    code: ProductCode,
+    to: library::Library,
+    cancel: Cancel,
+    progress: Arc<std::sync::Mutex<migrate::Progress>>,
+) -> Result<migrate::Moved, String> {
+    let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
+    // Minutes of blocking reads and writes: off the runtime's workers.
+    let runtime = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        runtime
+            .block_on(migrate::copy(&http, &layout, &code, &to, &cancel, |p| {
+                if let Ok(mut shown) = progress.lock() {
+                    *shown = p;
+                }
+            }))
+            .map_err(|e| chain(&e))
+    })
+    .await
+    .map_err(|e| chain(&e))?
+}
+
+/// Take `code` out of `from` once the config names its new library; see
+/// [`migrate::release`].
+pub async fn move_release(
+    http: Option<Http>,
+    layout: Layout,
+    code: ProductCode,
+    from: library::Library,
+) -> Result<u64, String> {
+    let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
+    let runtime = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        runtime.block_on(migrate::release(&http, &layout, &code, &from)).map_err(|e| chain(&e))
+    })
+    .await
+    .map_err(|e| chain(&e))?
+}
+
 /// Delete one product's shader cache; `false` when it had none. Off the GUI
 /// thread because the NVIDIA cache in it has no size cap.
 pub async fn clear_shader_cache(dir: PathBuf) -> Result<bool, String> {

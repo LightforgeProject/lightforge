@@ -152,6 +152,7 @@ async fn run() -> Result<()> {
         Command::AddonToken { token } => commands::addons::addon_token(token),
         Command::Verify { path, deep, repair, all } => commands::storage::verify(ctx, path, deep, repair, all),
         Command::Reindex { path } => commands::storage::reindex(ctx, path),
+        Command::Move { product, to, yes } => commands::storage::move_game(ctx, product, to, yes).await,
         Command::Uninstall { product, path, yes } => commands::storage::uninstall(ctx, product, path, yes),
         Command::Reclaim { product, build_key, region, path, yes } => commands::storage::reclaim(ctx, product, build_key, region, path, yes).await,
         Command::Prune { path, yes } => commands::storage::prune(ctx, path, yes).await,

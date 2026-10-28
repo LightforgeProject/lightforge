@@ -109,6 +109,7 @@ impl Lightforge {
             || self.scanning
             || self.upgrading()
             || self.uninstall_dialog.as_ref().is_some_and(|d| d.working)
+            || self.moving.is_some()
             || self.unused.values().any(|u| matches!(u, UnusedData::Freeing { .. }))
         {
             true => iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),

@@ -415,6 +415,18 @@ pub(crate) enum Command {
         /// Install root. Defaults to the managed WoW install.
         path: Option<PathBuf>,
     },
+    /// Move a game to another library without downloading it again. Prints
+    /// the plan unless `--yes` is given.
+    Move {
+        #[arg(long, default_value = "wow", value_parser = commands::product_code)]
+        product: String,
+        /// The library to move it to, by name or id, as `lightforge paths` lists them.
+        #[arg(long)]
+        to: String,
+        /// Actually move. Without this, nothing is touched.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Remove an installed product. Prints the plan unless `--yes` is given.
     Uninstall {
         #[arg(long, default_value = "wow", value_parser = commands::product_code)]

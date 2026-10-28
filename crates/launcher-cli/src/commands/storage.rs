@@ -177,6 +177,56 @@ pub(crate) fn reindex(ctx: Ctx, path: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
+pub(crate) async fn move_game(ctx: Ctx, product: String, to: String, yes: bool) -> Result<()> {
+    use lightforge_core::migrate::{self, Moved};
+    use lightforge_core::net::Http;
+    use lightforge_core::tact::download::Cancel;
+
+    let Ctx { layout, mut config } = ctx;
+    let code: ProductCode = product.parse().expect("product codes are infallible");
+    let target = config
+        .libraries
+        .iter()
+        .find(|l| l.id == to || l.label == to)
+        .cloned()
+        .with_context(|| format!("no library named {to}; `lightforge paths` lists them"))?;
+    let source = layout.library(&code).cloned().context("the product has no library")?;
+    println!("product         {}", code.as_str());
+    println!("from            {} ({})", source.label, layout.wow_install(&code).display());
+    println!("to              {} ({})", target.label, layout.wow_install_in(&target).display());
+    if !yes {
+        println!("\nnothing moved; add --yes to move it");
+        return Ok(());
+    }
+
+    let http = Http::new()?;
+    let mut shown = u64::MAX;
+    let moved = migrate::copy(&http, &layout, &code, &target, &Cancel::new(), |p| {
+        let percent = p.bytes_done * 100 / p.bytes_total.max(1);
+        if percent / 5 != shown {
+            shown = percent / 5;
+            println!("{:<15} {percent}%", if p.verifying { "verifying" } else { "copying" });
+        }
+    })
+    .await?;
+    match &moved {
+        Moved::Renamed => println!("moved           the install folder, renamed"),
+        Moved::Copied { files, bytes } => println!("copied          {files} files, {bytes} bytes, all read back"),
+    }
+
+    // The new library is recorded before the old copy goes.
+    config
+        .product_mut(&code)
+        .context("the product is not in the config")?
+        .profile
+        .library = Some(target.id.clone());
+    config.save(&AppDirs::discover()?.config_file())?;
+
+    let freed = migrate::release(&http, &config.layout()?, &code, &source).await?;
+    println!("freed           {freed} bytes in {}", source.label);
+    Ok(())
+}
+
 pub(crate) fn uninstall(ctx: Ctx, product: String, path: Option<PathBuf>, yes: bool) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::tact::uninstall;

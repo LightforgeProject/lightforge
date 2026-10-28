@@ -237,6 +237,8 @@ impl Lightforge {
             Some("the uninstall")
         } else if self.discarding.is_some() {
             Some("removing the cancelled download")
+        } else if self.moving.is_some() {
+            Some("moving a game")
         } else {
             None
         }
@@ -377,6 +379,7 @@ impl Lightforge {
             deep_scan: installed && !self.busy && !self.scanning && self.maintenance().is_none(),
             uninstall: installed && !self.busy && store_free,
             repair: !self.busy && store_free,
+            move_game: installed && !self.busy && store_free,
         }
     }
 

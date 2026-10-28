@@ -140,6 +140,7 @@ impl Lightforge {
                     note: None,
                     textures_bytes: None,
                     textures: TexturesStep::Idle,
+                    move_to: None,
                 });
                 // Only if the manifest offers it (retail's does not).
                 let code = self.selected.code.clone();

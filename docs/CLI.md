@@ -375,6 +375,21 @@ Options:
           Print help (see a summary with '-h')
 ```
 
+### `lightforge move`
+
+```text
+Move a game to another library without downloading it again. Prints the plan unless `--yes` is given
+
+Usage: lightforge move [OPTIONS] --to <TO>
+
+Options:
+      --product <PRODUCT>  [default: wow]
+      --root <ROOT>        Override the Blizzard root (default: ~/Games/Blizzard)
+      --to <TO>            The library to move it to, by name or id, as `lightforge paths` lists them
+      --yes                Actually move. Without this, nothing is touched
+  -h, --help               Print help
+```
+
 ### `lightforge uninstall`
 
 ```text

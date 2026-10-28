@@ -38,6 +38,17 @@ pub(crate) enum Diagnostics {
     Done(Vec<lightforge_core::doctor::Check>),
 }
 
+/// A game on its way to another library; see [`lightforge_core::migrate`].
+pub(crate) struct Moving {
+    pub(crate) code: ProductCode,
+    pub(crate) from: lightforge_core::library::Library,
+    pub(crate) to: lightforge_core::library::Library,
+    pub(crate) progress: Arc<std::sync::Mutex<lightforge_core::migrate::Progress>>,
+    pub(crate) cancel: Cancel,
+    /// Copied and recorded in the new library; the old copy is going.
+    pub(crate) releasing: bool,
+}
+
 /// An update of Lightforge itself, from "Update" on.
 #[derive(Debug)]
 pub(crate) struct Upgrade {
@@ -151,6 +162,7 @@ pub(crate) struct Maintain {
     pub(crate) deep_scan: bool,
     pub(crate) uninstall: bool,
     pub(crate) repair: bool,
+    pub(crate) move_game: bool,
 }
 
 /// What the hand-off panel's one button does, which depends on how much is

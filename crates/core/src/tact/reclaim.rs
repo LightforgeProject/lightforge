@@ -322,7 +322,7 @@ async fn config_text(http: &Http, install: &Path, build: &Build) -> Result<Strin
 /// Everything in the store `build` needs: its download manifest's files, and
 /// every key its build config names, with the content-key-only ones (root,
 /// patch) resolved through its encoding manifest.
-async fn keep_keys(
+pub(crate) async fn keep_keys(
     http: &Http,
     install: &Path,
     store: &mut Storage,

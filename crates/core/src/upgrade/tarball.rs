@@ -62,7 +62,8 @@ fn put_in_place(archive: &Path, bin_dir: &Path, data_dir: &Path) -> Result<(), U
     // Not a rename: the applications folder can be on another filesystem.
     std::fs::copy(&written, apps.join(ENTRY)).map_err(io(&apps.join(ENTRY)))?;
 
-    copy_tree(&release.join("icons/hicolor"), &data_dir.join("icons/hicolor"))?;
+    crate::fsutil::copy_tree(&release.join("icons/hicolor"), &data_dir.join("icons/hicolor"))
+        .map_err(|(path, source)| UpgradeError::Io { path, source })?;
     refresh_menu(&apps);
     Ok(())
 }
@@ -88,22 +89,6 @@ fn unpack(archive: &Path, into: &Path) -> Result<PathBuf, UpgradeError> {
         Some(top) if BINARIES.iter().all(|b| top.join(b).is_file()) && top.join(ENTRY).is_file() => Ok(top),
         _ => Err(UpgradeError::NotARelease(archive.to_path_buf())),
     }
-}
-
-/// Copy every file under `from` into the same place under `to`.
-fn copy_tree(from: &Path, to: &Path) -> Result<(), UpgradeError> {
-    std::fs::create_dir_all(to).map_err(io(to))?;
-    for entry in std::fs::read_dir(from).map_err(io(from))?.filter_map(Result::ok) {
-        let (source, target) = (entry.path(), to.join(entry.file_name()));
-        match entry.file_type().map_err(io(&source))? {
-            kind if kind.is_dir() => copy_tree(&source, &target)?,
-            kind if kind.is_file() => {
-                std::fs::copy(&source, &target).map_err(io(&target))?;
-            }
-            _ => {}
-        }
-    }
-    Ok(())
 }
 
 fn set_executable(path: &Path) -> std::io::Result<()> {

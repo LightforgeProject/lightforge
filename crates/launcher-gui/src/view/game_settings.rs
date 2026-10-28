@@ -285,6 +285,7 @@ impl Lightforge {
                 None,
                 secondary("Show in Explorer", Message::OpenFiles).enabled(true),
             ),
+            self.drive_row(settings, can.move_game),
             setting(
                 "Game files",
                 "Check them against the build and fetch what is damaged.",
@@ -318,6 +319,59 @@ impl Lightforge {
                 .enabled(can.uninstall),
             ),
         ])
+    }
+
+    /// Which library the game is on, and moving it to another one.
+    fn drive_row<'a>(&'a self, settings: &'a GameSettings, can_move: bool) -> Element<'a, Message> {
+        let here = self.layout.library(&settings.code);
+        if let Some(moving) = self.moving.as_ref().filter(|m| m.code == settings.code) {
+            let progress = moving.progress.lock().map(|p| *p).unwrap_or_default();
+            let percent = progress.bytes_done * 100 / progress.bytes_total.max(1);
+            let doing = match (moving.releasing, progress.verifying) {
+                (true, _) => format!("Removing the old copy from {}…", moving.from.label),
+                (false, true) => format!("Checking the copy on {}: {percent}%", moving.to.label),
+                (false, false) => format!("Copying to {}: {percent}%", moving.to.label),
+            };
+            return setting("Drive", doing, None, secondary("Cancel", Message::CancelMove).enabled(!moving.releasing));
+        }
+
+        let about = here.map_or_else(String::new, |library| format!("On {}.", library.label));
+        let targets: Vec<(String, String)> = self
+            .config
+            .libraries
+            .iter()
+            .filter(|library| here.is_none_or(|h| h.id != library.id))
+            .map(|library| (library.label.clone(), library.id.clone()))
+            .collect();
+        if targets.is_empty() {
+            return setting("Drive", about, self.hint("Add another drive under Settings › Storage to move the game there."), Space::new());
+        }
+        let picked = settings
+            .move_to
+            .as_ref()
+            .and_then(|id| targets.iter().find(|(_, t)| t == id))
+            .map(|(label, _)| label.clone());
+        let labels = targets.iter().map(|(label, _)| label.clone()).collect();
+        let picker = self.picker(
+            "move to".to_owned(),
+            labels,
+            picked.clone(),
+            "another drive",
+            move |label: String| {
+                let id = targets.iter().find(|(l, _)| *l == label).map(|(_, id)| id.clone()).unwrap_or_default();
+                Message::MoveTargetPicked(id)
+            },
+            Length::Shrink,
+            theme::LABEL,
+        );
+        setting(
+            "Drive",
+            about,
+            self.hint("Copies the game's files to the other drive, checks every one, then removes the old copy. Nothing is downloaded again."),
+            row![picker, secondary("Move", Message::MoveGame).enabled(can_move && picked.is_some())]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
+        )
     }
 
     /// The same pin as Settings › Proton, for whoever is here.

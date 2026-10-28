@@ -1475,3 +1475,48 @@ fn cancelling_a_pre_download_never_deletes_the_installed_game() {
     assert!(app.delete_after_cancel.is_empty());
     assert!(app.queue.is_empty());
 }
+
+fn moving(code: ProductCode) -> Moving {
+    Moving {
+        code,
+        from: library::Library::main_at(PathBuf::from("/nowhere/a/games"), "A"),
+        to: library::Library::adopted(PathBuf::from("/nowhere/b/games"), "B"),
+        progress: Arc::default(),
+        cancel: Cancel::new(),
+        releasing: false,
+    }
+}
+
+/// The new library is recorded before the old copy is touched, so a crash
+/// between the two leaves the game in two places, never in none.
+#[test]
+fn a_committed_copy_points_the_config_at_the_new_library_first() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.track_selected();
+    let code = app.selected.code.clone();
+    let move_ = moving(code.clone());
+    let to = move_.to.id.clone();
+    app.moving = Some(move_);
+
+    let _ = app.update(Message::GameCopied(code.clone(), Ok(lightforge_core::migrate::Moved::Copied { files: 1, bytes: 1 })));
+
+    assert_eq!(app.config.product(&code).unwrap().profile.library.as_deref(), Some(to.as_str()));
+    assert!(app.moving.as_ref().unwrap().releasing);
+}
+
+#[test]
+fn a_failed_copy_leaves_the_game_where_it_was() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.track_selected();
+    let code = app.selected.code.clone();
+    let before = app.config.product(&code).unwrap().profile.library.clone();
+    app.moving = Some(moving(code.clone()));
+
+    let _ = app.update(Message::GameCopied(code.clone(), Err("2 copied files did not read back intact".to_owned())));
+
+    assert!(app.moving.is_none());
+    assert_eq!(app.config.product(&code).unwrap().profile.library, before);
+    assert!(app.error.is_some());
+}

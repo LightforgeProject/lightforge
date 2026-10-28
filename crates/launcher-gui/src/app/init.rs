@@ -147,6 +147,7 @@ impl Lightforge {
             location_input: String::new(),
             install_dialog: None,
             uninstall_dialog: None,
+            moving: None,
             cancel_dialog: None,
             update_notice: None,
             origin: lightforge_core::upgrade::Origin::detect(),

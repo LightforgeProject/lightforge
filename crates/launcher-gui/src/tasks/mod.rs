@@ -18,6 +18,7 @@ use lightforge_core::assets::{Manifest, Pipeline};
 use lightforge_core::config::Config;
 use lightforge_core::net::Http;
 use lightforge_core::families::Families;
+use lightforge_core::{library, migrate};
 use lightforge_core::paths::{AppDirs, Layout};
 use lightforge_core::preflight::{DownloadGuard, GameProcess, Preflight, PreflightError};
 use lightforge_core::product::ProductCode;

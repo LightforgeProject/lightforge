@@ -218,6 +218,14 @@ impl BuildInfo {
         Self::parse(DEFAULT_SCHEMA).expect("the pinned schema parses")
     }
 
+    /// A product's row as `(column, value)` pairs, to carry it into another
+    /// `.build.info` with [`BuildInfo::set_product`].
+    pub fn named_row(&self, code: &ProductCode) -> Option<Vec<(String, String)>> {
+        let row = self.row(code)?;
+        let names = self.headers.iter().map(|h| h.split('!').next().unwrap_or(h).to_owned());
+        Some(names.zip(row.cells.iter().cloned()).collect())
+    }
+
     /// Add or replace a product's row, taking cells by column name.
     ///
     /// Unnamed columns stay empty, as Agent leaves them on a fresh install.
