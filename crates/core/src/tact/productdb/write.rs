@@ -9,18 +9,15 @@ use crate::product::ProductCode;
 /// One installed product, as Agent records it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductInstall {
-    /// Product code, written to both the `uid` and `product_code` fields.
-    ///
-    /// The two coincide for every product Lightforge writes a record for,
-    /// they only differ for Hearthstone, which Battle.net installs itself.
-    /// On the reading side they are kept apart: see [`Installed`].
+    /// Product code, written to both `uid` and `product_code`; they differ
+    /// only for Hearthstone, which Battle.net installs itself.
     pub product: String,
     /// Windows-visible install root, e.g. `C:/Program Files (x86)/World of Warcraft`.
     pub install_path: String,
     pub region: String,
     pub locale: String,
-    /// Account country (`AUT`) and GeoIP country (`AT`). Agent fills these from
-    /// the logged-in account; empty is accepted rather than invented.
+    /// Account country (`AUT`) and GeoIP country (`AT`), from the account.
+    /// Empty when unknown.
     pub account_country: String,
     pub geo_country: String,
     /// Flavor subdirectory, e.g. `_classic_era_`.
@@ -73,15 +70,9 @@ impl ProductInstall {
         })
     }
 
-    /// Rewrite the tags the way Agent writes them.
-    ///
-    /// Agent's own records read
-    /// `Windows x86_64 EU? acct-AUT? geoip-AT? enUS speech?:… text?`: the `?`
-    /// marks a tag as advisory, and the account/GeoIP tags are present even
-    /// though no manifest defines them. Our downloader writes the plain form,
-    /// which selects identical files (`TagSet` strips `?` and ignores names the
-    /// manifest does not define), but it is not byte-identical to what Agent
-    /// expects to read back.
+    /// Rewrite the tags as Agent writes them,
+    /// `Windows x86_64 EU? acct-AUT? geoip-AT? enUS speech?:… text?`. Selects
+    /// the same files as the plain form, but matches Agent's bytes.
     pub fn with_agent_tags(mut self) -> Self {
         self.tags = agent_tags(
             &self.region,
@@ -145,8 +136,7 @@ impl ProductInstall {
         let mut cached = Vec::new();
         message_field(&mut cached, 1, &base);
 
-        // Two timing stubs; real records carry doubles here that only describe
-        // the last operation, so zeros are honest rather than invented.
+        // Two timing stubs: real ones only describe the last operation.
         let mut timing = Vec::new();
         double_field(&mut timing, 1, 0.0);
         varint_field(&mut timing, 2, 0);
@@ -182,18 +172,14 @@ pub fn encode(installs: &[ProductInstall]) -> Vec<u8> {
 /// Merge `installs` into an existing `product.db`, leaving every other record
 /// exactly as it was found.
 ///
-/// Splicing, not decode-and-re-encode: the registry holds products Lightforge
-/// has nothing to do with, and [`decode`] reads four of their dozens of
-/// fields, so rebuilding would drop the rest. Records are kept as raw bytes;
-/// matching codes are replaced, new ones appended. Unreadable input gives
-/// `None` and the caller writes nothing.
+/// Spliced as raw bytes: [`decode`](super::decode) reads a few of dozens of
+/// fields, and a rebuild would drop the rest. Unreadable input gives `None`.
 pub fn splice(existing: &[u8], installs: &[ProductInstall]) -> Option<Vec<u8>> {
     rewrite(existing, installs, None)
 }
 
-/// Drop `product`'s record from an existing `product.db`, leaving every other
-/// record exactly as it was found, the same byte-preserving rules as
-/// [`splice`], for the same reason.
+/// Drop `product`'s record from an existing `product.db`, byte-preserving
+/// like [`splice`].
 pub fn without(existing: &[u8], product: &str) -> Option<Vec<u8>> {
     rewrite(existing, &[], Some(product))
 }
@@ -251,9 +237,7 @@ fn merge(
         }
     }
 
-    // New records go with the other records rather than at the end of the
-    // file: field order is free in protobuf, but a registry that still looks
-    // like one Agent wrote is easier to reason about when something breaks.
+    // New records go with the others, as Agent would place them.
     let after_records = items.iter().rposition(|item| item.field == 1).map_or(0, |at| at + 1);
     let mut out = Vec::new();
     for item in &items[..after_records] {
@@ -277,10 +261,8 @@ struct Raw<'a> {
     payload: Option<&'a [u8]>,
 }
 
-/// Split a message into its fields without interpreting any of them.
-///
-/// `None` for bytes that are not a readable field sequence, which is how every
-/// caller declines to rewrite a file it did not understand.
+/// Split a message into its fields without interpreting them. `None` for
+/// bytes that are not a field sequence: the caller then rewrites nothing.
 fn raw_fields(bytes: &[u8]) -> Option<Vec<Raw<'_>>> {
     let mut found = Vec::new();
     let mut at = 0usize;
@@ -303,7 +285,7 @@ fn raw_fields(bytes: &[u8]) -> Option<Vec<Raw<'_>>> {
                 at = end;
             }
             5 => at = at.checked_add(4).filter(|end| *end <= bytes.len())?,
-            // Groups left the wire format decades ago; this is not the file.
+            // Groups are long gone from the wire format.
             _ => return None,
         }
         found.push(Raw { field, bytes: bytes.get(start..at)?, payload });
@@ -311,10 +293,8 @@ fn raw_fields(bytes: &[u8]) -> Option<Vec<Raw<'_>>> {
     Some(found)
 }
 
-/// One product record lifted whole out of another prefix's registry.
-///
-/// Opaque on purpose: the point of it is the fields Lightforge does *not*
-/// understand. See [`lift`].
+/// One product record lifted whole out of another prefix's registry; opaque,
+/// see [`lift`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
     pub product: String,
@@ -324,13 +304,9 @@ pub struct Record {
 /// Lift one product's record out of another `product.db`, with its install
 /// path rewritten and every other byte kept.
 ///
-/// For a game Lightforge does not manage. A Diablo that Battle.net installed in
-/// a Lutris prefix can be made visible to the Battle.net in Lightforge's prefix
-/// without reinstalling it, but only if the record our registry gains is one
-/// Agent will accept, and that means a build key, an install-state block and a
-/// tag expression that nothing here knows how to invent. The record Agent wrote
-/// itself has all of them right, so it is copied rather than rebuilt, and only
-/// the install path, the one thing that genuinely changed, is replaced.
+/// For a game Lightforge does not manage, say a Diablo in a Lutris prefix:
+/// Agent's own record carries the build key, install state and tags nothing
+/// here can invent, so it is copied and only the path changes.
 ///
 /// `None` when the file holds no record for `product`, or is not a registry.
 pub fn lift(bytes: &[u8], product: &str, install_path: &str) -> Option<Record> {
@@ -397,15 +373,10 @@ pub fn graft(agent_dir: &Path, records: &[Record]) -> Result<bool, ProductDbErro
 /// Register `installs` in Agent's own registry, the list the client builds its
 /// library from.
 ///
-/// This is what decides whether a freshly downloaded product shows `Play` or
-/// `Install`: the per-install `.product.db` is only read once the user asks
-/// Battle.net to locate a game, while this file is read at startup.
-///
-/// Must run with nothing alive in the prefix, Agent rewrites this file as it
-/// exits, so a write while it is up is simply lost.
-///
-/// A file that cannot be parsed is left untouched and reported as `false`,
-/// because the alternative is replacing somebody's library with ours.
+/// It decides whether a downloaded product shows Play or Install: the
+/// per-install `.product.db` is only read by Locate. Only with nothing alive
+/// in the prefix (Agent rewrites it on exit). An unreadable file is left
+/// alone and reported as `false`.
 pub fn register(agent_dir: &Path, installs: &[ProductInstall]) -> Result<bool, ProductDbError> {
     let path = agent_dir.join("product.db");
     let existing = match std::fs::read(&path) {
@@ -439,11 +410,8 @@ pub fn unregister(agent_dir: &Path, product: &str) -> Result<bool, ProductDbErro
     replace(&path, &existing, &trimmed)
 }
 
-/// Write a rewritten registry over the old one, atomically, or do nothing at
-/// all when the rewrite changed nothing.
-///
-/// Agent reads this file while it runs, so the new bytes go to a temporary file
-/// in the same directory and are renamed over it.
+/// Write a rewritten registry over the old one, atomically (Agent reads it
+/// while running), unless nothing changed.
 fn replace(path: &Path, existing: &[u8], merged: &[u8]) -> Result<bool, ProductDbError> {
     if merged == existing {
         return Ok(false);
@@ -453,10 +421,6 @@ fn replace(path: &Path, existing: &[u8], merged: &[u8]) -> Result<bool, ProductD
 }
 
 /// Write `.product.db` into an install root, atomically.
-///
-/// Agent reads this file while it runs, so it is written to a temporary file in
-/// the same directory and renamed, a half-written `.product.db` would be worse
-/// than none at all.
 pub fn write(install_root: &Path, installs: &[ProductInstall]) -> Result<PathBuf, ProductDbError> {
     let path = install_root.join(".product.db");
     crate::fsutil::write_atomic(&path, &encode(installs)).map_err(io(&path))?;
@@ -466,10 +430,8 @@ pub fn write(install_root: &Path, installs: &[ProductInstall]) -> Result<PathBuf
 /// Put `installs` into an install root's `.product.db`, keeping every other
 /// product's record already there.
 ///
-/// Products share one install root, so [`write`] with only the product just
-/// installed would drop its siblings, and Battle.net's Locate then no longer
-/// finds them. A file that does not decode as records is replaced, as there
-/// is nothing in it to keep.
+/// Products share one install root, and Locate must still find the siblings.
+/// A file that does not decode is replaced.
 pub fn upsert(install_root: &Path, installs: &[ProductInstall]) -> Result<PathBuf, ProductDbError> {
     let path = install_root.join(".product.db");
     let Ok(existing) = std::fs::read(&path) else {

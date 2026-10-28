@@ -3,27 +3,16 @@ use std::path::Path;
 use super::wire::{Fields, Wire};
 use super::{io, ProductDbError};
 
-/// One product Agent reports as installed, as far as Lightforge cares.
-///
-/// A deliberately small slice of the record: enough to name a product, find
-/// its files and say what it is on. Everything else in there describes an
-/// install Lightforge does not manage.
+/// One product Agent reports as installed: enough to name it, find its files
+/// and say what build it is on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Installed {
-    /// The client's install key, field 1, e.g. `hs_beta`.
-    ///
-    /// This is what Battle.net calls the product, which is **not always what
-    /// the CDN calls it**: see [`Installed::product_code`].
+    /// The client's install key, field 1, e.g. `hs_beta`: Battle.net's name,
+    /// **not always the CDN's** ([`Installed::product_code`]).
     pub product: String,
-    /// The TACT product code, field 2, e.g. `hsb`.
-    ///
-    /// The two are the same string for every product but Hearthstone, which
-    /// Battle.net records as `hs_beta` and Blizzard's CDN publishes as `hsb`.
-    /// Lightforge's catalog is keyed by the CDN's name, so a caller matching
-    /// a tile against this file has to accept either, matching only on
-    /// [`Installed::product`] leaves Hearthstone reading as "not installed"
-    /// however many times someone installs it. Empty on a record that omits
-    /// the field rather than assumed equal to `product`.
+    /// The TACT product code, field 2, e.g. `hsb`. Equal to
+    /// [`Installed::product`] except for Hearthstone, so a match against the
+    /// catalog (keyed by CDN name) must accept either. Empty when omitted.
     pub product_code: String,
     /// Windows-visible install root, e.g. `C:/Program Files (x86)/Hearthstone`.
     pub install_path: String,
@@ -33,8 +22,8 @@ pub struct Installed {
     /// else the active one (12). The only record of a pre-installed build,
     /// which Agent keeps here after taking its `.build.info` row away.
     pub build_key: Option<String>,
-    /// Product family, e.g. `wow` for every WoW flavour. Empty when absent,
-    /// which is the normal state for a single-title game like Hearthstone.
+    /// Product family, e.g. `wow` for every WoW flavour. Often empty
+    /// (Hearthstone).
     pub family: String,
 }
 
@@ -45,18 +34,11 @@ impl Installed {
     }
 }
 
-/// Read Agent's `product.db`: what Battle.net has installed, and where.
+/// Read Agent's `product.db`: what Battle.net has installed, and where. The
+/// counterpart to [`encode`](super::encode), held to it by a round-trip test.
 ///
-/// The counterpart to [`encode`], against the same layout documented at the
-/// top of this module. Written separately rather than derived from a schema
-/// because there is no published schema; the two directions read the same
-/// field numbers and are kept honest by a round-trip test.
-///
-/// Tolerant by design. Unknown fields are skipped, a record missing a field
-/// yields a default for it, and malformed bytes end the scan rather than
-/// failing the file: this is someone else's file, written by a program that
-/// updates on its own schedule, and a launcher that refuses to start because
-/// Agent added a field is worse than one that shows fewer tiles.
+/// Tolerant: unknown fields are skipped, missing ones default, and malformed
+/// bytes end the scan. Agent updates on its own schedule.
 pub fn decode(bytes: &[u8]) -> Vec<Installed> {
     let mut found = Vec::new();
     for (field, value) in Fields::new(bytes) {
@@ -116,8 +98,7 @@ pub(super) fn decode_install(bytes: &[u8]) -> Option<Installed> {
         }
     }
 
-    // A record with no code names nothing; a record with no path points
-    // nowhere. Either way there is no tile to draw.
+    // No code or no path: nothing to draw.
     (!product.is_empty() && !install_path.is_empty()).then_some(Installed {
         product,
         product_code,

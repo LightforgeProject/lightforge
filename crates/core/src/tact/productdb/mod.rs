@@ -1,16 +1,11 @@
 //! `.product.db`: Agent's record of what is installed where.
 //!
-//! **Why this exists:** Battle.net refuses to adopt an install without it. Its
-//! "Locate the game" flow reads `<install>/.product.db` and, finding none,
-//! answers `error 2800` in the same millisecond, with no message beyond "This
-//! folder doesn't contain the correct version of this game". Every other file a
-//! real install has, Lightforge already writes; this was the last one, and it
-//! is the difference between an install the launcher owns and one Battle.net
-//! will hand an SSO session to.
+//! Battle.net will not adopt an install without one: "Locate the game" finds
+//! no `<install>/.product.db` and answers `error 2800` ("This folder doesn't
+//! contain the correct version of this game").
 //!
-//! The format is protocol-buffer wire format with no schema published by
-//! Blizzard, so the layout below was read field by field out of a real
-//! install's file. Only what is observed is written, no invented fields.
+//! Protobuf wire format with no published schema; the layout was read field
+//! by field from a real install, and only observed fields are written.
 //!
 //! ```text
 //! 1  ProductInstall            (repeated: one per installed product)

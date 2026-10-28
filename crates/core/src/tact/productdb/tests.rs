@@ -294,13 +294,8 @@ mod reading {
         record
     }
 
-    /// The one product whose two names disagree, taken from a real registry.
-    ///
-    /// Agent records Hearthstone as uid `hs_beta` in field 1 and TACT code
-    /// `hsb` in field 2, with no family at all, where every other product
-    /// repeats one string in both fields. A reader that kept only field 1
-    /// made an installed Hearthstone read as "not installed" forever, because
-    /// the tile asking the question holds the CDN's name.
+    /// From a real registry: Hearthstone is `hs_beta` in field 1 and `hsb` in
+    /// field 2, with no family. Reading only field 1 left it "not installed".
     #[test]
     fn hearthstone_is_read_under_both_of_the_names_it_has() {
         let mut base = Vec::new();
@@ -412,10 +407,8 @@ mod reading {
         }
     }
 
-    /// The whole reason this is a splice: Agent's registry holds records with
-    /// fields `decode` never looks at, and rebuilding the file from what we
-    /// understood would drop them. Losing a record means Battle.net forgets
-    /// an install.
+    /// Why this is a splice: a rebuild would drop fields `decode` never
+    /// reads, and Battle.net would forget installs.
     #[test]
     fn records_we_do_not_own_survive_byte_for_byte() {
         // A record with a field the reader ignores entirely.
@@ -456,8 +449,7 @@ mod reading {
         assert_eq!(read[1].product, "wow_classic_era");
     }
 
-    /// Anything we cannot read back is left alone. Replacing a library we did
-    /// not understand is the failure this exists to avoid.
+    /// Anything we cannot read back is left alone.
     #[test]
     fn an_unreadable_registry_is_never_rewritten() {
         assert!(splice(b"not a protobuf at all", &[install("wow", "1.0.0")]).is_none());
