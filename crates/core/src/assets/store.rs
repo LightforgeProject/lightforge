@@ -12,7 +12,7 @@ use crate::net::ETagCache;
 pub enum Origin {
     /// Base URL holding `manifest.json`, e.g. `https://assets.tuxcore.pro/wow/`.
     Http(String),
-    /// Local fixture directory, used until the endpoint is live.
+    /// Local fixture directory.
     Dir(PathBuf),
 }
 
@@ -33,7 +33,7 @@ pub struct Asset {
     /// `true` when bytes moved this run; `false` on a `304` or a fixture read.
     pub fetched: bool,
     /// The manifest's height hint, carried through unverified, see
-    /// [`AssetRef::height`]. The UI decides what is a sane value.
+    /// [`AssetRef::height`](super::AssetRef::height). The UI decides what is a sane value.
     pub height: Option<f32>,
 }
 
@@ -43,8 +43,7 @@ pub struct Branding {
     pub label: String,
     pub logo: Asset,
     pub background: Asset,
-    /// `None` when the theme declares no icon, or when one is declared but
-    /// isn't resolvable, a missing mark costs a fallback label, not a theme.
+    /// `None` when the theme has no icon or it cannot be resolved.
     pub icon: Option<Asset>,
 }
 
@@ -63,12 +62,7 @@ impl Store {
         &self.dir
     }
 
-    /// Cache file name for a URL.
-    ///
-    /// Keyed by the URL rather than by product and slot, so two products
-    /// sharing one image share one cached file, and so a rename upstream
-    /// lands as a new file instead of overwriting art that other products may
-    /// still be pointing at.
+    /// Cache file name for a URL: shared images share a file.
     pub fn cache_name(url: &str) -> String {
         let digest = Sha256::digest(url.as_bytes());
         let stem: String = hex(&digest)[..16].to_owned();
@@ -84,12 +78,9 @@ impl Store {
 
     /// Delete cached art that `keep` does not name.
     ///
-    /// Art is content-addressed upstream, so every revision arrives under a new
-    /// URL and the old cache file would be stranded forever. Narrow on
-    /// purpose: direct children only, names [`Store::cache_name`] could have
-    /// produced, never the manifest. **Each kept file keeps its `.etag`
-    /// sidecar**: deleting those once made every revalidation re-download and
-    /// swap unchanged pictures, a flicker after each product switch.
+    /// Every revision arrives under a new URL. Only direct children named by
+    /// [`Store::cache_name`], never the manifest. **Kept files keep their
+    /// `.etag`**, or every revalidation re-downloads and the art flickers.
     pub fn prune(&self, keep: &[String]) -> usize {
         let mut wanted: std::collections::HashSet<String> =
             std::collections::HashSet::with_capacity(keep.len() * 2);

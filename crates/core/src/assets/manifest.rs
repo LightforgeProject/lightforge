@@ -24,30 +24,21 @@ pub struct Theme {
     /// Stable display name, `Retail`, never `Midnight`.
     pub label: String,
     /// Which game this product is a build of, `retail`, `classic`,
-    /// `classic_era`, `forever`, or a name of your own.
-    ///
-    /// Optional. Without it the client works the line out from the product
-    /// code, which it can only do for codes it already knows: this field is
-    /// how a product released after the binary lands in the right tile
-    /// instead of appearing as a game of its own.
+    /// `classic_era`, `forever`, or a name of your own. Optional: lets a
+    /// product newer than the binary land in the right tile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<String>,
-    /// Which build of that line, `live`, `ptr`, `ptr2` or `beta`. Optional,
-    /// on the same terms as `line`. A value outside that set is ignored
-    /// rather than guessed at; the set is closed and the UI has to render it.
+    /// Which build of that line, `live`, `ptr`, `ptr2` or `beta`. Optional;
+    /// anything else is ignored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
-    /// Optional since schema 2. A product with no wordmark is drawn with its
-    /// label, which is what every Battle.net hand-off already does.
+    /// Optional since schema 2; without it the label is drawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logo: Option<AssetRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<AssetRef>,
-    /// Small square mark for the dashboard's product bar.
-    ///
-    /// Optional, unlike the other two: the bar falls back to
-    /// [`ProductCode::short_name`] for a product with no icon yet, so art can
-    /// be added one product at a time without the bar breaking in between.
+    /// Small square mark for the product bar. Optional: the bar falls back to
+    /// [`ProductCode::short_name`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<AssetRef>,
 }
@@ -62,14 +53,8 @@ pub struct AssetRef {
     /// mismatch discards rather than caches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
-    /// Logical height to draw this image at, in pixels. Only meaningful for
-    /// [`Slot::Logo`]; a background is always drawn to fill.
-    ///
-    /// Logos are drawn to a fixed height, so two of them at the same height
-    /// but different aspect ratios read as different sizes, a wide wordmark
-    /// looks twice the size of a square one. How much room a particular piece
-    /// of art wants is a property of that art, so it is declared next to it
-    /// rather than guessed at by the client. Absent means the app's default.
+    /// Logical height to draw a [`Slot::Logo`] at, in pixels: a wide wordmark
+    /// at a square one's height looks twice the size. Absent: the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<f32>,
 }
@@ -111,13 +96,8 @@ impl Manifest {
         Ok(manifest)
     }
 
-    /// This product's own entry, with no fallback.
-    ///
-    /// [`Manifest::theme`]'s fallback to `default` is right for a logo and a
-    /// background, a WoW product released after the binary should look like
-    /// WoW rather than like nothing. It is wrong for a *mark*, which is
-    /// identity: falling back there puts World of Warcraft's icon beside the
-    /// word "Hearthstone", which is worse than no icon at all.
+    /// This product's own entry, with no fallback: right for a *mark*, which
+    /// is identity (WoW's icon must not appear beside "Hearthstone").
     pub fn own_theme(&self, code: &ProductCode) -> Option<&Theme> {
         self.products.get(code.as_str())
     }
@@ -129,11 +109,9 @@ impl Manifest {
 
     /// The theme of this product's *line*: Classic's for Classic PTR.
     ///
-    /// Between a product's own entry and `default`; without it both PTRs wore
-    /// retail's art. For a head the manifest does not name, the first other
-    /// branch with a theme: Forever's head is `wowf`, and naming `wowf` in the
-    /// manifest would make 1.0.0-beta.3 and older install into a literal
-    /// `wowf/`, so its art stays on `wow_classic_beta`.
+    /// Between a product's own entry and `default`. For a head the manifest
+    /// does not name, the first other branch with a theme: Forever's art stays
+    /// on `wow_classic_beta`, since naming `wowf` breaks 1.0.0-beta.3.
     fn head_theme(&self, code: &ProductCode) -> Option<&Theme> {
         let line = code.line();
         let head = line.head();
@@ -152,12 +130,8 @@ impl Manifest {
     /// One art slot for a product: its own, else its line's, else the default
     /// theme's.
     ///
-    /// Per *slot* rather than per theme, because since schema 2 an entry can
-    /// carry a mark and nothing else. Falling back a whole theme at a time
-    /// would mean a WoW product that gains its own icon silently *loses* the
-    /// logo and background it used to inherit, it stopped being an unknown
-    /// product, so the fallback stopped applying. That is a surprising way to
-    /// lose artwork, and it bit Anniversary the moment it got a mark.
+    /// Per slot, not per theme: an entry with only a mark still inherits the
+    /// logo and background.
     pub fn slot(
         &self,
         code: &ProductCode,
@@ -180,8 +154,7 @@ impl Manifest {
 impl Manifest {
     /// Every asset URL this manifest names, as the client would resolve them.
     ///
-    /// `base` is the manifest's own location, so relative entries resolve the
-    /// same way [`Pipeline`] resolves them when fetching.
+    /// `base` is the manifest's own location.
     pub fn urls(&self, base: &str) -> Vec<String> {
         let mut out = Vec::with_capacity(self.products.len() * 3);
         for theme in self.products.values() {
@@ -197,9 +170,8 @@ impl Manifest {
 
     /// The product catalog this manifest states, over the built-in one.
     ///
-    /// A product is only *stated* here, identity, grouping, what to call it.
-    /// Where its files go and what runs stays derived from the code, so a bad
-    /// publish can mislabel a product but never install one over another.
+    /// Only identity, grouping and label; where files go stays derived from
+    /// the code, so a bad publish can mislabel but never misinstall.
     pub fn catalog(&self) -> Catalog {
         // A published code is a folder name on every machine that reads it.
         let published = self.products.iter().filter(|(code, _)| {
@@ -216,9 +188,7 @@ impl Manifest {
                     Some(line) => line.parse().unwrap_or_else(|never| match never {}),
                     None => code.line(),
                 },
-                // An unparseable branch falls back rather than failing the
-                // entry: a product in the wrong slot of a version list still
-                // beats a product missing from the launcher.
+                // An unparseable branch falls back; the entry stays.
                 branch: theme
                     .branch
                     .as_deref()

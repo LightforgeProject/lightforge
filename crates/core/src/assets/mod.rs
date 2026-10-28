@@ -1,23 +1,14 @@
 //! Dynamic theming asset pipeline.
 //!
-//! Hybrid manifest + per-asset ETags against Tuxcore-hosted branding:
-//! `manifest.json` is revalidated with `If-None-Match` on each launch, and the
-//! logo/background images it names carry their own independent ETags, so a
-//! metadata-only manifest change never re-downloads unchanged art.
+//! `manifest.json` is revalidated by ETag each launch, and each image it names
+//! has its own ETag, so a manifest change never re-downloads unchanged art.
+//! The cache file under [`crate::paths::AppDirs::asset_cache_dir`] is the
+//! image itself: a `304` costs one `stat`.
 //!
-//! Cached under [`crate::paths::AppDirs::asset_cache_dir`], where each asset's
-//! cache file *is* the image the UI renders, the ETag body and the artwork are
-//! the same bytes, so a `304` costs one `stat` and nothing else.
+//! Labels are per product (`Retail`), never per expansion.
 //!
-//! Labels are per-product and stable (`Retail`, `Classic`, `Classic Era`), not
-//! per-expansion. The art behind `Retail` changes every expansion; the word the
-//! UI prints does not, so nothing has to ship an app update to keep reading
-//! correctly.
-//!
-//! The endpoint is not live yet, so [`Origin::Dir`] resolves a manifest and its
-//! art straight out of a local fixture directory. Both origins run the same
-//! parsing, product lookup and checksum verification; only the two fetch points
-//! differ.
+//! [`Origin::Dir`] reads a local fixture directory through the same parsing
+//! and checksum checks.
 
 mod manifest;
 mod pipeline;
@@ -39,10 +30,8 @@ use pipeline::*;
 /// Manifest schema this build understands. A newer one is refused: the last
 /// good cached art beats half-understood theming.
 ///
-/// **2** made `logo` and `background` optional, so a Battle.net hand-off can
-/// be themed with just its square mark. Not merely additive: a schema-1 client
-/// fails to parse the whole document when an entry omits `logo`, so it must
-/// be told to keep its cache.
+/// **2** made `logo` and `background` optional; a schema-1 client cannot
+/// parse an entry without `logo`.
 pub const SCHEMA_VERSION: u32 = 2;
 
 /// File name of the manifest within its base URL or fixture directory.
