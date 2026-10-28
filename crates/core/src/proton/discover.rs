@@ -24,11 +24,8 @@ pub fn discover_managed(proton_dir: &Path) -> Vec<ProtonRelease> {
         .collect()
 }
 
-/// Every Proton build available to Lightforge: its own managed installs plus
-/// everything found across the user's Steam libraries.
-///
-/// Managed builds are listed first so they win the dedup against an identical
-/// version installed under Steam, Lightforge controls its own copy's integrity.
+/// Every Proton build available: Lightforge's own, then everything in the
+/// user's Steam libraries. Own builds win the dedup against the same version.
 pub fn discover_all(
     steam: Option<&crate::steam::SteamRoot>,
     proton_dir: &Path,
@@ -38,9 +35,8 @@ pub fn discover_all(
         found.extend(discover_installed(steam));
     }
     found.sort_by(|a, b| {
-        // Numerically where both are GE tags, so the list reads 9-20, 10-34,
-        // 11-7 rather than in the lexical order those strings have. Equal
-        // versions stay adjacent either way, which is what the dedup needs.
+        // GE tags numerically (9-20, 10-34, 11-7); equal versions stay
+        // adjacent for the dedup.
         (ge_version(&a.version), &a.version)
             .cmp(&(ge_version(&b.version), &b.version))
             // Managed sorts before SystemCompatTools/SteamApp, so dedup keeps it.
@@ -53,22 +49,14 @@ pub fn discover_all(
 }
 
 /// The build Lightforge is tested against, used whenever nothing is pinned.
-///
-/// Newest is not safest. GE-Proton11-9 hangs `wineboot` when given a game id
-/// and crashes Battle.net's installer on start (`c00000fd`), and it was the
-/// newest build on the machine it broke. Moved by hand, after a release has
-/// been through setup, a Battle.net sign-in and a game launch.
+/// Newest is not safest: GE-Proton11-9 crashes Battle.net's installer
+/// (`c00000fd`). Moved by hand once a build has passed setup, a Battle.net
+/// sign-in and a game launch.
 pub const TESTED: &str = "GE-Proton11-7";
 
-/// Choose the build to launch with.
-///
-/// A pin is honored exactly, silently falling back to another build is how a
-/// user ends up debugging a regression against a Proton version they never
-/// selected. Without a pin, [`TESTED`] wins when it is installed. Only when it
-/// is not does the newest supported build stand in, dated by the `version`
-/// file rather than by tag, since tags don't sort numerically
-/// (`GE-Proton11-10` < `GE-Proton11-7` lexically). Setup installs [`TESTED`]
-/// when it is missing, so the stand-in is for machines set up before it.
+/// Choose the build to launch with. A pin is honoured exactly, never swapped
+/// for another build. Without one, [`TESTED`] when installed, else the newest
+/// supported build by its `version` file date (tags do not sort as strings).
 pub fn select<'a>(builds: &'a [ProtonRelease], pin: Option<&str>) -> Option<&'a ProtonRelease> {
     match pin {
         Some(version) => builds.iter().find(|b| b.version == version),
@@ -81,16 +69,11 @@ pub fn select<'a>(builds: &'a [ProtonRelease], pin: Option<&str>) -> Option<&'a 
     }
 }
 
-/// Whether to fetch [`TESTED`] on the user's behalf.
-///
-/// For a machine set up before [`TESTED`] was the default, which otherwise
-/// stays on whatever build it had: a GE-Proton11-5 install could not start
-/// Warcraft III's web UI, and 11-7 could. Only ever a step *forward*, so:
-/// nothing is fetched under a pin (a pin is a choice), when it is already
-/// installed, when no supported build is installed yet (setup installs one),
-/// when a newer build is installed (someone who has one and plays on it keeps
-/// it), or when the prefix was made by a newer build than [`TESTED`], which
-/// would turn the switch into a downgrade of the shared prefix.
+/// Whether to fetch [`TESTED`] for a machine set up before it was the
+/// default (GE-Proton11-5 could not start Warcraft III's web UI; 11-7 can).
+/// Only ever a step forward: not under a pin, not when it is installed, not
+/// before setup, not when a newer build is installed, and not when the prefix
+/// was made by a newer build.
 pub fn wants_tested(
     installed: &[ProtonRelease],
     pin: Option<&str>,
@@ -110,20 +93,16 @@ pub fn wants_tested(
     !prefix_fit(TESTED, prefix_built_by).is_downgrade()
 }
 
-/// A GE release tag as the pair of numbers it is, for ordering.
-///
-/// `GE-Proton11-7` → `(11, 7)`. Needed because these tags do not sort as
-/// strings, `GE-Proton11-7` < `GE-Proton9-20` lexically, and because the
-/// build that made a prefix is recorded as a bare tag with no build timestamp
-/// beside it, so there is nothing else to compare on.
+/// A GE release tag as numbers for ordering: `GE-Proton11-7` → `(11, 7)`.
+/// As strings `GE-Proton11-7` < `GE-Proton9-20`, and a prefix records only
+/// the tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct GeVersion {
     major: u32,
     minor: u32,
 }
 
-/// Parse a GE tag, or `None` for anything else, Valve's builds, UMU's, a
-/// directory name read as a fallback. Incomparable is the honest answer there.
+/// Parse a GE tag, or `None` for anything else (Valve's, umu's builds).
 pub(super) fn ge_version(tag: &str) -> Option<GeVersion> {
     let (major, rest) = tag.strip_prefix("GE-Proton")?.split_once('-')?;
     Some(GeVersion {
@@ -136,7 +115,7 @@ pub(super) fn ge_version(tag: &str) -> Option<GeVersion> {
 
 /// Every Proton build installed across the user's Steam libraries.
 ///
-/// Unsupported flavors are included; filter with [`ProtonFlavor::is_supported`]
+/// Unsupported flavors are included; filter with [`super::ProtonFlavor::is_supported`]
 /// at the point of use.
 pub fn discover_installed(steam: &crate::steam::SteamRoot) -> Vec<ProtonRelease> {
     let mut found = Vec::new();

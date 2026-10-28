@@ -31,14 +31,9 @@ pub struct Outcome {
     pub disposition: Disposition,
 }
 
-/// Shut the prefix down: `wineserver -k` first, then signals for whatever
-/// ignored it.
-///
-/// `wineserver -k` is preferred because it is the shutdown Wine itself defines,
-/// the client gets to flush `Battle.net.config` instead of being killed
-/// mid-write, and because it is scoped to one `WINEPREFIX` by construction.
-/// Signals are the fallback for a genuinely orphaned process whose wineserver
-/// is already gone, which is precisely the case that produces the deadlock.
+/// Shut the prefix down: `wineserver -k` first, which lets the client flush
+/// its config and only reaches this prefix, then signals for orphans whose
+/// wineserver is gone (the deadlock case).
 pub fn shutdown(
     runner: &ProtonRunner,
     layout: &Layout,
@@ -47,11 +42,8 @@ pub fn shutdown(
     shutdown_timed(runner, layout, grace, &mut Vec::new())
 }
 
-/// [`shutdown`], stamping how long each stage took into `timings`.
-///
-/// The stages are wildly different in cost, a scan is 60 ms and a signal grace
-/// is up to five seconds, and when a launch feels like it has hung this is the
-/// only thing that says which one it is sitting in.
+/// [`shutdown`], stamping how long each stage took into `timings` (a scan is
+/// 60 ms, a signal grace up to five seconds).
 pub(super) fn shutdown_timed(
     runner: &ProtonRunner,
     layout: &Layout,
@@ -75,10 +67,8 @@ pub(super) fn shutdown_timed(
         found.iter().map(|p| format!("{} ({})", p.name, p.pid)).collect::<Vec<_>>().join(", "),
     );
 
-    // `wineserver -k` below takes every process in the prefix with it, and a
-    // running game is in the prefix too. The GUI never gets here mid-session,
-    // but the CLI's `play` and Battle.net launch would end a raid without a
-    // logout or a SavedVariables write.
+    // `wineserver -k` would take a running game with it; the CLI could get
+    // here mid-raid.
     let games = games_running(layout);
     if !games.is_empty() {
         return Err(PreflightError::GameRunning(games));
@@ -145,9 +135,7 @@ fn pids_of(processes: &[PrefixProcess]) -> Vec<u32> {
 /// Send `signal` to each process, then wait up to `grace` for them all to go
 /// away. Returns the pids still alive at the end.
 ///
-/// Every pid is re-attributed against the prefix immediately before it is
-/// signalled. Between the scan and the signal a pid can be recycled onto an
-/// unrelated process, and signalling that one would be indefensible.
+/// Each pid is re-attributed right before its signal: it may have been recycled.
 pub(super) fn signal_all(
     system: &mut System,
     layout: &Layout,
@@ -180,8 +168,7 @@ pub(super) fn signal_all(
             true,
             ProcessRefreshKind::nothing(),
         );
-        // A zombie has exited and is only waiting to be reaped by its parent;
-        // counting it would report a dead process as one that survived.
+        // A zombie has exited; it only awaits its parent.
         pending.retain(|pid| {
             system
                 .process(Pid::from_u32(*pid))

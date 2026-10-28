@@ -10,25 +10,18 @@ use crate::paths::Layout;
 use crate::prefix::ProtonRunner;
 use crate::product::ProductCode;
 
-/// A downloader that pre-flight can pause before Battle.net starts.
-///
-/// This is the seam the native downloader plugs into. Both the
-/// downloader and an `Agent.exe` verification pass write the same
-/// `data.NNN`/`.idx` files, and letting them overlap corrupts CASC storage.
-///
-/// Implementations are expected to be cheap no-ops when nothing is in flight.
+/// A downloader pre-flight pauses before Battle.net starts: it and Agent
+/// write the same `data.NNN`/`.idx` files, and overlapping corrupts the store.
 pub trait DownloadGuard {
     /// Pause any transfer writing to `code`'s CASC storage. `Ok(true)` means
-    /// something was actually paused and [`DownloadGuard::resume`] is owed.
-    /// An `Err` blocks the launch rather than risking the overlap.
+    /// [`DownloadGuard::resume`] is owed; `Err` blocks the launch.
     fn pause(&mut self, code: &ProductCode) -> Result<bool, PreflightError>;
 
     /// Resume what [`DownloadGuard::pause`] stopped, once Battle.net has exited.
     fn resume(&mut self, code: &ProductCode) -> Result<bool, PreflightError>;
 }
 
-/// For callers with no downloader of their own: there is never anything
-/// to pause.
+/// For callers with no downloader of their own.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoDownloads;
 
@@ -48,8 +41,7 @@ pub struct Preflight {
     /// Windows user inside the prefix, for locating the config files.
     user: String,
     /// Products Lightforge downloads itself, whose Battle.net auto-update is
-    /// re-disabled on every pass, the client rewrites its config on exit, so
-    /// setting this once at install time does not hold.
+    /// switched off again on every pass: the client rewrites its config on exit.
     managed: Vec<ProductCode>,
     grace: Duration,
     /// Leave a running Battle.net client (and its Agent) alone.
@@ -66,14 +58,8 @@ impl Preflight {
         }
     }
 
-    /// Do not close a Battle.net client that is already up.
-    ///
-    /// For a direct launch of the game, which has no need of the prefix
-    /// being empty: the client is the only thing a scan finds besides its own
-    /// helpers, so the pass has nothing else to clean. The caches and
-    /// configs it would rewrite belong to that running client, which writes
-    /// its config back on exit, so they wait for a launch that finds it
-    /// closed. With no client up this changes nothing.
+    /// Do not close a Battle.net client that is already up, for a direct game
+    /// launch. Cache and config work waits for a launch that finds it closed.
     pub fn keeping_client(mut self, keep: bool) -> Self {
         self.keep_client = keep;
         self
@@ -91,8 +77,7 @@ impl Preflight {
         self
     }
 
-    /// Run the full pass. Fails rather than half-cleaning if anything in the
-    /// prefix refused to die.
+    /// Run the full pass. Fails, without cleaning, if anything refused to die.
     pub fn run(
         &self,
         runner: &ProtonRunner,
@@ -121,18 +106,14 @@ impl Preflight {
             return Err(PreflightError::StillRunning(survivors));
         }
 
-        // Everything below this line depends on the prefix being quiet.
-        // Agent's cache is `Agent/data/cache` and nothing else: clearing the
-        // whole directory would take `product.db` with it, and Battle.net
-        // would forget every install it has been shown.
+        // The prefix is quiet from here. Only `Agent/data/cache`: the rest of
+        // Agent's directory holds `product.db`, every install it knows.
         let agent_cache = remove_dir(&layout.agent_cache_dir())?;
         let staging = remove_dir(&layout.battle_net_staging())?;
         stamp(&mut timings, "clear caches");
 
-        // The per-account file is the client's, not ours: it is recreated on
-        // login and after a prefix update, each time without `HideOnClose`. A
-        // one-shot write at setup does not survive, so it is re-applied here
-        // on every launch.
+        // The client recreates the per-account file on login and after a
+        // prefix update, without `HideOnClose`, so it is re-applied every launch.
         let mut tweaks = battlenet::default_tweaks(layout);
         tweaks.extend(battlenet::product_tweaks(&self.managed));
         let mut configs = vec![battlenet::configure(layout, &self.user, &tweaks)?];
@@ -203,9 +184,7 @@ pub struct Report {
     pub configs: Vec<PathBuf>,
     /// Whether a download was paused and is owed a resume.
     pub download_paused: bool,
-    /// How long each stage took, in the order they ran. A launch that feels
-    /// like it has hung is one of these, and which one is not guessable from
-    /// the outside.
+    /// How long each stage took, in order: which one a slow launch sits in.
     pub timings: Vec<Timing>,
 }
 

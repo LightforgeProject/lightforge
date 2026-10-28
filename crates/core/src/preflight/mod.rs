@@ -1,9 +1,8 @@
 //! Pre-flight: everything that has to be true before Battle.net is spawned.
 //!
-//! The problem this solves is the "Initializing Data…" deadlock. A previous
-//! session leaves `Agent.exe`, or the whole client, alive inside the prefix;
-//! the next launch finds Agent's directory cache describing a world that no
-//! longer exists, and Agent responds by scanning 126 GB of CASC storage.
+//! It prevents the "Initializing Data…" deadlock: a previous session's Agent
+//! survives in the prefix, its directory cache goes stale, and Agent rescans
+//! 126 GB of CASC storage.
 //!
 //! The pass, in order:
 //!
@@ -16,19 +15,16 @@
 //! 5. re-apply the Battle.net config defaults,
 //! 6. pause any download writing to CASC storage.
 //!
-//! A process is only ever signalled when its own environment names
-//! Lightforge's prefix (`WINEPREFIX` or `STEAM_COMPAT_DATA_PATH`). Someone
-//! running Battle.net out of Lutris or Steam has processes with identical
-//! names and a different prefix, so killing on name alone would be a
-//! data-loss bug. A process whose environment cannot be read is left alone.
+//! A process is only signalled when its own environment names Lightforge's
+//! prefix (`WINEPREFIX` or `STEAM_COMPAT_DATA_PATH`): a Battle.net under
+//! Lutris or Steam has the same names. An unreadable environment means hands off.
 //!
 //! Steps 4 and 5 are gated on step 3 succeeding: the client rewrites its
 //! configs on exit and Agent memory-maps its cache, so writing into a live
 //! prefix loses the write at best.
 //!
-//! The same process table answers the question at the *other* end of a
-//! launch; see [`wait_for_game_start`]. Handing a game to Battle.net gives
-//! nothing to wait on, because the client exits as soon as the game is up.
+//! The same process table tells when a handed-off game starts and ends; see
+//! [`wait_for_game_start`].
 
 mod games;
 mod gate;

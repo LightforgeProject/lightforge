@@ -3,9 +3,8 @@
 //! Policy is **pinned + notify-only**: Lightforge never swaps a working Proton
 //! build out from under the user.
 //!
-//! All products share one prefix, so a pin selects which Proton-GE binary runs
-//! at launch rather than isolating a prefix. The stale-shader safety step on a
-//! version swap therefore clears only that product's
+//! All products share one prefix, so a pin only picks which Proton binary
+//! runs at launch. A version swap clears just that product's
 //! [`crate::paths::AppDirs::shader_cache_dir`].
 
 mod discover;
@@ -34,13 +33,9 @@ use discover::parse_version_file;
 #[cfg(test)]
 use {discover::*, upstream::*};
 
-/// The build WoW's in-game shop is known to work under.
-///
-/// Newer GE builds start the shop's browser (`Utils/BlizzardBrowser.exe`) but
-/// lose its GPU child, the grey box instead of a page. The other half of the
-/// fix is the install's own drive ([`crate::paths::Layout::wow_drive`]).
-/// Measured 2026-10-02. A recommendation only: other builds play fine
-/// without a shop.
+/// The build WoW's in-game shop works under (measured 2026-10-02). Newer GE
+/// builds start `Utils/BlizzardBrowser.exe` but lose its GPU child: a grey
+/// box. The other half of the fix is [`crate::paths::Layout::wow_drive`].
 pub const SHOP_BUILD: &str = "GE-Proton11-7";
 
 /// Where a given Proton build comes from.
@@ -57,9 +52,8 @@ pub enum ProtonSource {
 
 /// Which Proton lineage a build belongs to.
 ///
-/// [`ProtonFlavor::GloriousEggroll`], [`ProtonFlavor::CachyOs`] and Valve's
-/// own are the supported launch targets; everything else is detected so the UI can show what is installed and
-/// explain why it isn't offered, rather than silently omitting it.
+/// GE, CachyOS and Valve's own are launch targets; the rest are detected so
+/// the UI can say why they are not offered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProtonFlavor {
@@ -76,16 +70,12 @@ pub enum ProtonFlavor {
 }
 
 impl ProtonFlavor {
-    /// Classify a build by its version tag.
-    ///
-    /// Matching is case-insensitive: Valve tags their builds in lowercase
-    /// (`proton-11.0-2-x86_64`, `experimental-11.0-20260910b-x86_64`) while
-    /// GE and umu use mixed case.
+    /// Classify a build by its version tag, ignoring case: Valve's are lower
+    /// case (`proton-11.0-2-x86_64`), GE's and umu's mixed.
     pub fn classify(version: &str) -> Self {
         let v = version.to_ascii_lowercase();
 
-        // Order matters: umu builds are Proton derivatives and would otherwise
-        // match the lineage checks below.
+        // First: umu builds would also match the checks below.
         if v.starts_with("umu-") {
             Self::Umu
         } else if v.starts_with("ge-proton") || v.starts_with("proton-ge") {
@@ -105,12 +95,8 @@ impl ProtonFlavor {
         matches!(self, Self::GloriousEggroll | Self::CachyOs | Self::Valve)
     }
 
-    /// Whether Lightforge may pick a build of this flavor on its own.
-    ///
-    /// Narrower than [`ProtonFlavor::is_supported`] on purpose: the other
-    /// lineages are launchable because someone chose them, but a machine that
-    /// has only Steam's Proton must still be given the tested GE build, and a
-    /// missing pin must not quietly land on a lineage nobody tested.
+    /// Whether Lightforge may pick a build of this flavor on its own. Narrower
+    /// than [`ProtonFlavor::is_supported`]: the other lineages need a pin.
     pub fn is_default_candidate(&self) -> bool {
         matches!(self, Self::GloriousEggroll)
     }
@@ -119,12 +105,9 @@ impl ProtonFlavor {
 /// An installed Proton build.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProtonRelease {
-    /// Upstream release tag, e.g. `GE-Proton11-6`.
-    ///
-    /// Read from the build's `version` file rather than its directory name,
-    /// they disagree in practice (`GE-Proton11-6-x86_64/` ships
-    /// `version` = `GE-Proton11-6`), and only the tag matches what the GitHub
-    /// Releases API reports.
+    /// Upstream release tag, e.g. `GE-Proton11-6`, from the `version` file:
+    /// the directory is `GE-Proton11-6-x86_64/`, and only the tag matches
+    /// GitHub's releases.
     pub version: String,
     pub flavor: ProtonFlavor,
     pub source: ProtonSource,
@@ -135,10 +118,8 @@ pub struct ProtonRelease {
 }
 
 impl ProtonRelease {
-    /// Read a build from a compatibility-tool directory.
-    ///
-    /// Returns `None` when the directory has no `proton` entry point, partial
-    /// extractions and stray directories are common in `compatibilitytools.d`.
+    /// Read a build from a compatibility-tool directory; `None` without a
+    /// `proton` script (stray and half-extracted folders are common).
     pub fn read_from_dir(dir: &Path, source: ProtonSource) -> Option<Self> {
         if !dir.join("proton").is_file() {
             return None;
@@ -148,8 +129,7 @@ impl ProtonRelease {
             .ok()
             .and_then(|s| parse_version_file(&s));
 
-        // Fall back to the directory name when `version` is absent, which is
-        // the case for Valve's `Proton - Experimental`.
+        // Valve's `Proton - Experimental` has no `version` file.
         let (built_at, version) = match from_file {
             Some(parsed) => parsed,
             None => (None, dir.file_name()?.to_string_lossy().into_owned()),
@@ -170,14 +150,11 @@ impl ProtonRelease {
     }
 }
 
-/// Which Proton build a product is pinned to.
+/// Which Proton build a product is pinned to. Battle.net has its own pin:
+/// "latest" is not reliably best for Agent and CEF.
 ///
-/// The Battle.net prefix carries its own pin, independent of any WoW product,
-/// "latest" is not reliably best for Agent.exe and CEF.
-///
-/// Serialized as an optional string rather than a tagged enum, so TOML stays a
-/// flat `default_proton = "GE-Proton9-20"` line instead of a nested table that
-/// would have to be ordered against the `[[products]]` array.
+/// Serialized as an optional string, so the TOML is one flat line
+/// (`default_proton = "GE-Proton9-20"`), not a table to order around `[[products]]`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "Option<String>", into = "Option<String>")]
 pub enum ProtonPin {

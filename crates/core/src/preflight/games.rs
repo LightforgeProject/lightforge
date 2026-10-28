@@ -11,23 +11,15 @@ use super::shutdown::{signal_all, Disposition};
 use crate::paths::Layout;
 
 /// How often the prefix is re-scanned while waiting on a handed-off game.
-///
-/// Slower than [`super::POLL`]: that one is a shutdown the user is waiting through,
-/// this one runs for the length of a gaming session.
+/// Slower than [`super::POLL`]: this runs for a whole session.
 const HANDOFF_POLL: Duration = Duration::from_millis(500);
 
-/// Wine's own processes, which live in every prefix and are nobody's game.
+/// Wine's own processes, in every prefix and nobody's game. The
+/// before-snapshot catches most, but Wine starts services on demand too.
 ///
-/// The before-snapshot is the primary filter, these are already running when
-/// the hand-off starts, but Wine spawns services on demand too, and a
-/// `winedevice.exe` that appears two seconds after the click would otherwise
-/// be reported as the game and "played" for a quarter of a second.
-///
-/// The last four outlive the game: `steam.exe` is the shim every `proton run`
-/// goes through, `xalia.exe` the accessibility helper GE-Proton starts beside
-/// it, `lsass.exe` is started on demand by a login and `rundll32.exe` by the
-/// shell. Counted as a game they kept the prefix "busy" for good: every later
-/// Play was refused as a game still running.
+/// The last four outlive the game: `steam.exe` is Proton's shim, `xalia.exe`
+/// GE-Proton's accessibility helper, `lsass.exe` comes with a login and
+/// `rundll32.exe` with the shell. Counted as games, they refused every later Play.
 const WINE_SERVICES: [&str; 16] = [
     "services",
     "winedevice",
@@ -47,22 +39,16 @@ const WINE_SERVICES: [&str; 16] = [
     "rundll32",
 ];
 
-/// A process in the prefix that is neither Battle.net's nor Wine's own.
-///
-/// After a hand-off there is exactly one thing that fits: the game Battle.net
-/// was asked to start. Identifying it this way rather than by name is what
-/// makes the hand-off work for a title Lightforge has never heard of.
+/// A process in the prefix that is neither Battle.net's nor Wine's: after a
+/// hand-off, the game, whatever title it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GameProcess {
     pub pid: u32,
     pub name: String,
 }
 
-/// Whether a Battle.net client is already up in this prefix.
-///
-/// The question a hand-off asks first: a client that is already running and
-/// signed in can be handed a launch command straight away, and starting a
-/// second one would only be told to go away by the first.
+/// Whether a Battle.net client is already up in this prefix, and can take a
+/// launch command directly.
 pub fn client_running(layout: &Layout) -> bool {
     scan(layout).iter().any(|p| p.kind == ProcKind::BattleNet)
 }
@@ -94,20 +80,14 @@ fn collect_games(system: &System, layout: &Layout) -> Vec<GameProcess> {
         .collect()
 }
 
-/// The executable's name, when a process could be a game at all.
-///
-/// Ownership is checked separately; this is the "what is it" half. Three
-/// things are not games: Battle.net's own processes, Wine's plumbing, and a
-/// browser child re-execing its parent.
+/// The executable's name, when a process could be a game at all: not
+/// Battle.net's, not Wine's, not a browser child. Ownership is checked elsewhere.
 pub(super) fn names_a_game(argv: &[std::ffi::OsString], fallback: &str) -> Option<String> {
-    // Anything Battle.net's is accounted for elsewhere; what is left is
-    // either Wine's own or the game.
     if ProcKind::classify(argv, fallback).is_some() {
         return None;
     }
-    // Proton's own `python3`, and any wrapper such as `gamemoderun`, carries
-    // the prefix in its environment too, but a game under Wine always has a
-    // Windows executable as `argv[0]`.
+    // Proton's `python3` and wrappers like `gamemoderun` carry the prefix too,
+    // but a game under Wine has a Windows executable as `argv[0]`.
     if argv.first().is_some_and(|a| !a.is_empty() && !is_windows_exe(a)) {
         return None;
     }
@@ -131,17 +111,10 @@ pub struct Stopped {
     pub disposition: Disposition,
 }
 
-/// Stop the running game, and only the game.
-///
-/// Not [`shutdown`]: `wineserver -k` takes the whole prefix with it, which is
-/// Battle.net and any other game started from it. This signals the processes
-/// [`games_running`] names, `SIGTERM` first so Wine can tear its windows
-/// down, `SIGKILL` for whatever is still there after `grace`. Each pid is
-/// re-attributed to the prefix right before it is signalled, as in
-/// [`signal_all`]. Lifecycle only: nothing here reads or writes the game.
-///
-/// The prefix is left for the next pre-flight to settle, exactly as after a
-/// game that closed by itself.
+/// Stop the running game, and only the game. Not [`super::shutdown`], which takes
+/// Battle.net down with it: this signals what [`games_running`] names,
+/// `SIGTERM` then `SIGKILL` after `grace`, re-attributing each pid first as
+/// `signal_all` does. Lifecycle only: nothing reads or writes the game.
 pub fn stop_games(layout: &Layout, grace: Duration) -> Vec<Stopped> {
     let mut system = System::new();
     refresh(&mut system);
@@ -173,15 +146,10 @@ pub fn stop_games(layout: &Layout, grace: Duration) -> Vec<Stopped> {
 
 /// Wait for a handed-off game to start.
 ///
-/// `before` is what [`games_running`] returned *prior* to the hand-off, so a
-/// game already playing does not count as this launch's. `None` means nothing
-/// started in time, almost always a client sitting at its login screen,
-/// which is not an error, but is the point at which the launcher has to stop
-/// claiming a launch is in progress.
-///
-/// This is the half of a hand-off that Battle.net does not give back: the
-/// client exits as soon as the game is up (`GameLaunchWindowBehavior: 2`), so
-/// the child process says nothing about whether anything is playing.
+/// `before` is [`games_running`] from before the hand-off, so a game already
+/// playing does not count. `None` means nothing started in time, usually a
+/// client at its login screen. Needed because the client exits once the game
+/// is up (`GameLaunchWindowBehavior: 2`).
 pub fn wait_for_game_start(
     layout: &Layout,
     before: &[GameProcess],
@@ -201,11 +169,8 @@ pub fn wait_for_game_start(
     }
 }
 
-/// Block until a game seen by [`wait_for_game_start`] is gone.
-///
-/// Watched by pid: a title that re-execs itself becomes a different process,
-/// and calling the session over at that point is better than hanging forever
-/// on a pid that is never coming back.
+/// Block until a game seen by [`wait_for_game_start`] is gone. By pid: a
+/// title that re-execs itself ends the session early instead of hanging.
 pub fn wait_for_game_exit(layout: &Layout, pid: u32) {
     while games_running(layout).iter().any(|p| p.pid == pid) {
         std::thread::sleep(HANDOFF_POLL);

@@ -90,9 +90,7 @@ fn a_process_that_ignores_sigterm_is_killed_and_a_stranger_is_left_alone() {
 
 #[test]
 fn a_handed_off_game_is_whatever_is_not_battle_net_or_wine() {
-    // The point of the rule: a title nobody wrote a table entry for is
-    // still recognised, which is what makes the hand-off work for
-    // anything Blizzard ships.
+    // A title with no table entry is still recognised.
     assert_eq!(
         names_a_game(&argv([r"C:\Program Files (x86)\Hearthstone\Hearthstone.exe"].as_ref()), "Hearthstone.e"),
         Some("Hearthstone.exe".to_owned())
@@ -181,11 +179,8 @@ fn only_the_processes_that_cause_the_deadlock_are_classified() {
 
 #[test]
 fn the_client_is_recognised_despite_cef_renaming_its_threads() {
-    // Live finding: Linux reports `comm`, and the Battle.net client is
-    // CEF: every one of its processes is named after a Chromium thread,
-    // never after the executable. Classifying on the name alone silently
-    // misses the client entirely, which is the one process pre-flight
-    // exists to clear.
+    // Live finding: `comm` is a Chromium thread name for every client
+    // process, so classifying on it misses the client entirely.
     for comm in ["CrBrowserMain", "CrGpuMain", "CrRendererMain", "CrUtilityMain", "Agent"] {
         assert!(
             ProcKind::classify(&argv(&[BNET, "--from-launcher"]), comm).is_some(),
@@ -296,11 +291,9 @@ fn cleanup_reports_what_it_reclaimed_and_is_idempotent() {
 
 #[test]
 fn clearing_the_cache_never_touches_agents_product_registry() {
-    // The bug this guards against cost a real user their install
-    // registration on every launch: `agent_cache_dir` pointed at Agent's
-    // whole directory, so clearing it deleted `product.db`: the list of
-    // games Battle.net knows are installed, and the client then asked to
-    // locate the game again, every single time.
+    // A real user lost their install registration every launch: clearing
+    // all of Agent's directory deleted `product.db`, and the client asked to
+    // locate the game each time.
     let root = scratch("agent-registry");
     let layout = Layout::with_root(&root);
 

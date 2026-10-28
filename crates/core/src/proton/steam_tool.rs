@@ -1,11 +1,8 @@
 use super::{ProtonRelease, ProtonSource};
 
-/// A Valve Proton that Steam can install as a tool.
-///
-/// Valve publishes no tarballs: these are Steam apps, so "download" means
-/// asking Steam to install one (`steam://install/<id>`). The ids are from
-/// SteamDB; `install_dir` is the folder Steam puts it in, which is how an
-/// installed one is recognised.
+/// A Valve Proton Steam can install (`steam://install/<id>`, ids from
+/// SteamDB): Valve publishes no tarballs. `install_dir` is how an installed
+/// one is recognised.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SteamTool {
     pub name: &'static str,

@@ -4,10 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{io, ProtonError, ProtonFlavor, ProtonRelease, ProtonSource, UpdateNotice};
 
-/// A line of Proton builds Lightforge can download.
-///
-/// Valve's Proton is only distributed through Steam and TKG publishes no
-/// release builds, so neither is a family here; the installer window says so.
+/// A line of Proton builds Lightforge can download. Not Valve's (Steam only)
+/// nor TKG's (no release builds).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ProtonFamily {
     GloriousEggroll,
@@ -59,8 +57,7 @@ const CACHYOS_RELEASES_URL: &str = "https://api.github.com/repos/CachyOS/proton-
 /// One release as published upstream.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpstreamRelease {
-    /// Release tag, e.g. `GE-Proton11-6`. Matches the `version` file of an
-    /// installed build, which is what makes the two comparable.
+    /// Release tag, e.g. `GE-Proton11-6`, as an installed build's `version` file has it.
     pub tag_name: String,
     #[serde(default)]
     pub prerelease: bool,
@@ -95,9 +92,8 @@ impl UpstreamRelease {
     /// | `GE-Proton11-1`, `11-3` | unsuffixed x86_64 **plus** `-aarch64` |
     /// | ≥ `GE-Proton11-4` | explicit `-x86_64` **and** `-aarch64` |
     ///
-    /// So an x86_64 host takes an explicit `-x86_64` when offered and otherwise
-    /// any tarball that isn't `-aarch64`; picking the first `.tar.gz` would
-    /// select the ARM build, since `aarch64` sorts first.
+    /// So x86_64 takes an explicit `-x86_64`, else any non-`-aarch64` tarball;
+    /// the first `.tar.gz` is the ARM build.
     pub fn tarball_for(&self, arch: &str) -> Option<&ReleaseAsset> {
         // CachyOS calls aarch64 `arm64`, and compresses with xz.
         let names: &[&str] = match arch {
@@ -127,10 +123,8 @@ impl UpstreamRelease {
         self.tarball_for(std::env::consts::ARCH)
     }
 
-    /// The checksum published alongside a specific tarball.
-    ///
-    /// Derived from the tarball's own name rather than searched for, so a
-    /// dual-arch release can never pair an x86_64 download with the ARM digest.
+    /// The checksum for one tarball, by its own name, so a dual-arch release
+    /// cannot pair an x86_64 download with the ARM digest.
     pub fn checksum_for(&self, tarball: &ReleaseAsset) -> Option<&ReleaseAsset> {
         let stem = ARCHIVE_EXTENSIONS
             .iter()
@@ -140,11 +134,8 @@ impl UpstreamRelease {
     }
 }
 
-/// Fetch a family's release list, revalidating with `cache`.
-///
-/// Unauthenticated GitHub API calls are capped at 60/hour per IP, so the cached
-/// copy is returned on `304` and the budget only moves when something actually
-/// changed upstream.
+/// Fetch a family's release list, revalidating with `cache`: unauthenticated
+/// GitHub calls are capped at 60/hour per IP, and a `304` costs nothing.
 pub async fn fetch_releases(
     http: &crate::net::Http,
     cache: &crate::net::ETagCache,
@@ -158,14 +149,12 @@ pub async fn fetch_releases(
 
 /// The newest stable release, or `None` if upstream published only prereleases.
 pub fn latest_stable(releases: &[UpstreamRelease]) -> Option<&UpstreamRelease> {
-    // GitHub returns newest-first, so the first stable entry is the latest.
+    // GitHub returns newest first.
     releases.iter().find(|r| !r.prerelease)
 }
 
-/// Compare an installed version against upstream, producing a passive notice.
-///
-/// Returns `None` when already current. Nothing here applies an update, the
-/// policy is pinned + notify-only.
+/// Compare an installed version against upstream: a notice, never an update.
+/// `None` when current.
 pub fn check_for_update(installed: &str, releases: &[UpstreamRelease]) -> Option<UpdateNotice> {
     let latest = latest_stable(releases)?;
     (latest.tag_name != installed).then(|| UpdateNotice {
@@ -175,12 +164,8 @@ pub fn check_for_update(installed: &str, releases: &[UpstreamRelease]) -> Option
     })
 }
 
-/// Delete a Proton build Lightforge installed.
-///
-/// Refuses builds outside `proton_dir` (Steam's or hand-placed) and builds
-/// something is pinned to, naming the pins. It does not unpin them itself: a
-/// pin is the user's decision about how a game launches, and freeing disk
-/// space should not quietly rewrite it.
+/// Delete a Proton build Lightforge installed. Refuses builds outside
+/// `proton_dir` and pinned builds, naming the pins: unpinning is the user's call.
 pub fn remove_build(
     build: &ProtonRelease,
     proton_dir: &Path,
@@ -199,20 +184,13 @@ pub fn remove_build(
     std::fs::remove_dir_all(&build.path).map_err(io(&build.path))
 }
 
-/// How much disk a build occupies, following no symlinks.
-///
-/// Best effort: an unreadable entry contributes nothing rather than failing
-/// the total, since this only ever labels a button.
+/// How much disk a build occupies, not following symlinks. Best effort.
 pub fn size_on_disk(path: &Path) -> u64 {
     crate::fsutil::dir_size(path)
 }
 
-/// Download, verify, and unpack a release into `dest_root`.
-///
-/// The tarball unpacks to a single top-level directory named for the release,
-/// so the installed build lands at `dest_root/<dir>`. The download is verified
-/// against the published SHA-512 before anything is extracted, a truncated
-/// Proton fails much later and far more confusingly than a checksum mismatch.
+/// Download a release, check its published SHA-512, and unpack it to
+/// `dest_root/<release dir>`.
 pub async fn install_release(
     http: &crate::net::Http,
     release: &UpstreamRelease,
@@ -235,12 +213,9 @@ pub async fn install_release(
         .download(&tarball.browser_download_url, &archive, on_progress)
         .await?;
 
-    // Whatever happens from here, the tarball goes: it is ~400 MB, and a
-    // failed checksum fetch, a missing checksum or a bad unpack used to leave
-    // it in the cache for good.
+    // The ~400 MB tarball goes, whatever happens from here.
     let installed: Result<ProtonRelease, ProtonError> = async {
-        // GE publishes a checksum file for every release; treat its absence
-        // as a reason to stop rather than a reason to trust the download.
+        // GE publishes one for every release; a missing one stops the install.
         let expected = match release.checksum_for(tarball) {
             Some(asset) => parse_sha512sum(&http.get_text(&asset.browser_download_url).await?)
                 .ok_or_else(|| ProtonError::MalformedChecksum(asset.name.clone()))?,
@@ -274,12 +249,9 @@ pub async fn install_release(
     installed
 }
 
-/// Extract a `.tar.gz` or `.tar.xz` into `dest_root`, returning the build's directory.
-///
-/// Unpacked into a staging folder inside `dest_root` and renamed into place
-/// only once it is complete and reads as a Proton build. An interrupted or
-/// failed unpack used to leave a half-extracted GE-Proton folder that
-/// discovery listed and a launch then failed on; now it leaves nothing.
+/// Extract a `.tar.gz` or `.tar.xz` into `dest_root`, returning the build's
+/// directory. Unpacked into staging and renamed in only once it reads as a
+/// Proton build, so a failed unpack leaves nothing for discovery to list.
 pub(super) fn unpack(archive: &Path, dest_root: &Path) -> Result<PathBuf, ProtonError> {
     let file = std::fs::File::open(archive).map_err(io(archive))?;
     std::fs::create_dir_all(dest_root).map_err(io(dest_root))?;
@@ -298,8 +270,7 @@ pub(super) fn unpack(archive: &Path, dest_root: &Path) -> Result<PathBuf, Proton
         let mut entry = entry.map_err(io(archive))?;
         let path = entry.path().map_err(io(archive))?.into_owned();
 
-        // Reject absolute paths and `..` traversal rather than trusting the
-        // archive to stay inside its own directory.
+        // No absolute paths, no `..`.
         if path.is_absolute()
             || path
                 .components()
@@ -310,9 +281,7 @@ pub(super) fn unpack(archive: &Path, dest_root: &Path) -> Result<PathBuf, Proton
         entry.unpack_in(&fresh).map_err(io(&fresh))?;
     }
 
-    // A release is one directory named for it. Anything else is not a
-    // GE-Proton tarball, and guessing which part is the build is how a stray
-    // folder would end up beside the real ones.
+    // A release is exactly one directory; anything else is not a Proton tarball.
     let mut tops = std::fs::read_dir(&fresh).map_err(io(&fresh))?
         .filter_map(Result::ok)
         .map(|e| e.path());
@@ -327,8 +296,8 @@ pub(super) fn unpack(archive: &Path, dest_root: &Path) -> Result<PathBuf, Proton
     }
 
     let target = dest_root.join(built.file_name().unwrap_or_default());
-    // The same release again, a repair: the old copy only goes once the new
-    // one is ready to take its place, and comes back if that fails.
+    // The same release again, a repair: the old copy goes only once the new
+    // one is ready, and comes back if the swap fails.
     let replacing = target.exists();
     if replacing {
         std::fs::rename(&target, &old).map_err(io(&target))?;

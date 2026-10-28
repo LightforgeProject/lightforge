@@ -9,11 +9,8 @@ use crate::paths::Layout;
 /// Environment variables that identify which prefix a process belongs to.
 const PREFIX_VARS: [&str; 2] = ["WINEPREFIX", "STEAM_COMPAT_DATA_PATH"];
 
-/// What a process found inside the prefix is.
-///
-/// The distinction is not cosmetic: [`ProcKind::Agent`] is the one that causes
-/// the repair scan, and [`ProcKind::WineServer`] is the one that must die last,
-/// because everything else dies with it.
+/// What a process found inside the prefix is. [`ProcKind::Agent`] causes the
+/// repair scan; [`ProcKind::WineServer`] dies last, taking the rest with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ProcKind {
     /// `Battle.net.exe` or `Battle.net Launcher.exe`.
@@ -27,19 +24,11 @@ pub enum ProcKind {
 }
 
 impl ProcKind {
-    /// Classify a process from its command line.
-    ///
-    /// `argv[0]` is the only dependable source here. Linux reports a process's
-    /// name from `comm`, which is the *thread* name, and the client is CEF,
-    /// so a live `Battle.net.exe` shows up as `CrBrowserMain`, `CrGpuMain` or
-    /// `CrRendererMain` and a name-based match misses the one process this
-    /// whole module exists to clean up. `argv[0]` is the Windows path Wine was
-    /// handed, e.g. `C:\Program Files (x86)\Battle.net\Battle.net.exe`.
-    ///
-    /// Returns `None` for anything Lightforge has no business touching.
+    /// Classify a process from `argv[0]`, the Windows path Wine was handed.
+    /// Not `comm`: that is the thread name, and the CEF client shows up as
+    /// `CrBrowserMain` or `CrRendererMain`. `None` for anything not ours to touch.
     pub(super) fn classify(argv: &[std::ffi::OsString], name: &str) -> Option<Self> {
-        // Matching is case-insensitive: Wine's spelling of an executable is
-        // not dependable across builds.
+        // Case-insensitive: Wine's spelling varies across builds.
         let exe = executable_name(argv, name).to_ascii_lowercase();
         let kind = match exe.trim_end_matches(".exe") {
             "battle.net" | "battle.net launcher" => Self::BattleNet,
@@ -49,9 +38,7 @@ impl ProcKind {
             _ => return None,
         };
 
-        // CEF's own children re-exec the same binary with `--type=`. They are
-        // helpers, not the client, and go first so the browser process isn't
-        // left rendering into dead children while it shuts down.
+        // CEF children re-exec the same binary with `--type=`; they go first.
         if kind == Self::BattleNet && argv.iter().skip(1).any(is_cef_child_arg) {
             return Some(Self::Helper);
         }
@@ -69,10 +56,8 @@ impl ProcKind {
     }
 }
 
-/// The executable's file name, from `argv[0]` where there is one.
-///
-/// Splits on both separators: `argv[0]` is a Windows path for anything running
-/// under Wine and a POSIX one for `wineserver` itself.
+/// The executable's file name from `argv[0]`: a Windows path under Wine, a
+/// POSIX one for `wineserver`.
 pub(super) fn executable_name(argv: &[std::ffi::OsString], fallback: &str) -> String {
     let Some(argv0) = argv.first().map(|a| a.to_string_lossy()) else {
         return fallback.to_owned();
@@ -108,19 +93,15 @@ pub struct PrefixProcess {
     pub exe: Option<PathBuf>,
 }
 
-/// Find every process belonging to the prefix described by `layout`.
-///
-/// Returns them in termination order. An empty result is the normal state of a
-/// healthy system, not a failure to detect anything.
+/// Every process belonging to the prefix, in termination order.
 pub fn scan(layout: &Layout) -> Vec<PrefixProcess> {
     let mut system = System::new();
     refresh(&mut system);
     collect(&system, layout)
 }
 
-/// Refresh only what ownership and classification need. The default refresh
-/// walks disks, networks and CPU state as well, which on a machine with a
-/// 126 GB install is a measurable stall for data nobody here reads.
+/// Refresh only what ownership and classification need; the default also
+/// walks disks and networks, a measurable stall.
 pub(super) fn refresh(system: &mut System) {
     system.refresh_processes_specifics(
         ProcessesToUpdate::All,
@@ -139,9 +120,7 @@ pub(super) fn collect(system: &System, layout: &Layout) -> Vec<PrefixProcess> {
         .processes()
         .iter()
         .filter_map(|(pid, proc)| {
-            // Threads share their process's environment and command line, so
-            // they match every test below, and signalling one is not how a
-            // process is stopped. Only thread-group leaders are candidates.
+            // Threads match every test below; only thread-group leaders count.
             if proc.thread_kind().is_some() {
                 return None;
             }
@@ -163,11 +142,8 @@ pub(super) fn collect(system: &System, layout: &Layout) -> Vec<PrefixProcess> {
     found
 }
 
-/// Every spelling of "our prefix" a process's environment might carry.
-///
-/// Both the compat-data directory and the `pfx` inside it count, because
-/// Proton exports the first and Wine exports the second. Canonical forms are
-/// included so a prefix reached through a symlinked home still matches.
+/// Every spelling of "our prefix" a process's environment might carry: the
+/// compat-data directory (Proton's) and `pfx` (Wine's), raw and canonical.
 pub(super) fn owned_prefixes(layout: &Layout) -> HashSet<PathBuf> {
     let mut set = HashSet::new();
     for path in [layout.compat_data(), layout.prefix()] {
@@ -179,11 +155,8 @@ pub(super) fn owned_prefixes(layout: &Layout) -> HashSet<PathBuf> {
     set
 }
 
-/// Whether a process's environment names one of `prefixes`.
-///
-/// Unreadable or absent, the case for a process owned by another user, or one
-/// that exited mid-scan, means "not ours". Refusing to signal a process we
-/// cannot attribute is the whole safety property of this module.
+/// Whether a process's environment names one of `prefixes`. Unreadable means
+/// not ours: never signalling what cannot be attributed is this module's safety rule.
 pub(super) fn belongs_to(environ: &[std::ffi::OsString], prefixes: &HashSet<PathBuf>) -> bool {
     environ.iter().any(|entry| {
         let Some(value) = PREFIX_VARS.iter().find_map(|var| strip_var(entry, var)) else {
