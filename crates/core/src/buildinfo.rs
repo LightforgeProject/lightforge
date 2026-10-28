@@ -23,7 +23,6 @@
 //! [`crate::preflight`], which every caller must pass through first.
 
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::product::ProductCode;
@@ -189,40 +188,8 @@ impl BuildInfo {
     /// nobody asked for.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), BuildInfoError> {
         let path = path.as_ref();
-        let dir = path.parent().unwrap_or(Path::new("."));
-        std::fs::create_dir_all(dir)
-            .map_err(|source| BuildInfoError::Io { path: dir.to_path_buf(), source })?;
-
-        let io = |p: &Path| {
-            let p = p.to_path_buf();
-            move |source| BuildInfoError::Io { path: p.clone(), source }
-        };
-
-        let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(io(dir))?;
-        tmp.write_all(self.to_file_contents().as_bytes())
-            .map_err(io(tmp.path()))?;
-        tmp.as_file().sync_all().map_err(io(tmp.path()))?;
-
-        match std::fs::metadata(path) {
-            // Carry the existing file's mode over rather than imposing one.
-            Ok(meta) => {
-                let _ = tmp.as_file().set_permissions(meta.permissions());
-            }
-            // A fresh install would otherwise keep tempfile's 0600, where a
-            // real `.build.info` is 0644, the same tightening the indices had.
-            Err(_) => {
-                let _ = tmp
-                    .as_file()
-                    .set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o644));
-            }
-        }
-        tmp.persist(path).map_err(|e| BuildInfoError::Io { path: path.to_path_buf(), source: e.error })?;
-
-        // Durability of the rename, not of the contents.
-        if let Ok(handle) = std::fs::File::open(dir) {
-            let _ = handle.sync_all();
-        }
-        Ok(())
+        crate::fsutil::write_atomic(path, self.to_file_contents().as_bytes())
+            .map_err(|source| BuildInfoError::Io { path: path.to_path_buf(), source })
     }
 
     /// Load, mutate, and atomically write back in one call.

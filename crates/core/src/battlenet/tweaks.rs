@@ -364,7 +364,7 @@ fn remove_key(path: &Path, key: &str) -> Result<(), BattleNetError> {
     let mut text = serde_json::to_string_pretty(&config)
         .map_err(|e| BattleNetError::MalformedConfig { path: path.to_path_buf(), source: e })?;
     text.push('\n');
-    write_atomic(path, text.as_bytes())
+    crate::fsutil::write_atomic(path, text.as_bytes()).map_err(|e| BattleNetError::io(path, e))
 }
 
 /// Read, merge, and atomically rewrite one config file.
@@ -384,25 +384,6 @@ fn merge_file(path: &Path, tweaks: &[Tweak], seed: bool) -> Result<bool, BattleN
     let mut text = serde_json::to_string_pretty(&config)
         .map_err(|e| BattleNetError::MalformedConfig { path: path.to_path_buf(), source: e })?;
     text.push('\n');
-    write_atomic(path, text.as_bytes())?;
+    crate::fsutil::write_atomic(path, text.as_bytes()).map_err(|e| BattleNetError::io(path, e))?;
     Ok(true)
-}
-
-/// Write via a temp file in the destination directory plus a rename, so a
-/// crash mid-write can never leave a truncated config behind.
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), BattleNetError> {
-    use std::io::Write;
-
-    let dir = path.parent().unwrap_or(Path::new("."));
-    std::fs::create_dir_all(dir).map_err(|e| BattleNetError::io(dir, e))?;
-
-    let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(|e| BattleNetError::io(dir, e))?;
-    tmp.write_all(bytes)
-        .map_err(|e| BattleNetError::io(tmp.path(), e))?;
-    tmp.as_file()
-        .sync_all()
-        .map_err(|e| BattleNetError::io(tmp.path(), e))?;
-    tmp.persist(path)
-        .map_err(|e| BattleNetError::io(path, e.error))?;
-    Ok(())
 }

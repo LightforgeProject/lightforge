@@ -478,8 +478,9 @@ impl Index {
         // A new generation is a new file, so a plain create is already atomic
         // with respect to readers of the previous one; the temp-and-rename is
         // here so a crash mid-write cannot leave a short file wearing a valid
-        // generation's name.
-        write_atomic(&path, &bytes)?;
+        // generation's name. 0644, as Agent writes them.
+        crate::fsutil::write_atomic_with_mode(&path, &bytes, 0o644)
+            .map_err(|source| IdxError::Io { path: path.clone(), source })?;
         Ok(path)
     }
 }
@@ -563,29 +564,6 @@ fn entries_hash(entries: &[u8]) -> u32 {
 
 fn le_u32(bytes: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(bytes[at..at + 4].try_into().expect("4 bytes in range"))
-}
-
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), IdxError> {
-    use std::io::Write;
-
-    let dir = path.parent().unwrap_or(Path::new("."));
-    std::fs::create_dir_all(dir).map_err(|source| IdxError::Io { path: dir.to_path_buf(), source })?;
-
-    let io = |p: &Path| {
-        let p = p.to_path_buf();
-        move |source| IdxError::Io { path: p.clone(), source }
-    };
-    let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(io(dir))?;
-    tmp.write_all(bytes).map_err(io(tmp.path()))?;
-    tmp.as_file().sync_all().map_err(io(tmp.path()))?;
-    tmp.persist(path).map_err(|e| IdxError::Io { path: path.to_path_buf(), source: e.error })?;
-
-    // A real install's indices are 0644. tempfile creates at 0600, which would
-    // hand Agent and the client an index only this user can read, the same
-    // silent tightening `buildinfo::save` guards against.
-    std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o644))
-        .map_err(io(path))?;
-    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]

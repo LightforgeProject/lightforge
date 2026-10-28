@@ -548,7 +548,6 @@ impl ETagCache {
     }
 
     fn store(&self, body: &[u8], etag: Option<&str>) -> Result<(), NetError> {
-        use std::io::Write;
 
         let dir = self.body_path.parent().unwrap_or_else(|| Path::new("."));
         let io = |p: &Path| {
@@ -565,10 +564,7 @@ impl ETagCache {
             _ => {}
         }
 
-        let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(io(dir))?;
-        temp.write_all(body).map_err(io(temp.path()))?;
-        temp.as_file().sync_all().map_err(io(temp.path()))?;
-        temp.persist(&self.body_path).map_err(|e| io(&self.body_path)(e.error))?;
+        crate::fsutil::write_atomic(&self.body_path, body).map_err(io(&self.body_path))?;
 
         if let Some(etag) = etag {
             std::fs::write(self.etag_path(), etag).map_err(io(&self.etag_path()))?;

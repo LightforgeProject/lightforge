@@ -136,9 +136,12 @@ pub fn add(steam: &SteamRoot, name: &str, exe: &Path, art: &Artwork) -> Result<A
         (art.logo, format!("{appid}_logo.{}", art.logo.ext)),
         (art.icon, format!("{appid}_icon.{}", art.icon.ext)),
     ] {
-        write_atomic(&grid.join(file), image.bytes)?;
+        let path = grid.join(file);
+        crate::fsutil::write_atomic(&path, image.bytes)
+            .map_err(|source| ShortcutError::Io { path, source })?;
     }
-    write_atomic(&file, &render(&root))?;
+    crate::fsutil::write_atomic(&file, &render(&root))
+        .map_err(|source| ShortcutError::Io { path: file.clone(), source })?;
 
     Ok(Added { account, appid, updated })
 }
@@ -385,24 +388,6 @@ fn set(entry: &mut Vec<(Vec<u8>, Value)>, key: &str, value: Value) {
     }
 }
 
-/// Write via a temp file in the destination directory plus a rename: a crash
-/// mid-write must not be able to truncate somebody's shortcuts.
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ShortcutError> {
-    use std::io::Write;
-
-    let io = |p: &Path| {
-        let p = p.to_path_buf();
-        move |source| ShortcutError::Io { path: p.clone(), source }
-    };
-    let dir = path.parent().unwrap_or(Path::new("."));
-    std::fs::create_dir_all(dir).map_err(io(dir))?;
-    let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(io(dir))?;
-    tmp.write_all(bytes).map_err(io(tmp.path()))?;
-    tmp.as_file().sync_all().map_err(io(tmp.path()))?;
-    tmp.persist(path).map_err(|e| ShortcutError::Io { path: path.to_path_buf(), source: e.error })?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,7 +467,7 @@ mod tests {
             )]),
         )];
         let file = root.path().join(format!("userdata/{account}/config/shortcuts.vdf"));
-        write_atomic(&file, &render(&theirs)).unwrap();
+        crate::fsutil::write_atomic(&file, &render(&theirs)).unwrap();
 
         let exe = Path::new("/home/deck/.local/bin/lightforge-gui");
         let first = add(&root, "Lightforge", exe, &art()).unwrap();
@@ -493,7 +478,7 @@ mod tests {
         if let Value::Map(ours) = &mut shortcuts_mut(&mut parsed)[1].1 {
             set(ours, "LaunchOptions", Value::Str(b"MANGOHUD=1 %command%".to_vec()));
         }
-        write_atomic(&file, &render(&parsed)).unwrap();
+        crate::fsutil::write_atomic(&file, &render(&parsed)).unwrap();
 
         let second = add(&root, "Lightforge", exe, &art()).unwrap();
         assert!(second.updated);

@@ -214,21 +214,9 @@ impl Ledger {
     /// renamed. Every product's ledger lives in one directory, so a shared
     /// temp name let two saves rename each other's contents into place.
     pub fn save(&self, path: &Path) -> Result<(), InstallError> {
-        use std::io::Write;
-
-        let dir = path.parent().unwrap_or_else(|| Path::new("."));
-        let io = |p: &Path| {
-            let p = p.to_path_buf();
-            move |source| InstallError::Io { path: p, source }
-        };
-        std::fs::create_dir_all(dir).map_err(io(dir))?;
-
         let json = serde_json::to_vec_pretty(self).expect("ledger serializes");
-        let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(io(dir))?;
-        temp.write_all(&json).map_err(io(temp.path()))?;
-        temp.as_file().sync_all().map_err(io(temp.path()))?;
-        temp.persist(path).map_err(|e| InstallError::Io { path: path.to_path_buf(), source: e.error })?;
-        Ok(())
+        crate::fsutil::write_atomic(path, &json)
+            .map_err(|source| InstallError::Io { path: path.to_path_buf(), source })
     }
 
     pub fn find(&self, provider: &str, id: &str) -> Option<&Record> {
@@ -519,7 +507,6 @@ fn swap_steps<'a>(
     }
     Ok(())
 }
-
 
 /// How `name` is spelled in `dir`, matching ASCII case-insensitively as Wine
 /// does. An exact match is taken without listing the directory.

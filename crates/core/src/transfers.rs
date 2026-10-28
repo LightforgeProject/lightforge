@@ -80,18 +80,7 @@ impl Queue {
             };
         }
         let text = toml::to_string_pretty(self)?;
-        let dir = path.parent().unwrap_or(Path::new("."));
-        std::fs::create_dir_all(dir).map_err(write)?;
-        // A unique temp name: the GUI and the CLI can both save at once.
-        let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(write)?;
-        std::io::Write::write_all(&mut temp, text.as_bytes()).map_err(write)?;
-        temp.as_file().sync_all().map_err(write)?;
-        temp.persist(path).map_err(|e| write(e.error))?;
-        // Durability of the rename, not of the contents.
-        if let Ok(handle) = std::fs::File::open(dir) {
-            let _ = handle.sync_all();
-        }
-        Ok(())
+        crate::fsutil::write_atomic(path, text.as_bytes()).map_err(write)
     }
 }
 

@@ -172,30 +172,6 @@ mod downloading {
     }
 
     #[test]
-    fn an_extracted_file_lands_readable_with_its_directories_made() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = std::env::temp_dir().join(format!("lightforge-extract-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let path = dir.join("Utils").join("swiftshader").join("libEGL.dll");
-
-        write_file(&path, b"MZ...").unwrap();
-
-        assert_eq!(std::fs::read(&path).unwrap(), b"MZ...");
-        // tempfile would leave these 0600; Wine and the client have to read them.
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o644, "{mode:o}");
-
-        // Overwriting an existing file works, and leaves no temporary behind.
-        write_file(&path, b"MZ newer").unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), b"MZ newer");
-        let siblings: Vec<_> = std::fs::read_dir(path.parent().unwrap()).unwrap().flatten().collect();
-        assert_eq!(siblings.len(), 1);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn install_paths_collapse_onto_a_directory_that_differs_only_by_case() {
         let dir = std::env::temp_dir().join(format!("lightforge-case-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -204,10 +180,10 @@ mod downloading {
         // The manifest spells it `Utils\cef.pak` here and `UTILS\...` there.
         // Whichever lands first decides the case, and the rest join it.
         let first = resolve_windows_path(&dir, std::path::Path::new("Utils/cef.pak"));
-        write_file(&first, b"cef").unwrap();
+        crate::fsutil::write_atomic_with_mode(&first, b"cef", 0o644).unwrap();
 
         let second = resolve_windows_path(&dir, std::path::Path::new("UTILS/LIBCEF.DLL"));
-        write_file(&second, b"libcef").unwrap();
+        crate::fsutil::write_atomic_with_mode(&second, b"libcef", 0o644).unwrap();
 
         // One directory, not two, the split left a real install's Utils/
         // without LIBCEF.DLL and Wine could not find CEF.

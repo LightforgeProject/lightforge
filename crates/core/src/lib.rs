@@ -20,6 +20,7 @@ pub mod debug;
 pub mod discover;
 pub mod error;
 pub mod families;
+pub(crate) mod fsutil;
 pub mod library;
 pub mod logging;
 pub mod net;

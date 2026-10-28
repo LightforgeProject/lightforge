@@ -26,13 +26,7 @@ pub fn set(config_wtf: &Path, locale: &str) -> io::Result<()> {
         .map(str::to_owned)
         .collect();
     out.extend(KEYS.iter().map(|key| format!("SET {key} \"{locale}\"")));
-
-    if let Some(dir) = config_wtf.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = config_wtf.with_extension("wtf.lightforge-tmp");
-    std::fs::write(&tmp, out.join("\n") + "\n")?;
-    std::fs::rename(&tmp, config_wtf)
+    crate::fsutil::write_atomic(config_wtf, (out.join("\n") + "\n").as_bytes())
 }
 
 #[cfg(test)]

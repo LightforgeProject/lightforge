@@ -326,26 +326,9 @@ impl Config {
     /// worse than losing the edit. The temp name is unique, so the GUI and
     /// the CLI saving at once cannot rename each other's half-written file.
     pub fn save(&self, path: &std::path::Path) -> Result<(), ConfigError> {
-        use std::io::Write;
-
         let text = self.to_toml()?;
-        let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-        let io = |p: &std::path::Path| {
-            let p = p.to_path_buf();
-            move |source| ConfigError::Io { path: p, source }
-        };
-        std::fs::create_dir_all(dir).map_err(io(dir))?;
-
-        let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(io(dir))?;
-        temp.write_all(text.as_bytes()).map_err(io(temp.path()))?;
-        temp.as_file().sync_all().map_err(io(temp.path()))?;
-        temp.persist(path).map_err(|e| ConfigError::Io { path: path.to_path_buf(), source: e.error })?;
-
-        // Durability of the rename, not of the contents.
-        if let Ok(handle) = std::fs::File::open(dir) {
-            let _ = handle.sync_all();
-        }
-        Ok(())
+        crate::fsutil::write_atomic(path, text.as_bytes())
+            .map_err(|source| ConfigError::Io { path: path.to_path_buf(), source })
     }
 
     pub fn to_toml(&self) -> Result<String, ConfigError> {

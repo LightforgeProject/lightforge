@@ -178,16 +178,10 @@ pub fn store(data_dir: &Path, hash: &str, bytes: &[u8]) -> Result<PathBuf, Confi
     if path.is_file() {
         return Ok(path);
     }
-    let io = |source| ConfigError::Io { path: path.clone(), source };
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(io)?;
-    }
-    // Through a temporary file in the same directory: the client reads this
-    // directory while it runs, and a half-written config is worse than an
-    // absent one, which it knows how to fetch.
-    let temp = path.with_extension("lightforge-tmp");
-    std::fs::write(&temp, bytes).map_err(io)?;
-    std::fs::rename(&temp, &path).map_err(io)?;
+    // Atomic: the client reads this directory while it runs, and a
+    // half-written config is worse than an absent one, which it knows how to fetch.
+    crate::fsutil::write_atomic(&path, bytes)
+        .map_err(|source| ConfigError::Io { path: path.clone(), source })?;
     Ok(path)
 }
 

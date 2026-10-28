@@ -25,7 +25,6 @@
 //! with no ordering to lose.
 
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use futures_util::stream::{self, StreamExt};
@@ -180,19 +179,9 @@ impl IndexCache {
     /// every later check, so the rename has to be the only way one appears.
     pub(crate) fn store(&self, hash: &str, bytes: &[u8]) -> Result<(), IndexError> {
         let path = self.path_of(hash);
-        let mut temp = tempfile::NamedTempFile::new_in(&self.dir)
-            .map_err(|source| IndexError::Io { path: self.dir.clone(), source })?;
-        temp.write_all(bytes)
-            .and_then(|()| temp.as_file().sync_all())
-            .map_err(|source| IndexError::Io { path: path.clone(), source })?;
-        temp.persist(&path)
-            .map_err(|e| IndexError::Io { path: path.clone(), source: e.error })?;
-
-        // 0644, as Agent's own cached indices are, tempfile's 0600 would
-        // leave a file the client cannot read.
-        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o644))
-            .map_err(|source| IndexError::Io { path, source })?;
-        Ok(())
+        // 0644, as Agent's own cached indices are.
+        crate::fsutil::write_atomic_with_mode(&path, bytes, 0o644)
+            .map_err(|source| IndexError::Io { path, source })
     }
 }
 

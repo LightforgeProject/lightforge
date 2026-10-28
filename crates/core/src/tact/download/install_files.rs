@@ -115,7 +115,7 @@ pub async fn extract_install(
             continue;
         };
         let path = resolve_windows_path(dest, &relative);
-        match write_file(&path, &decoded) {
+        match crate::fsutil::write_atomic_with_mode(&path, &decoded, 0o644) {
             Ok(()) => {
                 let written = Extracted { path, bytes: decoded.len() as u64 };
                 progress(&written);
@@ -148,7 +148,8 @@ pub fn write_flavor_info(
     product: &crate::ProductCode,
 ) -> std::io::Result<std::path::PathBuf> {
     let path = flavor_dir.join(".flavor.info");
-    write_file(&path, format!("{FLAVOR_HEADER}\n{}\n", product.as_str()).as_bytes())?;
+    let text = format!("{FLAVOR_HEADER}\n{}\n", product.as_str());
+    crate::fsutil::write_atomic_with_mode(&path, text.as_bytes(), 0o644)?;
     Ok(path)
 }
 
@@ -187,22 +188,4 @@ pub(super) fn resolve_windows_path(root: &std::path::Path, relative: &std::path:
     }
 
     at
-}
-
-/// Write a file and its parent directories, via a temporary file alongside.
-pub(super) fn write_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let dir = path.parent().unwrap_or(std::path::Path::new("."));
-    let mut temp = tempfile::NamedTempFile::new_in(dir)?;
-    temp.write_all(bytes)?;
-    temp.as_file().sync_all()?;
-
-    // tempfile creates at 0600; these are files Wine and the client read, and
-    // a launcher that silently tightens permissions on Wow.exe is a bug.
-    temp.persist(path).map_err(|e| e.error)?;
-    std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o644))
 }
