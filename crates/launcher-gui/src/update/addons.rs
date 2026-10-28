@@ -565,6 +565,13 @@ impl Lightforge {
                 }
             }
 
+            Message::FindAddon(name) => {
+                self.search_input = name;
+                self.addon_tab = AddonTab::Browse;
+                self.addon_remove_armed = None;
+                self.update(Message::RunSearch)
+            }
+
             Message::SearchChanged(value) => {
                 self.search_input = value;
                 self.search_seq += 1;

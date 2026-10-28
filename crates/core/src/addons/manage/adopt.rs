@@ -33,7 +33,7 @@ pub async fn adopt(
         .flat_map(|record| record.folders.iter().cloned())
         .collect();
 
-    let present: Vec<String> = crate::addons::scan(&options.addons_dir)
+    let present: Vec<String> = crate::addons::scan(&options.addons_dir, &crate::addons::Client::default())
         .unwrap_or_default()
         .into_iter()
         .map(|addon| addon.folder)

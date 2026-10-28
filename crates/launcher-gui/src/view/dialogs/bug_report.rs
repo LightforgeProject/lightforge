@@ -19,7 +19,7 @@ impl Lightforge {
                 let dir = self.layout.addons_dir(code);
                 let _ = writeln!(out, "\n--- addons: {} ---", dir.display());
                 let _ = writeln!(out, "{:<16}{}", "flavor", lightforge_core::addons::flavor_of(code));
-                let installed = match lightforge_core::addons::scan(&dir) {
+                let installed = match lightforge_core::addons::scan(&dir, &lightforge_core::addons::Client::default()) {
                     Ok(installed) => installed,
                     Err(e) => {
                         let _ = writeln!(out, "the folder could not be read: {}", chain(&e));

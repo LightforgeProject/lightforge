@@ -27,6 +27,18 @@ impl Lightforge {
             body = body.push(mine_header());
         }
 
+        // Two providers writing one folder undo each other's updates.
+        for (folder, providers) in &self.addons.shared {
+            body = body.push(
+                text(format!(
+                    "{folder} is installed from both {}: an update from one overwrites the other. Remove one of them.",
+                    providers.join(" and ")
+                ))
+                .size(theme::CAPTION)
+                .color(theme::WARN),
+            );
+        }
+
         // What the unattended pass did, said only here.
         if let Some(note) = &self.addon_auto_note {
             body = body.push(muted(note.clone(), theme::CAPTION));
@@ -157,8 +169,18 @@ impl Lightforge {
             .filter(|r| r.child_of.as_deref() == Some(addon.folder.as_str()))
             .count();
         let status = self.update_status(addon);
+        // Its own folders' needs too: they are listed under it, not apart.
+        let mut missing: Vec<&String> = self
+            .addons
+            .rows
+            .iter()
+            .filter(|r| r.folder == addon.folder || r.child_of.as_deref() == Some(addon.folder.as_str()))
+            .flat_map(|r| &r.missing)
+            .collect();
+        missing.sort();
+        missing.dedup();
 
-        let mut line = row![column![
+        let mut words = column![
             self.addon_heading(addon, status),
             muted(
                 match (&addon.managed, extra) {
@@ -170,7 +192,19 @@ impl Lightforge {
             ),
         ]
         .spacing(theme::XS)
-        .width(Length::Fill)]
+        .width(Length::Fill);
+        for dep in missing {
+            words = words.push(
+                row![
+                    text(format!("needs {dep}, which is not installed")).size(theme::CAPTION).color(theme::WARN),
+                    secondary("Find", Message::FindAddon(dep.clone())).enabled(true),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
+            );
+        }
+
+        let mut line = row![words]
         .spacing(theme::SM)
         .align_y(Alignment::Center);
 
@@ -229,6 +263,10 @@ impl Lightforge {
                 heading = heading.push(pill("manual".to_owned(), theme::MUTED));
             }
             _ => {}
+        }
+        // What the game would say about it, which an update may not change.
+        if addon.out_of_date {
+            heading = heading.push(pill("out of date".to_owned(), theme::WARN));
         }
         if let Some(status) = status.filter(|s| s.has_update()) {
             // The provider's version name; a channel switch says so instead.

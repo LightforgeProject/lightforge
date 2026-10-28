@@ -29,6 +29,10 @@ pub struct Row {
     /// Folders belonging to a managed addon other than its first are shown as
     /// children, not as separate addons.
     pub child_of: Option<String>,
+    /// The game client would call it out of date; see `addons::Client`.
+    pub out_of_date: bool,
+    /// Required addons that are not installed, by folder name.
+    pub missing: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -75,13 +79,18 @@ pub struct Listing {
     pub dir: PathBuf,
     /// Why the ledger could not be read, when it could not.
     pub problem: Option<String>,
+    /// Folders two providers' records both claim, with the providers.
+    pub shared: Vec<(String, Vec<String>)>,
 }
 
 /// Scan a product's addons and fold in what the ledger knows.
 pub async fn list(layout: Layout, code: ProductCode) -> Listing {
     tokio::task::spawn_blocking(move || {
         let dir = layout.addons_dir(&code);
-        let installed = addons::scan(&dir).unwrap_or_default();
+        let version = lightforge_core::buildinfo::BuildInfo::load(layout.build_info(&code))
+            .ok()
+            .and_then(|info| info.get(&code, lightforge_core::buildinfo::COL_VERSION).ok().map(str::to_owned));
+        let installed = addons::scan(&dir, &addons::Client::of(&code, version.as_deref())).unwrap_or_default();
         let path = AppDirs::discover()
             .ok()
             .map(|dirs| manage::ledger_path(dirs.data_dir(), &dir, &code));
@@ -120,6 +129,7 @@ pub async fn list(layout: Layout, code: ProductCode) -> Listing {
             rows: rows_from(&installed, &ledger),
             dir,
             problem,
+            shared: ledger.shared_folders(),
         }
     })
     .await
@@ -144,11 +154,14 @@ pub fn rows_from(installed: &[Installed], ledger: &Ledger) -> Vec<Row> {
         }
     }
 
+    let missing = addons::missing_dependencies(installed);
     installed
         .iter()
         .map(|addon: &Installed| {
             let known = owner.get(addon.folder.as_str());
             Row {
+                out_of_date: addon.out_of_date,
+                missing: missing.iter().filter(|(folder, _)| *folder == addon.folder).map(|(_, dep)| dep.clone()).collect(),
                 folder: addon.folder.clone(),
                 title: addon.title.clone().unwrap_or_else(|| addon.folder.clone()),
                 version: addon.version.clone().unwrap_or_else(|| "—".to_owned()),
@@ -178,6 +191,14 @@ pub fn rows_from(installed: &[Installed], ledger: &Ledger) -> Vec<Row> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_missing_dependency_lands_on_the_row_that_needs_it() {
+        let core = Installed { dependencies: vec!["BigWigs".to_owned()], ..installed("BigWigs_Core", "v427.8") };
+        let rows = rows_from(&[core, installed("Details", "1.0")], &Ledger::default());
+        assert_eq!(rows[0].missing, ["BigWigs"]);
+        assert!(rows[1].missing.is_empty());
+    }
+
     fn installed(folder: &str, version: &str) -> Installed {
         Installed {
             folder: folder.to_owned(),
@@ -187,6 +208,8 @@ mod tests {
             author: None,
             ids: Default::default(),
             interfaces: Vec::new(),
+            dependencies: Vec::new(),
+            out_of_date: false,
         }
     }
 

@@ -454,6 +454,8 @@ pub(crate) enum Message {
     AutoUpdateFinished(Result<Option<Box<lightforge_core::addons::Report>>, Problem>),
     SettingsTab(SettingsTab),
     SearchChanged(String),
+    /// Search Browse for an addon by name: a missing dependency.
+    FindAddon(String),
     RunSearch,
     SearchDone(Box<addonwork::SearchOutcome>),
     InstallAddon(String, String),

@@ -318,6 +318,47 @@ pub fn flavor_of(code: &ProductCode) -> &'static str {
     }
 }
 
+/// What one game client reads in an `AddOns` folder: which `.toc` it picks,
+/// and which interface number it calls current.
+///
+/// A client looks for its game suffix, then its family's, then the bare
+/// name: a Mists client reads `X_Mists.toc`, `X_Classic.toc`, `X.toc`
+/// (warcraft.wiki.gg, TOC format, 2026-10). The default reads only the bare
+/// name and never calls anything out of date.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Client {
+    suffixes: &'static [&'static str],
+    /// `12.1.5` reads as `120105`.
+    pub interface: Option<u32>,
+}
+
+impl Client {
+    /// `version` is the installed one, `.build.info`'s `Version`. The Classic
+    /// line changes expansion under one product code, so its major decides.
+    pub fn of(code: &ProductCode, version: Option<&str>) -> Self {
+        let interface = version.and_then(interface_of);
+        let major = interface.map(|i| i / 10_000);
+        let suffixes: &'static [&'static str] = match (code, major) {
+            (ProductCode::Forever, _) => &["Forever", "Camelot", "Mainline"],
+            (ProductCode::Classic | ProductCode::ClassicPtr | ProductCode::ClassicBeta, None) => &["Mists", "Classic"],
+            (ProductCode::ClassicEra | ProductCode::EraPtr, None) | (_, Some(1)) => &["Vanilla", "Classic"],
+            (_, Some(2)) => &["TBC", "Classic"],
+            (_, Some(3)) => &["Wrath", "Classic"],
+            (_, Some(4)) => &["Cata", "Classic"],
+            (_, Some(5)) => &["Mists", "Classic"],
+            _ => &["Standard", "Mainline"],
+        };
+        Self { suffixes, interface }
+    }
+}
+
+/// `12.1.5.70575` -> `120105`, the number a `## Interface` line carries.
+fn interface_of(version: &str) -> Option<u32> {
+    let mut parts = version.split('.').map(|p| p.parse::<u32>().ok());
+    let (major, minor, patch) = (parts.next()??, parts.next()??, parts.next()??);
+    Some(major * 10_000 + minor * 100 + patch)
+}
+
 /// A parsed `.toc` file: the `## Key: value` header block.
 ///
 /// Keys are looked up case-insensitively; addons disagree on capitals.
@@ -353,6 +394,22 @@ impl Toc {
             .map(|v| v.split(',').filter_map(|p| p.trim().parse().ok()).collect())
             .unwrap_or_default()
     }
+
+    /// Addons that must load first: `Dependencies`, `RequiredDeps`, or any
+    /// key beginning with `Dep`, repeated lines adding up. `OptionalDeps` is
+    /// not among them.
+    pub fn dependencies(&self) -> Vec<String> {
+        let required = |key: &str| {
+            key.eq_ignore_ascii_case("RequiredDeps") || key.get(..3).is_some_and(|k| k.eq_ignore_ascii_case("dep"))
+        };
+        self.fields
+            .iter()
+            .filter(|(key, _)| required(key))
+            .flat_map(|(_, value)| value.split(','))
+            .map(|name| name.trim().to_owned())
+            .filter(|name| !name.is_empty())
+            .collect()
+    }
 }
 
 /// An addon folder found in a product's `AddOns` directory.
@@ -368,6 +425,11 @@ pub struct Installed {
     /// Provider ids the author published under.
     pub ids: BTreeMap<Provider, String>,
     pub interfaces: Vec<u32>,
+    /// Addons this one needs loaded first, by folder name.
+    pub dependencies: Vec<String>,
+    /// The client would call it out of date: no `.toc` for its flavour, or
+    /// none of the interface numbers it names is the client's.
+    pub out_of_date: bool,
 }
 
 impl Installed {
@@ -376,10 +438,10 @@ impl Installed {
     }
 }
 
-/// Scan a product's `AddOns` directory.
+/// Scan a product's `AddOns` directory as `client` reads it.
 ///
 /// Folders without a readable `.toc` are skipped, as WoW skips them.
-pub fn scan(addons_dir: &Path) -> Result<Vec<Installed>, AddonError> {
+pub fn scan(addons_dir: &Path, client: &Client) -> Result<Vec<Installed>, AddonError> {
     let entries = std::fs::read_dir(addons_dir).map_err(io(addons_dir))?;
 
     let mut found = Vec::new();
@@ -388,7 +450,7 @@ pub fn scan(addons_dir: &Path) -> Result<Vec<Installed>, AddonError> {
             continue;
         }
         let folder = entry.file_name().to_string_lossy().into_owned();
-        let Some(toc_path) = toc_for(&entry.path(), &folder) else {
+        let Some((toc_path, read_by_client)) = toc_for(&entry.path(), &folder, client) else {
             continue;
         };
         let Ok(text) = read_toc(&toc_path) else { continue };
@@ -405,11 +467,16 @@ pub fn scan(addons_dir: &Path) -> Result<Vec<Installed>, AddonError> {
             }
         }
 
+        let interfaces = toc.interfaces();
+        let out_of_date =
+            client.interface.is_some_and(|current| !read_by_client || !interfaces.contains(&current));
         found.push(Installed {
             title: toc.get("Title").map(strip_color_codes),
             version: toc.get("Version").map(str::to_owned),
             author: toc.get("Author").map(str::to_owned),
-            interfaces: toc.interfaces(),
+            interfaces,
+            dependencies: toc.dependencies(),
+            out_of_date,
             ids,
             path: entry.path(),
             folder,
@@ -420,24 +487,40 @@ pub fn scan(addons_dir: &Path) -> Result<Vec<Installed>, AddonError> {
     Ok(found)
 }
 
-/// Pick the `.toc` for a folder.
+/// Pick the `.toc` for a folder the way `client` does, and whether it is one
+/// the client reads. Failing that, any `.toc`, so the folder is still listed.
 ///
-/// Modern addons ship one per flavor (`BigWigs.toc`, `BigWigs_Vanilla.toc`).
-/// The bare name first, then `_Mainline`, then any: the metadata is the same.
-fn toc_for(dir: &Path, folder: &str) -> Option<PathBuf> {
-    let exact = dir.join(format!("{folder}.toc"));
-    if exact.is_file() {
-        return Some(exact);
-    }
-    let mainline = dir.join(format!("{folder}_Mainline.toc"));
-    if mainline.is_file() {
-        return Some(mainline);
-    }
-    std::fs::read_dir(dir)
+/// Case-insensitive: the client runs under Wine, which matches names so.
+fn toc_for(dir: &Path, folder: &str, client: &Client) -> Option<(PathBuf, bool)> {
+    let tocs: Vec<PathBuf> = std::fs::read_dir(dir)
         .ok()?
         .flatten()
         .map(|e| e.path())
-        .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("toc")))
+        .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("toc")))
+        .collect();
+    let named = |stem: &str| {
+        tocs.iter().find(|p| p.file_stem().is_some_and(|s| s.to_string_lossy().eq_ignore_ascii_case(stem)))
+    };
+    client
+        .suffixes
+        .iter()
+        .find_map(|suffix| named(&format!("{folder}_{suffix}")))
+        .or_else(|| named(folder))
+        .map(|path| (path.clone(), true))
+        .or_else(|| tocs.first().map(|path| (path.clone(), false)))
+}
+
+/// Required dependencies no folder in `installed` provides, as
+/// `(addon folder, dependency)`. Blizzard's own `Blizzard_*` addons ship with
+/// the client, not in `AddOns`.
+pub fn missing_dependencies(installed: &[Installed]) -> Vec<(String, String)> {
+    let present: std::collections::HashSet<String> = installed.iter().map(|a| a.folder.to_lowercase()).collect();
+    installed
+        .iter()
+        .flat_map(|addon| addon.dependencies.iter().map(move |dep| (addon.folder.clone(), dep.clone())))
+        .filter(|(_, dep)| !present.contains(&dep.to_lowercase()))
+        .filter(|(_, dep)| !dep.get(..9).is_some_and(|p| p.eq_ignore_ascii_case("blizzard_")))
+        .collect()
 }
 
 /// Read a `.toc` lossily: some have a BOM or are not UTF-8, and the header
@@ -699,6 +782,78 @@ mod tests {
         assert_eq!(toc.get("Notes"), None);
     }
 
+    /// The header lines of BigWigs v424 (retail `AddOns`, 2026-10-28).
+    const BIGWIGS: &str = "## Interface: 11508, 11509, 16001, 20505, 20506, 30405, 38002, 40402, 50503, 50504, 120100, 120105, 120107\n\
+        ## OptionalDeps: Ace3, LibCandyBar-3.0, LibSharedMedia-3.0, LibSink-2.0, LibDBIcon-1.0\n";
+    const BIGWIGS_CORE: &str = "## Interface: 11508, 11509, 16001, 20505, 20506, 30405, 38002, 40402, 50503, 50504, 120100, 120105, 120107\n\
+        ## Dependencies: BigWigs\n";
+
+    #[test]
+    fn required_dependencies_leave_the_optional_ones_out() {
+        assert_eq!(Toc::parse(BIGWIGS_CORE).dependencies(), ["BigWigs"]);
+        assert!(Toc::parse(BIGWIGS).dependencies().is_empty());
+        // Any key starting with Dep, repeated lines adding up.
+        let toc = Toc::parse("## RequiredDeps: A, B\n## Dep: C\n## DefaultState: disabled\n");
+        assert_eq!(toc.dependencies(), ["A", "B", "C"]);
+    }
+
+    #[test]
+    fn the_client_follows_the_installed_expansion() {
+        let retail = Client::of(&ProductCode::Retail, Some("12.1.5.70575"));
+        assert_eq!((retail.suffixes[0], retail.interface), ("Standard", Some(120_105)));
+        let classic = Client::of(&ProductCode::Classic, Some("5.5.4.70631"));
+        assert_eq!((classic.suffixes, classic.interface), (&["Mists", "Classic"][..], Some(50_504)));
+        let era = Client::of(&ProductCode::ClassicEra, Some("1.15.9.70576"));
+        assert_eq!((era.suffixes[0], era.interface), ("Vanilla", Some(11_509)));
+    }
+
+    fn addons_with(folders: &[(&str, &[(&str, &str)])]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (folder, tocs) in folders {
+            std::fs::create_dir_all(dir.path().join(folder)).unwrap();
+            for (name, text) in *tocs {
+                std::fs::write(dir.path().join(folder).join(name), text).unwrap();
+            }
+        }
+        dir
+    }
+
+    #[test]
+    fn each_client_reads_its_own_toc_and_is_judged_by_it() {
+        let dir = addons_with(&[(
+            "Details",
+            &[("Details.toc", "## Interface: 120105\n"), ("Details_Vanilla.toc", "## Interface: 11509\n")],
+        )]);
+        let scan_as = |code, version| scan(dir.path(), &Client::of(&code, Some(version))).unwrap().remove(0);
+
+        let era = scan_as(ProductCode::ClassicEra, "1.15.9.70576");
+        assert_eq!((era.interfaces.as_slice(), era.out_of_date), (&[11_509][..], false));
+        assert!(!scan_as(ProductCode::Retail, "12.1.5.70575").out_of_date);
+        // Mists reads the bare file, which names only retail.
+        assert!(scan_as(ProductCode::Classic, "5.5.4.70631").out_of_date);
+    }
+
+    #[test]
+    fn a_folder_with_only_another_flavours_toc_is_listed_and_out_of_date() {
+        let dir = addons_with(&[("Questie", &[("Questie-Classic.toc", "## Interface: 11509\n")])]);
+        let found = scan(dir.path(), &Client::of(&ProductCode::Retail, Some("12.1.5.70575"))).unwrap();
+        assert!(found[0].out_of_date);
+    }
+
+    #[test]
+    fn a_dependency_counts_as_missing_only_when_no_folder_provides_it() {
+        let dir = addons_with(&[
+            ("BigWigs_Core", &[("BigWigs_Core.toc", BIGWIGS_CORE)]),
+            ("Plater", &[("Plater.toc", "## Dependencies: Blizzard_NamePlates\n")]),
+        ]);
+        let installed = scan(dir.path(), &Client::default()).unwrap();
+        assert_eq!(missing_dependencies(&installed), [("BigWigs_Core".to_owned(), "BigWigs".to_owned())]);
+
+        std::fs::create_dir_all(dir.path().join("BigWigs")).unwrap();
+        std::fs::write(dir.path().join("BigWigs/BigWigs.toc"), BIGWIGS).unwrap();
+        assert!(missing_dependencies(&scan(dir.path(), &Client::default()).unwrap()).is_empty());
+    }
+
     #[test]
     fn colour_codes_are_stripped_from_titles() {
         assert_eq!(strip_color_codes("|cffFFFFFFBigWigs|r"), "BigWigs");
@@ -718,6 +873,8 @@ mod tests {
             author: None,
             ids: BTreeMap::from([(Provider::Curse, "2382".to_owned())]),
             interfaces: vec![120100],
+            dependencies: Vec::new(),
+            out_of_date: false,
         }];
 
         let report = collection.reconcile(&installed);
@@ -741,6 +898,8 @@ mod tests {
             author: None,
             ids: BTreeMap::new(),
             interfaces: Vec::new(),
+            dependencies: Vec::new(),
+            out_of_date: false,
         }];
 
         let report = collection.reconcile(&installed);
@@ -770,6 +929,8 @@ mod tests {
             author: None,
             ids: BTreeMap::from([(Provider::Wago, "2382".to_owned())]),
             interfaces: Vec::new(),
+            dependencies: Vec::new(),
+            out_of_date: false,
         };
         assert!(!installed.has_id(&Provider::Curse, "2382"));
         assert!(installed.has_id(&Provider::Wago, "2382"));

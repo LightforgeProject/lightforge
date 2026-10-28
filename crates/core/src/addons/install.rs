@@ -124,6 +124,26 @@ fn is_false(value: &bool) -> bool {
 }
 
 impl Ledger {
+    /// Folders records from more than one provider claim, with those
+    /// providers. Each record's update writes the folder, so the two overwrite
+    /// each other and removing one takes the other's files.
+    pub fn shared_folders(&self) -> Vec<(String, Vec<String>)> {
+        let mut owners: std::collections::BTreeMap<&str, Vec<String>> = Default::default();
+        for record in &self.addons {
+            for folder in &record.folders {
+                let providers = owners.entry(folder.as_str()).or_default();
+                if !providers.contains(&record.provider) {
+                    providers.push(record.provider.clone());
+                }
+            }
+        }
+        owners
+            .into_iter()
+            .filter(|(_, providers)| providers.len() > 1)
+            .map(|(folder, providers)| (folder.to_owned(), providers))
+            .collect()
+    }
+
     /// Where a product's ledger lives, keyed by the AddOns directory too: a
     /// second install of the same product gets its own.
     pub fn path_for(data_dir: &Path, addons_dir: &Path, code: &ProductCode) -> PathBuf {
@@ -527,6 +547,24 @@ fn io(path: &Path) -> impl FnOnce(std::io::Error) -> InstallError + '_ {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_folder_two_providers_installed_is_reported_once_with_both() {
+        let record = |provider: &str, folders: &[&str]| Record {
+            provider: provider.to_owned(),
+            folders: folders.iter().map(|f| (*f).to_owned()).collect(),
+            ..Record::default()
+        };
+        let ledger = Ledger {
+            addons: vec![
+                record("curse", &["Details", "Details_Streamer"]),
+                record("wowinterface", &["Details"]),
+                record("curse", &["WeakAuras"]),
+            ],
+        };
+        assert_eq!(ledger.shared_folders(), [("Details".to_owned(), vec!["curse".to_owned(), "wowinterface".to_owned()])]);
+    }
+
     use super::*;
     use std::io::Write;
     use zip::write::SimpleFileOptions;

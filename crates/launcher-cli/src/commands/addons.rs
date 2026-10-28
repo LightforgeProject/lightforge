@@ -86,7 +86,7 @@ pub(crate) async fn addon_fingerprints(ctx: Ctx, product: String, path: Option<P
     println!("{:<32} {:>12} {:>12}", "folder", "computed", "published");
     let mut checked = 0;
     let mut agreed = 0;
-    for addon in addons::scan(&dir).unwrap_or_default() {
+    for addon in addons::scan(&dir, &addons::Client::default()).unwrap_or_default() {
         let computed = fingerprint::of_folder(&dir.join(&addon.folder));
         let published = expected.get(&addon.folder).copied();
         let verdict = match (computed, published) {
@@ -123,11 +123,23 @@ pub(crate) fn addons(ctx: Ctx, product: String, path: Option<PathBuf>, token: Op
 
     let code: ProductCode = product.parse().expect("product codes are infallible");
     let dir = path.unwrap_or_else(|| layout.addons_dir(&code));
-    let installed = addons::scan(&dir)
+    let version = BuildInfo::load(layout.build_info(&code))
+        .ok()
+        .and_then(|info| info.get(&code, lightforge_core::buildinfo::COL_VERSION).ok().map(str::to_owned));
+    let client = addons::Client::of(&code, version.as_deref());
+    let installed = addons::scan(&dir, &client)
         .with_context(|| format!("reading {}", dir.display()))?;
 
     println!("addons dir      {}", dir.display());
-    println!("installed       {}\n", installed.len());
+    println!("installed       {}", installed.len());
+    if let Some(interface) = client.interface {
+        let stale = installed.iter().filter(|a| a.out_of_date).count();
+        println!("out of date     {stale}, for interface {interface}");
+    }
+    for (folder, dep) in addons::missing_dependencies(&installed) {
+        println!("missing         {dep}, which {folder} needs");
+    }
+    println!();
 
     for addon in &installed {
         let ids: Vec<String> = addon
@@ -136,10 +148,11 @@ pub(crate) fn addons(ctx: Ctx, product: String, path: Option<PathBuf>, token: Op
             .map(|(provider, id)| format!("{}:{id}", provider.as_str()))
             .collect();
         println!(
-            "{:<34} {:<18} {}",
+            "{:<34} {:<18} {}{}",
             addon.folder,
             addon.version.as_deref().unwrap_or("-"),
-            ids.join(" ")
+            ids.join(" "),
+            if addon.out_of_date { "  (out of date)" } else { "" },
         );
     }
 
