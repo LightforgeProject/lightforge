@@ -174,6 +174,8 @@ impl Lightforge {
                     Tweak::GamePerformance => tweaks.game_performance = Some(on),
                     Tweak::MangoHud => tweaks.mangohud = on,
                     Tweak::Wayland => tweaks.wayland = on,
+                    Tweak::NvidiaGpu => tweaks.nvidia_gpu = on,
+                    Tweak::Nvapi => tweaks.nvapi = on,
                 });
                 Task::none()
             }

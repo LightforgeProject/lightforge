@@ -480,6 +480,8 @@ pub(crate) enum Tweak {
     GamePerformance,
     MangoHud,
     Wayland,
+    NvidiaGpu,
+    Nvapi,
 }
 
 /// A Proton build in a picker, or the "follow the default" entry.

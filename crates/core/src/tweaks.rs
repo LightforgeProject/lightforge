@@ -32,6 +32,12 @@ pub struct Tweaks {
     /// Proton itself ignores this unless `WAYLAND_DISPLAY` is set, and so
     /// does [`Tweaks::environment`]; see [`HostTools::wayland`].
     pub wayland: bool,
+    /// Render on the NVIDIA GPU of a hybrid laptop, through PRIME render
+    /// offload; without it the game gets the integrated one.
+    pub nvidia_gpu: bool,
+    /// DXVK-NVAPI, for Reflex and other NVIDIA-only options. Off by default,
+    /// as in Proton, which otherwise reports the card as an AMD one.
+    pub nvapi: bool,
     /// The user's own environment variables for the launch.
     pub env: BTreeMap<String, String>,
 }
@@ -46,6 +52,15 @@ impl Tweaks {
         // Only with `WAYLAND_DISPLAY` set, as Proton itself requires.
         if self.wayland && tools.wayland {
             env.push(("PROTON_ENABLE_WAYLAND".into(), "1".into()));
+        }
+        // NVIDIA's documented PRIME render offload set: GL, Vulkan, and GLX.
+        if self.nvidia_gpu && tools.hybrid {
+            env.push(("__NV_PRIME_RENDER_OFFLOAD".into(), "1".into()));
+            env.push(("__VK_LAYER_NV_optimus".into(), "NVIDIA_only".into()));
+            env.push(("__GLX_VENDOR_LIBRARY_NAME".into(), "nvidia".into()));
+        }
+        if self.nvapi && tools.nvidia.is_some() {
+            env.push(("PROTON_ENABLE_NVAPI".into(), "1".into()));
         }
         // The user's own overrides go last so they win over anything above.
         for (key, value) in &self.env {
@@ -82,6 +97,9 @@ pub struct HostTools {
     pub wayland: bool,
     /// The proprietary NVIDIA driver's major version, when it is loaded.
     pub nvidia: Option<u32>,
+    /// That driver beside an Intel or AMD GPU: a laptop that renders on the
+    /// integrated one unless told otherwise.
+    pub hybrid: bool,
 }
 
 impl HostTools {
@@ -92,6 +110,7 @@ impl HostTools {
             wayland: std::env::var_os("WAYLAND_DISPLAY").is_some(),
             nvidia: crate::debug::nvidia_version()
                 .and_then(|version| version.split('.').next()?.parse().ok()),
+            hybrid: is_hybrid(&crate::debug::cards()),
         }
     }
 
@@ -100,6 +119,15 @@ impl HostTools {
     pub fn nvidia_lacks_explicit_sync(&self) -> bool {
         self.nvidia.is_some_and(|major| major < 555)
     }
+}
+
+/// Whether `cards` (as [`crate::debug::cards`] lists them) pair the
+/// proprietary NVIDIA driver with another vendor's.
+fn is_hybrid(cards: &[String]) -> bool {
+    let has = |drivers: &[&str]| {
+        cards.iter().any(|card| card.split_whitespace().next().is_some_and(|d| drivers.contains(&d)))
+    };
+    has(&["nvidia"]) && has(&["i915", "xe", "amdgpu"])
 }
 
 /// A line of the environment editor that is not `KEY=value`.
@@ -246,6 +274,38 @@ mod tests {
             tweaks.environment(&tools),
             vec![(OsString::from("MANGOHUD"), OsString::from("1"))]
         );
+    }
+
+    #[test]
+    fn prime_offload_is_set_only_on_a_hybrid_machine() {
+        let tweaks = Tweaks { nvidia_gpu: true, ..Tweaks::default() };
+        let desktop = HostTools { nvidia: Some(580), ..HostTools::default() };
+        assert!(tweaks.environment(&desktop).is_empty());
+
+        let laptop = HostTools { hybrid: true, ..desktop };
+        let keys: Vec<OsString> = tweaks.environment(&laptop).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, ["__NV_PRIME_RENDER_OFFLOAD", "__VK_LAYER_NV_optimus", "__GLX_VENDOR_LIBRARY_NAME"]);
+    }
+
+    #[test]
+    fn nvapi_needs_the_nvidia_driver() {
+        let tweaks = Tweaks { nvapi: true, ..Tweaks::default() };
+        assert!(tweaks.environment(&HostTools::default()).is_empty());
+        let nvidia = HostTools { nvidia: Some(580), ..HostTools::default() };
+        assert_eq!(
+            tweaks.environment(&nvidia),
+            vec![(OsString::from("PROTON_ENABLE_NVAPI"), OsString::from("1"))]
+        );
+    }
+
+    #[test]
+    fn only_the_nvidia_driver_beside_another_vendor_is_hybrid() {
+        let cards = |list: &[&str]| list.iter().map(|c| (*c).to_owned()).collect::<Vec<_>>();
+        assert!(is_hybrid(&cards(&["i915 8086:a7a0", "nvidia 10de:28e0"])));
+        assert!(is_hybrid(&cards(&["amdgpu 1002:1681", "nvidia 10de:2860"])));
+        assert!(!is_hybrid(&cards(&["nvidia 10de:2684"])));
+        // nouveau cannot do PRIME render offload with these variables.
+        assert!(!is_hybrid(&cards(&["i915 8086:a7a0", "nouveau 10de:28e0"])));
     }
 
     #[test]

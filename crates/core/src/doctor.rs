@@ -277,12 +277,21 @@ fn nvidia(version: &str) -> Vec<Check> {
 
     let gl32 = match runtime::has_32bit_lib("libGLX_nvidia.so.0") {
         Some(true) => check("nvidia 32-bit gl", Status::Ok, "present", None),
-        Some(false) => check(
-            "nvidia 32-bit gl",
-            Status::Warn,
-            "missing",
-            Some("Battle.net is 32-bit and needs the driver's 32-bit libraries".to_owned()),
-        ),
+        Some(false) => {
+            let remedy = runtime::nvidia_remedy(version);
+            let fix = match (remedy.command, remedy.note) {
+                (Some(command), Some(note)) => format!("; on {}: {command} ({note})", remedy.distro),
+                (Some(command), None) => format!("; on {}: {command}", remedy.distro),
+                (None, Some(note)) => format!("; {note}"),
+                (None, None) => String::new(),
+            };
+            check(
+                "nvidia 32-bit gl",
+                Status::Warn,
+                "missing",
+                Some(format!("Battle.net is 32-bit and needs the driver's 32-bit libraries{fix}")),
+            )
+        }
         None => check("nvidia 32-bit gl", Status::Ok, "unknown, ldconfig could not be read", None),
     };
 

@@ -261,6 +261,15 @@ impl OsRelease {
         os
     }
 
+    /// What the system calls itself, for "on <name>: run this".
+    fn name(&self) -> String {
+        match (self.pretty_name.is_empty(), self.id.is_empty()) {
+            (false, _) => self.pretty_name.clone(),
+            (true, false) => self.id.clone(),
+            (true, true) => "this system".to_owned(),
+        }
+    }
+
     fn is_fedora(&self) -> bool {
         self.is("fedora")
     }
@@ -278,13 +287,7 @@ pub fn remedy() -> Remedy {
 
 /// The table: only the common families; the rest get [`ADVICE`] and no command.
 pub fn remedy_for(os: &OsRelease) -> Remedy {
-    let distro = match os.pretty_name.is_empty() {
-        false => os.pretty_name.clone(),
-        true => match os.id.is_empty() {
-            false => os.id.clone(),
-            true => "this system".to_owned(),
-        },
-    };
+    let distro = os.name();
 
     let (command, note) = if os.id == "nixos" {
         // Declarative: no command to copy.
@@ -374,6 +377,48 @@ pub fn remedy_for(os: &OsRelease) -> Remedy {
     Remedy { distro, command, note }
 }
 
+/// What to run for the NVIDIA driver's 32-bit libraries, which Battle.net
+/// needs and which the driver packages leave out. `driver` is the loaded
+/// module's version; Ubuntu names its packages by the major.
+pub fn nvidia_remedy(driver: &str) -> Remedy {
+    nvidia_remedy_for(&OsRelease::read(), driver)
+}
+
+pub fn nvidia_remedy_for(os: &OsRelease, driver: &str) -> Remedy {
+    let major = driver.split('.').next().unwrap_or(driver);
+    let apt = |package: &str| {
+        format!("sudo dpkg --add-architecture i386 && sudo apt update && sudo apt install {package}:i386")
+    };
+
+    // All UNVERIFIED: no NVIDIA machine has run them yet.
+    let (command, note) = if os.id == "nixos" {
+        (None, Some("set `hardware.graphics.enable32Bit = true;` and rebuild".to_owned()))
+    } else if os.atomic {
+        (
+            None,
+            Some("this system boots from a read-only image; use an image built with the NVIDIA driver".to_owned()),
+        )
+    } else if os.is("ubuntu") {
+        (Some(apt(&format!("libnvidia-gl-{major}"))), None)
+    } else if os.is("debian") {
+        (Some(apt("nvidia-driver-libs")), None)
+    } else if os.is("arch") {
+        (
+            Some("sudo pacman -S lib32-nvidia-utils".to_owned()),
+            Some("it lives in the multilib repository, enabled in /etc/pacman.conf".to_owned()),
+        )
+    } else if os.is_fedora() {
+        (
+            Some("sudo dnf install xorg-x11-drv-nvidia-libs.i686".to_owned()),
+            Some("from RPM Fusion, where the driver itself comes from".to_owned()),
+        )
+    } else {
+        (None, None)
+    };
+
+    Remedy { distro: os.name(), command, note }
+}
+
 #[cfg(test)]
 mod remedy_tests {
     use super::*;
@@ -456,6 +501,29 @@ mod remedy_tests {
                 "{id} neither names a 32-bit build nor explains why it need not: {command}"
             );
         }
+    }
+
+    #[test]
+    fn ubuntu_names_the_gl_package_by_the_driver_major() {
+        let command = nvidia_remedy_for(&os("linuxmint", "ubuntu debian"), "580.82.07").command.unwrap();
+        assert!(command.ends_with("apt install libnvidia-gl-580:i386"), "{command}");
+        assert!(command.starts_with("sudo dpkg --add-architecture i386"), "{command}");
+    }
+
+    #[test]
+    fn every_nvidia_command_asks_for_a_32_bit_build() {
+        for (id, like) in [("debian", ""), ("ubuntu", "debian"), ("cachyos", "arch"), ("fedora", "")] {
+            let command = nvidia_remedy_for(&os(id, like), "580.82.07").command.unwrap();
+            assert!(
+                ["i386", "i686", "lib32"].iter().any(|m| command.contains(m)),
+                "{id} names no 32-bit build: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_image_based_system_gets_no_nvidia_command() {
+        assert!(nvidia_remedy_for(&atomic("bazzite", "fedora"), "580.82.07").command.is_none());
     }
 
     #[test]

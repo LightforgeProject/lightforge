@@ -144,6 +144,25 @@ impl Lightforge {
                 Tweak::Wayland,
             ),
         )];
+        if self.tools.hybrid {
+            rows.push(setting(
+                "Run on the NVIDIA GPU",
+                "Renders on the NVIDIA card instead of the integrated one.",
+                self.hint("Through the driver's PRIME render offload. Faster, and uses more power."),
+                self.tool_switch("nvidia gpu", true, tweaks.nvidia_gpu, scope, Tweak::NvidiaGpu),
+            ));
+        }
+        if self.tools.nvidia.is_some() {
+            rows.push(setting(
+                "NVIDIA features",
+                "Reflex and other NVIDIA-only options, through DXVK-NVAPI.",
+                self.hint(
+                    "Proton reports an NVIDIA card as an AMD one unless this is on, so games \
+                     leave their NVIDIA-only options out.",
+                ),
+                self.tool_switch("nvapi", true, tweaks.nvapi, scope, Tweak::Nvapi),
+            ));
+        }
 
         // Only where the build has textures behind the option.
         if let Some(bytes) = settings.textures_bytes {

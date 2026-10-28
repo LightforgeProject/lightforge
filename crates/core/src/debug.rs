@@ -233,10 +233,18 @@ fn session() -> Option<String> {
 }
 
 /// Which kernel driver sits behind each card, and which card it is.
+fn gpu_driver() -> Option<String> {
+    let cards = cards();
+    (!cards.is_empty()).then(|| cards.join(", "))
+}
+
+/// Each card as `driver pci-id`, e.g. `amdgpu 1002:744c`, sorted.
 ///
 /// From `/sys` (`uevent`), not `vulkaninfo` or `glxinfo`, which may be missing.
-fn gpu_driver() -> Option<String> {
-    let entries = std::fs::read_dir("/sys/class/drm").ok()?;
+pub(crate) fn cards() -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir("/sys/class/drm") else {
+        return Vec::new();
+    };
     let mut cards: Vec<String> = Vec::new();
 
     for entry in entries.flatten() {
@@ -262,7 +270,7 @@ fn gpu_driver() -> Option<String> {
 
     cards.sort();
     cards.dedup();
-    (!cards.is_empty()).then(|| cards.join(", "))
+    cards
 }
 
 /// The proprietary module's version, when it is the one loaded.
