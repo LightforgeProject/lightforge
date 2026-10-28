@@ -198,11 +198,6 @@ pub fn parse_hash(hex: &str) -> Result<[u8; 16], ConfigError> {
     Ok(out)
 }
 
-/// Render 16 bytes back to lower-case hex.
-pub fn to_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("config is malformed: {0}")]
@@ -225,6 +220,7 @@ pub enum ConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::text::hex;
 
     /// Trimmed verbatim from a real 12.1.0 retail install, keeping the shapes
     /// that matter: a one-hash `root`, two-hash `encoding`, and the `-size`
@@ -252,14 +248,14 @@ build-product = WoW
 
         // Encoding is the one entry that must carry an ekey: it is read from
         // local storage before any ckey can be resolved.
-        assert_eq!(to_hex(&build.encoding.ckey), "bdb644bbe038d17b9ad370d8a855f305");
+        assert_eq!(hex(&build.encoding.ckey), "bdb644bbe038d17b9ad370d8a855f305");
         assert_eq!(
-            build.encoding.ekey.map(|e| to_hex(&e)).as_deref(),
+            build.encoding.ekey.map(|e| hex(&e)).as_deref(),
             Some("e144ce500f663d0ef512720d96553f20")
         );
 
         // Root lists a content key only, so it has to go through encoding.
-        assert_eq!(to_hex(&build.root.ckey), "669be7c403ea35a20f73ea7effcaa544");
+        assert_eq!(hex(&build.root.ckey), "669be7c403ea35a20f73ea7effcaa544");
         assert_eq!(build.root.ekey, None);
 
         assert!(build.install.unwrap().ekey.is_some());
@@ -273,7 +269,7 @@ build-product = WoW
         // `encoding`, and both are two-value lines. Reading the wrong one
         // yields a plausible-looking pair of numbers and a broken lookup.
         let build = BuildConfig::parse(REAL_BUILD).unwrap();
-        assert_ne!(to_hex(&build.encoding.ckey), "199496988");
+        assert_ne!(hex(&build.encoding.ckey), "199496988");
         assert_eq!(build.encoding.ckey.len(), 16);
     }
 
@@ -329,8 +325,8 @@ build-product = WoW
 
     #[test]
     fn hashes_round_trip_through_hex() {
-        let hex = "9712ae9c84cc54111e9e3ddf9a6b8019";
-        assert_eq!(to_hex(&parse_hash(hex).unwrap()), hex);
+        let hash = "9712ae9c84cc54111e9e3ddf9a6b8019";
+        assert_eq!(hex(&parse_hash(hash).unwrap()), hash);
         assert!(parse_hash("tooshort").is_err());
     }
 

@@ -233,7 +233,7 @@ pub enum ContentError {
     #[error("the build config names no encoding key for the encoding manifest")]
     EncodingHasNoEKey,
 
-    #[error("no content key {} in the encoding manifest for the {what}", super::config::to_hex(.ckey))]
+    #[error("no content key {} in the encoding manifest for the {what}", crate::text::hex(.ckey))]
     UnknownContentKey { what: &'static str, ckey: CKey },
 
     #[error("file id {0} is not in this build's root manifest")]
@@ -262,7 +262,8 @@ pub enum ContentError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tact::config::{parse_hash, to_hex, KeyPair};
+    use crate::tact::config::{parse_hash, KeyPair};
+    use crate::text::hex;
 
     fn build_config(encoding_ekey: Option<EKey>) -> BuildConfig {
         BuildConfig {
@@ -343,6 +344,6 @@ mod tests {
     #[test]
     fn hex_rendering_matches_the_config_spelling() {
         let ckey = parse_hash("669be7c403ea35a20f73ea7effcaa544").unwrap();
-        assert_eq!(to_hex(&ckey), "669be7c403ea35a20f73ea7effcaa544");
+        assert_eq!(hex(&ckey), "669be7c403ea35a20f73ea7effcaa544");
     }
 }

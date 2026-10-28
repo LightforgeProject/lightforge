@@ -7,7 +7,7 @@ use super::{Event, InstallError, Options, Summary};
 use crate::buildinfo::BuildInfo;
 use crate::net::Http;
 use crate::product::ProductCode;
-use crate::tact::config::to_hex;
+use crate::text::hex;
 use crate::tact::download::{
     self, extract_install, Cancel, Catalog, Downloader, Options as DownloadOptions, Source,
 };
@@ -296,7 +296,7 @@ fn log_event(event: &Event, heartbeat: &mut Heartbeat) {
 fn log_failures(failed: &[download::Failure]) {
     const NAMED: usize = 20;
     for failure in failed.iter().take(NAMED) {
-        tracing::warn!("failed {}: {}", to_hex(&failure.ekey), failure.reason);
+        tracing::warn!("failed {}: {}", hex(&failure.ekey), failure.reason);
     }
     if failed.len() > NAMED {
         tracing::warn!("... and {} more failed files", failed.len() - NAMED);

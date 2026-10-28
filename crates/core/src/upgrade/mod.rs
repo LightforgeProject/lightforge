@@ -246,7 +246,7 @@ fn sha256_of(path: &Path) -> Result<String, UpgradeError> {
     let mut file = std::fs::File::open(path).map_err(|source| UpgradeError::io(path, source))?;
     let mut hasher = Sha256::new();
     std::io::copy(&mut file, &mut hasher).map_err(|source| UpgradeError::io(path, source))?;
-    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+    Ok(crate::text::hex(&hasher.finalize()))
 }
 
 /// The PKGBUILD for `package`, as it stands on `main`, once it is the one for

@@ -188,7 +188,7 @@ impl Ledger {
         use sha2::{Digest, Sha256};
 
         let digest = Sha256::digest(addons_dir.as_os_str().as_encoded_bytes());
-        let tag: String = digest.iter().take(4).map(|b| format!("{b:02x}")).collect();
+        let tag = crate::text::hex(&digest[..4]);
         data_dir
             .join("addons")
             .join(format!("{}-{tag}.json", code.as_str()))

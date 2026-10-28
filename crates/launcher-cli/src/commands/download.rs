@@ -165,7 +165,7 @@ pub(crate) async fn download(dest: PathBuf, product: String, region: String, loc
     for failure in summary.outcome.failed.iter().take(10) {
         eprintln!(
             "  FAILED {} — {}",
-            lightforge_core::tact::config::to_hex(&failure.ekey),
+            lightforge_core::text::hex(&failure.ekey),
             failure.reason
         );
     }
@@ -191,7 +191,8 @@ pub(crate) async fn cdn_archive(archive: Option<String>, product: String, region
     use lightforge_core::net::Http;
     use lightforge_core::tact::archive::ArchiveIndex;
     use lightforge_core::tact::cdn::{Client, Kind};
-    use lightforge_core::tact::config::{to_hex, BuildConfig, CdnConfig};
+    use lightforge_core::tact::config::{BuildConfig, CdnConfig};
+    use lightforge_core::text::hex;
     use lightforge_core::tact::version::{self, Region};
 
     let code: ProductCode = product.parse().expect("product codes are infallible");
@@ -263,14 +264,14 @@ pub(crate) async fn cdn_archive(archive: Option<String>, product: String, region
                 ok += 1;
                 println!(
                     "  {} -> ckey {}  {:>9} bytes decoded  verified",
-                    to_hex(&located.ekey),
-                    to_hex(&ckey),
+                    hex(&located.ekey),
+                    hex(&ckey),
                     decoded.len()
                 );
             }
             Err(e) => {
                 bad += 1;
-                println!("  {} FAILED: {e}", to_hex(&located.ekey));
+                println!("  {} FAILED: {e}", hex(&located.ekey));
             }
         }
     }
@@ -488,9 +489,7 @@ pub(crate) async fn plan(dest: PathBuf, product: String, region: String, locale:
         n => {
             println!("  {n} planned files ARE in the store — the probe is wrong");
             for ekey in &report.examples {
-                let hex: String =
-                    ekey.iter().map(|b| format!("{b:02x}")).collect();
-                println!("    {hex}");
+                println!("    {}", lightforge_core::text::hex(ekey));
             }
         }
     }

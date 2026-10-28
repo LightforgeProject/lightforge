@@ -16,6 +16,8 @@ use futures_util::StreamExt;
 use sha2::{Digest, Sha512};
 use tokio::io::AsyncWriteExt;
 
+use crate::text::hex;
+
 /// Sent on every request. GitHub rejects API calls without a User-Agent.
 const USER_AGENT: &str = concat!("Lightforge/", env!("CARGO_PKG_VERSION"));
 
@@ -489,10 +491,6 @@ fn check_status(url: &str, response: reqwest::Response) -> Result<reqwest::Respo
         url: url.to_owned(),
         status: status.as_u16(),
     })
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// A cached response body plus the ETag that validates it.

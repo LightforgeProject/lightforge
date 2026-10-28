@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::net::Http;
+use crate::text::hex;
 use crate::product::{Branch, ProductCode};
 
 const FIXTURE: &str = r#"{

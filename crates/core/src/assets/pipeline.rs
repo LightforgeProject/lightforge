@@ -7,6 +7,7 @@ use super::{
 };
 use crate::net::Http;
 use crate::product::ProductCode;
+use crate::text::hex;
 
 /// The pipeline: an origin, a cache, and the rules connecting them.
 #[derive(Debug, Clone)]
@@ -303,8 +304,4 @@ pub(super) fn extension(url: &str) -> Option<String> {
     let ext = name.rsplit_once('.')?.1;
     (!ext.is_empty() && ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric()))
         .then(|| ext.to_ascii_lowercase())
-}
-
-pub(super) fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

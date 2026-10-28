@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use super::pipeline::{extension, hex, is_cache_name, join};
+use super::pipeline::{extension, is_cache_name, join};
+use crate::text::hex;
 use super::MANIFEST_FILE;
 use crate::net::ETagCache;
 

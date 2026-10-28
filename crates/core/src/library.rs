@@ -686,7 +686,7 @@ fn new_id() -> String {
             ^ u64::from(std::process::id());
         bytes.copy_from_slice(&now.to_le_bytes()[..6]);
     }
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    crate::text::hex(&bytes)
 }
 
 #[derive(Debug, thiserror::Error)]

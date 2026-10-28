@@ -37,7 +37,7 @@
 
 use crate::net::{Http, NetError, MAX_CDN_BYTES};
 
-use super::config::to_hex;
+use crate::text::hex;
 use super::version::Cdn;
 
 /// Where a hash is fetched from within a CDN path.
@@ -223,7 +223,7 @@ impl Client {
                     last = Some(CdnError::HashMismatch {
                         url,
                         expected: hash.to_ascii_lowercase(),
-                        found: to_hex(&actual),
+                        found: hex(&actual),
                     });
                 }
                 Err(source) => last = Some(endpoint_failed(url, source)),
@@ -311,7 +311,7 @@ impl Client {
         expect_ckey: &super::config::CKey,
         keys: Option<&ngdp_crypto::KeyService>,
     ) -> Result<Vec<u8>, CdnError> {
-        let hash = to_hex(ekey);
+        let hash = hex(ekey);
         let mut last: Option<CdnError> = None;
 
         for endpoint in &self.endpoints {
@@ -332,8 +332,8 @@ impl Client {
                     }
                     last = Some(CdnError::HashMismatch {
                         url,
-                        expected: to_hex(expect_ckey),
-                        found: to_hex(&actual),
+                        expected: hex(expect_ckey),
+                        found: hex(&actual),
                     });
                 }
                 Err(e) => last = Some(CdnError::Decode { url, detail: e.to_string() }),
@@ -380,8 +380,8 @@ impl Client {
                     }
                     last = Some(CdnError::HashMismatch {
                         url,
-                        expected: to_hex(expect_ckey),
-                        found: to_hex(&actual),
+                        expected: hex(expect_ckey),
+                        found: hex(&actual),
                     });
                 }
                 Err(e) => last = Some(CdnError::Decode { url, detail: e.to_string() }),
@@ -544,13 +544,13 @@ mod tests {
         // Content keys, by contrast, are exactly the MD5 of the decoded bytes,
         // which is what `fetch_from_archive` checks.
         let payload = b"decoded content";
-        assert_eq!(to_hex(&*md5::compute(payload)).len(), 32);
+        assert_eq!(hex(&*md5::compute(payload)).len(), 32);
     }
 
     #[test]
     fn md5_matches_the_hex_spelling_used_everywhere_else() {
         let digest = *md5::compute(b"lightforge");
-        assert_eq!(to_hex(&digest).len(), 32);
-        assert_eq!(parse_md5(&to_hex(&digest)).unwrap(), digest);
+        assert_eq!(hex(&digest).len(), 32);
+        assert_eq!(parse_md5(&hex(&digest)).unwrap(), digest);
     }
 }

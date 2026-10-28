@@ -1,5 +1,6 @@
 use super::*;
-use crate::tact::config::{to_hex, CKey};
+use crate::tact::config::CKey;
+use crate::text::hex;
 use crate::tact::plan::Plan;
 use crate::tact::writer::StoreWriter;
 
@@ -38,8 +39,8 @@ mod downloading {
         match verify(&encoded, &ekey_of(&encoded), Some(&wrong), None) {
             Verified::Wrong(reason) => {
                 // The message has to name both, or a mismatch is unactionable.
-                assert!(reason.contains(&to_hex(&wrong)), "{reason}");
-                assert!(reason.contains(&to_hex(&ckey_of(b"the real bytes"))), "{reason}");
+                assert!(reason.contains(&hex(&wrong)), "{reason}");
+                assert!(reason.contains(&hex(&ckey_of(b"the real bytes"))), "{reason}");
             }
             _ => panic!("a content-key mismatch must not pass"),
         }

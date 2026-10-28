@@ -34,7 +34,7 @@
 //! u32 BE    offset of those bytes from the start of the archive
 //! ```
 
-use super::config::to_hex;
+use crate::text::hex;
 use super::storage::EKey;
 
 /// Bytes of footer at the end of every archive index.
@@ -92,7 +92,7 @@ impl ArchiveIndex {
             // file, refusing the index would cost every file in the archive.
             .filter(|&(ekey, size, _)| {
                 if size == 0 {
-                    tracing::warn!("archive {archive} lists {} with size 0, skipping it", to_hex(&ekey));
+                    tracing::warn!("archive {archive} lists {} with size 0, skipping it", hex(&ekey));
                 }
                 size != 0
             })
@@ -207,7 +207,7 @@ impl FileIndex {
 /// Check that `bytes` is the index named `hash`, every checksum included.
 pub fn verify(bytes: &[u8], hash: &str) -> Result<(), ArchiveError> {
     let footer = bytes.get(bytes.len().saturating_sub(FOOTER_SIZE)..).unwrap_or_default();
-    let found = to_hex(&md5::compute(footer).0);
+    let found = hex(&md5::compute(footer).0);
     if !found.eq_ignore_ascii_case(hash) {
         return Err(ArchiveError::NameMismatch { expected: hash.to_owned(), found });
     }
@@ -363,7 +363,7 @@ pub(crate) fn seal(bytes: &mut [u8]) -> String {
     zeroed[..12].copy_from_slice(&bytes[len - 20..len - 8]);
     let own = short_md5(&zeroed);
     bytes[len - 8..].copy_from_slice(&own);
-    to_hex(&md5::compute(&bytes[len - FOOTER_SIZE..]).0)
+    hex(&md5::compute(&bytes[len - FOOTER_SIZE..]).0)
 }
 
 /// Big-endian integer of 1..=8 bytes.

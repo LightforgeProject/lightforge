@@ -387,7 +387,7 @@ fn fingerprint(files: &[File]) -> String {
         hash.update(file.len.to_le_bytes());
         hash.update(file.mtime.to_le_bytes());
     }
-    hash.finalize().iter().take(16).map(|b| format!("{b:02x}")).collect()
+    crate::text::hex(&hash.finalize()[..16])
 }
 
 fn read_backup(path: &Path) -> Result<Backup, BackupError> {

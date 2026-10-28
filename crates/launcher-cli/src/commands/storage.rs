@@ -101,8 +101,7 @@ pub(crate) fn verify(ctx: Ctx, path: Option<PathBuf>, deep: bool, repair: bool, 
     };
     println!();
     for damage in &report.damaged[..show] {
-        let key: String =
-            damage.entry.key.iter().map(|b| format!("{b:02x}")).collect();
+        let key = lightforge_core::text::hex(&damage.entry.key);
         println!(
             "  {key}  data.{:03} +{}  {}",
             damage.entry.archive_id, damage.entry.offset, damage.fault.describe()

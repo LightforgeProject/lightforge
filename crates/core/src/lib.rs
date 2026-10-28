@@ -38,6 +38,7 @@ pub mod steam;
 pub mod steam_shortcut;
 pub mod storage;
 pub mod tact;
+pub mod text;
 pub mod transfers;
 pub mod tweaks;
 pub mod update;

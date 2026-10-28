@@ -227,8 +227,8 @@ pub(crate) fn content(path: PathBuf, product: String, locale: String, fdid: Opti
         let ekey = content.ekey_for_fdid(id).context("content key has no encoding key")?;
         let bytes = content.read_fdid(&mut storage, id).context("reading the file")?;
         println!("\nfile id         {id}");
-        println!("content key     {}", lightforge_core::tact::config::to_hex(&ckey));
-        println!("encoding key    {}", lightforge_core::tact::config::to_hex(&ekey));
+        println!("content key     {}", lightforge_core::text::hex(&ckey));
+        println!("encoding key    {}", lightforge_core::text::hex(&ekey));
         println!("expected size   {}", content.size_of(&ckey).unwrap_or(0));
         println!("decoded size    {}", bytes.len());
         let magic: String = bytes.iter().take(4).map(|b| {

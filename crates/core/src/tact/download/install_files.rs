@@ -1,5 +1,5 @@
 use super::{Cancel, DownloadError, Source};
-use crate::tact::config::to_hex;
+use crate::text::hex;
 
 /// The three lookups that turn a content key into a fetch: what it encodes
 /// to, which archive holds it, and whether it is loose instead.
@@ -63,7 +63,7 @@ pub async fn extract_install(
         };
 
         let Some(ekey) = encoding.ekey_for(&entry.ckey) else {
-            fail(&mut report, format!("encoding does not list content key {}", to_hex(&entry.ckey)));
+            fail(&mut report, format!("encoding does not list content key {}", hex(&entry.ckey)));
             continue;
         };
 
@@ -71,14 +71,14 @@ pub async fn extract_install(
         // request, loose ones whole.
         let encoded = if let Some((archive, located)) = locations.get(&ekey) {
             let Some(range) = located.range() else {
-                fail(&mut report, format!("encoding key {} has size 0 in archive {archive}", to_hex(&ekey)));
+                fail(&mut report, format!("encoding key {} has size 0 in archive {archive}", hex(&ekey)));
                 continue;
             };
             client.fetch_range(http, archive, &range).await
         } else if loose.contains(&ekey) {
-            client.fetch(http, crate::tact::cdn::Kind::Data, &to_hex(&ekey)).await
+            client.fetch(http, crate::tact::cdn::Kind::Data, &hex(&ekey)).await
         } else {
-            fail(&mut report, format!("encoding key {} is in no index", to_hex(&ekey)));
+            fail(&mut report, format!("encoding key {} is in no index", hex(&ekey)));
             continue;
         };
 
@@ -105,7 +105,7 @@ pub async fn extract_install(
         if actual != entry.ckey {
             fail(
                 &mut report,
-                format!("decoded to {} but the build says {}", to_hex(&actual), to_hex(&entry.ckey)),
+                format!("decoded to {} but the build says {}", hex(&actual), hex(&entry.ckey)),
             );
             continue;
         }

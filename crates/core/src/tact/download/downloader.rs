@@ -5,7 +5,8 @@ use futures_util::stream::{self, StreamExt};
 use ngdp_crypto::KeyService;
 
 use super::{cancelled, Cancel, DownloadError, Failure, Options, Outcome, Progress, Source};
-use crate::tact::config::{to_hex, CKey};
+use crate::tact::config::CKey;
+use crate::text::hex;
 use crate::tact::plan::Plan;
 use crate::tact::storage::EKey;
 use crate::tact::writer::StoreWriter;
@@ -85,7 +86,7 @@ impl Downloader {
                         }
                     }
                     Work::Loose(loose) => {
-                        match client.fetch(http, crate::tact::cdn::Kind::Data, &to_hex(&loose.ekey)).await {
+                        match client.fetch(http, crate::tact::cdn::Kind::Data, &hex(&loose.ekey)).await {
                             Ok(body) => Fetched::Loose { ekey: loose.ekey, ckey: loose.ckey, body },
                             Err(source) => Fetched::Failed {
                                 ekeys: vec![loose.ekey],
@@ -210,8 +211,8 @@ pub(super) fn verify(encoded: &[u8], ekey: &EKey, ckey: Option<&CKey>, keys: Opt
             } else {
                 Verified::Wrong(format!(
                     "decoded to {} but the build says {}",
-                    to_hex(&actual),
-                    to_hex(ckey)
+                    hex(&actual),
+                    hex(ckey)
                 ))
             }
         }

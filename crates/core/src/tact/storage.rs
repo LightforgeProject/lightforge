@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use ngdp_crypto::KeyService;
 
 use super::idx::{self, Entry, Index, IdxError, CASC_ENTRY_HEADER};
+use crate::text::hex;
 
 /// Full 16-byte encoding key. Indices store only the first 9 bytes.
 pub type EKey = [u8; 16];
@@ -307,10 +308,6 @@ pub enum StorageError {
         #[source]
         source: std::io::Error,
     },
-}
-
-fn hex(key: &EKey) -> String {
-    key.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]
