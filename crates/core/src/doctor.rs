@@ -5,7 +5,7 @@
 //! such.
 
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -20,8 +20,17 @@ const NOFILE_MIN: u64 = 524_288;
 /// Free space a library should keep: a retail patch day can stage 15 GiB.
 const FREE_MIN: u64 = 20 << 30;
 
-/// Where Vulkan loaders look for drivers.
-const ICD_DIRS: &[&str] = &["/usr/share/vulkan/icd.d", "/etc/vulkan/icd.d"];
+/// Where drivers are looked for besides the XDG data dirs, which a session
+/// can set without `/usr/share`; the last is NixOS's.
+const ICD_DIRS: &[&str] = &[
+    "/usr/share/vulkan/icd.d",
+    "/etc/vulkan/icd.d",
+    "/usr/local/share/vulkan/icd.d",
+    "/run/opengl-driver/share/vulkan/icd.d",
+];
+
+/// Variables that replace the loader's search with a list of driver files.
+const ICD_OVERRIDES: &[&str] = &["VK_DRIVER_FILES", "VK_ICD_FILENAMES"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -121,7 +130,19 @@ fn ntsync() -> Check {
 }
 
 fn vulkan() -> Check {
-    let mut drivers: Vec<String> = ICD_DIRS
+    let set = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+    if let Some((name, files)) = ICD_OVERRIDES.iter().find_map(|name| Some((*name, set(name)?))) {
+        let mut drivers: Vec<String> = std::env::split_paths(&files)
+            .filter_map(|file| Some(file.file_name()?.to_string_lossy().into_owned()))
+            .collect();
+        drivers.sort();
+        drivers.dedup();
+        return check("vulkan", Status::Ok, format!("set by {name}: {}", drivers.join(", ")), None);
+    }
+
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let dirs = icd_dirs(set("XDG_DATA_HOME").as_deref(), home.as_deref(), set("XDG_DATA_DIRS").as_deref());
+    let mut drivers: Vec<String> = dirs
         .iter()
         .filter_map(|dir| std::fs::read_dir(dir).ok())
         .flatten()
@@ -130,15 +151,36 @@ fn vulkan() -> Check {
         .filter(|name| name.ends_with(".json"))
         .collect();
     drivers.sort();
+    drivers.dedup();
     match drivers.is_empty() {
+        // Warn: a driver somewhere this does not look still counts.
         true => check(
             "vulkan",
-            Status::Fail,
+            Status::Warn,
             "no Vulkan driver found",
             Some("install your GPU's Vulkan driver; DXVK and VKD3D cannot run without one".to_owned()),
         ),
         false => check("vulkan", Status::Ok, drivers.join(", "), None),
     }
+}
+
+/// The driver directories the loader searches, from the XDG variables as
+/// set (unset or empty is `None`) and their defaults otherwise.
+fn icd_dirs(data_home: Option<&str>, home: Option<&Path>, data_dirs: Option<&str>) -> Vec<PathBuf> {
+    let data_home = match data_home {
+        Some(dir) => Some(PathBuf::from(dir)),
+        None => home.map(|home| home.join(".local/share")),
+    };
+    let data_dirs = data_dirs.unwrap_or("/usr/local/share:/usr/share");
+    let mut dirs: Vec<PathBuf> = data_home
+        .into_iter()
+        .chain(std::env::split_paths(data_dirs))
+        .map(|dir| dir.join("vulkan/icd.d"))
+        .chain(ICD_DIRS.iter().map(PathBuf::from))
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    dirs.retain(|dir| seen.insert(dir.clone()));
+    dirs
 }
 
 fn loader() -> Check {
@@ -320,6 +362,24 @@ Max locked memory         8388608              8388608              bytes
     fn an_unlimited_open_file_limit_counts_as_enough() {
         let limits = LIMITS.replace("1048576              2097152", "unlimited            unlimited");
         assert_eq!(nofile(&limits), Some((u64::MAX, u64::MAX)));
+    }
+
+    #[test]
+    fn vulkan_drivers_are_looked_for_in_every_xdg_data_dir() {
+        let dirs = icd_dirs(None, Some(Path::new("/home/gabriel")), Some("/var/lib/flatpak/exports/share:/usr/share"));
+        assert_eq!(dirs[0], Path::new("/home/gabriel/.local/share/vulkan/icd.d"));
+        assert_eq!(dirs[1], Path::new("/var/lib/flatpak/exports/share/vulkan/icd.d"));
+        assert!(dirs.contains(&PathBuf::from("/run/opengl-driver/share/vulkan/icd.d")));
+        let usr = dirs.iter().filter(|d| *d == Path::new("/usr/share/vulkan/icd.d")).count();
+        assert_eq!(usr, 1, "listed once though named twice");
+    }
+
+    #[test]
+    fn unset_xdg_dirs_fall_back_to_their_defaults() {
+        let dirs = icd_dirs(Some("/data"), None, None);
+        assert_eq!(dirs[0], Path::new("/data/vulkan/icd.d"));
+        assert_eq!(dirs[1], Path::new("/usr/local/share/vulkan/icd.d"));
+        assert_eq!(dirs[2], Path::new("/usr/share/vulkan/icd.d"));
     }
 
     #[test]
