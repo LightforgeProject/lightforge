@@ -34,13 +34,9 @@ impl InstallReport {
     }
 }
 
-/// Write the install manifest's files into the flavor directory.
-///
-/// These exist as real files, not CASC content (`Wow.exe`, `wow_loader.dll`,
-/// CEF and its `.pak`s), and are not written into the store: only 12 of the
-/// 36 are in Agent's store, because the download manifest lists them too.
-/// `dest` is the flavor directory (`<install>/_retail_`). Each file is
-/// verified against its content key and written through a temporary file.
+/// Write the install manifest's files (`Wow.exe`, `wow_loader.dll`, CEF) as
+/// plain files into `dest`, the flavor directory (`<install>/_retail_`),
+/// each verified against its content key.
 pub async fn extract_install(
     source: Source<'_>,
     entries: &[&crate::tact::manifest::InstallEntry],
@@ -67,8 +63,7 @@ pub async fn extract_install(
             continue;
         };
 
-        // The same dispatch the plan makes: archived keys come out of a range
-        // request, loose ones whole.
+        // As the plan does: archived keys by range request, loose ones whole.
         let encoded = if let Some((archive, located)) = locations.get(&ekey) {
             let Some(range) = located.range() else {
                 fail(&mut report, format!("encoding key {} has size 0 in archive {archive}", hex(&ekey)));
@@ -98,9 +93,7 @@ pub async fn extract_install(
             }
         };
 
-        // Unlike store content, an install file is never stored unverified:
-        // these are executables, and one that does not match its content key
-        // is not something to write to disk and hope.
+        // Never written unverified: these are executables.
         let actual = *md5::compute(&decoded);
         if actual != entry.ckey {
             fail(
@@ -131,13 +124,9 @@ pub async fn extract_install(
 /// The `.flavor.info` line a client reads to know which product it is.
 const FLAVOR_HEADER: &str = "Product Flavor!STRING:0";
 
-/// Write `<flavor dir>/.flavor.info`, which nothing else creates.
-///
-/// Agent writes this, the install manifest does not list it, and the client
-/// uses it to work out which `.build.info` row belongs to it. A flavor
-/// directory without one is not an install any Blizzard tool produces.
-///
-/// Verbatim shape, from a real install's `_classic_beta_`:
+/// Write `<flavor dir>/.flavor.info`. Agent writes it, the install manifest
+/// does not list it, and the client finds its `.build.info` row by it. From
+/// a real `_classic_beta_`:
 ///
 /// ```text
 /// Product Flavor!STRING:0
@@ -155,12 +144,9 @@ pub fn write_flavor_info(
 
 /// Join `relative` onto `root`, reusing directories that differ only by case.
 ///
-/// The install manifest mixes `Utils\cef.pak` with `UTILS\LOCALES\EN-US.PAK`;
-/// Windows lands both in one directory, Linux would make two, and a real
-/// install then had `LIBCEF.DLL` in `UTILS/` where Wine could miss it. So a
-/// component reuses an existing case-insensitive match and otherwise keeps the
-/// manifest's spelling (first writer decides, as on Windows). File-name case
-/// is kept either way.
+/// The manifest mixes `Utils\cef.pak` with `UTILS\LOCALES\EN-US.PAK`; on Linux
+/// that makes two directories, and Wine missed `LIBCEF.DLL`. The first
+/// spelling decides, as on Windows. File-name case is kept.
 pub(super) fn resolve_windows_path(root: &std::path::Path, relative: &std::path::Path) -> std::path::PathBuf {
     let mut at = root.to_path_buf();
 
@@ -168,8 +154,7 @@ pub(super) fn resolve_windows_path(root: &std::path::Path, relative: &std::path:
         let name = component.as_os_str();
         let candidate = at.join(name);
 
-        // An exact match wins without a directory scan, which is the common
-        // case and keeps this off the hot path for deep trees.
+        // An exact match needs no directory scan.
         if candidate.exists() {
             at = candidate;
             continue;

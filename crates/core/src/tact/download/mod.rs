@@ -1,35 +1,23 @@
-//! The download loop: a [`Plan`] in, a CASC store out.
+//! The download loop: a [`Plan`](super::plan::Plan) in, a CASC store out.
 //!
-//! Fetches overlap, writes do not. Runs and loose files are requested
-//! concurrently, but every byte goes into the store through one
-//! [`StoreWriter`] in the order it arrives, the writer appends to an archive
-//! and owns the offsets, so there is exactly one of it and no lock to get
-//! wrong.
+//! Fetches overlap, writes do not: every byte goes through one
+//! [`StoreWriter`](super::writer::StoreWriter), which owns the archive offsets.
 //!
 //! Three things happen to every file between the socket and the archive:
 //!
 //! 1. **Split.** A run's response covers several files plus the padding
 //!    between them; each file is sliced back out at the offset the plan
 //!    recorded.
-//! 2. **Verify.** The bytes are decoded and checked against the content key.
-//!    The encoding key names the encoded bytes but cannot check them, only
-//!    `md5(decoded) == ckey` says the file is what the build says it is.
-//! 3. **Store.** The *encoded* bytes are written, because that is what an
-//!    archive holds. Decoding is for verification only; the decoded copy is
-//!    dropped.
+//! 2. **Verify.** Decoded and checked: `md5(decoded) == ckey`.
+//! 3. **Store.** The *encoded* bytes, as an archive holds them.
 //!
-//! Encrypted content (about 2% of a build, unreleased material) cannot be
-//! decoded without a key this machine does not have. Those files are stored
-//! unverified rather than refused, which is what Agent does, and the outcome
-//! counts them so the caller can say so honestly. Unverified means the content
-//! key went unchecked, not that nothing was: the encoded bytes must still match
-//! their encoding key and every chunk its checksum, or one chunk marked
-//! encrypted would carry anything past the check.
+//! Encrypted content (about 2% of a build) cannot be decoded without its
+//! key, so like Agent we store it unverified, counted in the outcome. The
+//! encoded bytes must still match their encoding key and every chunk its
+//! checksum.
 //!
-//! Durability is the store's own: every [`Options::checkpoint_bytes`] the
-//! writer flushes and rewrites its indices, leaving a store that opens and
-//! reads. Resume is then nothing more than re-planning against it, there is
-//! no progress file to get out of step with the bytes on disk.
+//! Every [`Options::checkpoint_bytes`] the writer rewrites its indices, so
+//! resuming is re-planning against the store; there is no progress file.
 
 mod downloader;
 mod guard;
@@ -56,11 +44,8 @@ use crate::net::Http;
 #[cfg(test)]
 use {downloader::*, install_files::*};
 
-/// A cooperative cancel token, checked between requests.
-///
-/// Cancellation is not abandonment: the loop stops taking new work, finishes
-/// what is in flight, and checkpoints, so a cancelled download leaves a valid
-/// store and resumes without refetching what it already had.
+/// A cooperative cancel token. The loop stops taking work and checkpoints,
+/// so a cancelled download resumes without refetching.
 #[derive(Debug, Clone, Default)]
 pub struct Cancel(Arc<AtomicBool>);
 
@@ -78,9 +63,8 @@ impl Cancel {
     }
 }
 
-/// Resolves once `cancel` trips. Polled rather than notified: `Cancel` is a
-/// plain flag shared with synchronous code, and a tenth of a second is far
-/// inside what a pause click needs.
+/// Resolves once `cancel` trips. Polled: `Cancel` is a plain flag shared with
+/// synchronous code.
 async fn cancelled(cancel: &Cancel) {
     while !cancel.is_cancelled() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -94,13 +78,7 @@ pub struct Options {
     pub concurrency: usize,
     /// Cap on how fast bytes may be pulled, shared across the run.
     pub limit: Option<RateLimit>,
-    /// Upper bound on the bytes stored between checkpoints.
-    ///
-    /// An *upper* bound, not the interval: a plan smaller than this would
-    /// otherwise never checkpoint at all, and a download with no intermediate
-    /// index write is one an interrupt costs entirely. Classic Era is 4.5 GiB
-    /// against this 4 GiB default, 3.2 GB of it was orphaned by a restart
-    /// before the first checkpoint was ever due. The effective interval is
+    /// Upper bound on the bytes stored between checkpoints; the interval is
     /// [`Options::interval_for`].
     pub checkpoint_bytes: u64,
 }
@@ -111,22 +89,17 @@ impl Default for Options {
     }
 }
 
-/// Checkpoints a download aims for, however big it is.
-///
-/// Eight keeps an interrupt's cost near an eighth of the work while leaving
-/// the generation counter in the range a real install's sits in.
+/// Checkpoints a download aims for: an interrupt costs about an eighth, and
+/// the generation counter stays in a real install's range.
 const TARGET_CHECKPOINTS: u64 = 8;
 
 /// Floor on the interval, so a tiny plan does not rewrite sixteen indices
-/// every few megabytes for no gain.
+/// every few megabytes.
 const MIN_CHECKPOINT_BYTES: u64 = 64 << 20;
 
 impl Options {
-    /// The interval actually used for a plan of `total` bytes.
-    ///
-    /// Scales down for small products so every download checkpoints several
-    /// times, rather than depending on whether it happens to exceed a constant
-    /// tuned on a 123 GiB install.
+    /// The interval for a plan of `total` bytes, scaled so small products
+    /// checkpoint several times too.
     pub fn interval_for(&self, total: u64) -> u64 {
         self.checkpoint_bytes
             .min((total / TARGET_CHECKPOINTS).max(MIN_CHECKPOINT_BYTES))
@@ -148,8 +121,7 @@ pub struct Progress {
 }
 
 impl Progress {
-    /// Completion as a fraction of bytes, which tracks time far better than a
-    /// fraction of files: sizes here span 176 bytes to 209 MB.
+    /// Completion as a fraction of bytes: file sizes span 176 bytes to 209 MB.
     pub fn fraction(&self) -> f64 {
         if self.bytes_total == 0 {
             return 1.0;
@@ -185,10 +157,7 @@ pub struct Failure {
 }
 
 /// Where bytes come from: the HTTP client, the CDN endpoints, and whatever
-/// decryption keys this machine has.
-///
-/// No `Debug`: `KeyService` has none, and printing key material would be the
-/// wrong thing to add.
+/// decryption keys this machine has. No `Debug`: keys stay out of logs.
 #[derive(Clone, Copy)]
 pub struct Source<'a> {
     pub http: &'a Http,
@@ -198,15 +167,9 @@ pub struct Source<'a> {
     pub keys: Option<&'a KeyService>,
 }
 
-/// A key service loaded the way [`super::storage::Storage`] loads one.
-///
-/// Every caller wants this, and the one that did not, the first Classic Era
-/// download, which passed `None`: logged its encrypted files as corruption.
-/// Exposed here so a front-end never has to name a cascette type to build one.
-///
-/// A machine with no key files is the normal case and not an error: the
-/// built-in keys still decrypt some content, and what they cannot is stored
-/// unverified.
+/// A key service loaded the way [`super::storage::Storage`] loads one, so a
+/// front end never names a cascette type. No key files is normal: the
+/// built-in keys still decrypt some content.
 pub fn default_key_service() -> KeyService {
     let mut keys = KeyService::new();
     let _ = keys.load_from_standard_dirs();

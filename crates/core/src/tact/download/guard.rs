@@ -1,12 +1,9 @@
 use super::Cancel;
 
 /// The downloads this process has running, keyed by product: the real
-/// [`crate::preflight::DownloadGuard`].
-///
-/// Agent and Lightforge writing the same `data.NNN` and `.idx` files is
-/// corruption, so a launch pauses any download first. "Resume" re-plans
-/// against the checkpointed store, which needs the network, so
-/// [`Downloads::resume`] only reports *that* a product needs restarting.
+/// [`crate::preflight::DownloadGuard`]. Resuming needs the network, so
+/// [`resume`](crate::preflight::DownloadGuard::resume) only reports which
+/// products need restarting.
 #[derive(Debug, Clone, Default)]
 pub struct Downloads {
     running: std::collections::HashMap<crate::ProductCode, Cancel>,
@@ -24,8 +21,7 @@ impl Downloads {
         self.running.insert(code, cancel);
     }
 
-    /// Drop a download that finished on its own. Not the same as pausing one:
-    /// nothing is owed afterwards.
+    /// Drop a download that finished on its own; no resume is owed.
     pub fn finished(&mut self, code: &crate::ProductCode) {
         self.running.remove(code);
         self.paused.remove(code);

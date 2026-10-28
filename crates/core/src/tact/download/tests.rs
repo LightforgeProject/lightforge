@@ -164,8 +164,7 @@ mod downloading {
 
     #[test]
     fn junk_is_refused_rather_than_counted_as_unverifiable() {
-        // Corruption must not be mistaken for encryption, or a broken download
-        // would quietly fill the store.
+        // Corruption must not pass as encryption.
         match verify(b"not blte at all", &[0; 16], Some(&ckey_of(b"x")), None) {
             Verified::Wrong(_) => {}
             _ => panic!("junk must be refused"),
@@ -276,8 +275,7 @@ mod downloading {
         let code: crate::ProductCode = "wow".parse().unwrap();
         let mut downloads = Downloads::new();
 
-        // Pausing nothing must report nothing, or a launch would wait on a
-        // resume that is never owed.
+        // Pausing nothing owes no resume.
         assert!(!downloads.pause(&code).unwrap());
         assert!(!downloads.resume(&code).unwrap());
     }
@@ -392,9 +390,8 @@ mod rate_limit {
         assert!(earned.elapsed().as_secs_f64() >= 0.9, "a second burst was let through");
     }
 
-    /// A single run can be larger than the bucket holds, 8 MiB against a
-    /// 1 MB/s cap. It has to go through anyway, or the download deadlocks
-    /// against a capacity it can never reach.
+    /// A run larger than the bucket (8 MiB at 1 MB/s) still goes, or the
+    /// download deadlocks.
     #[tokio::test(start_paused = true)]
     async fn a_request_larger_than_the_bucket_still_goes_through() {
         let limit = RateLimit::new(1_000_000).unwrap();

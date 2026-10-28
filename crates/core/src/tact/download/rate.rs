@@ -1,16 +1,8 @@
 use std::sync::Arc;
 
-/// A shared cap on how fast the loop may pull bytes.
-///
-/// A token bucket in front of each request rather than a throttle on the byte
-/// stream: the plan already knows how large every fetch is, so the cost can be
-/// paid before the request goes out, and the bytes themselves never pass
-/// through an extra layer. The average converges on the limit; the wire is
-/// bursty within one request, which is the trade for leaving the hot path
-/// untouched.
-///
-/// Cloneable and shared by every task in one run. `None` is the ordinary case
-/// and costs a single `Option` check per request.
+/// A shared cap on how fast the loop may pull bytes: a token bucket paid per
+/// request, since the plan knows every fetch's size, so the byte stream is
+/// untouched. The average converges on the limit; one request is bursty.
 #[derive(Debug, Clone)]
 pub struct RateLimit {
     inner: Arc<tokio::sync::Mutex<Bucket>>,
@@ -22,12 +14,9 @@ pub struct RateLimit {
 struct Bucket {
     /// Tokens available now, in bytes.
     tokens: f64,
-    /// Most tokens the bucket may hold, one second of the limit, so a quiet
-    /// moment buys a short burst and no more.
+    /// Most tokens the bucket may hold: one second of the limit.
     capacity: f64,
-    /// Read from tokio's clock, not the system one: it is the clock
-    /// [`tokio::time::sleep`] obeys, so the two cannot drift apart, and it
-    /// makes the limiter testable without spending real seconds.
+    /// Tokio's clock, which [`tokio::time::sleep`] obeys and tests can pause.
     last: tokio::time::Instant,
 }
 
@@ -44,12 +33,8 @@ impl RateLimit {
         })
     }
 
-    /// Wait until `bytes` may be fetched.
-    ///
-    /// A request larger than the bucket holds is allowed through once the
-    /// bucket is full rather than deadlocking against a capacity it can never
-    /// reach, it simply overdraws, and the negative balance is repaid before
-    /// the next request starts.
+    /// Wait until `bytes` may be fetched. A request larger than the bucket
+    /// goes once it is full and overdraws; the next request repays it.
     pub async fn acquire(&self, bytes: u64) {
         let want = bytes as f64;
         loop {

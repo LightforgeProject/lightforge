@@ -22,11 +22,8 @@ impl Downloader {
         Self { options }
     }
 
-    /// Fetch everything in `plan` and write it through `writer`.
-    ///
-    /// `writer` is left open: the caller finishes it, so it can write the
-    /// install-manifest files or `.build.info` first and still end with one
-    /// index write.
+    /// Fetch everything in `plan` and write it through `writer`, which is left
+    /// open for the caller to finish.
     pub async fn run(
         &self,
         source: Source<'_>,
@@ -51,8 +48,7 @@ impl Downloader {
         let checkpoint_every = self.options.interval_for(plan.bytes());
         let limit = self.options.limit.clone();
 
-        // Runs first: they are the bulk, and the loose files are large enough
-        // that leaving them last keeps the tail of the download responsive.
+        // Runs first: they are the bulk.
         let work = plan
             .runs
             .iter()
@@ -66,8 +62,7 @@ impl Downloader {
                 if cancel.is_cancelled() {
                     return Fetched::Skipped;
                 }
-                // Paid before the request goes out, so the limit shapes what
-                // is asked for rather than what has already arrived.
+                // Paid before the request goes out.
                 if let Some(limit) = &limit {
                     limit.acquire(item.bytes()).await;
                 }
@@ -99,11 +94,8 @@ impl Downloader {
             })
             .buffer_unordered(self.options.concurrency.max(1));
 
-        // Raced against the pause, rather than checked between fetches: up to
-        // `concurrency` range requests are in flight at once, each up to
-        // hundreds of megabytes, and a pause that waited for them all read as
-        // a hang. What is dropped here was never stored, so the next run's
-        // plan simply asks for it again.
+        // Raced against the pause: waiting out `concurrency` requests of
+        // hundreds of megabytes read as a hang. Dropped bytes were never stored.
         while let Either::Left((Some(fetched), _)) =
             future::select(fetches.next(), pin!(cancelled(cancel))).await
         {
@@ -151,8 +143,7 @@ impl Downloader {
         outcome.files_stored = sink.state.files_stored;
         outcome.bytes_stored = sink.state.bytes_stored;
 
-        // Whatever happened, finished, failed or cancelled, leave the store
-        // readable, so the next run re-plans against real bytes.
+        // Finished, failed or cancelled: leave the store readable.
         sink.writer.checkpoint()?;
 
         Ok(outcome)
@@ -175,8 +166,7 @@ impl Sink<'_> {
             Verified::Ok => {}
             Verified::Unverifiable => self.outcome.unverified += 1,
             Verified::Wrong(reason) => {
-                // Storing a file that failed its own content key would put
-                // corruption into the store under a name that says it is fine.
+                // A file that failed its content key is never stored.
                 self.outcome.failed.push(Failure { ekey: *ekey, reason });
                 return Ok(());
             }
@@ -216,10 +206,8 @@ pub(super) fn verify(encoded: &[u8], ekey: &EKey, ckey: Option<&CKey>, keys: Opt
                 ))
             }
         }
-        // Classify a failure by what the bytes ARE, not by what the decoder
-        // says about them. `blte` 0.4 cannot decode an encrypted block at all
-        // (see [`has_encrypted_chunk`]), so its error text does not reliably
-        // distinguish "withheld key" from "corrupt".
+        // Classify by the bytes, not the decoder's error: `blte` 0.4 cannot
+        // tell a withheld key from corruption (see [`has_encrypted_chunk`]).
         Err(e) => {
             if has_encrypted_chunk(encoded) {
                 unverifiable(encoded, ekey)
@@ -230,10 +218,9 @@ pub(super) fn verify(encoded: &[u8], ekey: &EKey, ckey: Option<&CKey>, keys: Opt
     }
 }
 
-/// A file whose content key cannot be checked, held to what can be: the
-/// same test a store scan applies ([`crate::tact::verify`]), the encoding key over
-/// the chunk table and each chunk's own checksum, no decoding needed. Anything
-/// this refuses, a later `lightforge verify` would have called damaged.
+/// A file whose content key cannot be checked, held to what a store scan
+/// ([`crate::tact::verify`]) checks: the encoding key over the chunk table and
+/// each chunk's checksum.
 fn unverifiable(encoded: &[u8], ekey: &EKey) -> Verified {
     use crate::tact::idx::KEY_SIZE;
 
@@ -250,13 +237,9 @@ fn unverifiable(encoded: &[u8], ekey: &EKey) -> Verified {
     }
 }
 
-/// Whether any chunk of a BLTE payload is encrypted, read from the chunk
-/// table rather than from a decode error: `blte` 0.4 either fails untyped
-/// without a key service, or misreads the key-name size as a u64 where the
-/// format has one byte ("Invalid key name size: 9560733477763426568", low byte
-/// `0x08`, the real size). Unreleased content ships encrypted and Agent
-/// stores it anyway, so these files are stored unverified; refusing them cost
-/// a real Classic Era download 7 files.
+/// Whether any chunk of a BLTE payload is encrypted, from the chunk table:
+/// `blte` 0.4 misreads the one-byte key-name size as a u64 ("Invalid key name
+/// size: 9560733477763426568"). Agent stores these, and so do we, unverified.
 ///
 /// ```text
 /// "BLTE"            4 bytes
