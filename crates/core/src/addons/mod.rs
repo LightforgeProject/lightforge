@@ -497,6 +497,7 @@ fn base64_encode(bytes: &[u8]) -> String {
 }
 
 /// Standard base64 with or without padding.
+#[allow(clippy::cast_possible_truncation, reason = "a 6-bit table index, then the low byte of the buffer")]
 fn base64_decode(input: &str) -> Option<Vec<u8>> {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 

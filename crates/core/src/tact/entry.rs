@@ -22,7 +22,7 @@
 //!
 //! Algorithm reference: <https://wowdev.wiki/CASC>.
 
-use super::idx::CASC_ENTRY_HEADER;
+use super::idx::{CASC_ENTRY_HEADER, CASC_ENTRY_HEADER_U32};
 
 /// Bytes of the key stored in an index entry, and mirrored in this header.
 const KEY_BYTES: usize = 9;
@@ -110,20 +110,20 @@ pub fn checksum_a(header_prefix: &[u8]) -> u32 {
 /// low two bits, the 32-bit word an index entry packs.
 pub fn checksum_b(header: &[u8], archive_id: u16, archive_offset: u32) -> u32 {
     let offset = (archive_offset & 0x3fff_ffff) | ((u32::from(archive_id) & 3) << 30);
-    let seed = offset.wrapping_add(CASC_ENTRY_HEADER as u32);
+    let seed = offset.wrapping_add(CASC_ENTRY_HEADER_U32);
     let encoded = TABLE[(seed & 0xf) as usize] ^ seed;
 
     // Fold the first 0x1a bytes into four accumulator bytes, with which byte
     // receives which input rotated by the offset.
     let mut hashed = [0u8; 4];
-    for (i, byte) in header.iter().take(0x1a).enumerate() {
-        hashed[((i as u32).wrapping_add(offset) & 3) as usize] ^= *byte;
+    for (i, byte) in (0u32..).zip(header.iter().take(0x1a)) {
+        hashed[(i.wrapping_add(offset) & 3) as usize] ^= *byte;
     }
 
     let encoded = encoded.to_le_bytes();
     let mut out = [0u8; 4];
-    for (j, slot) in out.iter_mut().enumerate() {
-        let i = (j as u32).wrapping_add(0x1a).wrapping_add(offset);
+    for (j, slot) in (0u32..).zip(out.iter_mut()) {
+        let i = j.wrapping_add(0x1a).wrapping_add(offset);
         *slot = hashed[(i & 3) as usize] ^ encoded[(i & 3) as usize];
     }
     u32::from_le_bytes(out)

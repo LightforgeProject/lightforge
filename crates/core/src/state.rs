@@ -84,7 +84,7 @@ impl Progress {
         if self.total_bytes == 0 {
             return 0.0;
         }
-        (self.downloaded_bytes as f64 / self.total_bytes as f64).clamp(0.0, 1.0) as f32
+        (self.downloaded_bytes as f32 / self.total_bytes as f32).clamp(0.0, 1.0)
     }
 
     pub fn remaining_bytes(&self) -> u64 {

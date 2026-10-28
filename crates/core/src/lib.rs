@@ -8,6 +8,8 @@
 //! else stays synchronous and directly testable. `core` never depends on iced
 //! or clap.
 
+#![cfg_attr(test, allow(clippy::cast_possible_truncation))]
+
 pub mod addons;
 pub mod advice;
 pub mod assets;

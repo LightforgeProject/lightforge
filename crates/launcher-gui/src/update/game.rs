@@ -289,7 +289,10 @@ impl Lightforge {
                     return Ok(Task::none());
                 };
                 let busy = self.downloading_into(&self.layout.wow_install(&code));
-                let (layout, settings) = (self.layout.clone(), self.game_settings.as_mut().unwrap());
+                let layout = self.layout.clone();
+                let Some(settings) = self.game_settings.as_mut() else {
+                    return Ok(Task::none());
+                };
                 let TexturesStep::Ask(plan) = std::mem::take(&mut settings.textures) else {
                     return Ok(Task::none());
                 };

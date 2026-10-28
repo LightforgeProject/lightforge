@@ -24,6 +24,7 @@ const WHITESPACE: [u8; 4] = [9, 10, 13, 32];
 
 /// MurmurHash2, 32-bit, transcribed from Appleby's reference: the tail falls
 /// through, and the arithmetic wraps, as the C relies on.
+#[allow(clippy::cast_possible_truncation, reason = "murmur2 takes the length mod 2^32, as CurseForge does")]
 pub fn murmur2(bytes: &[u8], seed: u32) -> u32 {
     const M: u32 = 0x5bd1_e995;
     const R: u32 = 24;

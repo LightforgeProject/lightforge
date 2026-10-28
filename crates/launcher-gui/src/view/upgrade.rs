@@ -126,6 +126,7 @@ impl Lightforge {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation, reason = "a percentage")]
     fn fetching<'a>(&self) -> Element<'a, Message> {
         let (done, total) = self.upgrade.as_ref().map_or((0, None), |u| u.sample);
         let fraction = total.filter(|t| *t > 0).map(|t| (done as f32 / t as f32).clamp(0.0, 1.0));

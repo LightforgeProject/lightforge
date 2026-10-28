@@ -26,7 +26,7 @@ impl Progress {
     /// Fraction of the current step's download, when it has a known size.
     pub fn fraction(&self) -> Option<f32> {
         let total = self.total?;
-        (total > 0).then(|| (self.done as f64 / total as f64).clamp(0.0, 1.0) as f32)
+        (total > 0).then(|| (self.done as f32 / total as f32).clamp(0.0, 1.0))
     }
 }
 

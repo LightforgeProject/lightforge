@@ -81,6 +81,8 @@ pub const MAX_FILE_SIZE: usize = 64 * 1024 * 1024;
 
 /// Bytes of CASC entry header in front of every archived file's BLTE payload.
 pub const CASC_ENTRY_HEADER: usize = 30;
+#[allow(clippy::cast_possible_truncation, reason = "the header is 30 bytes")]
+pub(crate) const CASC_ENTRY_HEADER_U32: u32 = CASC_ENTRY_HEADER as u32;
 
 /// Bytes reserved at the head of every `data.NNN` for the per-bucket markers.
 pub const ARCHIVE_RESERVED: usize = BUCKETS as usize * CASC_ENTRY_HEADER;
@@ -117,7 +119,7 @@ impl Entry {
     /// Decoding them as files reports failures on a healthy install, and a
     /// written index has to reproduce them.
     pub fn is_archive_marker(&self) -> bool {
-        let header = CASC_ENTRY_HEADER as u32;
+        let header = CASC_ENTRY_HEADER_U32;
         self.key[2..] == ARCHIVE_MARKER_SUFFIX
             && self.size == header
             && self.offset.is_multiple_of(header)
@@ -125,6 +127,7 @@ impl Entry {
     }
 
     /// The marker `archive_id` gets in `bucket`'s index.
+    #[allow(clippy::cast_possible_truncation, reason = "the key carries the low byte")]
     pub fn archive_marker(archive_id: u16, bucket: u8) -> Self {
         let mut key = [0u8; KEY_SIZE];
         key[1] = archive_id as u8;
@@ -132,11 +135,12 @@ impl Entry {
         Self {
             key,
             archive_id,
-            offset: u32::from(bucket) * CASC_ENTRY_HEADER as u32,
-            size: CASC_ENTRY_HEADER as u32,
+            offset: u32::from(bucket) * CASC_ENTRY_HEADER_U32,
+            size: CASC_ENTRY_HEADER_U32,
         }
     }
 
+    #[allow(clippy::cast_possible_truncation, reason = "8 + 2 bits of archive id")]
     fn read(bytes: &[u8]) -> Self {
         let mut key = [0u8; KEY_SIZE];
         key.copy_from_slice(&bytes[..KEY_SIZE]);
@@ -155,6 +159,7 @@ impl Entry {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation, reason = "`to_bytes` refuses ids wider than 10 bits")]
     fn write(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.key);
         out.push((self.archive_id >> 2) as u8);
@@ -308,7 +313,10 @@ impl Index {
         }
         let blocks = blocks
             .iter()
-            .map(|c| (u32::from_be_bytes(c[..4].try_into().unwrap()), u32::from_be_bytes(c[4..].try_into().unwrap())))
+            .map(|c| {
+                let (words, _) = c.as_chunks::<4>();
+                (u32::from_be_bytes(words[0]), u32::from_be_bytes(words[1]))
+            })
             .collect::<Vec<_>>();
 
         let ds = data_offset(blocks.len());
@@ -344,6 +352,7 @@ impl Index {
     }
 
     /// Serialize to the on-disk form, padded to the file's fixed size.
+    #[allow(clippy::cast_possible_truncation, reason = "format constants, and lengths checked against MAX_FILE_SIZE")]
     pub fn to_bytes(&self) -> Result<Vec<u8>, IdxError> {
         let mut body = Vec::with_capacity(8 + self.blocks.len() * 8);
         body.extend_from_slice(&self.version.to_le_bytes());

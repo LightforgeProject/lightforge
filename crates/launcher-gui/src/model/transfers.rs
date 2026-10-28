@@ -111,6 +111,7 @@ impl Rate {
     /// Shorter windows are mostly chunk-arrival noise, not a rate.
     pub(crate) const MIN_WINDOW: f64 = 0.25;
 
+    #[allow(clippy::cast_possible_truncation, reason = "a rate in bytes per second")]
     pub(crate) fn sample(&mut self, bytes: u64) {
         let now = Instant::now();
         let Some(previous) = self.last_at else {

@@ -190,6 +190,7 @@ impl Lightforge {
     /// Ask Steam for its on-screen keyboard for `field`, on a console that
     /// Steam started. Where the field is goes with it, the way SDL asks, so
     /// Steam can keep the keyboard off it.
+    #[allow(clippy::cast_possible_truncation, reason = "screen coordinates")]
     pub(crate) fn steam_keyboard(&mut self, field: &focus::Target) {
         if !self.console() || !launched_by_steam() {
             return;

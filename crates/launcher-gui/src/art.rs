@@ -19,6 +19,7 @@ const BACKGROUND_MAX_WIDTH: u32 = 2560;
 ///
 /// Marks come at 256px; reduced that far without mipmaps they alias. Twice
 /// the tile is 1:1 on a 2x display and a clean 2:1 on 1x.
+#[allow(clippy::cast_possible_truncation, reason = "a whole number of pixels")]
 const MARK_MAX_WIDTH: u32 = (crate::theme::TILE * 2.0) as u32;
 
 /// Widest a logo is kept. It is drawn at most a couple of hundred pixels tall.
@@ -105,6 +106,7 @@ pub fn decode_bundled(bytes: &'static [u8]) -> Handle {
 /// 440px tall); cropped, they read as one size.
 ///
 /// Returns the image, its aspect, and its [`Art::logo_ink`] fraction.
+#[allow(clippy::cast_possible_truncation, reason = "a ratio, and a scaled-down height")]
 fn logo(path: &Path) -> (Handle, f32, f32) {
     let decoded = match image::open(path) {
         Ok(decoded) => decoded,
@@ -225,6 +227,7 @@ fn scale(path: &Path, max_width: u32, filter: FilterType) -> Handle {
     try_scale(path, max_width, filter).unwrap_or_else(placeholder)
 }
 
+#[allow(clippy::cast_possible_truncation, reason = "scaled down, so no wider than the u32 it came from")]
 fn try_scale(path: &Path, max_width: u32, filter: FilterType) -> Option<Handle> {
     let decoded = match decode(path, max_width) {
         Ok(decoded) => decoded,
@@ -471,6 +474,7 @@ pub struct Shot {
 /// Read an image from disk and re-encode it small enough to travel.
 ///
 /// Fails on anything that is not an image.
+#[allow(clippy::cast_possible_truncation, reason = "scaled down, so no wider than the u32 it came from")]
 pub fn load_shot(path: &Path) -> Result<Shot, String> {
     let decoded = image::open(path).map_err(|e| format!("not an image: {e}"))?;
     let original = decoded.into_rgb8();

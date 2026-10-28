@@ -146,6 +146,7 @@ impl Plan {
             }
 
             if let Some((archive, located)) = locations.get(&entry.ekey) {
+                #[allow(clippy::cast_possible_truncation, reason = "archive ids number in the thousands")]
                 let id = *archive_id.entry(archive.to_owned()).or_insert_with(|| {
                     archives.push(archive.to_owned());
                     (archives.len() - 1) as u32
@@ -180,6 +181,7 @@ impl Plan {
             match (extends, current.as_mut()) {
                 (true, Some(run)) => {
                     // Never shorter: a piece inside the run must not cut it back.
+                    #[allow(clippy::cast_possible_truncation, reason = "`extends` bounds it by max_run")]
                     let end = (piece_end - u64::from(run.offset)) as u32;
                     run.length = run.length.max(end);
                     run.pieces.push(Piece {

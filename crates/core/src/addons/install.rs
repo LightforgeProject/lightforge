@@ -87,6 +87,7 @@ pub fn today() -> String {
 }
 
 /// Days since the epoch to a civil date, by Howard Hinnant's `civil_from_days`.
+#[allow(clippy::cast_possible_truncation, reason = "day and month are in range by construction")]
 fn civil_from_unix(secs: u64) -> (i64, u32, u32) {
     let z = (secs / 86_400) as i64 + 719_468;
     let era = z.div_euclid(146_097);

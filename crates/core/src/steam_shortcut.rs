@@ -241,7 +241,7 @@ fn most_recent(users: &str) -> Option<u32> {
         }
     }
     let (id, _, _) = accounts.into_iter().max_by_key(|&(_, marked, timestamp)| (marked, timestamp))?;
-    id.checked_sub(STEAM_ID64_BASE).map(|n| n as u32)
+    id.checked_sub(STEAM_ID64_BASE).and_then(|n| u32::try_from(n).ok())
 }
 
 // ------------------------------------------------------------ binary VDF --

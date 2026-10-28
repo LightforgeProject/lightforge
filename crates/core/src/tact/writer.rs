@@ -172,6 +172,7 @@ impl StoreWriter {
     /// the CASC header is added here. Returns where it landed, or where it
     /// already was: many file ids share one key, and the index holds one entry
     /// per key, so a second copy would be unreachable bytes.
+    #[allow(clippy::cast_possible_truncation, reason = "offset + total stays within max_archive, under 2^30")]
     pub fn write(&mut self, ekey: &EKey, blte: &[u8]) -> Result<Entry, WriteError> {
         if let Ok(key) = <[u8; 9]>::try_from(&ekey[..9]) {
             let probe = Entry { key, archive_id: 0, offset: 0, size: 0 };
@@ -215,6 +216,7 @@ impl StoreWriter {
     /// The header is kept byte for byte except checksum B, which encodes the
     /// position: rebuilt, Agent's full-width keys would come out padded. The
     /// bytes at `from` become dead space.
+    #[allow(clippy::cast_possible_truncation, reason = "offset stays within max_archive, under 2^30")]
     pub fn relocate(&mut self, from: &Entry, raw: &[u8]) -> Result<Entry, WriteError> {
         let total = raw.len() as u64;
         if total != u64::from(from.size) || !Header::verify(raw, from.archive_id, from.offset) {

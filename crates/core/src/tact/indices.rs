@@ -172,6 +172,7 @@ impl Locations {
         index: &ArchiveIndex,
         wanted: &std::collections::HashSet<super::storage::EKey>,
     ) -> usize {
+        #[allow(clippy::cast_possible_truncation, reason = "archive ids number in the thousands")]
         let archive = match self.archives.iter().position(|a| a == index.archive()) {
             Some(i) => i as u32,
             None => {

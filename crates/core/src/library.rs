@@ -582,6 +582,7 @@ fn new_id() -> String {
     let mut bytes = [0u8; 6];
     let read = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes));
     if read.is_err() {
+        #[allow(clippy::cast_possible_truncation, reason = "only the low bits matter for a fallback id")]
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)

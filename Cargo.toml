@@ -101,3 +101,7 @@ zstd = { version = "0.14", default-features = false }
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+[workspace.lints.clippy]
+cast_possible_truncation = "warn"
+unwrap_used = "warn"

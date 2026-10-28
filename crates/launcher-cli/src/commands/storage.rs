@@ -172,7 +172,7 @@ pub(crate) fn reindex(ctx: Ctx, path: Option<PathBuf>) -> Result<()> {
     println!("rewrote         {} indices", summary.indices.len());
     for path in &summary.indices {
         let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-        println!("  {}  {size} bytes", path.file_name().unwrap().to_string_lossy());
+        println!("  {}  {size} bytes", path.file_name().expect("index paths end in a file name").to_string_lossy());
     }
     Ok(())
 }

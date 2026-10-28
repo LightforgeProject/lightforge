@@ -8,6 +8,8 @@
 //! - **Pausing is cancelling**: resuming plans against what is on disk, as
 //!   pre-flight's pause before Battle.net does.
 
+#![cfg_attr(test, allow(clippy::cast_possible_truncation))]
+
 mod addonwork;
 mod app;
 mod art;

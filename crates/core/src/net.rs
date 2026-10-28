@@ -361,6 +361,7 @@ async fn bounded_body(url: &str, response: reqwest::Response, max: usize) -> Res
         return Err(too_large());
     }
     // Sized up front when declared.
+    #[allow(clippy::cast_possible_truncation, reason = "checked against `max` above")]
     let mut body = Vec::with_capacity(declared.map_or(0, |len| len as usize));
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {

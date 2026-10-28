@@ -25,6 +25,7 @@ pub fn begin() {
     mark("process start");
 }
 
+#[allow(clippy::cast_possible_truncation, reason = "microseconds since start")]
 fn micros() -> u64 {
     START.get().map(|s| s.elapsed().as_micros() as u64).unwrap_or(0)
 }

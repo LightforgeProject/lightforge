@@ -123,3 +123,6 @@ assets = [
 glibc = ">= 2.36"
 # libudev.so.1, for gamepads.
 systemd-libs = "*"
+
+[lints]
+workspace = true

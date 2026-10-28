@@ -446,6 +446,7 @@ pub fn upsert(install_root: &Path, installs: &[ProductInstall]) -> Result<PathBu
     }
 }
 
+#[allow(clippy::cast_possible_truncation, reason = "milliseconds fit u64 for 584 million years")]
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
