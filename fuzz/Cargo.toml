@@ -1,0 +1,93 @@
+[package]
+name = "lightforge-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+lightforge-core = { path = "../crates/core" }
+
+# Its own workspace: nightly-only, and kept out of the release build and CI.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "archive_index"
+path = "fuzz_targets/archive_index.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "idx"
+path = "fuzz_targets/idx.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "idx_file_name"
+path = "fuzz_targets/idx_file_name.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "encoding"
+path = "fuzz_targets/encoding.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "manifest"
+path = "fuzz_targets/manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "blte"
+path = "fuzz_targets/blte.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "productdb_decode"
+path = "fuzz_targets/productdb_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "productdb_splice"
+path = "fuzz_targets/productdb_splice.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "steam_libraryfolders"
+path = "fuzz_targets/steam_libraryfolders.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "steam_loginusers"
+path = "fuzz_targets/steam_loginusers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "steam_shortcuts"
+path = "fuzz_targets/steam_shortcuts.rs"
+test = false
+doc = false
+bench = false

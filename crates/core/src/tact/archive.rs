@@ -325,10 +325,23 @@ fn narrow(value: u64) -> Result<u32, ArchiveError> {
 /// return the name it then has.
 #[cfg(test)]
 pub(crate) fn seal(bytes: &mut [u8]) -> String {
-    let footer = Footer::parse(bytes).expect("a footer to seal");
+    try_seal(bytes).expect("an index to seal")
+}
+
+/// [`seal`], or `None` when the footer's geometry does not match the length.
+#[cfg(any(test, fuzzing))]
+pub(crate) fn try_seal(bytes: &mut [u8]) -> Option<String> {
+    let footer = Footer::parse(bytes).ok()?;
     let entry_size = footer.key_size + footer.size_bytes + footer.offset_bytes;
-    let blocks = footer.count.div_ceil(footer.block_size / entry_size).max(1);
+    let per_block = footer.block_size / entry_size;
+    if per_block == 0 {
+        return None;
+    }
+    let blocks = footer.count.div_ceil(per_block).max(1);
     let (len, toc_start) = (bytes.len(), blocks * footer.block_size);
+    if len != toc_start + blocks * (footer.key_size + footer.checksum_size) + FOOTER_SIZE {
+        return None;
+    }
     let sums_at = toc_start + blocks * footer.key_size;
     for b in 0..blocks {
         let sum = short_md5(&bytes[b * footer.block_size..(b + 1) * footer.block_size]);
@@ -340,7 +353,7 @@ pub(crate) fn seal(bytes: &mut [u8]) -> String {
     zeroed[..12].copy_from_slice(&bytes[len - 20..len - 8]);
     let own = short_md5(&zeroed);
     bytes[len - 8..].copy_from_slice(&own);
-    hex(&md5::compute(&bytes[len - FOOTER_SIZE..]).0)
+    Some(hex(&md5::compute(&bytes[len - FOOTER_SIZE..]).0))
 }
 
 /// Big-endian integer of 1..=8 bytes.

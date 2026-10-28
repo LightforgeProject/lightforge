@@ -41,7 +41,7 @@ pub const VERSION: u16 = 7;
 pub const KEY_SIZE: usize = 9;
 const LOCATION_SIZE: usize = 5;
 const LENGTH_SIZE: usize = 4;
-const ENTRY_SIZE: usize = KEY_SIZE + LOCATION_SIZE + LENGTH_SIZE;
+pub(crate) const ENTRY_SIZE: usize = KEY_SIZE + LOCATION_SIZE + LENGTH_SIZE;
 
 /// Bits of an entry's packed location word given over to the offset. The two
 /// bits above them carry the low end of the archive id.
@@ -491,7 +491,7 @@ pub fn discover(dir: &Path) -> Result<Vec<PathBuf>, IdxError> {
 }
 
 /// Where the data section starts: the header body, padded to 16 bytes.
-fn data_offset(block_count: usize) -> usize {
+pub(crate) fn data_offset(block_count: usize) -> usize {
     let body_end = 8 + 8 + block_count * 8;
     body_end + ((DATA_SECTION_ALIGN - (body_end % DATA_SECTION_ALIGN)) % DATA_SECTION_ALIGN)
 }
@@ -499,7 +499,7 @@ fn data_offset(block_count: usize) -> usize {
 /// The data section's checksum: `hashlittle2` over each entry in turn with
 /// the state carried across, taking the final `pc`. One hash over the whole
 /// region gives a different value.
-fn entries_hash(entries: &[u8]) -> u32 {
+pub(crate) fn entries_hash(entries: &[u8]) -> u32 {
     let (mut pc, mut pb) = (0u32, 0u32);
     for entry in entries.as_chunks::<ENTRY_SIZE>().0 {
         hashlittle2(entry, &mut pc, &mut pb);

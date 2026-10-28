@@ -202,7 +202,7 @@ fn last_account(steam: &SteamRoot) -> Option<u32> {
 ///
 /// Older clients mark `"MostRecent" "1"`; October 2026's writes only a
 /// `"timestamp"`, and the newest wins. Text VDF read as a flat token list.
-fn most_recent(users: &str) -> Option<u32> {
+pub(crate) fn most_recent(users: &str) -> Option<u32> {
     let mut tokens = Vec::new();
     let mut rest = users;
     while let Some(at) = rest.find(['"', '{', '}']) {
@@ -249,7 +249,7 @@ fn most_recent(users: &str) -> Option<u32> {
 /// One value in a binary VDF file. Strings are kept as bytes, so whatever
 /// another tool wrote into somebody's shortcuts goes back out unchanged.
 #[derive(Debug, Clone, PartialEq)]
-enum Value {
+pub(crate) enum Value {
     Map(Vec<(Vec<u8>, Value)>),
     Str(Vec<u8>),
     Int(u32),
@@ -265,7 +265,7 @@ const LONG: u8 = 0x07;
 const END: u8 = 0x08;
 
 /// The whole file: the top-level map's entries.
-fn parse(bytes: &[u8]) -> Option<Vec<(Vec<u8>, Value)>> {
+pub(crate) fn parse(bytes: &[u8]) -> Option<Vec<(Vec<u8>, Value)>> {
     let mut at = 0;
     map(bytes, &mut at, true)
 }
@@ -308,7 +308,7 @@ fn take<const N: usize>(bytes: &[u8], at: &mut usize) -> Option<[u8; N]> {
     Some(chunk)
 }
 
-fn render(root: &[(Vec<u8>, Value)]) -> Vec<u8> {
+pub(crate) fn render(root: &[(Vec<u8>, Value)]) -> Vec<u8> {
     let mut out = Vec::new();
     write_map(&mut out, root);
     out.push(END);

@@ -43,10 +43,29 @@ cargo test
 cargo clippy --all-targets
 ```
 
-Tests must pass, and clippy should report nothing new — there is one
-long-standing warning about a function with eight arguments, and that is the
-only one you should see. If you touched a CLI command, also run `make cli-doc`
-so `docs/CLI.md` matches the binary.
+Tests must pass, and clippy should report nothing. If you touched a CLI
+command, also run `make cli-doc` so `docs/CLI.md` matches the binary.
+
+## Fuzzing the parsers
+
+Every parser of bytes from Blizzard's CDN, a CASC store, Battle.net's
+`product.db` or Steam has a target in `fuzz/`. They need a nightly toolchain
+and `cargo-fuzz`, and do not run in CI:
+
+```bash
+rustup toolchain install nightly --profile minimal
+cargo install cargo-fuzz --locked
+fuzz/seed.sh "$HOME/Games/Blizzard/games/World of Warcraft"
+cd fuzz
+cargo +nightly fuzz list
+cargo +nightly fuzz run -O idx -- -max_total_time=600 -rss_limit_mb=2048
+```
+
+`seed.sh` copies a few real files from an install into `fuzz/corpus/`, which
+stays out of git. Formats that only live inside the archives (encoding,
+manifests, BLTE) start from their magic bytes. A crash lands in
+`fuzz/artifacts/<target>/`. Fix it, add a unit test for the input that
+caused it, and run the target again.
 
 ## Pull requests
 

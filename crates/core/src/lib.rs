@@ -23,6 +23,8 @@ pub mod discover;
 pub mod error;
 pub mod families;
 pub(crate) mod fsutil;
+#[cfg(fuzzing)]
+pub mod fuzzing;
 pub mod library;
 pub mod logging;
 pub mod net;

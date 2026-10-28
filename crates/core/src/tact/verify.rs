@@ -435,7 +435,7 @@ fn payload(raw: &[u8], key: &[u8; KEY_SIZE]) -> Payload {
     }
 }
 
-pub(super) fn blte_fault(blte: &[u8], key: &[u8; KEY_SIZE]) -> Option<Fault> {
+pub(crate) fn blte_fault(blte: &[u8], key: &[u8; KEY_SIZE]) -> Option<Fault> {
     let be32 = |at: usize| {
         blte.get(at..at + 4)
             .map(|b| u32::from_be_bytes(b.try_into().expect("four bytes")) as usize)

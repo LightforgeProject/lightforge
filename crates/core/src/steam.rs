@@ -72,7 +72,7 @@ impl SteamRoot {
 /// Extract `"path"` values from a `libraryfolders.vdf`.
 ///
 /// A line scan for one field, tolerant of schema changes.
-fn parse_library_paths(contents: &str) -> Vec<PathBuf> {
+pub(crate) fn parse_library_paths(contents: &str) -> Vec<PathBuf> {
     contents
         .lines()
         .filter_map(|line| {
