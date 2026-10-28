@@ -12,34 +12,22 @@ use crate::product::ProductCode;
 pub enum Launch {
     /// Just the client window, the app-level "other Blizzard titles" path.
     Client,
-    /// The same client start, told that it was started automatically.
-    ///
-    /// `--autostarted` is the flag Blizzard's own Run entry passes, the
-    /// client writes it as `"%1" --autostarted`: and it is the only condition
-    /// under which the client honours
-    /// [`AUTOSTART_MINIMIZED_KEY`]: its startup decision reads
-    /// `needToMinimize` from `shouldMainWindowShowMinimizedAtAutoStartup &&
-    /// varAutoStarted`. A hand-off is exactly an automatic start: nobody asked
-    /// for the client, they asked for the game.
+    /// The same start with `--autostarted`, the flag Blizzard's own Run entry
+    /// passes. Only then does the client honour [`super::AUTOSTART_MINIMIZED_KEY`]
+    /// (`needToMinimize = shouldMainWindowShowMinimizedAtAutoStartup &&
+    /// varAutoStarted`).
     Autostart,
-    /// Hand straight off into a product, so the user never clicks through the
-    /// Battle.net UI. Paired with `GameLaunchWindowBehavior: 2`, the client
-    /// exits by itself once the game is up.
+    /// Hand straight off into a product. With `GameLaunchWindowBehavior: 2`
+    /// the client exits once the game is up.
     Product { code: ProductCode, exec: Option<String> },
-    /// Open the client's install flow for a product, by its install uid.
-    ///
-    /// The one thing that is neither view state nor a link: an action with a
-    /// view of its own, which is why it is the only candidate that can
-    /// survive the client's boot straight to its homepage.
-    ///
-    /// `install` and `game` are the client's own option names, pooled beside
-    /// `repair` and `modify` in its binary against the descriptions "Start a
-    /// package installation" and "Game registration/installation uid".
+    /// Open the client's install flow for a product, by its install uid. An
+    /// action, not view state, so the client's boot to its homepage keeps it.
+    /// `install` and `game` are option names from the client binary ("Start a
+    /// package installation", "Game registration/installation uid").
     InstallFlow { uid: String },
-    /// A `battlenet://` link, handed over the way Wine registered the protocol
-    /// (`Battle.net.exe --uri="%1"`). It is how Blizzard's own web buttons
-    /// drive the client, and a command the client acts on rather than view
-    /// state its startup can overwrite.
+    /// A `battlenet://` link, passed the way Wine registered the protocol
+    /// (`Battle.net.exe --uri="%1"`). A command the client acts on, not view
+    /// state its startup overwrites.
     Uri(String),
 }
 
@@ -49,18 +37,15 @@ impl Launch {
         Self::Product { code, exec: None }
     }
 
-    /// The executable and arguments this launch needs, relative to `install_dir`.
-    ///
-    /// Plain client opens go through `Battle.net Launcher.exe`, which is what
-    /// Blizzard's own shortcut runs and what keeps the client's self-update
-    /// path intact. A product hand-off goes straight to `Battle.net.exe`, the
-    /// binary that actually parses `--productcode`/`--exec`.
+    /// The executable and arguments this launch needs, relative to
+    /// `install_dir`. Plain opens use `Battle.net Launcher.exe`, as Blizzard's
+    /// shortcut does, which keeps self-update working. A hand-off goes to
+    /// `Battle.net.exe`, which parses `--productcode`/`--exec`.
     pub fn command(&self, install_dir: &Path) -> (PathBuf, Vec<String>) {
         match self {
             Self::Client => (install_dir.join("Battle.net Launcher.exe"), Vec::new()),
-            // Through the launcher, like a plain start: it is what Blizzard's
-            // shortcut runs, it keeps the client's self-update path intact,
-            // and it passes its command line on to the client.
+            // Through the launcher, like a plain start; it passes its command
+            // line on to the client.
             Self::Autostart => (
                 install_dir.join("Battle.net Launcher.exe"),
                 vec!["--autostarted".to_owned()],
@@ -81,16 +66,13 @@ impl Launch {
                         format!("--exec=launch {uid}"),
                     ],
                 ),
-                // No family id for this product, so there is nothing safe to
-                // ask for. Opening the client leaves the user one click away
-                // from the right tile; guessing puts them on the wrong game.
+                // No family id: a guess opens the wrong game, so just open the client.
                 None => Self::Client.command(install_dir),
             },
         }
     }
 
-    /// Whether this launch can actually hand off, or would only open the
-    /// client. Lets a caller label the button for what it will really do.
+    /// Whether this launch hands off, or only opens the client.
     #[cfg(test)]
     pub fn hands_off(&self) -> bool {
         match self {
@@ -119,9 +101,8 @@ pub fn game_uri(family: &str) -> String {
 /// ```
 ///
 /// A TACT code here makes the client fall back to its first family, Warcraft
-/// III, which is where `launch wow_classic_era` used to land. The compiled-in
-/// WoW families come first (a PTR and a beta live in the retail tile, Forever
-/// has its own); everything else comes from [`crate::families`].
+/// III. The WoW families are compiled in; the rest come from
+/// [`crate::families`].
 pub fn resolve_game_uid(code: &ProductCode, families: &crate::families::Families) -> Option<String> {
     game_uid(code).or_else(|| families.family_of(code.as_str()).map(str::to_owned))
 }
@@ -134,12 +115,9 @@ pub fn game_uid(code: &ProductCode) -> Option<String> {
         | ProductCode::ClassicEra
         | ProductCode::ClassicPtr
         | ProductCode::EraPtr => "WoWC",
-        // Observed 2026-10-14: picking the stress test in the Forever tile's
-        // dropdown logs `WoWF` and then `WoW_wowf`, one tile for both.
+        // Observed 2026-10-14: the Forever tile's stress test logs `WoWF`, then `WoW_wowf`.
         ProductCode::ClassicBeta | ProductCode::Forever => "WoWF",
-        // Families read out of a real client log, same as the WoW ones above.
-        // Only codes actually observed are listed: a guess here does not
-        // degrade to "nothing happens", it opens somebody else's game.
+        // From a real client log. Only observed codes: a guess opens another game.
         ProductCode::Custom(code) => match code.as_str() {
             "hsb" | "hs_beta" => "WTCG",
             "osi" => "OSI",
@@ -149,10 +127,7 @@ pub fn game_uid(code: &ProductCode) -> Option<String> {
     Some(uid.to_owned())
 }
 
-/// Start Battle.net and hand the caller the running child.
-///
-/// Deliberately does not wait: the CLI blocks on the child itself, and the GUI
-/// wants the process to outlive the click that started it.
+/// Start Battle.net and return the running child without waiting for it.
 pub fn launch(
     runner: &ProtonRunner,
     layout: &Layout,
@@ -161,13 +136,9 @@ pub fn launch(
     launch_wrapped(runner, layout, launch, &[])
 }
 
-/// [`launch`], run under `wrappers` (outermost first).
-///
-/// Separate because almost nothing wants them. A wrapper belongs on the
-/// invocation that *becomes* the client, the one whose process the games
-/// inherit from, and not on the invocations that only hand arguments to a
-/// client already running: those exit at once, so a power profile or a
-/// GameMode session held around them would be held for nothing.
+/// [`launch`], run under `wrappers` (outermost first). Only for the call that
+/// becomes the client, which the games inherit from; a call that hands
+/// arguments to a running client exits at once.
 pub fn launch_wrapped(
     runner: &ProtonRunner,
     layout: &Layout,
@@ -179,9 +150,8 @@ pub fn launch_wrapped(
         return Err(BattleNetError::NotInstalled(install_dir));
     }
 
-    // In a container, a call that finds the prefix already running must join
-    // it: the client's hand-off, or a second open of the client, arrives that
-    // way and would otherwise wait for the session it is talking to to end.
+    // In a container, a call into an already running prefix must join it, or
+    // it waits for the very session it is talking to.
     let joined;
     let runner = match runner.has_container() && !crate::preflight::scan(layout).is_empty() {
         true => {

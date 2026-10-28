@@ -6,9 +6,8 @@ use super::{io, BattleNetError};
 use crate::paths::Layout;
 use crate::product::ProductCode;
 
-/// Where Battle.net should propose installing games. The WoW symlink lives
-/// directly under this directory, so an install it starts itself lands in
-/// `games/` without a "locate game" prompt.
+/// Battle.net's install path when there is no library. The WoW symlink sits
+/// directly under it, so an install the client starts needs no "locate game".
 const WINDOWS_PROGRAM_FILES: &str = r"C:\Program Files (x86)";
 
 /// One `Battle.net.config` setting, addressed by its path through the JSON.
@@ -35,19 +34,11 @@ impl Tweak {
     }
 }
 
-/// Lightforge's defaults for `Battle.net.config`.
-///
-/// Every value is a JSON *string*: Battle.net writes booleans and numbers that
-/// way itself, and a real boolean here is silently ignored by the client.
+/// Lightforge's defaults for `Battle.net.config`. Every value is a JSON
+/// string: the client writes them that way and ignores a real boolean.
 pub fn default_tweaks(layout: &Layout) -> Vec<Tweak> {
-    // The default library's `games/` drive, so a title Battle.net installs
-    // itself lands beside WoW on the drive the user chose, rather than inside
-    // the prefix on the system disk, which is where `Program Files (x86)`
-    // used to put it.
-    //
-    // This moves the *games*, never the client: Battle.net itself is
-    // installed into the prefix, and the prefix is at the Blizzard root
-    // whatever the default drive is.
+    // Games Battle.net installs land on the default library's drive. The
+    // client itself stays in the prefix.
     let install_path = layout
         .default_library()
         .map(|library| library.windows_games_path())
@@ -80,11 +71,7 @@ pub fn default_tweaks(layout: &Layout) -> Vec<Tweak> {
 /// second, or `None` when it has none set.
 pub const DOWNLOAD_LIMIT_KEY: &str = "Client.Install.LastUserDownloadLimitNextPatchInBps";
 
-/// Read Battle.net's own download limit out of its config.
-///
-/// The client stores it as a string; a value it cannot be read as a number is
-/// reported as no limit rather than as an error, since a launcher has nothing
-/// useful to do with a malformed one.
+/// Battle.net's own download limit. A value that is not a number reads as none.
 pub fn download_limit(layout: &Layout, user: &str) -> Option<u64> {
     let text = std::fs::read_to_string(layout.battle_net_config(user)).ok()?;
     let config: Value = serde_json::from_str(&text).ok()?;
@@ -95,12 +82,8 @@ pub fn download_limit(layout: &Layout, user: &str) -> Option<u64> {
     node.as_str()?.parse().ok().filter(|bps| *bps > 0)
 }
 
-/// Set or clear Battle.net's own download limit.
-///
-/// `None` removes the key rather than writing a zero: the client wrote this
-/// from its own settings dropdown and absent is the shape it uses before
-/// anyone has chosen, which is the closest thing to "no limit" that can be
-/// written without guessing at a sentinel value.
+/// Set or clear Battle.net's own download limit. `None` removes the key, the
+/// state the client is in before anyone picks a limit.
 pub fn set_download_limit(
     layout: &Layout,
     user: &str,
@@ -120,12 +103,9 @@ pub fn set_download_limit(
     Ok(())
 }
 
-/// Keep Agent's hands off a product Lightforge downloads itself.
-///
-/// Only for managed products. Battle.net owns the titles it installed, and
-/// switching their updates off would be taking something away rather than
-/// protecting anything: the hazard here is specific to a CASC store that two
-/// programs both believe they maintain.
+/// Keep Agent's hands off products Lightforge downloads itself, so two
+/// programs never maintain one CASC store. Titles Battle.net installed are
+/// left to it.
 pub fn product_tweaks(codes: &[ProductCode]) -> Vec<Tweak> {
     codes
         .iter()
@@ -146,11 +126,8 @@ pub fn product_tweaks(codes: &[ProductCode]) -> Vec<Tweak> {
         .collect()
 }
 
-/// Defaults for a per-account `<hash>.config`.
-///
-/// "Full quit, never tray-minimize" lives here rather than in
-/// `Battle.net.config`: the client stores window behavior per account, and
-/// keys of this name in the global config are silently ignored.
+/// Defaults for a per-account `<hash>.config`. The client stores window
+/// behaviour per account and ignores these keys in `Battle.net.config`.
 pub fn account_tweaks() -> Vec<Tweak> {
     vec![
         Tweak::new(
@@ -166,35 +143,25 @@ pub fn account_tweaks() -> Vec<Tweak> {
     ]
 }
 
-/// Where the client remembers how its window was last left.
-///
-/// Qt's own `WindowState` flags, written by the client when it exits and read
-/// when it starts: `0` is a normal window, `1` is minimized. Setting it is the
-/// only lever there is for starting the client out of the way, Wine cannot
-/// minimize a window for us, and nothing on Wayland can do it from outside.
+/// The Qt `WindowState` the client saves on exit and restores on start: `0`
+/// normal, `1` minimized. The only way to start it out of sight: Wine cannot
+/// minimize a window for us, and Wayland lets nothing do it from outside.
 pub const WINDOW_STATE_KEY: &str = "User.Client.Windows.BrowserMainWindow.WindowState";
 
-/// The client's own "launch minimized to the system tray" preference.
-///
-/// Its settings panel calls this *Launch Battle.net minimized to the system
-/// tray*, and it is the key the checkbox writes, `AutoStartMinimized`, beside
-/// `HideOnClose` and `DisplayExitPrompt` in `battle.net.dll`, so it lives in
-/// the per-account config with the rest of the window preferences.
+/// The settings checkbox "Launch Battle.net minimized to the system tray",
+/// a per-account key like `HideOnClose`.
 pub const AUTOSTART_MINIMIZED_KEY: &str = "User.Client.AutoStartMinimized";
 
-/// Start the client minimized, or normally.
-///
-/// The client logs its decision on every start:
+/// Start the client minimized, or normally. It logs the decision on every start:
 ///
 /// ```text
 /// [Frontend] {Main} Attempting to show main window. isMinimizedOnStartup=false
 /// shouldMainWindowShowMinimizedAtAutoStartup=false varAutoStarted=false …
 /// ```
 ///
-/// `isMinimizedOnStartup` is the Qt window state below; the preference above
-/// is only read when `varAutoStarted` is set, which is what
-/// [`Launch::Autostart`] is for. Both are re-applied before each start because
-/// the client writes its window state back on every exit.
+/// `isMinimizedOnStartup` is [`WINDOW_STATE_KEY`]; [`AUTOSTART_MINIMIZED_KEY`]
+/// is only read when `varAutoStarted` is set, see [`super::Launch::Autostart`]. Both
+/// are re-applied before each start: the client rewrites them on exit.
 pub fn window_state_tweaks(minimized: bool) -> Vec<Tweak> {
     vec![
         Tweak::new(
@@ -222,11 +189,8 @@ pub fn window_state_tweaks(minimized: bool) -> Vec<Tweak> {
     ]
 }
 
-/// Merge `tweaks` into a parsed config, creating missing objects on the way
-/// down and leaving every unrelated key untouched.
-///
-/// Preserving the rest matters: the client stores login state and per-game
-/// settings in the same file, and a wholesale rewrite would log the user out.
+/// Merge `tweaks` into a parsed config, creating missing objects and leaving
+/// every other key alone: the same file holds the login state.
 pub fn apply_tweaks(config: &mut Value, tweaks: &[Tweak]) {
     if !config.is_object() {
         *config = json!({});
@@ -242,8 +206,7 @@ pub fn apply_tweaks(config: &mut Value, tweaks: &[Tweak]) {
                 .expect("node is an object")
                 .entry(key.clone())
                 .or_insert_with(|| json!({}));
-            // A scalar where an object belongs is a corrupt config; replacing
-            // that one branch is better than failing the whole setup.
+            // A scalar where an object belongs: replace the branch, keep setup going.
             if !next.is_object() {
                 *next = json!({});
             }
@@ -255,28 +218,17 @@ pub fn apply_tweaks(config: &mut Value, tweaks: &[Tweak]) {
     }
 }
 
-/// Read, merge, and atomically rewrite `Battle.net.config`.
-///
-/// A missing file is normal, Battle.net only writes one on first launch, and
-/// is treated as an empty config rather than an error, so setup can seed the
-/// values before the client has ever run.
+/// Read, merge and atomically rewrite `Battle.net.config`. The client creates
+/// it on first launch, so a missing one starts empty and setup can seed it.
 pub fn configure(layout: &Layout, user: &str, tweaks: &[Tweak]) -> Result<PathBuf, BattleNetError> {
     let path = layout.battle_net_config(user);
     merge_file(&path, tweaks, true)?;
     Ok(path)
 }
 
-/// Product codes the client itself records, read from `Battle.net.config`.
-///
-/// The `Games` object is keyed by the code Battle.net uses for each title it
-/// knows about, and that is not always the code Lightforge's own tables carry:
-/// `version::KNOWN_PRODUCTS` holds `hsb` for Hearthstone while the client and
-/// `product.db` both say `hs_beta`. This is the client's own answer, so it is
-/// the one that matches everywhere else on the machine.
-///
-/// An absent or unreadable file yields nothing rather than an error, the
-/// client writes it on first launch, and a machine that has not run it yet is
-/// not a broken one.
+/// Product codes as the client spells them, the keys of `Games` in
+/// `Battle.net.config`. They can differ from the CDN's (`hs_beta` vs `hsb`).
+/// A missing or unreadable file gives none.
 pub fn known_product_codes(layout: &Layout, user: &str) -> Vec<String> {
     let Ok(text) = std::fs::read_to_string(layout.battle_net_config(user)) else {
         return Vec::new();
@@ -291,13 +243,9 @@ pub fn known_product_codes(layout: &Layout, user: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Apply `tweaks` to every per-account config next to `Battle.net.config`,
-/// returning the files changed.
-///
-/// These files are named after an account hash the client invents on first
-/// login, so there is nothing to write before the user has signed in once, an
-/// empty result is the normal outcome of a fresh setup, not a failure. The
-/// pre-flight pass is what applies them on later runs.
+/// Apply `tweaks` to every per-account config, returning the files changed.
+/// They appear on first sign-in, so none exist after a fresh setup; pre-flight
+/// applies them on later runs.
 pub fn configure_accounts(
     layout: &Layout,
     user: &str,
@@ -332,10 +280,7 @@ fn account_configs(entries: std::fs::ReadDir) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Delete one dotted key, leaving the rest of the file alone.
-///
-/// A missing file or a key that was never there is success: the caller asked
-/// for it to be absent, and it is.
+/// Delete one dotted key. A missing file or key counts as success.
 fn remove_key(path: &Path, key: &str) -> Result<(), BattleNetError> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return Ok(());
@@ -367,10 +312,8 @@ fn remove_key(path: &Path, key: &str) -> Result<(), BattleNetError> {
     crate::fsutil::write_atomic(path, text.as_bytes()).map_err(io(path))
 }
 
-/// Read, merge, and atomically rewrite one config file.
-///
-/// `seed` decides what a missing file means: the global config is created from
-/// nothing, while a per-account file is the client's to invent.
+/// Read, merge and atomically rewrite one config. With `seed` a missing file
+/// starts empty; without it, the file is the client's to create.
 fn merge_file(path: &Path, tweaks: &[Tweak], seed: bool) -> Result<bool, BattleNetError> {
     let mut config = match std::fs::read_to_string(path) {
         Ok(text) => serde_json::from_str(&text)

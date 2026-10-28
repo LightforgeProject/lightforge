@@ -14,8 +14,8 @@ pub const INSTALLER_URL: &str =
 /// File name the installer is cached under.
 pub const INSTALLER_FILE: &str = "Battle.net-Setup.exe";
 
-/// Windows-side install path handed to the installer. It has to be the Windows
-/// spelling, not the Linux one, the installer writes it into `.product.db`.
+/// Install path handed to the installer, in Windows spelling: it goes into
+/// `.product.db`.
 const WINDOWS_BATTLE_NET_DIR: &str = r"C:\Program Files (x86)\Battle.net";
 
 /// Default UI language passed to the installer.
@@ -27,45 +27,27 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 /// Gap between filesystem checks while waiting for the install.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
-/// How long to keep watching after the installer process has exited.
-///
-/// Exiting is not the same as failing: Blizzard's setup bootstraps a second
-/// process and the first can return before the files land, so a short grace
-/// period after a *clean* exit avoids calling a working install a failure.
+/// How long to keep watching after a clean installer exit: the setup hands
+/// over to a second process and can return before the files land.
 const EXIT_GRACE: Duration = Duration::from_secs(60);
 
-/// The same grace after a *failed* exit.
-///
-/// Kept short deliberately. A non-zero exit is the installer telling us it
-/// gave up; the only reason to wait at all is the vanishing chance that the
-/// files landed in the same instant.
+/// The same grace after a failed exit, short: the installer has given up.
 const FAILED_EXIT_GRACE: Duration = Duration::from_secs(5);
 
-/// Most stderr kept from the installer, in bytes.
-///
-/// Enough for a dynamic-loader complaint or a stack of Wine warnings, bounded
-/// so a chatty installer cannot grow this without limit.
+/// Most stderr kept from the installer, in bytes: room for a loader error and
+/// a stack of Wine warnings.
 pub(super) const STDERR_TAIL: usize = 8 * 1024;
 
-/// How many of those lines the error message itself shows.
-///
-/// Capturing generously and displaying briefly are different jobs: the tail is
-/// kept in full for a debug bundle, while the message goes into a banner in
-/// the GUI, where eight kilobytes of Wine chatter would bury the one line that
-/// matters. The last lines are the right ones, a failing process says why
-/// just before it stops.
+/// How many of those lines the error message shows. The full tail goes into
+/// a debug bundle; the message is a GUI banner.
 pub(super) const STDERR_LINES_SHOWN: usize = 8;
 
-/// Consecutive successful checks required before the install counts as done.
-/// The installer writes the launcher before the versioned client directory is
-/// fully populated, so one positive sample is not enough.
+/// Consecutive successful checks before the install counts as done: the
+/// launcher is written before the versioned client directory is complete.
 const SETTLE_POLLS: u32 = 3;
 
-/// Download the installer into `cache_dir`, returning its path.
-///
-/// Blizzard publishes no checksum for this endpoint, so unlike Proton-GE there
-/// is nothing to verify against; the transfer is HTTPS-authenticated and that
-/// is all the guarantee available.
+/// Download the installer into `cache_dir`, returning its path. Blizzard
+/// publishes no checksum for it; HTTPS is the only guarantee.
 pub async fn fetch_installer(
     http: &crate::net::Http,
     cache_dir: &Path,
@@ -114,9 +96,7 @@ impl Installer {
         self
     }
 
-    /// How long to keep watching after the installer exits, cleanly, then
-    /// with a failure. Exists for the same reason [`Installer::with_timeout`]
-    /// does: so a test does not have to wait a real minute.
+    /// The grace after a clean and a failed exit, for tests.
     #[cfg(test)]
     pub fn with_exit_grace(mut self, clean: Duration, failed: Duration) -> Self {
         self.exit_grace = clean;
@@ -124,17 +104,15 @@ impl Installer {
         self
     }
 
-    /// Shorten the polling gap, used by tests, and by nothing else.
+    /// Shorten the polling gap, for tests.
     #[cfg(test)]
     pub fn with_poll_interval(mut self, interval: Duration) -> Self {
         self.poll_interval = interval;
         self
     }
 
-    /// Arguments passed to the installer.
-    ///
-    /// `--installpath` is what keeps Battle.net out of the default
-    /// `%LOCALAPPDATA%` location, where a prefix wipe would take it with it.
+    /// `--installpath` keeps Battle.net out of `%LOCALAPPDATA%`, where a
+    /// prefix wipe would take it along.
     pub fn args(&self) -> Vec<String> {
         vec![
             format!("--lang={}", self.locale),
@@ -147,11 +125,9 @@ impl Installer {
         is_installed(&self.install_dir)
     }
 
-    /// Run the installer, or return immediately if Battle.net is already there.
-    ///
-    /// Leaves the prefix quiesced: whatever the installer spawned is killed and
-    /// `wineserver` is shut down before returning, so the caller can touch
-    /// registry and config files safely.
+    /// Run the installer unless Battle.net is already there. Returns with the
+    /// prefix's `wineserver` shut down, so the caller can edit registry and
+    /// config files.
     pub fn install(&self, runner: &ProtonRunner) -> Result<InstallOutcome, BattleNetError> {
         if self.is_installed() {
             return Ok(InstallOutcome {
@@ -174,12 +150,8 @@ impl Installer {
         let mut child = runner
             .command("run", &self.installer, self.args())
             .stdin(Stdio::null())
-            // stdout is noise nobody reads. stderr is the one thing worth
-            // having when this goes wrong. It is where Proton's dynamic
-            // loader names a missing 32-bit library, so it is piped and
-            // drained on a thread. Piping without a reader would eventually
-            // block the child on a full pipe, which is why the drain exists
-            // rather than a plain `.stderr(piped())`.
+            // stderr is where Proton's loader names a missing 32-bit library.
+            // Drained on a thread: an unread pipe blocks the child once full.
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
@@ -194,14 +166,12 @@ impl Installer {
 
         let waited = self.wait_for_install(started, Some(&mut child));
 
-        // Either way the session has to go: on success the installer left a
-        // client running, and on failure a half-finished one.
+        // Success leaves a client running, failure a half-finished one.
         let _ = child.kill();
         let _ = child.wait();
         runner.wineserver_kill()?;
 
-        // Only joined after the child is gone, so the pipe is closed and the
-        // reader cannot block.
+        // Joined after the child is gone, so the pipe is closed.
         let stderr = drain.and_then(|handle| handle.join().ok()).unwrap_or_default();
 
         match &waited {
@@ -227,17 +197,11 @@ impl Installer {
         }
     }
 
-    /// Poll the filesystem until the install settles, the installer gives up,
-    /// or the timeout expires.
+    /// Poll until the install settles, the installer exits, or the timeout.
     ///
-    /// Watching the files is still the primary signal, the installer stays
-    /// alive after a successful install, having launched the client, but
-    /// watching *only* the files means a process that died in the first
-    /// second is indistinguishable from one still downloading, and the user
-    /// waits the full ten minutes to be told it "timed out". It did not time
-    /// out; it failed immediately, and said why on a stderr nobody kept.
-    ///
-    /// `child` is optional so the timeout path can be tested without one.
+    /// The files are the main signal (the installer stays up after success,
+    /// running the client), but the exit catches an installer that died in
+    /// its first second. `child` is optional for the timeout test.
     pub(super) fn wait_for_install(
         &self,
         started: Instant,
@@ -268,8 +232,7 @@ impl Installer {
                 }
             }
 
-            // An exit is not itself a failure, the files may still be
-            // landing, but it bounds how long waiting can be worthwhile.
+            // An exit is not a failure yet, the files may still be landing.
             if let Some((at, code)) = exit {
                 let grace = match code {
                     Some(0) | None => self.exit_grace,
@@ -288,10 +251,8 @@ impl Installer {
     }
 }
 
-/// Why [`Installer::wait_for_install`] stopped waiting.
-///
-/// Internal: the caller turns these into [`BattleNetError`], which it can only
-/// do once it has drained the installer's stderr.
+/// Why [`Installer::wait_for_install`] stopped waiting. Becomes a
+/// [`BattleNetError`] once the installer's stderr is drained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Wait {
     /// Nothing happened for the whole timeout.
@@ -300,10 +261,8 @@ pub(super) enum Wait {
     Exited(Option<i32>),
 }
 
-/// Read a pipe to the end, keeping only the last [`STDERR_TAIL`] bytes.
-///
-/// Reads everything so the writer never blocks on a full pipe, but retains a
-/// bounded tail, the end is where the error is.
+/// Read a pipe to the end, so the writer never blocks, keeping only the last
+/// [`STDERR_TAIL`] bytes.
 pub(super) fn tail_of(mut pipe: impl Read) -> String {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];

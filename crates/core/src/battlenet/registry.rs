@@ -28,11 +28,8 @@ impl RegValue {
     }
 }
 
-/// Registry tweaks that specifically benefit the Battle.net client.
-///
-/// `reg add` is used rather than a generated `.reg` file: no temp file inside
-/// the prefix, no path translation, and no guessing at the encoding `regedit`
-/// wants for a given Wine build.
+/// Registry tweaks for the Battle.net client. Through `reg add`, which needs
+/// no temp file, no path translation and no guess at `regedit`'s encoding.
 pub fn registry_tweaks() -> Vec<RegValue> {
     vec![
         RegValue {
@@ -49,13 +46,10 @@ pub fn registry_tweaks() -> Vec<RegValue> {
             data: "",
             reason: "stop the installer writing Windows shortcuts into the desktop's app menu",
         },
-        // Deliberately no `FontSmoothing*`: Proton's prefix already smooths
-        // with greyscale, and the subpixel values `winetricks fontsmooth=rgb`
-        // writes make the CEF storefront's text look pixel-snapped and thin.
-        // Deliberately no `LogPixels`: Wine's default of 96 is right at 1x,
-        // writing 96 is a no-op, and any other value needs a display scale
-        // that cannot be read from inside the prefix. A wrong one makes the
-        // storefront unusable, so it stays a thing the user asks for.
+        // No `FontSmoothing*`: Proton already smooths in greyscale, and
+        // `winetricks fontsmooth=rgb` values make CEF text thin and snapped.
+        // No `LogPixels`: 96 is Wine's default, and any other value needs a
+        // display scale the prefix cannot read; a wrong one breaks the store.
     ]
 }
 

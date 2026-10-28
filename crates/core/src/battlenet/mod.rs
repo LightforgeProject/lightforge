@@ -8,12 +8,9 @@
 //! 3. apply the Wine registry tweaks Battle.net benefits from,
 //! 4. inject Lightforge's defaults into `Battle.net.config`.
 //!
-//! Phase 2 needs the unusual completion rule: `Battle.net-Setup.exe` is a
-//! bootstrapper. It unpacks a launcher, hands off to `Battle.net.exe`/`Agent`
-//! and exits, or doesn't exit at all, since the client it spawned keeps the
-//! Wine session alive. Waiting on the child's exit status therefore either
-//! returns far too early or never returns, so completion is detected from the
-//! filesystem and the session is torn down with `wineserver -k`.
+//! `Battle.net-Setup.exe` is a bootstrapper: it hands off to `Battle.net.exe`
+//! and `Agent`, then exits early or never (the client keeps the Wine session
+//! alive). So phase 2 watches the filesystem and ends with `wineserver -k`.
 //!
 //! Phases 3 and 4 run with no Battle.net process alive: the client rewrites
 //! `Battle.net.config` on exit and would otherwise clobber the injection.
@@ -58,12 +55,9 @@ pub struct SetupReport {
     pub account_configs: Vec<PathBuf>,
 }
 
-/// Install Battle.net and configure it, in one call.
-///
-/// Assumes the prefix already exists, [`crate::prefix::provision`] is the
-/// step before this one, not part of it. `container` is where the installer
-/// alone runs, from [`crate::runtime::tls_container`]; the rest runs
-/// on the host as always.
+/// Install Battle.net and configure it, in an existing prefix (see
+/// [`crate::prefix::provision`]). Only the installer runs in `container`
+/// ([`crate::runtime::tls_container`]); the rest runs on the host.
 pub fn provision(
     runner: &ProtonRunner,
     container: Option<&Path>,
@@ -86,8 +80,7 @@ pub fn provision(
     let registry = registry_tweaks();
     apply_registry(runner, &registry)?;
 
-    // Last, and only with nothing running: the client rewrites this file when
-    // it exits, so an injection before the teardown above would be lost.
+    // Last, with nothing running: the client rewrites this file on exit.
     let mut tweaks = default_tweaks(layout);
     tweaks.extend(product_tweaks(managed));
     let config_path = configure(layout, user, &tweaks)?;

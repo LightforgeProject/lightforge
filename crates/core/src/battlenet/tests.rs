@@ -24,8 +24,7 @@ fn an_autostart_is_the_plain_client_start_plus_the_flag_that_unlocks_it() {
     let (plain, no_args) = Launch::Client.command(&dir);
     let (exe, args) = Launch::Autostart.command(&dir);
 
-    // Same binary, deliberately: the launcher is what keeps the client's
-    // self-update path intact.
+    // Same binary: the launcher keeps the client's self-update working.
     assert_eq!(exe, plain);
     assert!(no_args.is_empty());
     assert_eq!(args, ["--autostarted"]);
@@ -184,16 +183,14 @@ fn an_install_needs_both_the_launcher_and_a_versioned_client() {
     assert!(is_installed(&dir));
 }
 
-/// The Debian regression: no 32-bit runtime, so the installer dies in
-/// under a second. Before this, the filesystem poll ignored the dead
-/// child and sat there for the full ten minutes, then blamed a timeout.
+/// The Debian regression: with no 32-bit runtime the installer dies in under
+/// a second, and that must not surface as a ten-minute timeout.
 #[test]
 fn an_installer_that_dies_is_reported_as_exited_not_timed_out() {
     let dir = scratch("exited");
     let layout = Layout::with_root(&dir);
     let installer = Installer::new(&layout, dir.join("setup.exe"))
-        // Deliberately generous: the point is that it does NOT wait this
-        // long once the process is gone.
+        // Generous: it must not wait this long once the process is gone.
         .with_timeout(Duration::from_secs(60))
         .with_poll_interval(Duration::from_millis(10))
         .with_exit_grace(Duration::from_millis(50), Duration::from_millis(20));
@@ -443,9 +440,8 @@ fn a_plain_open_runs_the_launcher_with_no_arguments() {
     assert!(args.is_empty());
 }
 
-/// The failure this guards is not "nothing happens": the client cannot
-/// resolve an unknown uid and falls back to the first family it knows,
-/// which is Warcraft III. Opening the client is the honest alternative.
+/// An unknown uid makes the client fall back to its first family, Warcraft
+/// III, so only opening the client is safe.
 #[test]
 fn registry_tweaks_are_well_formed_reg_add_arguments() {
     for value in registry_tweaks() {
@@ -472,7 +468,7 @@ fn font_smoothing_is_left_at_protons_default() {
     let tweaks = registry_tweaks();
     assert!(tweaks.iter().all(|v| !v.name.starts_with("FontSmoothing")));
 
-    // DPI is deliberately not written; see the comment beside the list.
+    // DPI is not written; see the comment beside the list.
     assert!(tweaks.iter().all(|v| v.name != "LogPixels"));
 }
 
@@ -486,8 +482,7 @@ fn only_managed_products_have_their_updates_switched_off() {
     assert!(keys.contains(&"Games.wow_classic_era.AutoUpdate".to_owned()));
     assert!(tweaks.iter().all(|t| t.value == json!("false")));
 
-    // Nothing is generated for a product nobody asked about, the caller
-    // decides what is managed, and a hand-off title never reaches here.
+    // Nothing for a product nobody asked about; hand-off titles never get here.
     assert!(product_tweaks(&[]).is_empty());
 }
 

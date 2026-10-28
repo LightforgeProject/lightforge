@@ -5,11 +5,8 @@ use serde_json::Value;
 
 use crate::paths::Layout;
 
-/// Whether the client is set up to sign in without being asked.
-///
-/// Decides whether it is safe to start minimized. Without auto-login the
-/// client comes up at a sign-in form, and a sign-in form nobody can see is a
-/// launch that quietly never happens.
+/// Whether the client signs in by itself, which is what makes starting it
+/// minimized safe: a hidden sign-in form is a launch that never happens.
 pub fn signs_in_by_itself(layout: &Layout, user: &str) -> bool {
     let Ok(text) = std::fs::read_to_string(layout.battle_net_config(user)) else {
         return false;
@@ -37,27 +34,22 @@ pub fn signs_in_by_itself(layout: &Layout, user: &str) -> bool {
 pub enum Readiness {
     /// Signed in and idle: a launch command sent now will be acted on.
     SignedIn,
-    /// Still not signed in when the wait ran out. Two-factor, an outage, a
-    /// pending client update: all of them need a person, and none of them
-    /// are ours to drive.
+    /// Still not signed in when the wait ran out: two-factor, an outage or a
+    /// client update, all of which need a person.
     NeedsAttention,
 }
 
 /// The line the client writes once it is signed in.
 pub(super) const SIGNED_IN: &str = "Logged into Battle.net successfully";
 
-/// The line that says its game list is built, the only moment a launch
-/// command is acted on. Sign-in comes first and the list a beat later, or
-/// several seconds later on a slow start, and a command that arrives in
-/// between is consumed without a trace: no `LaunchBinary`, nothing starts.
-/// Measured on 2026-10-24: every launch that worked arrived after this line,
-/// both that failed arrived before it, Warcraft III and Hearthstone alike.
+/// The line that says its game list is built. A launch command sent between
+/// sign-in and this line is dropped without a trace (no `LaunchBinary`).
+/// Measured 2026-10-24: every launch that worked came after it, both that
+/// failed came before, Warcraft III and Hearthstone alike.
 pub(super) const GAMES_READY: &str = "GameController initialization complete";
 
-/// How long after sign-in the game list gets before the command goes anyway.
-/// The client's own log is the only witness, and a line that never comes
-/// (the window-drawn marker was missing from one log in six) must cost a
-/// short wait, not the whole sign-in timeout.
+/// How long after sign-in the game list gets before the command goes anyway,
+/// so a marker that never comes costs a short wait, not the sign-in timeout.
 pub(super) const GAMES_GRACE: Duration = Duration::from_secs(20);
 
 /// Whether a launch command sent now would be acted on, given the log so far
@@ -66,22 +58,18 @@ pub(super) fn client_ready(log: &str, signed_in_for: Duration) -> bool {
     log.contains(SIGNED_IN) && (log.contains(GAMES_READY) || signed_in_for >= GAMES_GRACE)
 }
 
-// There is deliberately no "the window has drawn" marker here. The obvious
-// candidate, `End recording load sequence for browser content_browser`: is
-// missing from one full-client log in six, so waiting for it stalls for the
-// whole grace period on a client that is perfectly ready, long enough for
-// someone to close the window out from under the launch. Anything that must
-// survive the client's startup is sent as a `battlenet://` URI instead, which
-// the client queues and runs when it is ready. See [`Launch::Uri`].
+// No "window has drawn" marker: `End recording load sequence for browser
+// content_browser` is missing from one log in six. What must survive the
+// client's startup goes as a `battlenet://` URI, which it queues ([`Launch::Uri`]).
 
 /// How often the log is re-read while waiting.
 const READY_POLL: Duration = Duration::from_millis(250);
 
 /// Wait until the client says it is signed in and has its games.
 ///
-/// Reads the newest log in [`Layout::battle_net_logs`] written after `since`
-/// (so an old session cannot answer) for the client's own marker. Nothing is
-/// injected or read from its memory.
+/// Reads the newest log in [`Layout::battle_net_logs`] written after `since`,
+/// so an old session cannot answer, for the client's own marker. Only the
+/// log: nothing touches the client's memory.
 ///
 /// ```text
 /// I [BNLogin] Logged into Battle.net successfully. |bnet=…
@@ -122,11 +110,8 @@ pub fn wait_until_ready(
     }
 }
 
-/// The most recently written `battle.net-*.log`, if it is newer than `since`.
-///
-/// By modification time rather than by the timestamp in the name: the name is
-/// the client's local time, and a prefix does not have to agree with the host
-/// about what that is.
+/// The most recently written `battle.net-*.log`, if newer than `since`. By
+/// mtime: the name carries the prefix's local time, which can differ from the host's.
 fn newest_log_after(dir: &Path, since: SystemTime) -> Option<PathBuf> {
     std::fs::read_dir(dir)
         .ok()?
