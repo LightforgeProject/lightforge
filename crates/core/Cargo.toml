@@ -36,6 +36,7 @@ zstd.workspace = true
 
 [dev-dependencies]
 blte.workspace = true
+proptest.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "time"] }
 
 [lints]

@@ -434,4 +434,31 @@ mod tests {
         assert_eq!(archive_name(27), "data.027");
         assert_eq!(archive_name(123), "data.123");
     }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(32))]
+        #[test]
+        fn what_the_writer_stores_reads_back_byte_for_byte(
+            blobs in proptest::collection::vec((proptest::collection::vec(0u8.., 0..4096), proptest::bool::ANY), 1..24)
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let data = dir.path().join("Data").join("data");
+            let mut writer = crate::tact::writer::StoreWriter::create(&data).unwrap();
+            let mut written = Vec::new();
+            for (payload, zlib) in blobs {
+                let mode = if zlib { blte::CompressionMode::ZLib } else { blte::CompressionMode::None };
+                let encoded = blte::compress_data_single(payload.clone(), mode, None).unwrap();
+                // A single-chunk file's encoding key is the MD5 of all of it.
+                let ekey: EKey = md5::compute(&encoded).0;
+                writer.write(&ekey, &encoded).unwrap();
+                written.push((ekey, payload));
+            }
+            writer.finish().unwrap();
+
+            let mut storage = Storage::open(dir.path()).unwrap();
+            for (ekey, payload) in written {
+                proptest::prop_assert_eq!(storage.read(&ekey).unwrap(), payload);
+            }
+        }
+    }
 }

@@ -77,6 +77,8 @@ blte = "0.4"
 tact-parser = "0.4"
 tar = "0.4"
 tempfile = "3"
+# Round-trip tests. No `fork`/`timeout`: no test here can hang or abort.
+proptest = { version = "1", default-features = false, features = ["std"] }
 tokio = { version = "1", default-features = false }
 # The log file. `fmt` and `tracing-log` only: `env-filter` would pull in a
 # regex engine for a filter that `Targets` and one environment variable cover.

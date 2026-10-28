@@ -215,6 +215,49 @@ mod writing {
 mod reading {
     use super::*;
 
+    /// Random where `decode` reads, plus the optional key ring, which
+    /// changes the record's framing; fixed elsewhere.
+    fn install_strategy() -> impl proptest::strategy::Strategy<Value = ProductInstall> {
+        use proptest::{option, strategy::Strategy};
+        let (named, text) = ("\\PC{1,40}", "\\PC{0,40}");
+        (named, named, text, text, text, option::of(text)).prop_map(
+            |(product, install_path, version, build_key, family, key_ring)| ProductInstall {
+                product,
+                install_path,
+                region: "eu".into(),
+                locale: "enUS".into(),
+                account_country: "AUT".into(),
+                geo_country: "AT".into(),
+                flavor_dir: "_retail_".into(),
+                version,
+                build_key,
+                tags: "Windows x86_64 EU? enUS speech?:Windows x86_64 EU? enUS text?".into(),
+                key_ring,
+                installed_at_ms: 1_789_676_802_000,
+                family,
+            },
+        )
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn every_install_we_encode_decodes_to_the_same_record(
+            installs in proptest::collection::vec(install_strategy(), 0..8)
+        ) {
+            let read = decode(&encode(&installs));
+            proptest::prop_assert_eq!(read.len(), installs.len());
+            for (got, want) in read.iter().zip(&installs) {
+                let present = |s: &String| Some(s.clone()).filter(|s| !s.is_empty());
+                proptest::prop_assert_eq!(&got.product, &want.product);
+                proptest::prop_assert_eq!(&got.product_code, &want.product);
+                proptest::prop_assert_eq!(&got.install_path, &want.install_path);
+                proptest::prop_assert_eq!(&got.version, &present(&want.version));
+                proptest::prop_assert_eq!(&got.build_key, &present(&want.build_key));
+                proptest::prop_assert_eq!(&got.family, &want.family);
+            }
+        }
+    }
+
     /// The two directions must agree, since neither has a schema to check
     /// against, only each other and a real file.
     #[test]

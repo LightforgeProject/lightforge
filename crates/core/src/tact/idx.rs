@@ -872,4 +872,21 @@ mod tests {
         // Discovery hands back only the newest generation per bucket.
         assert_eq!(discover(&dir).unwrap(), vec![second]);
     }
+
+    proptest::proptest! {
+        #[test]
+        fn an_index_parses_back_to_the_entries_it_wrote(
+            rows in proptest::collection::vec(
+                (proptest::array::uniform9(0u8..), 0..=MAX_ARCHIVE_ID, 0..=OFFSET_MASK, 0u32..),
+                0..512,
+            )
+        ) {
+            let mut index = Index::new(0);
+            for (key, archive_id, offset, size) in rows {
+                index.insert(Entry { key, archive_id, offset, size });
+            }
+            let parsed = Index::parse(&index.to_bytes().unwrap()).unwrap();
+            proptest::prop_assert_eq!(parsed.entries(), index.entries());
+        }
+    }
 }
