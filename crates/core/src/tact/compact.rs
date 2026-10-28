@@ -1,28 +1,18 @@
 //! Rewriting archives that are mostly dead space.
 //!
-//! Dropping an entry from the indices makes its bytes unreachable but leaves
-//! them on disk, and an archive is only deleted once nothing at all points
-//! into it. A download interleaves every version's files in the same
-//! archives, so uninstalling one version empties almost none of them: on a
-//! real store, retail's 72 GiB of its own data sat in 129 archives that also
-//! held files the Classic beta still uses, and reclaiming it freed 0.19 GiB.
+//! Versions share archives, so dropping one version's entries empties almost
+//! none: on a real store, retail's 72 GiB sat in 129 archives the Classic
+//! beta also used, and reclaiming it freed 0.19 GiB.
 //!
-//! Compaction gets the rest back. For each archive worth it, every file still
-//! indexed there is copied into a fresh archive, the indices are published
-//! pointing at the copies, and only then is the old archive deleted. A crash
-//! at any point leaves a store that reads: before the index write the copies
-//! are unreachable bytes, after it the old archive is unreachable bytes, and
-//! the next pass deletes either.
+//! Compaction copies each worthwhile archive's live files into a fresh one,
+//! publishes the indices, then deletes the old archive. A crash at any point
+//! leaves a readable store with unreachable bytes the next pass deletes.
 //!
 //! What is never rewritten:
 //!
-//! * An archive holding a key that is indexed twice. Real indices have a few
-//!   such pairs, one of them a headerless alias of the other, see
-//!   [`super::storage`], and moving one copy of a key the index cannot tell
-//!   apart from the other is a guess.
-//! * The rest of an archive once one of its headers fails to verify. What was
-//!   already moved stays moved, the archive stays, and a repair is the tool
-//!   for the damaged file.
+//! * An archive holding a key indexed twice (a headerless alias, see
+//!   [`super::storage`]): which copy to move would be a guess.
+//! * The rest of an archive once a header fails to verify; that is repair's job.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -65,9 +55,7 @@ impl Usage {
         self.size.saturating_sub(self.live + ARCHIVE_RESERVED as u64)
     }
 
-    /// Whether the space it would free is worth copying what lives in it: a
-    /// quarter of the archive or more. Lower and a pass rewrites a gigabyte
-    /// to free a few megabytes.
+    /// Whether the space it would free is worth the copy: a quarter or more.
     pub fn worth_rewriting(&self) -> bool {
         let files = self.size.saturating_sub(ARCHIVE_RESERVED as u64);
         !self.tangled && (self.live == 0 || self.dead() * 4 >= files)
@@ -105,13 +93,9 @@ impl Compaction {
     }
 }
 
-/// How every archive in `data_dir` is used, counting only `live` as still
-/// pointed at; `gone` are entries about to leave. An archive on disk that
-/// nothing points into is in the map with nothing live, which is what a
-/// crash between two steps leaves.
-///
-/// An archive missing from disk is sized from its entries, so the arithmetic
-/// still works for a plan made against indices alone.
+/// How every archive in `data_dir` is used, counting only `live`; `gone` are
+/// entries about to leave. An archive nothing points into (a crash leftover)
+/// is included; one missing from disk is sized from its entries.
 pub fn usage<'a>(
     data_dir: &Path,
     live: impl Iterator<Item = &'a Entry>,
@@ -162,8 +146,7 @@ pub fn plan_where(
 /// Carry out `compaction` against the store under `install`, if it is still
 /// the store `snapshot` describes. Returns the bytes freed.
 ///
-/// `progress` hears the bytes copied so far. Never call against a live
-/// client: it rewrites the files the client memory-maps.
+/// `progress` hears the bytes copied. Never against a live client.
 pub fn execute(
     install: &Path,
     compaction: &Compaction,
@@ -171,8 +154,7 @@ pub fn execute(
     progress: impl FnMut(u64),
 ) -> Result<u64, CompactError> {
     let data_dir = super::storage::resolve_data_dir(install);
-    // Taken before the comparison: a writer slipping in after it would make
-    // the plan's positions name different files.
+    // Taken before the comparison, so no writer slips in after it.
     let lock = StoreLock::acquire(&data_dir)?;
     if Snapshot::take(&data_dir)? != *snapshot {
         return Err(VerifyError::StoreChanged.into());
@@ -181,11 +163,8 @@ pub fn execute(
 }
 
 /// The unchecked half of [`execute`], for a caller that just changed the
-/// store itself and so has no snapshot to compare against. Returns the bytes
+/// store itself. Works from the indices as they are now. Returns the bytes
 /// freed net of the copies.
-///
-/// Works from the indices as they are now, not as planned: a file that left
-/// since is not copied, and an archive that became tangled is skipped.
 pub(crate) fn rewrite(
     install: &Path,
     archives: &[u16],
@@ -248,8 +227,8 @@ pub(crate) fn rewrite(
     Ok(deleted.saturating_sub(copied))
 }
 
-/// Make the copies durable and the indices point at them, then delete the
-/// archives they came from. In that order, or a crash loses the files.
+/// Publish the copies, then delete the archives they came from; the other
+/// order loses files on a crash.
 fn publish_and_delete(
     writer: &mut StoreWriter,
     data_dir: &Path,

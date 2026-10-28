@@ -6,14 +6,9 @@
 //! file id ──root──▶ content key ──encoding──▶ encoding key ──index──▶ bytes
 //! ```
 //!
-//! The build config bootstraps the chain by naming the encoding manifest with
-//! *both* of its keys. Encoding is therefore the one manifest reachable
-//! without encoding, and everything else, root included, resolves through it
-//! afterwards.
-//!
-//! Both manifests are large: encoding decodes to ~190 MB on a current retail
-//! install. [`Content::open`] pays that cost once and keeps the result, so the
-//! caller should hold onto it rather than reopening per file.
+//! The build config names encoding by both keys, so it is reachable without
+//! encoding; everything else resolves through it. Encoding decodes to
+//! ~190 MB on retail: keep a [`Content`], do not reopen per file.
 
 use tact_parser::wow_root::{LocaleFlags, WowRoot};
 
@@ -22,18 +17,12 @@ use super::encoding::{Encoding, EncodingError};
 use super::config::{BuildConfig, CKey, ConfigError};
 use super::storage::{EKey, Storage, StorageError};
 
-/// A locale the root manifest can be filtered to.
-///
-/// Root lists most files once per locale, so this is a memory decision as much
-/// as a correctness one: keeping all of them on a current build costs hundreds
-/// of megabytes of entries the client will never ask for.
-///
-/// Exists so callers never handle a `tact_parser` type, the boundary this
-/// module is here to hold.
+/// A locale the root manifest can be filtered to: root lists most files once
+/// per locale, hundreds of megabytes unfiltered. Keeps `tact_parser` types out
+/// of callers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Locale {
-    /// Every locale. Correct when the caller does not know or care which
-    /// language the install is, at the cost of a much larger root.
+    /// Every locale, at the cost of a much larger root.
     #[default]
     Any,
     EnUs,
@@ -118,18 +107,14 @@ impl std::fmt::Debug for Content {
 }
 
 impl Content {
-    /// Load the encoding and root manifests for `build` out of local storage.
-    ///
-    /// `locale` filters the root manifest as it parses. It is not a
-    /// convenience: root lists most files once per locale, and keeping every
-    /// one of them costs memory for entries the client will never ask for.
+    /// Load the encoding and root manifests for `build` out of local storage,
+    /// filtering root to `locale` as it parses.
     pub fn open(
         storage: &mut Storage,
         build: BuildConfig,
         locale: Locale,
     ) -> Result<Self, ContentError> {
-        // Encoding first, and by ekey. It is the only manifest that can be
-        // found without already having encoding loaded.
+        // Encoding first, by ekey.
         let ekey = build.encoding.ekey.ok_or(ContentError::EncodingHasNoEKey)?;
         let raw = storage.read_verified(&ekey, &build.encoding.ckey).map_err(|source| ContentError::Read {
             what: "encoding manifest",
@@ -170,23 +155,17 @@ impl Content {
         self.encoding.len()
     }
 
-    /// Encoding key -> content key, for checking downloaded bytes against the
-    /// key that can actually verify them.
+    /// Encoding key -> content key, the key that verifies downloaded bytes.
     pub fn ckey_for_ekey(&self, ekey: &EKey) -> Option<CKey> {
         self.encoding.ckey_for_ekey(ekey)
     }
 
-    /// Decoded size of a file, from the encoding manifest rather than the
-    /// index, the index only knows the compressed size.
+    /// Decoded size of a file; the index only knows the compressed one.
     pub fn size_of(&self, ckey: &CKey) -> Option<u64> {
         self.encoding.size_of(ckey)
     }
 
-    /// File id -> content key.
-    ///
-    /// A file id can be listed under several locale/content flag combinations;
-    /// any of them names the same bytes for our purposes, so the first is
-    /// taken. Filtering happened at parse time via the locale.
+    /// File id -> content key; of several flag combinations, the first.
     pub fn ckey_for_fdid(&self, fdid: u32) -> Option<CKey> {
         self.root.fid_md5.get(&fdid)?.values().next().copied()
     }
@@ -198,10 +177,8 @@ impl Content {
 
     /// Resolve a game-relative path such as `Interface/FrameXML/GlobalStrings.lua`.
     ///
-    /// Paths are matched by a Jenkins hash of the normalized path, not by
-    /// string comparison, and modern roots omit most of them, a `None` here
-    /// usually means the build ships no name for that file, not that the file
-    /// is absent. Prefer a file id where one is known.
+    /// Matched by a Jenkins hash of the normalized path. Modern roots omit
+    /// most names, so `None` usually means no name, not no file.
     pub fn fdid_for_path(&self, path: &str) -> Option<u32> {
         self.root.get_fid(path)
     }
@@ -285,8 +262,7 @@ mod tests {
 
     #[test]
     fn a_build_config_without_an_encoding_ekey_cannot_bootstrap() {
-        // The whole chain hangs off this one field: without it there is no way
-        // to reach encoding, and so no way to resolve anything else.
+        // Without it there is no way to reach encoding.
         let dir = std::env::temp_dir().join("lightforge-content-noekey");
         let data = dir.join("Data").join("data");
         let _ = std::fs::remove_dir_all(&dir);
@@ -303,8 +279,7 @@ mod tests {
 
     #[test]
     fn errors_name_the_manifest_and_the_key_they_failed_on() {
-        // A bare hash in a log is useless; every failure in the chain has to
-        // say which hop it was and which key it was looking for.
+        // Every failure names its hop and its key.
         let err = ContentError::UnknownContentKey {
             what: "root manifest",
             ckey: parse_hash("669be7c403ea35a20f73ea7effcaa544").unwrap(),

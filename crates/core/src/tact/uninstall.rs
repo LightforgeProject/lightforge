@@ -1,16 +1,10 @@
 //! Removing an installed product.
 //!
-//! Deleting a game is the one operation where being slightly wrong is
-//! unrecoverable, so this is split in two: [`plan`] reads and decides, and
-//! [`execute`] does exactly what the plan says. A caller can show the plan and
-//! ask before anything is touched.
+//! [`plan`] decides, [`execute`] does exactly that, so a caller can ask first.
 //!
-//! The rule that shapes everything here: **products share one install.** The
-//! CASC store under `Data/` holds every product's files interleaved in the same
-//! archives, and `.build.info` holds a row per product. So removing one product
-//! means its flavor directory, its row, and its `.product.db` record, and the
-//! store survives untouched *unless it was the last product*, at which point
-//! the store is orphaned and goes too.
+//! **Products share one install**: one CASC store, one `.build.info`. Removing
+//! one takes its flavor directory, row and `.product.db` record; the store
+//! goes only with the last product.
 
 use std::path::{Path, PathBuf};
 
@@ -23,8 +17,7 @@ use crate::tact::productdb;
 pub struct Plan {
     /// The product's flavor directory, e.g. `_classic_era_`.
     pub flavor_dir: Option<PathBuf>,
-    /// The shared CASC store, present only when this is the last product and
-    /// the store would otherwise be left behind with nothing to read it.
+    /// The shared CASC store, only when this is the last product.
     pub store: Option<PathBuf>,
     /// `.build.info` row to drop, and whether the file itself would go.
     pub has_row: bool,
@@ -49,9 +42,7 @@ impl Plan {
 
 /// Decide what removing `code` from `install` would delete. Touches nothing.
 pub fn plan(install: &Path, code: &ProductCode) -> Result<Plan, UninstallError> {
-    // A file that is there but cannot be read says nothing about which
-    // products remain, and guessing "none" would delete the shared store.
-    // Only a file that does not exist at all means no product finished.
+    // An unreadable file is not "no products": guessing that deletes the store.
     let info_path = install.join(".build.info");
     let info = match BuildInfo::load(&info_path) {
         Ok(info) => Some(info),
@@ -67,19 +58,16 @@ pub fn plan(install: &Path, code: &ProductCode) -> Result<Plan, UninstallError> 
     if !is_plain_child(install, &flavor) {
         return Err(UninstallError::Outside(flavor));
     }
-    // Two codes can name one folder: `wow_retail` derives `_retail_`, which is
-    // Retail's. Removing it would take another product's game, settings and
-    // all, while its row stayed behind claiming an install that is gone.
+    // Two codes can name one folder: `wow_retail` derives Retail's `_retail_`.
     if let Some(owner) = remaining.iter().find(|p| p.install_dir() == code.install_dir()) {
         return Err(UninstallError::SharedFlavor { flavor, owner: owner.as_str().to_owned() });
     }
     let flavor_dir = flavor.is_dir().then_some(flavor);
     let store = install.join("Data");
 
-    // The store only goes when nothing is left to read it. A second product
-    // sharing these archives would be destroyed by deleting them. Without a
-    // `.build.info`, another product's flavor folder is the only sign one is
-    // still there, a first install that has not finished yet for example.
+    // The store goes only when nothing is left to read it. Without a
+    // `.build.info`, another flavor folder (an unfinished first install)
+    // still counts.
     let others_on_disk = info.is_none() && has_other_flavor(install, flavor_dir.as_deref());
     let store = (remaining.is_empty() && !others_on_disk && store.is_dir()).then_some(store);
 
@@ -104,14 +92,9 @@ pub struct Removed {
 
 /// Carry out a plan.
 ///
-/// Every path is checked to be inside `install` before it is deleted, a plan
-/// is data, and data that escaped the install root would be a very expensive
-/// bug.
-///
-/// `windows_path` is how Battle.net addresses this install, which differs per
-/// library; see [`crate::library::Library::windows_wow_path`]. It is only
-/// used to rewrite `.product.db` for the products that remain, and getting it
-/// wrong there is what makes the client reject an install it was happy with.
+/// Every path is checked to be inside `install` before it is deleted.
+/// `windows_path` ([`crate::library::Library::windows_wow_path`]) goes into
+/// the remaining products' `.product.db`; wrong, the client rejects the install.
 pub fn execute(
     install: &Path,
     code: &ProductCode,
@@ -153,9 +136,7 @@ pub fn execute(
         }
     }
 
-    // `.product.db` is rewritten for whatever is left, or removed with the
-    // last product. A record naming a product that is gone is exactly what
-    // makes Battle.net reject an install.
+    // A record naming a removed product makes Battle.net reject the install.
     let db_path = install.join(".product.db");
     if db_path.exists() {
         match plan.remaining.is_empty() {
@@ -182,9 +163,8 @@ pub fn execute(
     Ok(removed)
 }
 
-/// Whether `path` is `install` plus one ordinary folder name, never a path
-/// that climbs out of it through `..`. `starts_with` alone is textual and
-/// would accept `install/../elsewhere`.
+/// Whether `path` is `install` plus one ordinary folder name; `starts_with`
+/// alone accepts `install/../elsewhere`.
 fn is_plain_child(install: &Path, path: &Path) -> bool {
     path.strip_prefix(install).is_ok_and(|rest| {
         let mut parts = rest.components();
@@ -217,8 +197,7 @@ pub enum UninstallError {
     #[error(transparent)]
     BuildInfo(#[from] crate::buildinfo::BuildInfoError),
 
-    /// Refused rather than guessed: which products share the store is
-    /// written nowhere else.
+    /// Which products share the store is written nowhere else.
     #[error("refusing to plan an uninstall: .build.info cannot be read, so it is unknown which products still use the shared game data")]
     Unreadable(#[source] Box<crate::buildinfo::BuildInfoError>),
 
@@ -333,8 +312,7 @@ mod tests {
 
     #[test]
     fn an_unreadable_build_info_refuses_instead_of_taking_the_store() {
-        // A ragged row used to read as "no other products", and the plan
-        // then deleted the store Retail was still using.
+        // A ragged row once read as "no other products" and deleted Retail's store.
         let dir = install_with("ragged", &[("wow", "_retail_"), ("wow_classic_era", "_classic_era_")]);
         std::fs::write(
             dir.join(".build.info"),

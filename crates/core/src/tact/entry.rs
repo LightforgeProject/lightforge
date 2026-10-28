@@ -1,9 +1,7 @@
 //! The 30-byte header in front of every file inside a local `data.NNN`.
 //!
-//! CDN archives store bare BLTE files; local storage puts this header in front
-//! of each one. Writing an install therefore means synthesising these, and
-//! both of their checksums have to be right, which is the part that cannot be
-//! guessed, since neither is a plain hash of the header.
+//! CDN archives store bare BLTE files; local storage puts this header in
+//! front, and neither of its checksums is a plain hash.
 //!
 //! ```text
 //! 0x00  [u8; 16]  index key, padded to 16 bytes and byte-reversed
@@ -13,24 +11,14 @@
 //! 0x1a  u32 LE    checksum B
 //! ```
 //!
-//! Checksum A is `hashlittle` over the first 0x16 bytes with the seed
-//! `0x3D6BE971`. Checksum B is a table-driven XOR fold that mixes in **where
-//! the entry sits**: its archive number and offset, so the same file written
-//! to a different place gets a different checksum, and a header cannot be
-//! copied from one location to another.
+//! Checksum A is `hashlittle` over the first 0x16 bytes, seed `0x3D6BE971`.
+//! Checksum B is a table-driven XOR fold that mixes in **where the entry
+//! sits** (archive number and offset), so a header cannot be relocated.
 //!
-//! Both are verified against a real 12.1.0 install: 500 consecutive entries
-//! reproduce both checksums exactly, and 19,980 of 20,000 sampled headers
-//! rebuild byte-for-byte from nothing but their index entry.
-//!
-//! The other 20 are worth knowing about. The key field is 16 bytes wide, and
-//! a minority of entries, around 9% of those in `data.000`, none elsewhere in
-//! the sample, fill all sixteen rather than padding a 9-byte key with zeros.
-//! Every file reachable through the manifest chain uses the padded form: of
-//! 357 checked by resolving file ids through root and encoding, 357 were
-//! 9-byte padded and none were full-width. Since the downloader only ever
-//! writes content it resolved that way, [`Header::build`] emits the padded
-//! form; the wide entries appear to be something else living in `data.000`.
+//! Verified on 12.1.0: 19,980 of 20,000 sampled headers rebuild byte for
+//! byte from their index entry. The other 20, in `data.000` only, fill the
+//! 16-byte key field instead of padding a 9-byte key; every manifest-reachable
+//! file (357 of 357) is padded, so [`Header::build`] writes the padded form.
 //!
 //! Algorithm reference: <https://wowdev.wiki/CASC>.
 
@@ -39,8 +27,8 @@ use super::idx::CASC_ENTRY_HEADER;
 /// Bytes of the key stored in an index entry, and mirrored in this header.
 const KEY_BYTES: usize = 9;
 
-/// Constants lifted from Blizzard's own implementation. Index 10 is the same
-/// value used as checksum A's seed, which is a good sign the table is right.
+/// Constants from Blizzard's implementation. Index 10 equals checksum A's
+/// seed, a sign the table is right.
 const TABLE: [u32; 16] = [
     0x0493_96b8, 0x72a8_2a9b, 0xee62_6cca, 0x9917_754f, 0x15de_40b1, 0xf5a8_a9b6, 0x421e_ac7e,
     0xa9d5_5c9a, 0x317f_d40c, 0x04fa_f80d, 0x3d6b_e971, 0x5293_3cfd, 0x27f6_4b7d, 0xc6f5_c11b,
@@ -64,15 +52,11 @@ pub struct Header {
 
 impl Header {
     /// Build the header for a file about to be written at a known location.
-    ///
-    /// `size` counts this header plus the BLTE payload, the same number the
-    /// index entry records.
+    /// `size` includes this header, as the index entry records it.
     pub fn build(key: &[u8; KEY_BYTES], size: u32, archive_id: u16, offset: u32) -> [u8; CASC_ENTRY_HEADER] {
         let mut out = [0u8; CASC_ENTRY_HEADER];
 
-        // The key occupies a 16-byte field, right-padded with zeros and then
-        // reversed, so it reads as a little-endian big integer and the
-        // significant bytes land at the end rather than the start.
+        // Right-padded to 16 bytes, then reversed: the key bytes end up last.
         for (i, byte) in key.iter().enumerate() {
             out[15 - i] = *byte;
         }
@@ -122,11 +106,8 @@ pub fn checksum_a(header_prefix: &[u8]) -> u32 {
     tact_parser::jenkins3::hashlittle(header_prefix, CHECKSUM_A_SEED)
 }
 
-/// The position-dependent checksum.
-///
-/// `offset` is folded together with the low two bits of the archive number
-/// into the same 32-bit word an index entry packs, which is why an entry
-/// cannot simply be relocated: move it and this value changes.
+/// The position-dependent checksum: `offset` folded with the archive number's
+/// low two bits, the 32-bit word an index entry packs.
 pub fn checksum_b(header: &[u8], archive_id: u16, archive_offset: u32) -> u32 {
     let offset = (archive_offset & 0x3fff_ffff) | ((u32::from(archive_id) & 3) << 30);
     let seed = offset.wrapping_add(CASC_ENTRY_HEADER as u32);
@@ -162,9 +143,7 @@ mod tests {
 
     #[test]
     fn a_real_header_is_reproduced_byte_for_byte() {
-        // Both checksums and the reversed key field, against bytes Blizzard's
-        // own Agent wrote. Nothing here is guessable, so this is the test that
-        // says the algorithm is right.
+        // Both checksums and the reversed key, against bytes Agent wrote.
         let built = Header::build(&REAL_KEY, 18_355, 27, 1_049_269_890);
         assert_eq!(built, REAL_HEADER);
     }
@@ -180,9 +159,7 @@ mod tests {
 
     #[test]
     fn the_key_field_is_reversed_not_merely_padded() {
-        // The significant bytes sit at the END of the 16-byte field, in
-        // reverse order. Writing the key forwards produces a header that looks
-        // almost right and indexes nothing.
+        // The key bytes sit at the END of the field, reversed.
         assert_eq!(&REAL_HEADER[..7], &[0u8; 7]);
         assert_eq!(REAL_HEADER[15], REAL_KEY[0]);
         assert_eq!(REAL_HEADER[7], REAL_KEY[8]);

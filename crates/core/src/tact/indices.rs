@@ -1,28 +1,15 @@
 //! The archive index cache: where an encoding key actually lives.
 //!
-//! Nothing in the download path can proceed without these. An encoding key
-//! names bytes, but not their address; the address is in the index published
-//! beside each archive. For 12.1.0 that is **1406 indices totalling 119 MiB**,
-//! mean 87 KiB, plus the file index listing the loose keys.
+//! An encoding key's address is in the index beside its archive: for 12.1.0,
+//! **1406 indices, 119 MiB**, plus the file index. The combined
+//! `archive-group` answers **403**; Agent builds it locally.
 //!
-//! There is no shortcut. The CDN config names an `archive-group`: a single
-//! combined index that would answer every lookup in one fetch, but the CDN
-//! answers **403** for it. Agent builds it locally from the per-archive
-//! indices, which is why a real install has one in `Data/indices` beside the
-//! others. Measured, not assumed.
+//! Cached in `Data/indices/<hash>.index`, where Agent keeps them, so Agent
+//! reuses them.
 //!
-//! The cache is `Data/indices/<hash>.index`, exactly where Agent keeps them,
-//! so an install Lightforge downloads looks like one Agent downloaded, and a
-//! later Agent run reuses the work rather than refetching it.
-//!
-//! An index is not named by the hash of its own bytes, and the CDN config's
-//! `archives-index-size` list turns out not to be positionally aligned with
-//! its `archives` list, so there is no declared size to check an archive index
-//! against either; see [`super::config::CdnConfig::archives_index_size`].
-//! What remains is the index's own geometry, checked at parse time, and it is
-//! a strong check: block count, TOC and footer must account for every byte.
-//! The file index is the exception, since `file-index-size` is a single value
-//! with no ordering to lose.
+//! No usable declared size ([`super::config::CdnConfig::archives_index_size`]),
+//! so each index is checked by its geometry at parse time. The file index
+//! has a single `file-index-size`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -46,8 +33,7 @@ pub enum Fetched {
     Cached,
     /// Fetched and written.
     Downloaded { bytes: u64 },
-    /// Every endpoint failed. The prelude continues: one unreachable archive
-    /// costs its files, not the whole download.
+    /// Every endpoint failed; the run continues without that archive's files.
     Failed { detail: String },
 }
 
@@ -91,10 +77,7 @@ impl IndexCache {
         self.dir.join(format!("{hash}.index"))
     }
 
-    /// Whether `hash` is already cached at the size its config declares.
-    ///
-    /// Without a declared size this can only ask whether the file exists; the
-    /// geometry check at parse time is what catches a bad one then.
+    /// Whether `hash` is cached at its declared size, or at all without one.
     pub fn is_cached(&self, hash: &str, expect_size: Option<u64>) -> bool {
         match std::fs::metadata(self.path_of(hash)) {
             Ok(meta) => expect_size.is_none_or(|want| meta.len() == want),
@@ -102,11 +85,8 @@ impl IndexCache {
         }
     }
 
-    /// Whether a copy of `hash` is cached and every checksum in it holds.
-    ///
-    /// Reads the whole file. A damaged copy of the right size passed the
-    /// size check forever, and every run after planned from the same bad
-    /// offsets; failing this fetches it again instead.
+    /// Whether a copy of `hash` is cached and every checksum in it holds:
+    /// a damaged copy of the right size is fetched again.
     pub fn holds(&self, hash: &str, expect_size: Option<u64>) -> bool {
         self.is_cached(hash, expect_size)
             && std::fs::read(self.path_of(hash)).is_ok_and(|bytes| super::archive::verify(&bytes, hash).is_ok())
@@ -118,15 +98,9 @@ impl IndexCache {
         ArchiveIndex::parse(&bytes, hash).map_err(|source| IndexError::Parse { path, source })
     }
 
-    /// Fetch every index in `wanted` that is not already cached.
-    ///
-    /// `wanted` pairs each hash with the size its CDN config declares, as
-    /// [`super::config::CdnConfig::archive_indices`] produces it. `progress`
-    /// is called once per index, in completion order.
-    ///
-    /// A failure does not abort the run: the report lists what could not be
-    /// fetched so the caller can decide, since one unreachable archive costs
-    /// its own files rather than the whole download.
+    /// Fetch every index in `wanted` (from
+    /// [`super::config::CdnConfig::archive_indices`]) not already cached.
+    /// `progress` is called per index. Failures are listed, not fatal.
     pub async fn ensure(
         &self,
         http: &Http,
@@ -172,10 +146,7 @@ impl IndexCache {
         Ok(report)
     }
 
-    /// Write an index, via a temporary file in the same directory.
-    ///
-    /// A half-written index that happens to be the declared size would pass
-    /// every later check, so the rename has to be the only way one appears.
+    /// Write an index atomically: a torn one of the right size would pass checks.
     pub(crate) fn store(&self, hash: &str, bytes: &[u8]) -> Result<(), IndexError> {
         let path = self.path_of(hash);
         // 0644, as Agent's own cached indices are.
@@ -183,11 +154,8 @@ impl IndexCache {
     }
 }
 
-/// Where each encoding key lives, built from a set of archive indices.
-///
-/// Holding all 1406 parsed indices at once would cost far more than the keys
-/// actually wanted, so the lookup is built by streaming each index past a set
-/// of wanted keys and keeping only the hits.
+/// Where each wanted encoding key lives, built by streaming each archive
+/// index past the wanted set.
 #[derive(Debug, Clone, Default)]
 pub struct Locations {
     /// ekey -> (archive index into `archives`, offset, size)
@@ -198,9 +166,7 @@ pub struct Locations {
 impl Locations {
     /// Fold one archive's index in, keeping only keys `wanted` contains.
     ///
-    /// Returns how many of that index's entries were kept. A key found in two
-    /// archives keeps the first, duplicates across archives are normal, since
-    /// an archive is never rewritten once published.
+    /// Returns how many were kept. A key in two archives keeps the first.
     pub fn absorb(
         &mut self,
         index: &ArchiveIndex,
