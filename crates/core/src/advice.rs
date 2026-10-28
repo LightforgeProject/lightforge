@@ -331,7 +331,7 @@ mod tests {
     use crate::tact;
 
     fn io_error(kind: ErrorKind) -> crate::error::CoreError {
-        crate::error::CoreError::io("/games", std::io::Error::from(kind))
+        crate::error::CoreError::Io { path: "/games".into(), source: std::io::Error::from(kind) }
     }
 
     #[test]

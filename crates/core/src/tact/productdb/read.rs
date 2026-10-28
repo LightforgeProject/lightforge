@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use super::wire::{Fields, Wire};
-use super::ProductDbError;
+use super::{io, ProductDbError};
 
 /// One product Agent reports as installed, as far as Lightforge cares.
 ///
@@ -73,10 +73,7 @@ pub fn decode(bytes: &[u8]) -> Vec<Installed> {
 
 /// Read `product.db` out of Agent's data directory.
 pub fn read(path: &Path) -> Result<Vec<Installed>, ProductDbError> {
-    let bytes = std::fs::read(path).map_err(|source| ProductDbError::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let bytes = std::fs::read(path).map_err(io(path))?;
     Ok(decode(&bytes))
 }
 

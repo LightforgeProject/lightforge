@@ -347,19 +347,16 @@ impl Http {
         on_progress: impl FnMut(u64, Option<u64>),
     ) -> Result<String, NetError> {
         let dir = dest.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-        let io = |source| NetError::Io { path: dir.to_path_buf(), source };
-        tokio::fs::create_dir_all(dir).await.map_err(io)?;
+        tokio::fs::create_dir_all(dir).await.map_err(io(dir))?;
         sweep_stale_downloads(dir);
 
         let temp = tempfile::Builder::new()
             .prefix(DOWNLOAD_PREFIX)
-            .tempfile_in(dir)
-            .map_err(io)?;
-        let file = tokio::fs::File::from_std(temp.as_file().try_clone().map_err(io)?);
+            .tempfile_in(dir).map_err(io(dir))?;
+        let file = tokio::fs::File::from_std(temp.as_file().try_clone().map_err(io(dir))?);
         let digest = self.download_to(url, temp.path(), file, on_progress).await?;
 
-        temp.persist(dest)
-            .map_err(|e| NetError::Io { path: dest.to_path_buf(), source: e.error })?;
+        temp.persist(dest).map_err(|e| io(dest)(e.error))?;
         Ok(digest)
     }
 
@@ -392,10 +389,7 @@ impl Http {
                 source: e,
             })?;
             hasher.update(&chunk);
-            file.write_all(&chunk).await.map_err(|e| NetError::Io {
-                path: dest.to_path_buf(),
-                source: e,
-            })?;
+            file.write_all(&chunk).await.map_err(io(dest))?;
             written += chunk.len() as u64;
             on_progress(written, total);
         }
@@ -404,14 +398,8 @@ impl Http {
         if let Some(total) = total.filter(|&total| total != written) {
             return Err(NetError::Truncated { url: url.to_owned(), expected: total, got: written });
         }
-        file.flush().await.map_err(|e| NetError::Io {
-            path: dest.to_path_buf(),
-            source: e,
-        })?;
-        file.sync_all().await.map_err(|e| NetError::Io {
-            path: dest.to_path_buf(),
-            source: e,
-        })?;
+        file.flush().await.map_err(io(dest))?;
+        file.sync_all().await.map_err(io(dest))?;
 
         Ok(hex(&hasher.finalize()))
     }
@@ -530,10 +518,7 @@ impl ETagCache {
 
     /// The cached body, used when the server reports `304`.
     pub fn read(&self) -> Result<Vec<u8>, NetError> {
-        std::fs::read(&self.body_path).map_err(|e| NetError::Io {
-            path: self.body_path.clone(),
-            source: e,
-        })
+        std::fs::read(&self.body_path).map_err(io(&self.body_path))
     }
 
     /// Read and deserialize the cached body.
@@ -548,10 +533,6 @@ impl ETagCache {
     fn store(&self, body: &[u8], etag: Option<&str>) -> Result<(), NetError> {
 
         let dir = self.body_path.parent().unwrap_or_else(|| Path::new("."));
-        let io = |p: &Path| {
-            let p = p.to_path_buf();
-            move |source| NetError::Io { path: p, source }
-        };
         std::fs::create_dir_all(dir).map_err(io(dir))?;
 
         // The old ETag goes first and the new one last, so an interruption
@@ -612,6 +593,11 @@ pub enum NetError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> NetError + '_ {
+    move |source| NetError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {

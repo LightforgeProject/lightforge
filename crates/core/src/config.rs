@@ -5,7 +5,7 @@
 //! per-product pins and overrides. The format is hand-editable on purpose,
 //! realmlist and CDN overrides are exactly the fields people poke manually.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -327,8 +327,7 @@ impl Config {
     /// the CLI saving at once cannot rename each other's half-written file.
     pub fn save(&self, path: &std::path::Path) -> Result<(), ConfigError> {
         let text = self.to_toml()?;
-        crate::fsutil::write_atomic(path, text.as_bytes())
-            .map_err(|source| ConfigError::Io { path: path.to_path_buf(), source })
+        crate::fsutil::write_atomic(path, text.as_bytes()).map_err(io(path))
     }
 
     pub fn to_toml(&self) -> Result<String, ConfigError> {
@@ -564,6 +563,11 @@ pub enum ConfigError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> ConfigError + '_ {
+    move |source| ConfigError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {

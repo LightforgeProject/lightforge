@@ -280,7 +280,6 @@ impl Library {
     /// wrong volume, and quietly rebinding to it is how a config entry ends
     /// up pointing at someone else's games.
     pub fn claim(&mut self) -> Result<(), LibraryError> {
-        let io = |path: &Path, source| LibraryError::Io { path: path.to_path_buf(), source };
         match self.state() {
             State::Ready => {
                 self.claimed = true;
@@ -292,12 +291,12 @@ impl Library {
             State::Missing => return Err(LibraryError::Offline { label: self.label.clone() }),
             State::Foreign | State::New => {}
         }
-        std::fs::create_dir_all(&self.games).map_err(|e| io(&self.games, e))?;
+        std::fs::create_dir_all(&self.games).map_err(io(&self.games))?;
         let marker = self.marker();
         match read_marker(&marker) {
             Some(existing) => self.id = existing,
             None => {
-                std::fs::write(&marker, marker_text(&self.id)).map_err(|e| io(&marker, e))?
+                std::fs::write(&marker, marker_text(&self.id)).map_err(io(&marker))?
             }
         }
         self.claimed = true;
@@ -704,6 +703,11 @@ pub enum LibraryError {
     #[error("the Wine prefix has no drive letters left; remove a drive before adding another")]
     NoLettersLeft,
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> LibraryError + '_ {
+    move |source| LibraryError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {

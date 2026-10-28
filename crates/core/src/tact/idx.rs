@@ -444,7 +444,7 @@ impl Index {
 
     pub fn load(path: impl AsRef<Path>) -> Result<Self, IdxError> {
         let path = path.as_ref();
-        let bytes = std::fs::read(path).map_err(|source| IdxError::Io { path: path.to_path_buf(), source })?;
+        let bytes = std::fs::read(path).map_err(io(path))?;
         Self::parse(&bytes)
     }
 
@@ -479,8 +479,7 @@ impl Index {
         // with respect to readers of the previous one; the temp-and-rename is
         // here so a crash mid-write cannot leave a short file wearing a valid
         // generation's name. 0644, as Agent writes them.
-        crate::fsutil::write_atomic_with_mode(&path, &bytes, 0o644)
-            .map_err(|source| IdxError::Io { path: path.clone(), source })?;
+        crate::fsutil::write_atomic_with_mode(&path, &bytes, 0o644).map_err(io(&path))?;
         Ok(path)
     }
 }
@@ -605,6 +604,11 @@ pub enum IdxError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> IdxError + '_ {
+    move |source| IdxError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {

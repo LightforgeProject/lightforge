@@ -70,6 +70,11 @@ pub enum ShortcutError {
     },
 }
 
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> ShortcutError + '_ {
+    move |source| ShortcutError::Io { path: path.to_path_buf(), source }
+}
+
+
 /// Put `name`, started by `exe`, into the Steam library of the account that
 /// signed in last, with `art` for its pictures.
 pub fn add(steam: &SteamRoot, name: &str, exe: &Path, art: &Artwork) -> Result<Added, ShortcutError> {
@@ -137,11 +142,9 @@ pub fn add(steam: &SteamRoot, name: &str, exe: &Path, art: &Artwork) -> Result<A
         (art.icon, format!("{appid}_icon.{}", art.icon.ext)),
     ] {
         let path = grid.join(file);
-        crate::fsutil::write_atomic(&path, image.bytes)
-            .map_err(|source| ShortcutError::Io { path, source })?;
+        crate::fsutil::write_atomic(&path, image.bytes).map_err(io(&path))?;
     }
-    crate::fsutil::write_atomic(&file, &render(&root))
-        .map_err(|source| ShortcutError::Io { path: file.clone(), source })?;
+    crate::fsutil::write_atomic(&file, &render(&root)).map_err(io(&file))?;
 
     Ok(Added { account, appid, updated })
 }

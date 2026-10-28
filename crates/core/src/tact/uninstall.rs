@@ -131,10 +131,7 @@ pub fn execute(
         if !is_plain_child(install, path) {
             return Err(UninstallError::Outside(path.clone()));
         }
-        std::fs::remove_dir_all(path).map_err(|source| UninstallError::Io {
-            path: path.clone(),
-            source,
-        })?;
+        std::fs::remove_dir_all(path).map_err(io(path))?;
         removed.paths.push(path.clone());
     }
 
@@ -143,10 +140,7 @@ pub fn execute(
         // Nothing left to describe: the file goes with the last product.
         true => {
             if info_path.exists() {
-                std::fs::remove_file(&info_path).map_err(|source| UninstallError::Io {
-                    path: info_path.clone(),
-                    source,
-                })?;
+                std::fs::remove_file(&info_path).map_err(io(&info_path))?;
                 removed.paths.push(info_path);
             }
         }
@@ -166,10 +160,7 @@ pub fn execute(
     if db_path.exists() {
         match plan.remaining.is_empty() {
             true => {
-                std::fs::remove_file(&db_path).map_err(|source| UninstallError::Io {
-                    path: db_path.clone(),
-                    source,
-                })?;
+                std::fs::remove_file(&db_path).map_err(io(&db_path))?;
                 removed.paths.push(db_path);
             }
             false => {
@@ -247,6 +238,11 @@ pub enum UninstallError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> UninstallError + '_ {
+    move |source| UninstallError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {

@@ -45,7 +45,7 @@ pub use gate::{DownloadGuard, NoDownloads, Preflight, Report, Timing};
 pub use scan::{scan, PrefixProcess, ProcKind};
 pub use shutdown::{shutdown, Disposition, Outcome};
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::battlenet::BattleNetError;
@@ -91,4 +91,8 @@ pub enum PreflightError {
         #[source]
         source: std::io::Error,
     },
+}
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> PreflightError + '_ {
+    move |source| PreflightError::Io { path: path.to_path_buf(), source }
 }

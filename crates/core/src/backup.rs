@@ -155,7 +155,7 @@ impl Plan {
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(source) => return Err(BackupError::io(&self.dir, source)),
+            Err(source) => return Err(io(&self.dir)(source)),
         };
         let mut backups: Vec<Backup> = entries
             .filter_map(Result::ok)
@@ -206,20 +206,19 @@ impl Plan {
         unpack(&backup.path, &staging)?;
         let fresh = staging.join(ROOT);
         // A backup of an empty folder has no members under it.
-        fs::create_dir_all(&fresh).map_err(|e| BackupError::io(&fresh, e))?;
+        fs::create_dir_all(&fresh).map_err(io(&fresh))?;
 
         let safety = self.snapshot(Reason::BeforeRestore)?;
 
         let had_current = self.account_dir.exists();
         if had_current {
-            fs::rename(&self.account_dir, &replaced)
-                .map_err(|e| BackupError::io(&self.account_dir, e))?;
+            fs::rename(&self.account_dir, &replaced).map_err(io(&self.account_dir))?;
         }
         if let Err(e) = fs::rename(&fresh, &self.account_dir) {
             if had_current {
                 let _ = fs::rename(&replaced, &self.account_dir);
             }
-            return Err(BackupError::io(&self.account_dir, e));
+            return Err(io(&self.account_dir)(e));
         }
         // The restore has happened; failing to tidy up after it is not worth
         // reporting as a failed restore, and the next one clears both.
@@ -237,7 +236,7 @@ impl Plan {
         if !self.list()?.iter().any(|b| b.path == backup.path) {
             return Err(BackupError::NotABackup(backup.path.clone()));
         }
-        fs::remove_file(&backup.path).map_err(|e| BackupError::io(&backup.path, e))
+        fs::remove_file(&backup.path).map_err(io(&backup.path))
     }
 
     /// Write a backup without pruning, so a restore cannot rotate out the
@@ -269,15 +268,12 @@ impl Plan {
 
     fn write(&self, files: &[File], meta: &Meta) -> Result<PathBuf, BackupError> {
         let dir = &self.dir;
-        fs::create_dir_all(dir).map_err(|e| BackupError::io(dir, e))?;
+        fs::create_dir_all(dir).map_err(io(dir))?;
         // Created 0600 and left that way: these are one player's settings.
         let tmp = tempfile::Builder::new()
             .prefix(".partial-")
-            .tempfile_in(dir)
-            .map_err(|e| BackupError::io(dir, e))?;
-        let io = |e| BackupError::io(tmp.path(), e);
-
-        let encoder = zstd::Encoder::new(tmp.as_file(), LEVEL).map_err(io)?;
+            .tempfile_in(dir).map_err(io(dir))?;
+        let encoder = zstd::Encoder::new(tmp.as_file(), LEVEL).map_err(io(tmp.path()))?;
         let mut tar = tar::Builder::new(encoder);
 
         let text = toml::to_string(meta).expect("backup metadata serializes");
@@ -286,21 +282,21 @@ impl Plan {
         header.set_mode(0o644);
         header.set_mtime(meta.created / 1000);
         header.set_cksum();
-        tar.append_data(&mut header, META, text.as_bytes()).map_err(io)?;
+        tar.append_data(&mut header, META, text.as_bytes()).map_err(io(tmp.path()))?;
 
         for file in files {
             let source = self.account_dir.join(&file.rel);
             tar.append_path_with_name(&source, Path::new(ROOT).join(&file.rel))
-                .map_err(|e| BackupError::io(&source, e))?;
+                .map_err(io(&source))?;
         }
-        tar.into_inner().map_err(io)?.finish().map_err(io)?;
-        tmp.as_file().sync_all().map_err(io)?;
+        tar.into_inner().map_err(io(tmp.path()))?.finish().map_err(io(tmp.path()))?;
+        tmp.as_file().sync_all().map_err(io(tmp.path()))?;
 
         // The fingerprint keeps two backups taken in one millisecond from
         // landing on one name; the rename would silently replace the first.
         let short = &meta.fingerprint[..8];
         let path = dir.join(format!("{}-{}-{short}{EXTENSION}", meta.created, meta.reason.slug()));
-        tmp.persist(&path).map_err(|e| BackupError::io(&path, e.error))?;
+        tmp.persist(&path).map_err(|e| io(&path)(e.error))?;
         // Durability of the rename, as `BuildInfo::save` does it.
         if let Ok(handle) = fs::File::open(dir) {
             let _ = handle.sync_all();
@@ -311,7 +307,7 @@ impl Plan {
     /// Keep the newest `keep`, and clear anything a crash left half written.
     fn prune(&self) -> Result<(), BackupError> {
         for old in self.list()?.iter().skip(self.keep.max(1)) {
-            fs::remove_file(&old.path).map_err(|e| BackupError::io(&old.path, e))?;
+            fs::remove_file(&old.path).map_err(io(&old.path))?;
         }
         if let Ok(entries) = fs::read_dir(&self.dir) {
             for entry in entries.filter_map(Result::ok) {
@@ -345,10 +341,10 @@ fn walk(root: &Path) -> Result<Vec<File>, BackupError> {
     let mut pending = vec![PathBuf::new()];
     while let Some(rel) = pending.pop() {
         let dir = root.join(&rel);
-        for entry in fs::read_dir(&dir).map_err(|e| BackupError::io(&dir, e))? {
-            let entry = entry.map_err(|e| BackupError::io(&dir, e))?;
+        for entry in fs::read_dir(&dir).map_err(io(&dir))? {
+            let entry = entry.map_err(io(&dir))?;
             let path = entry.path();
-            let meta = fs::symlink_metadata(&path).map_err(|e| BackupError::io(&path, e))?;
+            let meta = fs::symlink_metadata(&path).map_err(io(&path))?;
             let rel = rel.join(entry.file_name());
             if meta.is_dir() {
                 pending.push(rel);
@@ -389,10 +385,10 @@ fn fingerprint(files: &[File]) -> String {
 
 fn read_backup(path: &Path) -> Result<Backup, BackupError> {
     let not_ours = || BackupError::NotABackup(path.to_path_buf());
-    let file = fs::File::open(path).map_err(|e| BackupError::io(path, e))?;
-    let size = file.metadata().map_err(|e| BackupError::io(path, e))?.len();
+    let file = fs::File::open(path).map_err(io(path))?;
+    let size = file.metadata().map_err(io(path))?.len();
 
-    let mut archive = tar::Archive::new(zstd::Decoder::new(file).map_err(|e| BackupError::io(path, e))?);
+    let mut archive = tar::Archive::new(zstd::Decoder::new(file).map_err(io(path))?);
     let mut entries = archive.entries().map_err(|_| not_ours())?;
     let mut first = entries.next().ok_or_else(not_ours)?.map_err(|_| not_ours())?;
     if first.path().ok().as_deref() != Some(Path::new(META)) {
@@ -416,14 +412,13 @@ fn read_backup(path: &Path) -> Result<Backup, BackupError> {
 /// inside `Account`. Our own archives never hold anything else, so one that
 /// does was not written by us and is not trusted.
 fn unpack(archive_path: &Path, dest: &Path) -> Result<(), BackupError> {
-    let io = |e| BackupError::io(archive_path, e);
-    let file = fs::File::open(archive_path).map_err(io)?;
-    let mut archive = tar::Archive::new(zstd::Decoder::new(file).map_err(io)?);
-    fs::create_dir_all(dest).map_err(|e| BackupError::io(dest, e))?;
+    let file = fs::File::open(archive_path).map_err(io(archive_path))?;
+    let mut archive = tar::Archive::new(zstd::Decoder::new(file).map_err(io(archive_path))?);
+    fs::create_dir_all(dest).map_err(io(dest))?;
 
-    for entry in archive.entries().map_err(io)? {
-        let mut entry = entry.map_err(io)?;
-        let path = entry.path().map_err(io)?.into_owned();
+    for entry in archive.entries().map_err(io(archive_path))? {
+        let mut entry = entry.map_err(io(archive_path))?;
+        let path = entry.path().map_err(io(archive_path))?.into_owned();
         if path == Path::new(META) {
             continue;
         }
@@ -433,14 +428,14 @@ fn unpack(archive_path: &Path, dest: &Path) -> Result<(), BackupError> {
         if !inside || !(kind.is_file() || kind.is_dir()) {
             return Err(BackupError::UnsafeEntry { archive: archive_path.to_path_buf(), entry: path });
         }
-        entry.unpack_in(dest).map_err(|e| BackupError::io(dest, e))?;
+        entry.unpack_in(dest).map_err(io(dest))?;
     }
     Ok(())
 }
 
 fn remove_if_present(path: &Path) -> Result<(), BackupError> {
     match fs::remove_dir_all(path) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(BackupError::io(path, e)),
+        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(io(path)(e)),
         _ => Ok(()),
     }
 }
@@ -467,10 +462,8 @@ pub enum BackupError {
     UnsafeEntry { archive: PathBuf, entry: PathBuf },
 }
 
-impl BackupError {
-    fn io(path: impl Into<PathBuf>, source: io::Error) -> Self {
-        Self::Io { path: path.into(), source }
-    }
+fn io(path: &Path) -> impl FnOnce(io::Error) -> BackupError + '_ {
+    move |source| BackupError::Io { path: path.to_path_buf(), source }
 }
 
 #[cfg(test)]

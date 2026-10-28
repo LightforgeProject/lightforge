@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use super::read::decode_install;
 use super::wire::{double_field, message_field, read_varint, string_field, varint_field};
-use super::{agent_tags, locale_from_tags, ProductDbError};
+use super::{agent_tags, io, locale_from_tags, ProductDbError};
 use crate::buildinfo::{self, BuildInfo};
 use crate::product::ProductCode;
 
@@ -448,8 +448,7 @@ fn replace(path: &Path, existing: &[u8], merged: &[u8]) -> Result<bool, ProductD
     if merged == existing {
         return Ok(false);
     }
-    crate::fsutil::write_atomic(path, merged)
-        .map_err(|source| ProductDbError::Io { path: path.to_path_buf(), source })?;
+    crate::fsutil::write_atomic(path, merged).map_err(io(path))?;
     Ok(true)
 }
 
@@ -460,8 +459,7 @@ fn replace(path: &Path, existing: &[u8], merged: &[u8]) -> Result<bool, ProductD
 /// than none at all.
 pub fn write(install_root: &Path, installs: &[ProductInstall]) -> Result<PathBuf, ProductDbError> {
     let path = install_root.join(".product.db");
-    crate::fsutil::write_atomic(&path, &encode(installs))
-        .map_err(|source| ProductDbError::Io { path: path.clone(), source })?;
+    crate::fsutil::write_atomic(&path, &encode(installs)).map_err(io(&path))?;
     Ok(path)
 }
 

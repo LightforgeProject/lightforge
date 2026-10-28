@@ -29,7 +29,7 @@ pub use manifest::{AssetRef, Manifest, Slot, Theme};
 pub use pipeline::Pipeline;
 pub use store::{Asset, Branding, Origin, Store};
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::net::NetError;
 // The tests reach the pipeline's checksum and path helpers directly.
@@ -82,4 +82,8 @@ pub enum AssetError {
         #[source]
         source: std::io::Error,
     },
+}
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> AssetError + '_ {
+    move |source| AssetError::Io { path: path.to_path_buf(), source }
 }

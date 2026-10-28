@@ -170,8 +170,7 @@ impl BuildInfo {
     /// Read and parse a `.build.info` from disk.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, BuildInfoError> {
         let path = path.as_ref();
-        let contents = std::fs::read_to_string(path)
-            .map_err(|source| BuildInfoError::Io { path: path.to_path_buf(), source })?;
+        let contents = std::fs::read_to_string(path).map_err(io(path))?;
         Self::parse(&contents)
     }
 
@@ -188,8 +187,7 @@ impl BuildInfo {
     /// nobody asked for.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), BuildInfoError> {
         let path = path.as_ref();
-        crate::fsutil::write_atomic(path, self.to_file_contents().as_bytes())
-            .map_err(|source| BuildInfoError::Io { path: path.to_path_buf(), source })
+        crate::fsutil::write_atomic(path, self.to_file_contents().as_bytes()).map_err(io(path))
     }
 
     /// Load, mutate, and atomically write back in one call.
@@ -324,6 +322,11 @@ pub enum BuildInfoError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> BuildInfoError + '_ {
+    move |source| BuildInfoError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {

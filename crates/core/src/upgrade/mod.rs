@@ -243,9 +243,9 @@ fn listed<'a>(sums: &'a str, suffix: &str) -> Option<(&'a str, &'a str)> {
 }
 
 fn sha256_of(path: &Path) -> Result<String, UpgradeError> {
-    let mut file = std::fs::File::open(path).map_err(|source| UpgradeError::io(path, source))?;
+    let mut file = std::fs::File::open(path).map_err(io(path))?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher).map_err(|source| UpgradeError::io(path, source))?;
+    std::io::copy(&mut file, &mut hasher).map_err(io(path))?;
     Ok(crate::text::hex(&hasher.finalize()))
 }
 
@@ -295,10 +295,8 @@ pub enum UpgradeError {
     },
 }
 
-impl UpgradeError {
-    fn io(path: &Path, source: std::io::Error) -> Self {
-        Self::Io { path: path.to_path_buf(), source }
-    }
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> UpgradeError + '_ {
+    move |source| UpgradeError::Io { path: path.to_path_buf(), source }
 }
 
 #[cfg(test)]

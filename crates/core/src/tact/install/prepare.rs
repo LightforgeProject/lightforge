@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use super::locale::shipped_locale;
-use super::{Event, InstallError, Options};
+use super::{io, Event, InstallError, Options};
 use crate::net::Http;
 use crate::product::ProductCode;
 use crate::tact::archive::FileIndex;
@@ -287,9 +287,8 @@ pub async fn prepare(
             .await?;
         cache.store(&file_index_hash, &bytes)?;
     }
-    let loose = FileIndex::parse(&std::fs::read(cache.path_of(&file_index_hash)).map_err(
-        |source| InstallError::Io { path: cache.path_of(&file_index_hash), source },
-    )?)?;
+    let index_path = cache.path_of(&file_index_hash);
+    let loose = FileIndex::parse(&std::fs::read(&index_path).map_err(io(&index_path))?)?;
     on_event(Event::Loose { files: loose.len() });
 
     let wanted_keys: HashSet<EKey> = wanted.iter().map(|e| e.ekey).collect();

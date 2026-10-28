@@ -10,7 +10,7 @@
 //! redoes. Like [`crate::tact::install`], it reports through an [`Event`]
 //! callback so both front-ends can drive it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::battlenet::{self, SetupReport};
 use crate::config::Config;
@@ -317,10 +317,7 @@ async fn install_proton(
     };
 
     let scratch = dirs.cache_dir().join("downloads");
-    std::fs::create_dir_all(&scratch).map_err(|source| SetupError::Io {
-        path: scratch.clone(),
-        source,
-    })?;
+    std::fs::create_dir_all(&scratch).map_err(io(&scratch))?;
 
     Ok(proton::install_release(http, release, &dirs.proton_dir(), &scratch, |done, total| {
         on_event(Event::Progress { done, total })
@@ -394,6 +391,11 @@ pub enum SetupError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> SetupError + '_ {
+    move |source| SetupError::Io { path: path.to_path_buf(), source }
+}
+
 
 /// Convenience for a caller that only wants to know whether to show setup.
 pub fn is_ready(layout: &Layout, dirs: &AppDirs, config: &Config) -> bool {

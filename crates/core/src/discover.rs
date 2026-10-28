@@ -431,10 +431,7 @@ pub struct Adopted {
 pub fn adopt(plan: &Plan, layout: &Layout) -> Result<Adopted, AdoptError> {
     let mut library = plan.library.clone();
     if let Some(target) = &plan.rename {
-        std::fs::rename(&plan.install, target).map_err(|source| AdoptError::Io {
-            path: target.clone(),
-            source,
-        })?;
+        std::fs::rename(&plan.install, target).map_err(io(target))?;
     }
     library.claim()?;
 
@@ -492,17 +489,16 @@ pub fn link_hand_off(
     use crate::prefix::LinkState;
 
     let link = library.games().join(&game.label);
-    let io = |source| AdoptError::Io { path: link.clone(), source };
     match crate::prefix::inspect_link(&link, &game.path) {
         // Already linked, by us or by a previous run of this.
         LinkState::Correct | LinkState::Pending(_) => {}
         // Left by an earlier adoption of the same game from somewhere else.
         // Only the symlink goes, never what it pointed at.
         LinkState::Mislinked(_) => {
-            std::fs::remove_file(&link).map_err(io)?;
-            std::os::unix::fs::symlink(&game.path, &link).map_err(io)?;
+            std::fs::remove_file(&link).map_err(io(&link))?;
+            std::os::unix::fs::symlink(&game.path, &link).map_err(io(&link))?;
         }
-        LinkState::Missing => std::os::unix::fs::symlink(&game.path, &link).map_err(io)?,
+        LinkState::Missing => std::os::unix::fs::symlink(&game.path, &link).map_err(io(&link))?,
         LinkState::OccupiedEmpty | LinkState::Occupied => return Err(AdoptError::Occupied(link)),
     }
 
@@ -544,6 +540,11 @@ pub enum AdoptError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> AdoptError + '_ {
+    move |source| AdoptError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {

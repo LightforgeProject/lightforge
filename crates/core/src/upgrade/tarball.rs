@@ -9,7 +9,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use super::{fetch_asset, UpgradeError};
+use super::{fetch_asset, io, UpgradeError};
 use crate::net::Http;
 
 /// The menu entry's file name, which is also the app id.
@@ -43,10 +43,6 @@ pub async fn install(
 /// Unpack `archive` beside the binaries it replaces, then move each file
 /// into place.
 fn put_in_place(archive: &Path, bin_dir: &Path, data_dir: &Path) -> Result<(), UpgradeError> {
-    let io = |path: &Path| {
-        let path = path.to_path_buf();
-        move |source| UpgradeError::Io { path, source }
-    };
     std::fs::create_dir_all(bin_dir).map_err(io(bin_dir))?;
     // In `bin_dir` itself, so every move below is a rename on one filesystem.
     let staging = crate::staging::create_in(bin_dir).map_err(io(bin_dir))?;
@@ -77,20 +73,18 @@ fn put_in_place(archive: &Path, bin_dir: &Path, data_dir: &Path) -> Result<(), U
 
 /// Extract a release tarball into `into`, returning its one top folder.
 fn unpack(archive: &Path, into: &Path) -> Result<PathBuf, UpgradeError> {
-    let io = |source| UpgradeError::Io { path: archive.to_path_buf(), source };
-    let file = std::fs::File::open(archive).map_err(io)?;
+    let file = std::fs::File::open(archive).map_err(io(archive))?;
     let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
-    for entry in tar.entries().map_err(io)? {
-        let mut entry = entry.map_err(io)?;
-        let path = entry.path().map_err(io)?.into_owned();
+    for entry in tar.entries().map_err(io(archive))? {
+        let mut entry = entry.map_err(io(archive))?;
+        let path = entry.path().map_err(io(archive))?.into_owned();
         if path.is_absolute() || path.components().any(|c| c == Component::ParentDir) {
             return Err(UpgradeError::NotARelease(archive.to_path_buf()));
         }
-        entry.unpack_in(into).map_err(io)?;
+        entry.unpack_in(into).map_err(io(archive))?;
     }
 
-    let top = std::fs::read_dir(into)
-        .map_err(io)?
+    let top = std::fs::read_dir(into).map_err(io(archive))?
         .filter_map(Result::ok)
         .map(|e| e.path())
         .find(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("lightforge-")));
@@ -102,10 +96,6 @@ fn unpack(archive: &Path, into: &Path) -> Result<PathBuf, UpgradeError> {
 
 /// Copy every file under `from` into the same place under `to`.
 fn copy_tree(from: &Path, to: &Path) -> Result<(), UpgradeError> {
-    let io = |path: &Path| {
-        let path = path.to_path_buf();
-        move |source| UpgradeError::Io { path, source }
-    };
     std::fs::create_dir_all(to).map_err(io(to))?;
     for entry in std::fs::read_dir(from).map_err(io(from))?.filter_map(Result::ok) {
         let (source, target) = (entry.path(), to.join(entry.file_name()));

@@ -78,7 +78,7 @@ impl BuildConfig {
     /// Read the build config named by `hash` out of a config directory.
     pub fn load(config_dir: impl AsRef<Path>, hash: &str) -> Result<Self, ConfigError> {
         let path = config_path(config_dir.as_ref(), hash)?;
-        let text = std::fs::read_to_string(&path).map_err(|source| ConfigError::Io { path, source })?;
+        let text = std::fs::read_to_string(&path).map_err(io(&path))?;
         Self::parse(&text)
     }
 }
@@ -145,7 +145,7 @@ impl CdnConfig {
 
     pub fn load(config_dir: impl AsRef<Path>, hash: &str) -> Result<Self, ConfigError> {
         let path = config_path(config_dir.as_ref(), hash)?;
-        let text = std::fs::read_to_string(&path).map_err(|source| ConfigError::Io { path, source })?;
+        let text = std::fs::read_to_string(&path).map_err(io(&path))?;
         Self::parse(&text)
     }
 }
@@ -180,8 +180,7 @@ pub fn store(data_dir: &Path, hash: &str, bytes: &[u8]) -> Result<PathBuf, Confi
     }
     // Atomic: the client reads this directory while it runs, and a
     // half-written config is worse than an absent one, which it knows how to fetch.
-    crate::fsutil::write_atomic(&path, bytes)
-        .map_err(|source| ConfigError::Io { path: path.clone(), source })?;
+    crate::fsutil::write_atomic(&path, bytes).map_err(io(&path))?;
     Ok(path)
 }
 
@@ -216,6 +215,11 @@ pub enum ConfigError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> ConfigError + '_ {
+    move |source| ConfigError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {

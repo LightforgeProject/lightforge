@@ -28,7 +28,7 @@ pub use execute::{execute, run};
 pub use locale::{current_locale, locale_name, LOCALES};
 pub use prepare::{offerings, prepare, Offerings, Prepared, StoreProbe};
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::tact::download::{self, Progress};
 use crate::tact::indices::Step;
@@ -295,4 +295,8 @@ pub enum InstallError {
         #[source]
         source: std::io::Error,
     },
+}
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> InstallError + '_ {
+    move |source| InstallError::Io { path: path.to_path_buf(), source }
 }

@@ -114,7 +114,7 @@ impl IndexCache {
 
     pub fn load_archive(&self, hash: &str) -> Result<ArchiveIndex, IndexError> {
         let path = self.path_of(hash);
-        let bytes = std::fs::read(&path).map_err(|source| IndexError::Io { path: path.clone(), source })?;
+        let bytes = std::fs::read(&path).map_err(io(&path))?;
         ArchiveIndex::parse(&bytes, hash).map_err(|source| IndexError::Parse { path, source })
     }
 
@@ -135,8 +135,7 @@ impl IndexCache {
         concurrency: usize,
         mut progress: impl FnMut(Step),
     ) -> Result<Report, IndexError> {
-        std::fs::create_dir_all(&self.dir)
-            .map_err(|source| IndexError::Io { path: self.dir.clone(), source })?;
+        std::fs::create_dir_all(&self.dir).map_err(io(&self.dir))?;
 
         let total = wanted.len();
         let mut report = Report::default();
@@ -180,8 +179,7 @@ impl IndexCache {
     pub(crate) fn store(&self, hash: &str, bytes: &[u8]) -> Result<(), IndexError> {
         let path = self.path_of(hash);
         // 0644, as Agent's own cached indices are.
-        crate::fsutil::write_atomic_with_mode(&path, bytes, 0o644)
-            .map_err(|source| IndexError::Io { path, source })
+        crate::fsutil::write_atomic_with_mode(&path, bytes, 0o644).map_err(io(&path))
     }
 }
 
@@ -281,6 +279,11 @@ pub enum IndexError {
     #[error(transparent)]
     Cdn(#[from] CdnError),
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> IndexError + '_ {
+    move |source| IndexError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {

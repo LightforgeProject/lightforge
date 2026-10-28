@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use super::BattleNetError;
+use super::{io, BattleNetError};
 use crate::paths::Layout;
 use crate::product::ProductCode;
 
@@ -364,7 +364,7 @@ fn remove_key(path: &Path, key: &str) -> Result<(), BattleNetError> {
     let mut text = serde_json::to_string_pretty(&config)
         .map_err(|e| BattleNetError::MalformedConfig { path: path.to_path_buf(), source: e })?;
     text.push('\n');
-    crate::fsutil::write_atomic(path, text.as_bytes()).map_err(|e| BattleNetError::io(path, e))
+    crate::fsutil::write_atomic(path, text.as_bytes()).map_err(io(path))
 }
 
 /// Read, merge, and atomically rewrite one config file.
@@ -377,13 +377,13 @@ fn merge_file(path: &Path, tweaks: &[Tweak], seed: bool) -> Result<bool, BattleN
             .map_err(|e| BattleNetError::MalformedConfig { path: path.to_path_buf(), source: e })?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && seed => json!({}),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(BattleNetError::io(path, e)),
+        Err(e) => return Err(io(path)(e)),
     };
 
     apply_tweaks(&mut config, tweaks);
     let mut text = serde_json::to_string_pretty(&config)
         .map_err(|e| BattleNetError::MalformedConfig { path: path.to_path_buf(), source: e })?;
     text.push('\n');
-    crate::fsutil::write_atomic(path, text.as_bytes()).map_err(|e| BattleNetError::io(path, e))?;
+    crate::fsutil::write_atomic(path, text.as_bytes()).map_err(io(path))?;
     Ok(true)
 }

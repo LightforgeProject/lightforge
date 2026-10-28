@@ -48,6 +48,7 @@ pub enum CompactError {
     Io { path: PathBuf, source: std::io::Error },
 }
 
+
 /// How one archive's bytes are spent.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Usage {

@@ -7,7 +7,7 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System};
 use super::games::games_running;
 use super::gate::Timing;
 use super::scan::{belongs_to, collect, owned_prefixes, refresh, scan, PrefixProcess};
-use super::{PreflightError, POLL};
+use super::{io, PreflightError, POLL};
 use crate::paths::Layout;
 use crate::prefix::ProtonRunner;
 
@@ -198,7 +198,6 @@ pub(super) fn remove_dir(dir: &Path) -> Result<Option<u64>, PreflightError> {
         return Ok(None);
     }
     let bytes = crate::fsutil::dir_size(dir);
-    std::fs::remove_dir_all(dir)
-        .map_err(|source| PreflightError::Io { path: dir.to_path_buf(), source })?;
+    std::fs::remove_dir_all(dir).map_err(io(dir))?;
     Ok(Some(bytes))
 }

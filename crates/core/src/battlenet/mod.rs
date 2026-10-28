@@ -147,11 +147,6 @@ pub enum BattleNetError {
     },
 }
 
-impl BattleNetError {
-    fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
-        Self::Io {
-            path: path.into(),
-            source,
-        }
-    }
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> BattleNetError + '_ {
+    move |source| BattleNetError::Io { path: path.to_path_buf(), source }
 }

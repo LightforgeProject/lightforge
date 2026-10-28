@@ -106,8 +106,7 @@ impl Encoding {
 
     pub fn load(path: impl AsRef<Path>) -> Result<Self, EncodingError> {
         let path = path.as_ref();
-        let bytes = std::fs::read(path)
-            .map_err(|source| EncodingError::Io { path: path.to_path_buf(), source })?;
+        let bytes = std::fs::read(path).map_err(io(path))?;
         Self::parse(&bytes)
     }
 
@@ -247,6 +246,10 @@ pub enum EncodingError {
         #[source]
         source: std::io::Error,
     },
+}
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> EncodingError + '_ {
+    move |source| EncodingError::Io { path: path.to_path_buf(), source }
 }
 
 #[cfg(test)]

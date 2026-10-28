@@ -323,8 +323,7 @@ impl ProtonRunner {
             return Err(PrefixError::MissingRuntime(self.entry_point.clone()));
         }
         for dir in [&self.compat_data, &self.steam_client] {
-            std::fs::create_dir_all(dir)
-                .map_err(|e| PrefixError::Io { path: dir.clone(), source: e })?;
+            std::fs::create_dir_all(dir).map_err(io(dir))?;
         }
         Ok(())
     }
@@ -463,22 +462,18 @@ pub fn ensure_link(link: &Path, target: &Path) -> Result<LinkState, PrefixError>
     let before = inspect_link(link, target);
 
     if let Some(parent) = link.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| PrefixError::Io { path: parent.to_path_buf(), source: e })?;
+        std::fs::create_dir_all(parent).map_err(io(parent))?;
     }
 
     match &before {
         LinkState::Correct | LinkState::Pending(_) => return Ok(before),
         LinkState::Occupied => return Err(PrefixError::LinkOccupied(link.to_path_buf())),
-        LinkState::Mislinked(_) => std::fs::remove_file(link)
-            .map_err(|e| PrefixError::Io { path: link.to_path_buf(), source: e })?,
-        LinkState::OccupiedEmpty => std::fs::remove_dir(link)
-            .map_err(|e| PrefixError::Io { path: link.to_path_buf(), source: e })?,
+        LinkState::Mislinked(_) => std::fs::remove_file(link).map_err(io(link))?,
+        LinkState::OccupiedEmpty => std::fs::remove_dir(link).map_err(io(link))?,
         LinkState::Missing => {}
     }
 
-    std::os::unix::fs::symlink(target, link)
-        .map_err(|e| PrefixError::Io { path: link.to_path_buf(), source: e })?;
+    std::os::unix::fs::symlink(target, link).map_err(io(link))?;
     Ok(before)
 }
 
@@ -640,6 +635,11 @@ pub enum PrefixError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> PrefixError + '_ {
+    move |source| PrefixError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {

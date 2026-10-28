@@ -13,7 +13,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use super::{fetch_asset, fetch_pkgbuild, Package, UpgradeError};
+use super::{fetch_asset, fetch_pkgbuild, io, Package, UpgradeError};
 use crate::net::Http;
 
 /// Terminals the common desktops ship, and what each needs before the
@@ -46,14 +46,13 @@ pub async fn prepare(
     work: &Path,
     on_progress: impl FnMut(u64, Option<u64>),
 ) -> Result<(PathBuf, String), UpgradeError> {
-    let io = |source| UpgradeError::Io { path: work.to_path_buf(), source };
     // Whatever the last update left: nothing reads it once its terminal is
     // closed, and Lightforge cannot tell when that was.
     match std::fs::remove_dir_all(work) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(io(e)),
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(io(work)(e)),
         _ => {}
     }
-    std::fs::create_dir_all(work).map_err(io)?;
+    std::fs::create_dir_all(work).map_err(io(work))?;
 
     let command = match package {
         // `makepkg` builds in the folder it is run from and asks for the
@@ -61,7 +60,7 @@ pub async fn prepare(
         Package::Pacman { package } => {
             let pkgbuild = fetch_pkgbuild(http, package, version).await?;
             let path = work.join("PKGBUILD");
-            std::fs::write(&path, pkgbuild).map_err(|source| UpgradeError::Io { path, source })?;
+            std::fs::write(&path, pkgbuild).map_err(io(&path))?;
             "makepkg -si --noconfirm".to_owned()
         }
         Package::Deb => {
@@ -75,8 +74,7 @@ pub async fn prepare(
     };
 
     let script = work.join(SCRIPT);
-    std::fs::write(&script, script_text(work, version, &command))
-        .map_err(|source| UpgradeError::Io { path: script.clone(), source })?;
+    std::fs::write(&script, script_text(work, version, &command)).map_err(io(&script))?;
     Ok((script, command))
 }
 
@@ -93,8 +91,7 @@ pub fn open(script: &Path) -> Result<(), UpgradeError> {
         .args(&argv[1..])
         .current_dir(script.parent().unwrap_or(Path::new("/")))
         .stdin(std::process::Stdio::null())
-        .spawn()
-        .map_err(|source| UpgradeError::Io { path: PathBuf::from(&argv[0]), source })?;
+        .spawn().map_err(io(&PathBuf::from(&argv[0])))?;
     // Reaped on the side, so a terminal that stays in the foreground does
     // not linger as a zombie once it closes.
     std::thread::spawn(move || child.wait());

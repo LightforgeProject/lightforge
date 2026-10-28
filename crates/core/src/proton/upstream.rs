@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::{ProtonError, ProtonFlavor, ProtonRelease, ProtonSource, UpdateNotice};
+use super::{io, ProtonError, ProtonFlavor, ProtonRelease, ProtonSource, UpdateNotice};
 
 /// A line of Proton builds Lightforge can download.
 ///
@@ -196,10 +196,7 @@ pub fn remove_build(
         });
     }
 
-    std::fs::remove_dir_all(&build.path).map_err(|source| ProtonError::Io {
-        path: build.path.clone(),
-        source,
-    })
+    std::fs::remove_dir_all(&build.path).map_err(io(&build.path))
 }
 
 /// How much disk a build occupies, following no symlinks.
@@ -284,10 +281,6 @@ pub async fn install_release(
 /// failed unpack used to leave a half-extracted GE-Proton folder that
 /// discovery listed and a launch then failed on; now it leaves nothing.
 pub(super) fn unpack(archive: &Path, dest_root: &Path) -> Result<PathBuf, ProtonError> {
-    let io = |path: &Path| {
-        let path = path.to_path_buf();
-        move |source| ProtonError::Io { path, source }
-    };
     let file = std::fs::File::open(archive).map_err(io(archive))?;
     std::fs::create_dir_all(dest_root).map_err(io(dest_root))?;
 
@@ -320,8 +313,7 @@ pub(super) fn unpack(archive: &Path, dest_root: &Path) -> Result<PathBuf, Proton
     // A release is one directory named for it. Anything else is not a
     // GE-Proton tarball, and guessing which part is the build is how a stray
     // folder would end up beside the real ones.
-    let mut tops = std::fs::read_dir(&fresh)
-        .map_err(io(&fresh))?
+    let mut tops = std::fs::read_dir(&fresh).map_err(io(&fresh))?
         .filter_map(Result::ok)
         .map(|e| e.path());
     let (Some(built), None) = (tops.next(), tops.next()) else {

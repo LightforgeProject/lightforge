@@ -270,3 +270,7 @@ pub enum ProtonError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> ProtonError + '_ {
+    move |source| ProtonError::Io { path: path.to_path_buf(), source }
+}

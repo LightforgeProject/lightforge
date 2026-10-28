@@ -78,8 +78,7 @@ impl StoreLock {
     /// A filesystem without `flock` (some NFS and SMB mounts) gets a warning
     /// and no lock rather than a store that cannot be written at all.
     pub fn acquire(data_dir: &Path) -> Result<Self, WriteError> {
-        let dir = File::open(data_dir)
-            .map_err(|source| WriteError::Io { path: data_dir.to_path_buf(), source })?;
+        let dir = File::open(data_dir).map_err(io(data_dir))?;
         match dir.try_lock() {
             Ok(()) => Ok(Self { held: Some(dir) }),
             Err(std::fs::TryLockError::WouldBlock) => Err(WriteError::StoreBusy(data_dir.to_path_buf())),
@@ -126,8 +125,7 @@ impl StoreWriter {
     /// answer for the whole store, so a resume skips what it has.
     pub fn create(data_dir: impl Into<PathBuf>) -> Result<Self, WriteError> {
         let data_dir = data_dir.into();
-        std::fs::create_dir_all(&data_dir)
-            .map_err(|source| WriteError::Io { path: data_dir.clone(), source })?;
+        std::fs::create_dir_all(&data_dir).map_err(io(&data_dir))?;
         let lock = StoreLock::acquire(&data_dir)?;
         Self::create_locked(data_dir, lock)
     }
@@ -236,8 +234,7 @@ impl StoreWriter {
         let path = || self.data_dir.join(archive_name(self.archive_id));
         archive
             .write_all(&header)
-            .and_then(|()| archive.write_all(blte))
-            .map_err(|source| WriteError::Io { path: path(), source })?;
+            .and_then(|()| archive.write_all(blte)).map_err(io(&path()))?;
 
         self.offset += total;
         self.files += 1;
@@ -282,8 +279,7 @@ impl StoreWriter {
         let path = || self.data_dir.join(archive_name(self.archive_id));
         archive
             .write_all(&header)
-            .and_then(|()| archive.write_all(&raw[CASC_ENTRY_HEADER..]))
-            .map_err(|source| WriteError::Io { path: path(), source })?;
+            .and_then(|()| archive.write_all(&raw[CASC_ENTRY_HEADER..])).map_err(io(&path()))?;
 
         self.offset += total;
         self.files += 1;
@@ -325,8 +321,7 @@ impl StoreWriter {
             let path = self.data_dir.join(archive_name(self.archive_id));
             archive
                 .flush()
-                .and_then(|()| archive.get_ref().sync_all())
-                .map_err(|source| WriteError::Io { path, source })?;
+                .and_then(|()| archive.get_ref().sync_all()).map_err(io(&path))?;
         }
         self.write_indices()
     }
@@ -338,7 +333,7 @@ impl StoreWriter {
             archive
                 .flush()
                 .and_then(|()| archive.into_inner().map_err(std::io::Error::from)?.sync_all())
-                .map_err(|source| WriteError::Io { path, source })?;
+                .map_err(io(&path))?;
         }
 
         let written = self.write_indices()?;
@@ -389,7 +384,7 @@ impl StoreWriter {
             let path = self.data_dir.join(archive_name(self.archive_id));
             open.flush()
                 .and_then(|()| open.into_inner().map_err(std::io::Error::from)?.sync_all())
-                .map_err(|source| WriteError::Io { path, source })?;
+                .map_err(io(&path))?;
         }
         self.archive_id = match (self.fill_gaps, had_open) {
             (true, _) => lowest_free_archive_id(&self.data_dir)?,
@@ -401,7 +396,7 @@ impl StoreWriter {
         }
 
         let path = self.data_dir.join(archive_name(self.archive_id));
-        let file = File::create(&path).map_err(|source| WriteError::Io { path: path.clone(), source })?;
+        let file = File::create(&path).map_err(io(&path))?;
         let mut archive = BufWriter::new(file);
 
         // The reserved head: sixteen 30-byte slots, one per bucket, which each
@@ -409,8 +404,7 @@ impl StoreWriter {
         // an archive without them indexes its first real file at offset 0,
         // where Agent expects a marker.
         archive
-            .write_all(&vec![0u8; idx::ARCHIVE_RESERVED])
-            .map_err(|source| WriteError::Io { path, source })?;
+            .write_all(&vec![0u8; idx::ARCHIVE_RESERVED]).map_err(io(&path))?;
 
         for bucket in 0..BUCKETS {
             let marker = Entry::archive_marker(self.archive_id, bucket);
@@ -532,6 +526,11 @@ pub enum WriteError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> WriteError + '_ {
+    move |source| WriteError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {

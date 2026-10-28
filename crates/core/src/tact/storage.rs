@@ -166,14 +166,14 @@ impl Storage {
             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
             std::collections::hash_map::Entry::Vacant(e) => {
                 let path = data_dir.join(archive_name(entry.archive_id));
-                let handle = File::open(&path).map_err(|source| StorageError::Io { path, source })?;
+                let handle = File::open(&path).map_err(io(&path))?;
                 e.insert(handle)
             }
         };
 
         let path = || data_dir.join(archive_name(entry.archive_id));
         // A corrupt .idx can claim up to 4 GiB; check before allocating it.
-        let len = file.metadata().map_err(|source| StorageError::Io { path: path(), source })?.len();
+        let len = file.metadata().map_err(io(&path()))?.len();
         if u64::from(entry.offset) + u64::from(entry.size) > len {
             return Err(StorageError::OutOfBounds {
                 archive_id: entry.archive_id,
@@ -182,11 +182,9 @@ impl Storage {
                 len,
             });
         }
-        file.seek(SeekFrom::Start(u64::from(entry.offset)))
-            .map_err(|source| StorageError::Io { path: path(), source })?;
+        file.seek(SeekFrom::Start(u64::from(entry.offset))).map_err(io(&path()))?;
         let mut raw = vec![0u8; entry.size as usize];
-        file.read_exact(&mut raw)
-            .map_err(|source| StorageError::Io { path: path(), source })?;
+        file.read_exact(&mut raw).map_err(io(&path()))?;
         Ok(raw)
     }
 
@@ -309,6 +307,11 @@ pub enum StorageError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> StorageError + '_ {
+    move |source| StorageError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {

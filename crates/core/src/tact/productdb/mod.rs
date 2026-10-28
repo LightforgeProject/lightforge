@@ -52,7 +52,7 @@ pub use write::{
     Record,
 };
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 // The tests check the bytes with the wire helpers.
 #[cfg(test)]
 use wire::*;
@@ -97,4 +97,8 @@ pub enum ProductDbError {
         #[source]
         source: std::io::Error,
     },
+}
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> ProductDbError + '_ {
+    move |source| ProductDbError::Io { path: path.to_path_buf(), source }
 }

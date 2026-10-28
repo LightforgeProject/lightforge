@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use super::{
-    Asset, AssetError, AssetRef, Branding, Manifest, Origin, Slot, Store, MANIFEST_FILE,
+    io, Asset, AssetError, AssetRef, Branding, Manifest, Origin, Slot, Store, MANIFEST_FILE,
 };
 use crate::net::Http;
 use crate::product::ProductCode;
@@ -260,10 +260,7 @@ pub(super) fn verify(bytes: &[u8], asset: &AssetRef, slot: Slot, url: &str) -> R
 }
 
 pub(super) fn read(path: &Path) -> Result<Vec<u8>, AssetError> {
-    std::fs::read(path).map_err(|source| AssetError::Io {
-        path: path.to_path_buf(),
-        source,
-    })
+    std::fs::read(path).map_err(io(path))
 }
 
 /// Resolve `rel` against `base`, the way a browser would for our shapes:

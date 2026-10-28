@@ -535,16 +535,15 @@ pub struct Snapshot(BTreeMap<String, (u64, SystemTime)>);
 
 impl Snapshot {
     pub fn take(data_dir: &Path) -> Result<Self, VerifyError> {
-        let io = |source| VerifyError::Io { path: data_dir.to_path_buf(), source };
         let mut files = BTreeMap::new();
-        for entry in std::fs::read_dir(data_dir).map_err(io)? {
-            let entry = entry.map_err(io)?;
+        for entry in std::fs::read_dir(data_dir).map_err(io(data_dir))? {
+            let entry = entry.map_err(io(data_dir))?;
             let name = entry.file_name().to_string_lossy().into_owned();
             if !name.starts_with("data.") && super::idx::parse_file_name(&name).is_none() {
                 continue;
             }
-            let meta = entry.metadata().map_err(io)?;
-            files.insert(name, (meta.len(), meta.modified().map_err(io)?));
+            let meta = entry.metadata().map_err(io(data_dir))?;
+            files.insert(name, (meta.len(), meta.modified().map_err(io(data_dir))?));
         }
         Ok(Self(files))
     }
@@ -638,6 +637,11 @@ pub enum VerifyError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> VerifyError + '_ {
+    move |source| VerifyError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {

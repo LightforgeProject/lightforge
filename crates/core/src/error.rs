@@ -48,19 +48,6 @@ pub enum CoreError {
     },
 }
 
-impl CoreError {
-    /// Attach the offending path to an [`std::io::Error`].
-    ///
-    /// Bare io errors say *what* failed but never *which file*, which is the
-    /// half that actually helps a user debugging a broken prefix.
-    pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
-        Self::Io {
-            path: path.into(),
-            source,
-        }
-    }
-}
-
 /// Render an error together with everything that caused it, as one line.
 ///
 /// `thiserror`'s `Display` prints the variant's own message and nothing else,
@@ -95,10 +82,10 @@ mod tests {
 
     #[test]
     fn a_cause_is_appended_once_however_deep_it_sits() {
-        let error = CoreError::io(
-            "/games/World of Warcraft",
-            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
-        );
+        let error = CoreError::Io {
+            path: "/games/World of Warcraft".into(),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        };
         assert_eq!(
             chain(&error),
             "i/o error at /games/World of Warcraft: permission denied"

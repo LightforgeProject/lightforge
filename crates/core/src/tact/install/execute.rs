@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use super::prepare::{prepare, Prepared};
-use super::{Event, InstallError, Options, Summary};
+use super::{io, Event, InstallError, Options, Summary};
 use crate::buildinfo::BuildInfo;
 use crate::net::Http;
 use crate::product::ProductCode;
@@ -85,8 +85,7 @@ pub async fn execute(
         // scanning the install then sees a flavor it cannot account for.
         if install_complete {
             let flavor_dir = dest.join(&options.flavor);
-            download::write_flavor_info(&flavor_dir, code)
-                .map_err(|source| InstallError::Io { path: flavor_dir, source })?;
+            download::write_flavor_info(&flavor_dir, code).map_err(io(&flavor_dir))?;
         }
     }
 
