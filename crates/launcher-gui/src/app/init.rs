@@ -193,7 +193,6 @@ impl Lightforge {
             game_settings: None,
             addon_detail: None,
             families: lightforge_core::families::Families::default(),
-            import_pinned: false,
             addon_auto_done: Vec::new(),
             addon_auto_running: false,
             addon_auto_note: None,

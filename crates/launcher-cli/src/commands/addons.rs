@@ -255,7 +255,7 @@ pub(crate) async fn addon_install(ctx: Ctx, id: String, provider: String, code: 
     Ok(())
 }
 
-pub(crate) async fn addon_import(ctx: Ctx, token: String, code: ProductCode, catalog: Option<String>, pinned: bool, dry_run: bool) -> Result<()> {
+pub(crate) async fn addon_import(ctx: Ctx, token: String, code: ProductCode, catalog: Option<String>, dry_run: bool) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::addons::{self, catalog::Catalog, manage};
     use lightforge_core::net::Http;
@@ -286,7 +286,7 @@ pub(crate) async fn addon_import(ctx: Ctx, token: String, code: ProductCode, cat
         flavor: addons::flavor_of(&code).to_owned(),
         addons_dir: layout.addons_dir(&code),
         ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code),
-        pinned,
+        pinned: false,
         reinstall: false,
         channel: addon_channel(&dirs),
         backup: Some(settings_backup(&layout, &dirs, &code)),

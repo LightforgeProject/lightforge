@@ -338,18 +338,18 @@ fn a_pinned_addon_is_asked_about_by_nothing() {
 
 #[test]
 fn a_pin_describes_a_file_and_is_dropped_once_it_no_longer_does() {
-    let resolve = |asked: Option<&str>, import: bool, held: Option<&str>, got: &str| {
+    let resolve = |asked: Option<&str>, holding: bool, held: Option<&str>, got: &str| {
         pin_after_install(
             asked.map(str::to_owned),
-            import,
+            holding,
             held.map(str::to_owned),
             Some(got),
         )
     };
 
-    // Importing someone's exact setup records the pin they asked for.
+    // A version picked from the list is held there.
     assert_eq!(resolve(Some("100"), true, None, "100").as_deref(), Some("100"));
-    // The same token imported as a list of addons pins nothing.
+    // A file named by anything else, an import token's say, pins nothing.
     assert_eq!(resolve(Some("100"), false, None, "100"), None);
     // An ordinary reinstall at the pinned file keeps the pin.
     assert_eq!(resolve(None, false, Some("100"), "100").as_deref(), Some("100"));

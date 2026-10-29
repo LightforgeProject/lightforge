@@ -33,14 +33,6 @@ impl Lightforge {
                 ]
                 .spacing(theme::SM)
                 .align_y(Alignment::Center),
-                // Taking the token's files pins them; leaving them tracks each addon.
-                clickable(
-                    "import pinned",
-                    tick(self.import_pinned)
-                        .label("Install the exact versions this token names, and pin them")
-                        .on_toggle(Message::ImportPinned)
-                        .text_size(theme::tap_text(theme::BODY)),
-                ),
             ]
             .spacing(theme::SM),
         )

@@ -465,8 +465,6 @@ pub(crate) enum Message {
     AddonDetailTab(DetailTab),
     /// Close the detail view.
     CloseAddonDetail,
-    /// Whether the next import pins to the versions the token names.
-    ImportPinned(bool),
     /// Put Battle.net on this game's tile, so its Install button is reachable.
     InstallViaBattleNet,
     /// The client's catalogue has been read.

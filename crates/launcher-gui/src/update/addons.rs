@@ -124,11 +124,6 @@ impl Lightforge {
     /// Taking in hand-installed addons, and importing or exporting a list.
     fn update_addon_sharing(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
-            Message::ImportPinned(on) => {
-                self.import_pinned = on;
-                Task::none()
-            }
-
             Message::AdoptAddons => {
                 if self.addons_locked() {
                     return Ok(Task::none());
@@ -197,7 +192,6 @@ impl Lightforge {
                         self.selected.code.clone(),
                         token,
                         self.config.addon_channel,
-                        self.import_pinned,
                         tx,
                     ),
                     |result| Message::AddonsFinished(result.map(Box::new)),

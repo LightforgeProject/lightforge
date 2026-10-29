@@ -475,9 +475,6 @@ pub async fn import(
     code: ProductCode,
     token: String,
     channel: Channel,
-    // Install the exact files the token names and hold them there, rather
-    // than taking the newest of each.
-    pinned: bool,
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Report, Problem> {
     let collection = Collection::parse(&token).map_err(|e| Problem::of(&e))?;
@@ -485,7 +482,9 @@ pub async fn import(
     if requests.is_empty() {
         return Err("that token names no addons Lightforge can install".into());
     }
-    run(http, layout, code, requests, Mode { pinned, ..Mode::default() }, channel, tx).await
+    // The newest of each on its channel, never the token's own files: an
+    // import pinned to them never updated, with nothing on screen saying why.
+    run(http, layout, code, requests, Mode::default(), channel, tx).await
 }
 
 /// Update everything the ledger tracks.

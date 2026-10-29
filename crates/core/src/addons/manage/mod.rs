@@ -35,8 +35,8 @@ pub struct Options {
     pub addons_dir: PathBuf,
     /// Where this product's ledger lives.
     pub ledger_path: PathBuf,
-    /// Honour the `version_id` an import token pins, instead of taking the
-    /// newest file. Reproduces someone's exact setup instead of tracking them.
+    /// Install the file each request names and hold the addon there, instead
+    /// of the newest: a version the user picked. Never for an import.
     pub pinned: bool,
     /// Install even when the ledger says the addon is already on this file:
     /// the ledger cannot tell whether its folders are intact. "Re-install".

@@ -533,7 +533,6 @@ Options:
       --product <PRODUCT>  [default: wow]
       --root <ROOT>        Override the Blizzard root (default: ~/Games/Blizzard)
       --catalog <CATALOG>  Catalog base URL, or a fixture directory. Defaults to config
-      --pinned             Install the exact files the export pinned, rather than the newest
       --dry-run            Resolve and report without writing anything
   -h, --help               Print help
 ```

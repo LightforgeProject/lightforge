@@ -461,8 +461,6 @@ struct Lightforge {
     /// The addon whose per-addon menu is showing. One at a time: the panel is
     /// an overlay, and two of them would draw over each other.
     addon_menu_open: Option<(String, String)>,
-    /// Whether the next import reproduces the token's exact versions.
-    import_pinned: bool,
     /// The version picker, when it is open: which addon, and the builds the
     /// catalogue offers. `None` in the list means the fetch is still out.
     version_picker: Option<VersionPicker>,

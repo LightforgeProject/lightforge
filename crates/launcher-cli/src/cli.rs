@@ -343,9 +343,6 @@ pub(crate) enum Command {
         /// Catalog base URL, or a fixture directory. Defaults to config.
         #[arg(long)]
         catalog: Option<String>,
-        /// Install the exact files the export pinned, rather than the newest.
-        #[arg(long)]
-        pinned: bool,
         /// Resolve and report without writing anything.
         #[arg(long)]
         dry_run: bool,

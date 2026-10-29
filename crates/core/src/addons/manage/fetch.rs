@@ -21,7 +21,7 @@ pub async fn install_all(
     let mut written: Vec<(Record, Option<String>)> = Vec::new();
     let mut report = Report::default();
 
-    // Pins only when reproducing an export; otherwise the newest on the channel.
+    // A named file only for a picked version; otherwise the newest on the channel.
     let requests: Vec<Request> = requests
         .iter()
         .map(|r| Request {
@@ -133,7 +133,7 @@ pub async fn install_all(
 
 /// Write what a pass installed into the ledger as it is now. The user's
 /// choices (channel, ignore, auto-update, pin) come from the current row.
-pub(super) fn save_merged(path: &std::path::Path, written: Vec<(Record, Option<String>)>, importing: bool) -> Result<(), ManageError> {
+pub(super) fn save_merged(path: &std::path::Path, written: Vec<(Record, Option<String>)>, holding: bool) -> Result<(), ManageError> {
     let mut ledger = Ledger::load(path)?;
     for (mut record, asked) in written {
         if let Some(current) = ledger.find(&record.provider, &record.id) {
@@ -141,7 +141,7 @@ pub(super) fn save_merged(path: &std::path::Path, written: Vec<(Record, Option<S
             record.ignored = current.ignored;
             record.auto_update = current.auto_update;
             record.pinned =
-                pin_after_install(asked, importing, current.pinned.clone(), record.file_id.as_deref());
+                pin_after_install(asked, holding, current.pinned.clone(), record.file_id.as_deref());
         }
         ledger.record(record);
     }
@@ -256,16 +256,16 @@ async fn fetch_and_install(
 
 /// What an addon is pinned to once a file has been installed over it.
 ///
-/// `asked` pins only when `importing`; otherwise the old pin carries over.
-/// Either way only while it names the file now on disk.
+/// `asked` pins only when `holding` (a picked version); otherwise the old pin
+/// carries over. Either way only while it names the file now on disk.
 pub(super) fn pin_after_install(
     asked: Option<String>,
-    importing: bool,
+    holding: bool,
     held: Option<String>,
     installed: Option<&str>,
 ) -> Option<String> {
     asked
-        .filter(|_| importing)
+        .filter(|_| holding)
         .or(held)
         .filter(|pin| Some(pin.as_str()) == installed)
 }

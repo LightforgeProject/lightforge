@@ -143,7 +143,7 @@ async fn run() -> Result<()> {
         Command::Addons { product, path, token } => commands::addons::addons(ctx, product, path, token),
         Command::AddonSearch { query, product, limit, catalog } => commands::addons::addon_search(query, product, limit, catalog).await,
         Command::AddonInstall { id, provider, product, catalog } => commands::addons::addon_install(ctx, id, provider, product, catalog).await,
-        Command::AddonImport { token, product, catalog, pinned, dry_run } => commands::addons::addon_import(ctx, token, product, catalog, pinned, dry_run).await,
+        Command::AddonImport { token, product, catalog, dry_run } => commands::addons::addon_import(ctx, token, product, catalog, dry_run).await,
         Command::AddonUpdate { product, catalog } => commands::addons::addon_update(ctx, product, catalog).await,
         Command::BackupList { product } => commands::addons::backup_list(ctx, product),
         Command::BackupCreate { product } => commands::addons::backup_create(ctx, product),
