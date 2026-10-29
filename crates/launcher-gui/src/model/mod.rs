@@ -248,6 +248,15 @@ pub(crate) enum Launch {
     Install,
 }
 
+/// A game of ours that is up, from the moment it is seen until it exits.
+#[derive(Debug, Clone)]
+pub(crate) struct Session {
+    pub(crate) code: ProductCode,
+    pub(crate) game: lightforge_core::preflight::GameProcess,
+    /// STOP was confirmed and the game has been told to go.
+    pub(crate) stopping: bool,
+}
+
 /// A tile held down in the band.
 ///
 /// `origin` comes from the first movement (a press has no position).

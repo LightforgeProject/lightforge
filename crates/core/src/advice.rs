@@ -106,7 +106,7 @@ fn recognise(error: &(dyn Error + 'static)) -> Option<Advice> {
     if let Some(e) = error.downcast_ref::<crate::preflight::PreflightError>() {
         use crate::preflight::PreflightError as P;
         return match e {
-            P::GameRunning(_) => Some(running()),
+            P::GameRunning(_) | P::OtherBuild(_) => Some(running()),
             P::StillRunning(_) => Some(Advice::say(
                 "A Wine process would not stop. Log out and back in, or restart the computer, \
                  then try again.",

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use super::games::{client_running, games_running};
-use super::scan::PrefixProcess;
+use super::scan::{scan, PrefixProcess, ProcKind};
 use super::shutdown::{remove_dir, shutdown_timed, Disposition, Outcome};
 use super::{PreflightError, DEFAULT_GRACE};
 use crate::battlenet;
@@ -87,8 +87,19 @@ impl Preflight {
     ) -> Result<Report, PreflightError> {
         let mut timings = Vec::new();
 
-        if self.keep_client && client_running(layout) {
-            return self.run_beside_client(layout, code, downloads, timings);
+        // A game already up keeps the prefix as it is: this launch goes beside
+        // it, as Battle.net starts a second game, or not at all.
+        let games = games_running(layout);
+        if !games.is_empty() {
+            if !served_by(runner, layout) {
+                return Err(PreflightError::OtherBuild(games));
+            }
+            return self.run_beside(code, downloads, timings);
+        }
+        // A client under another build is closed instead: it would share a
+        // wineserver with this launch.
+        if self.keep_client && client_running(layout) && served_by(runner, layout) {
+            return self.run_beside(code, downloads, timings);
         }
         let processes = shutdown_timed(runner, layout, self.grace, &mut timings)?;
         let mut at = Instant::now();
@@ -141,20 +152,15 @@ impl Preflight {
         })
     }
 
-    /// The pass when the client stays up: a game already running is still a
-    /// refusal, and the download is still paused.
-    pub(super) fn run_beside_client(
+    /// The pass when the prefix stays up, for a running client or game: the
+    /// download is still paused, and nothing else is touched.
+    pub(super) fn run_beside(
         &self,
-        layout: &Layout,
         code: Option<&ProductCode>,
         downloads: &mut dyn DownloadGuard,
         mut timings: Vec<Timing>,
     ) -> Result<Report, PreflightError> {
         let at = Instant::now();
-        let games = games_running(layout);
-        if !games.is_empty() {
-            return Err(PreflightError::GameRunning(games));
-        }
         let download_paused = match code {
             Some(code) => downloads.pause(code)?,
             None => false,
@@ -169,6 +175,18 @@ impl Preflight {
             download_paused,
         })
     }
+}
+
+/// Whether the prefix's live `wineserver`, if any, is this runner's. Two Wine
+/// builds cannot share one server. One whose binary cannot be read is let be.
+pub(super) fn served_by(runner: &ProtonRunner, layout: &Layout) -> bool {
+    let ours = runner.dist().join("bin").join("wineserver");
+    let ours = ours.canonicalize().unwrap_or(ours);
+    scan(layout)
+        .into_iter()
+        .filter(|p| p.kind == ProcKind::WineServer)
+        .filter_map(|p| p.exe)
+        .all(|exe| exe == ours)
 }
 
 /// Everything a pre-flight pass did, for the CLI and the UI's status line.

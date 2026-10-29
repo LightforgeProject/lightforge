@@ -360,7 +360,7 @@ impl Lightforge {
                 // own addon work is: both write the same directory.
                 if self.addon_auto_running
                     || self.addons_busy
-                    || self.launching.is_some()
+                    || self.in_play()
                     || self.addon_auto_done.contains(&self.selected.code)
                 {
                     return Ok(Task::none());

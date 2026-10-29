@@ -53,32 +53,30 @@ impl Lightforge {
                 }
             }
 
-            Message::GameWatch => {
-                if !(self.busy && self.launching.is_some()) {
-                    return Ok(Task::none());
-                }
-                Task::perform(tasks::game_running(self.layout.clone()), Message::GameSeen)
-            }
+            Message::GameStarted(result) => match result {
+                Ok(tasks::Started::Up { game, generation }) => self.game_up(game, Some(generation)),
+                Ok(tasks::Started::Over(note)) => self.update(Message::Launched(Ok(note))),
+                Err(e) => self.update(Message::Launched(Err(e))),
+            },
 
-            Message::GameSeen(up) => {
-                // A scan that was out when the session ended must not bring
-                // the button back.
-                self.game_up = up && self.busy && self.launching.is_some();
-                Task::none()
+            Message::GameExited(code, result) => {
+                self.playing.retain(|s| s.code != code);
+                if self.stop_dialog.as_ref().is_some_and(|d| d.code == code) {
+                    self.stop_dialog = None;
+                }
+                match result {
+                    Ok(note) => self.status = note,
+                    Err(e) => self.error = Some(e),
+                }
+                self.after_play(code)
             }
 
             Message::AskStopGame => {
-                if !self.game_up || self.stopping {
+                let code = self.selected.code.clone();
+                if !self.session(&code).is_some_and(|s| !s.stopping) {
                     return Ok(Task::none());
                 }
-                let code = self.launching.clone().unwrap_or_else(|| self.selected.code.clone());
-                let label = self
-                    .choices
-                    .iter()
-                    .find(|c| c.code == code)
-                    .map(|c| c.label.clone())
-                    .unwrap_or_else(|| code.as_str().to_owned());
-                self.stop_dialog = Some(StopDialog { label });
+                self.stop_dialog = Some(StopDialog { label: self.label_of(&code), code });
                 Task::none()
             }
 
@@ -88,67 +86,44 @@ impl Lightforge {
             }
 
             Message::StopGameConfirm => {
-                self.stop_dialog = None;
-                if !self.game_up || self.stopping {
+                let Some(dialog) = self.stop_dialog.take() else {
                     return Ok(Task::none());
-                }
-                self.stopping = true;
+                };
+                let Some(session) = self.playing.iter_mut().find(|s| s.code == dialog.code && !s.stopping) else {
+                    return Ok(Task::none());
+                };
+                session.stopping = true;
+                let game = session.game.clone();
                 self.status = "stopping the game…".to_owned();
-                Task::perform(tasks::stop_game(self.layout.clone()), Message::GameStopped)
+                let code = dialog.code;
+                Task::perform(tasks::stop_game(self.layout.clone(), game), move |result| {
+                    Message::GameStopped(code.clone(), result)
+                })
             }
 
-            Message::GameStopped(result) => {
-                // The watcher's `Launched` hands PLAY back; this only reports.
-                self.stopping = false;
-                self.game_up = false;
+            Message::GameStopped(code, result) => {
+                // The exit watcher's `GameExited` hands PLAY back; this only reports.
                 match result {
                     Ok(note) => self.status = note,
-                    Err(e) => self.error = Some(e),
+                    Err(e) => {
+                        // Still up: STOP is offered again.
+                        if let Some(session) = self.playing.iter_mut().find(|s| s.code == code) {
+                            session.stopping = false;
+                        }
+                        self.error = Some(e);
+                    }
                 }
                 Task::none()
             }
 
             Message::Launched(result) => {
-                self.game_up = false;
-                self.stopping = false;
-                self.stop_dialog = None;
                 self.busy = false;
                 let launched = self.launching.take().unwrap_or_else(|| self.selected.code.clone());
                 match result {
                     Ok(note) => self.status = note,
                     Err(e) => self.error = Some(e),
                 }
-                // Transfers a launch paused are owed a restart.
-                for code in std::mem::take(&mut self.resume_after_play) {
-                    if let Some(at) = self.queue.iter().position(|d| d.code == code) {
-                        self.queue[at].stage = Stage::Queued;
-                        self.queue[at].sample.stage = "queued".to_owned();
-                    }
-                }
-                let owed = self.downloads.pending().contains(&launched);
-                if owed {
-                    if let Some(at) = self.queue.iter().position(|d| d.code == launched) {
-                        self.queue[at].stage = Stage::Queued;
-                    }
-                }
-                // The session may have filled the catalogue cache; 25 ms to re-read.
-                Task::batch([
-                    self.pump(),
-                    self.reload(self.selected.code.clone()),
-                    Task::perform(
-                        tasks::game_families(
-                            self.layout.clone(),
-                            self.config.prefix_user.clone(),
-                            self.config.region,
-                        ),
-                        |families| Message::FamiliesRead(Box::new(families)),
-                    ),
-                    // And what it installed: only Agent's registry knows.
-                    Task::perform(
-                        tasks::installed_versions(self.layout.clone()),
-                        Message::InstalledVersions,
-                    ),
-                ])
+                self.after_play(launched)
             }
             other => return Err(other),
         })
@@ -159,21 +134,12 @@ impl Lightforge {
         Ok(match message {
             Message::HandoffStarted(result) => {
                 match result {
-                    // `busy` and the paused queue last the session, as on PLAY.
+                    // The paused queue lasts the session, as on PLAY.
                     Ok(tasks::Handoff::Playing(game)) => {
-                        self.status = format!(
-                            "{} is running — this unlocks when it exits",
-                            game.name,
-                        );
-                        // Not when the hand-off started: the client's window
-                        // and its sign-in are things the user is meant to see.
-                        Task::batch([
-                            Task::perform(
-                                tasks::await_game_exit(self.layout.clone(), game),
-                                Message::Launched,
-                            ),
-                            self.minimize_if_asked(),
-                        ])
+                        // Minimized only now, not when the hand-off started: the
+                        // client's window and its sign-in are meant to be seen.
+                        // The client stays up, so the prefix is not settled after.
+                        Task::batch([self.game_up(game, None), self.minimize_if_asked()])
                     }
                     // Closed while signing in: nothing to hand off to.
                     Ok(tasks::Handoff::ClientClosed) => self.update(Message::Launched(Ok(

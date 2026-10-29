@@ -85,12 +85,21 @@ pub(crate) fn back_up_before_launch(layout: &Layout, code: &ProductCode) {
     }
 }
 
-/// Run the game, returning when *the game* has exited.
+/// What came of a direct launch.
+#[derive(Debug, Clone)]
+pub enum Started {
+    /// The game is up; [`await_game_exit`] watches the rest of its session.
+    /// `generation` is this launch's count in [`LAUNCHES`].
+    Up { game: GameProcess, generation: u64 },
+    /// It ended before it was ever seen, with this to say.
+    Over(String),
+}
+
+/// Start the game, returning once *the game* is in the process table.
 ///
-/// Not when the prefix is quiet: Proton's `steam.exe` waits for every process
-/// in it, which held PLAY for tens of seconds. The exe is watched by name; if
-/// none appears, the child's exit status is reported.
-pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Problem> {
+/// The exe is watched by name: the game is not reliably a descendant of the
+/// Proton child. If it never appears, the child's exit status is reported.
+pub async fn start_game(layout: Layout, code: ProductCode) -> Result<Started, Problem> {
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         // The native path, not the `C:` symlink, so Wine puts the game on its
         // own drive ([`Layout::wow_drive`]) and the shop's browser keeps its
@@ -125,25 +134,18 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Probl
 
         let watch = exe.file_name().map(|n| n.to_string_lossy().into_owned());
         let Some(watch) = watch else {
-            return reap(child);
+            return reap(child).map(Started::Over);
         };
 
         match watch_for(&layout, &before, &watch, &mut child)? {
             Watched::Running(pid) => {
                 crate::trace::mark(format!("launch: {watch} is up (pid {pid})"));
                 tracing::info!("{watch} is up (pid {pid}) after {:.1}s", session.elapsed().as_secs_f64());
-                watch_until_gone(&layout, pid, &mut child);
-                crate::trace::mark(format!("launch: {watch} has exited"));
-                tracing::info!("{watch} exited after {:.0}s", session.elapsed().as_secs_f64());
-                // Reaped on its own thread. `steam.exe` outlived the game by
-                // nine seconds on a measured session.
-                let (quiet_layout, quiet_runner) = (layout.clone(), runner);
-                std::thread::spawn(move || {
-                    settle(&quiet_layout, &quiet_runner, generation);
-                    let _ = child.wait();
-                    crate::trace::mark("launch: the prefix is quiet");
-                });
-                Ok("game closed".to_owned())
+                // Not waited on for the session: Proton's `steam.exe` waits
+                // for every process in the prefix, which held PLAY for tens
+                // of seconds, and outlived the game by nine on a measured one.
+                reap_later(child);
+                Ok(Started::Up { game: GameProcess { pid, name: watch }, generation })
             }
             // Either the game was never recognisable or it went down with the
             // tree. Both make the child's own status the honest answer.
@@ -152,11 +154,11 @@ pub async fn run_game(layout: Layout, code: ProductCode) -> Result<String, Probl
                     "Proton exited ({status}) after {:.1}s before {watch} was seen",
                     session.elapsed().as_secs_f64()
                 );
-                Ok(format!("game exited ({status})"))
+                Ok(Started::Over(format!("game exited ({status})")))
             }
             Watched::NeverAppeared => {
                 tracing::warn!("{watch} never appeared within {GAME_APPEAR_WITHIN:?}; waiting on Proton");
-                reap(child)
+                reap(child).map(Started::Over)
             }
         }
     })
@@ -199,18 +201,6 @@ pub(crate) fn watch_for(
             None if Instant::now() >= deadline => return Ok(Watched::NeverAppeared),
             None => std::thread::sleep(WATCH_POLL),
         }
-    }
-}
-
-/// Block until `pid` is gone from the prefix, or the whole tree is.
-///
-/// By pid; a client that re-execs counts as closed.
-pub(crate) fn watch_until_gone(layout: &Layout, pid: u32, child: &mut std::process::Child) {
-    while lightforge_core::preflight::games_running(layout).iter().any(|p| p.pid == pid) {
-        if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
-            return;
-        }
-        std::thread::sleep(EXIT_POLL);
     }
 }
 
@@ -401,39 +391,51 @@ pub(crate) const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::fro
 /// claiming a launch is in progress.
 pub(crate) const HANDOFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
-/// Block until a handed-off game exits.
+/// Block until a game exits, by pid: a title that re-execs itself ends the
+/// session early instead of hanging.
 ///
-/// Split from the launch, so the screen can name the running game.
-pub async fn await_game_exit(layout: Layout, game: GameProcess) -> Result<String, Problem> {
+/// `settle_after` is a direct launch's [`Started::Up`] generation: the prefix is
+/// put to rest after it, unless something else still runs there.
+pub async fn await_game_exit(
+    layout: Layout,
+    code: ProductCode,
+    game: GameProcess,
+    settle_after: Option<u64>,
+) -> Result<String, Problem> {
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
-        lightforge_core::preflight::wait_for_game_exit(&layout, game.pid);
+        while lightforge_core::preflight::games_running(&layout).iter().any(|p| p.pid == game.pid) {
+            std::thread::sleep(EXIT_POLL);
+        }
+        crate::trace::mark(format!("launch: {} has exited", game.name));
+        // Best effort: the next pre-flight does the same work.
+        if let Some(generation) = settle_after {
+            if let Ok(runner) = runner_for(&layout, &code, Runs::Game) {
+                settle(&layout, &runner, generation);
+            }
+        }
         Ok(format!("{} exited", game.name))
     })
     .await
     .map_err(|e| Problem::of(&e))?
 }
 
-/// Whether a game is running in the prefix right now.
-pub async fn game_running(layout: Layout) -> bool {
-    tokio::task::spawn_blocking(move || !lightforge_core::preflight::games_running(&layout).is_empty())
-        .await
-        .unwrap_or(false)
-}
-
 /// How long a game gets to close on `SIGTERM` before it is killed outright.
 const STOP_GRACE: Duration = Duration::from_secs(5);
 
-/// Stop the running game, leaving Battle.net and the rest of the prefix be.
-pub async fn stop_game(layout: Layout) -> Result<String, Problem> {
+/// Stop one running game, leaving Battle.net, other games and the rest of
+/// the prefix be.
+pub async fn stop_game(layout: Layout, game: GameProcess) -> Result<String, Problem> {
     use lightforge_core::preflight::{self, Disposition};
 
-    let stopped = tokio::task::spawn_blocking(move || preflight::stop_games(&layout, STOP_GRACE))
+    let stopped = tokio::task::spawn_blocking(move || preflight::stop_game(&layout, game.pid, STOP_GRACE))
         .await
         .map_err(|e| Problem::of(&e))?;
-    match stopped.iter().find(|s| s.disposition == Disposition::Survived) {
-        Some(stuck) => Err(format!("{} would not stop", stuck.game.name).into()),
-        None if stopped.is_empty() => Ok("no game was running".to_owned()),
-        None => Ok("game stopped".to_owned()),
+    match stopped {
+        Some(stuck) if stuck.disposition == Disposition::Survived => {
+            Err(format!("{} would not stop", stuck.game.name).into())
+        }
+        Some(_) => Ok("game stopped".to_owned()),
+        None => Ok(format!("{} had already exited", game.name)),
     }
 }
 

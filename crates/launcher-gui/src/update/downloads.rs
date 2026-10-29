@@ -67,7 +67,7 @@ impl Lightforge {
             Message::ResumeDownload(code) => {
                 // Its game is running and has the store open: it goes back in
                 // the queue when the game exits, as pre-flight arranged.
-                if self.busy && self.launching.as_ref() == Some(&code) {
+                if self.launching.as_ref() == Some(&code) || self.session(&code).is_some() {
                     if !self.resume_after_play.contains(&code) {
                         self.resume_after_play.push(code);
                     }

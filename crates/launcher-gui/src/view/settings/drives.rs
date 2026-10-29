@@ -227,7 +227,7 @@ impl Lightforge {
                     .iter()
                     .find(|l| l.id == library.id)
                     .is_some_and(|l| self.downloading_into(&self.layout.wow_install_in(l)));
-                let held = self.store_writer().is_some() || self.launching.is_some();
+                let held = self.store_writer().is_some() || self.in_play();
                 let action =
                     secondary("Free up", Message::FreeUnused(library.id.clone())).enabled(!busy && !held);
                 let note = match busy {

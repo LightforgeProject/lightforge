@@ -13,6 +13,77 @@ impl Lightforge {
         }
     }
 
+    /// A product's running game, when it has one.
+    pub(crate) fn session(&self, code: &ProductCode) -> Option<&Session> {
+        self.playing.iter().find(|s| &s.code == code)
+    }
+
+    /// A launch of ours is under way or one of our games is up: the store
+    /// and the prefix are in use.
+    pub(crate) fn in_play(&self) -> bool {
+        self.launching.is_some() || !self.playing.is_empty()
+    }
+
+    /// Nothing that needs the launcher to itself may start.
+    pub(crate) fn locked(&self) -> bool {
+        self.busy || !self.playing.is_empty()
+    }
+
+    /// The launched game is up: its tile turns to STOP, and the launcher is
+    /// free for another game while this one runs.
+    pub(crate) fn game_up(
+        &mut self,
+        game: lightforge_core::preflight::GameProcess,
+        settle_after: Option<u64>,
+    ) -> Task<Message> {
+        let code = self.launching.take().unwrap_or_else(|| self.selected.code.clone());
+        self.busy = false;
+        self.status = format!("{} is running", game.name);
+        self.playing.retain(|s| s.code != code);
+        self.playing.push(Session { code: code.clone(), game: game.clone(), stopping: false });
+        Task::perform(
+            tasks::await_game_exit(self.layout.clone(), code.clone(), game, settle_after),
+            move |result| Message::GameExited(code.clone(), result),
+        )
+    }
+
+    /// What a finished launch or game owes: transfers paused for play go back
+    /// in the queue once nothing of ours runs, and what the session may have
+    /// changed is read again.
+    pub(crate) fn after_play(&mut self, code: ProductCode) -> Task<Message> {
+        if !self.in_play() {
+            for paused in std::mem::take(&mut self.resume_after_play) {
+                if let Some(at) = self.queue.iter().position(|d| d.code == paused) {
+                    self.queue[at].stage = Stage::Queued;
+                    self.queue[at].sample.stage = "queued".to_owned();
+                }
+            }
+        }
+        if self.downloads.pending().contains(&code) {
+            if let Some(at) = self.queue.iter().position(|d| d.code == code) {
+                self.queue[at].stage = Stage::Queued;
+            }
+        }
+        // The session may have filled the catalogue cache; 25 ms to re-read.
+        Task::batch([
+            self.pump(),
+            self.reload(self.selected.code.clone()),
+            Task::perform(
+                tasks::game_families(
+                    self.layout.clone(),
+                    self.config.prefix_user.clone(),
+                    self.config.region,
+                ),
+                |families| Message::FamiliesRead(Box::new(families)),
+            ),
+            // And what it installed: only Agent's registry knows.
+            Task::perform(
+                tasks::installed_versions(self.layout.clone()),
+                Message::InstalledVersions,
+            ),
+        ])
+    }
+
     /// Clear the way for a launch, then let [`Message::PreflightDone`] start it.
     pub(crate) fn preflight(&mut self, what: Launch) -> Task<Message> {
         // An older Proton than the prefix's is allowed, but not silently.
@@ -83,12 +154,11 @@ impl Lightforge {
         // The long wait starts here; say what it is.
         match what {
             Launch::Game => {
-                // See `tasks::run_game`.
-                self.status = "running — Play unlocks when the game closes".to_owned();
+                self.status = "starting the game…".to_owned();
                 Task::batch([
                     Task::perform(
-                        tasks::run_game(self.layout.clone(), code.clone()),
-                        Message::Launched,
+                        tasks::start_game(self.layout.clone(), code.clone()),
+                        Message::GameStarted,
                     ),
                     self.minimize_if_asked(),
                 ])
@@ -375,11 +445,11 @@ impl Lightforge {
         let installed = self.local.version.is_some();
         let store_free = self.store_writer().is_none() && self.deep_cancel.is_none();
         Maintain {
-            scan: installed && !self.busy && store_free,
-            deep_scan: installed && !self.busy && !self.scanning && self.maintenance().is_none(),
-            uninstall: installed && !self.busy && store_free,
-            repair: !self.busy && store_free,
-            move_game: installed && !self.busy && store_free,
+            scan: installed && !self.locked() && store_free,
+            deep_scan: installed && !self.locked() && !self.scanning && self.maintenance().is_none(),
+            uninstall: installed && !self.locked() && store_free,
+            repair: !self.locked() && store_free,
+            move_game: installed && !self.locked() && store_free,
         }
     }
 

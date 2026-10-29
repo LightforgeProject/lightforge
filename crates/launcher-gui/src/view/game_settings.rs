@@ -183,7 +183,7 @@ impl Lightforge {
                     size_of(bytes)
                 ),
             };
-            let switch: Element<'a, Message> = match working || self.busy {
+            let switch: Element<'a, Message> = match working || self.locked() {
                 true => iced::widget::toggler(on)
                     .size(theme::tap_text(20.0))
                     .style(theme::switch)
@@ -210,7 +210,7 @@ impl Lightforge {
                     row![
                         secondary("Keep them", Message::KeepOptional).enabled(true),
                         action_button("Delete", theme::ERROR, Message::RemoveOptional)
-                            .enabled(!self.busy),
+                            .enabled(!self.locked()),
                     ]
                     .spacing(theme::SM),
                 ));
@@ -458,7 +458,7 @@ impl Lightforge {
     /// The WTF backups, each restorable or deletable, and the button that
     /// takes one now.
     fn backups_group<'a>(&'a self, settings: &'a GameSettings) -> Element<'a, Message> {
-        let idle = !settings.working && !self.busy;
+        let idle = !settings.working && !self.locked();
 
         let mut rows: Vec<Element<'a, Message>> = vec![setting(
             "Your in-game settings",

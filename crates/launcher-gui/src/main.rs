@@ -396,13 +396,12 @@ struct Lightforge {
     delete_after_cancel: Vec<ProductCode>,
     /// A given-up download's files being removed right now.
     discarding: Option<ProductCode>,
-    /// The product being launched, from pre-flight until it exits.
+    /// The product being launched, from pre-flight until its game is seen
+    /// or the launch ends without one.
     launching: Option<ProductCode>,
-    /// A game process is up in the prefix during a launch of ours: PLAY
-    /// becomes STOP.
-    game_up: bool,
-    /// STOP was confirmed and the game has been told to go.
-    stopping: bool,
+    /// Games of ours that are up, at most one per product: its tile's PLAY
+    /// is STOP until it exits. Another product can still be launched.
+    playing: Vec<Session>,
     stop_dialog: Option<StopDialog>,
     version_dialog: Option<VersionDialog>,
     modify_dialog: Option<ModifyDialog>,

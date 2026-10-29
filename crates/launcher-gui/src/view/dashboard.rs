@@ -50,11 +50,13 @@ impl Lightforge {
             .style(theme::ghost)
             .padding(theme::tap([theme::XS, theme::SM])),
         ));
-        let stoppable = self.busy && self.game_up && !self.stopping;
+        // STOP on this game's own tile only: another one can still start.
+        let session = self.session(&self.selected.code);
+        let stoppable = session.is_some_and(|s| !s.stopping);
         let open = button(
-            container(text(match self.busy && self.game_up {
-                true => self.stop_label(),
-                false => act.label(),
+            container(text(match session {
+                Some(session) => stop_label(session),
+                None => act.label(),
             })
             .size(theme::HEADING))
             .center_x(Length::Fill),
@@ -74,7 +76,7 @@ impl Lightforge {
             true => Message::AskStopGame,
             false => act.message(),
         };
-        let can_press = stoppable || !self.busy;
+        let can_press = stoppable || (session.is_none() && !self.busy);
 
         container(
             row![
@@ -244,14 +246,6 @@ impl Lightforge {
             ]
             .into(),
             None => content.into(),
-        }
-    }
-
-    /// The word on the button while a game is up.
-    fn stop_label(&self) -> &'static str {
-        match self.stopping {
-            true => "STOPPING…",
-            false => "STOP",
         }
     }
 
@@ -449,15 +443,16 @@ impl Lightforge {
 
         // Battle.net's pre-install wording, as a caption only: PLAY stays PLAY.
         let release_date = self.families.release_date(self.selected.code.as_str(), "default");
-        let label = match (action, release_date) {
-            _ if self.busy && self.game_up => self.stop_label(),
-            (ActionState::Install, Some(_)) => "PRE-INSTALL",
+        let session = self.session(&self.selected.code);
+        let label = match (session, action, release_date) {
+            (Some(session), ..) => stop_label(session),
+            (None, ActionState::Install, Some(_)) => "PRE-INSTALL",
             _ => action.label(),
         };
-        // A game that is up turns PLAY into STOP, in the colour of the other
-        // thing this button never is: an error.
-        let stoppable = self.busy && self.game_up && !self.stopping;
-        let color = if self.busy && self.game_up { theme::ERROR } else { color };
+        // This game being up turns its PLAY into STOP, in the colour of the
+        // other thing this button never is: an error.
+        let stoppable = session.is_some_and(|s| !s.stopping);
+        let color = if session.is_some() { theme::ERROR } else { color };
         let primary = button(
             container(text(label).size(theme::HEADING).color(iced::Color::WHITE))
                 .center_x(Length::Fill),
@@ -489,7 +484,9 @@ impl Lightforge {
 
         let primary_press = match () {
             _ if stoppable => Some(Message::AskStopGame),
-            _ if self.busy || matches!(action, ActionState::Unknown) => None,
+            _ if session.is_some() || self.busy || matches!(action, ActionState::Unknown) => None,
+            // Beside another game only PLAY: downloads and repairs wait for it.
+            _ if !self.playing.is_empty() && !matches!(action, ActionState::Play) => None,
             _ => Some(Message::Primary),
         };
 
@@ -514,8 +511,8 @@ impl Lightforge {
             control,
             self.ring(
                 focus::Target::LaunchViaBattleNet,
-                (!self.busy).then_some(Message::BattleNet),
-                match self.busy {
+                (!self.busy && session.is_none()).then_some(Message::BattleNet),
+                match self.busy || session.is_some() {
                     true => battle_net,
                     false => battle_net.on_press(Message::BattleNet),
                 },
@@ -526,6 +523,14 @@ impl Lightforge {
         .align_x(Alignment::Center)
         .width(Length::Shrink)
         .into()
+    }
+}
+
+/// The word on a running game's button.
+fn stop_label(session: &Session) -> &'static str {
+    match session.stopping {
+        true => "STOPPING…",
+        false => "STOP",
     }
 }
 

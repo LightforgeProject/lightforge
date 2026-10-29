@@ -10,8 +10,8 @@ use super::scan::{
 use super::shutdown::{signal_all, Disposition};
 use crate::paths::Layout;
 
-/// How often the prefix is re-scanned while waiting on a handed-off game.
-/// Slower than [`super::POLL`]: this runs for a whole session.
+/// How often the prefix is re-scanned while waiting for a handed-off game to
+/// start. Slower than [`super::POLL`]: a cold client takes most of a minute.
 const HANDOFF_POLL: Duration = Duration::from_millis(500);
 
 /// Wine's own processes, in every prefix and nobody's game. The
@@ -111,37 +111,23 @@ pub struct Stopped {
     pub disposition: Disposition,
 }
 
-/// Stop the running game, and only the game. Not [`super::shutdown`], which takes
-/// Battle.net down with it: this signals what [`games_running`] names,
-/// `SIGTERM` then `SIGKILL` after `grace`, re-attributing each pid first as
-/// `signal_all` does. Lifecycle only: nothing reads or writes the game.
-pub fn stop_games(layout: &Layout, grace: Duration) -> Vec<Stopped> {
+/// Stop one running game, and only it. Not [`super::shutdown`], which takes
+/// Battle.net and every other game down with it: `SIGTERM`, then `SIGKILL`
+/// after `grace`. `None` when `pid` is no longer a game of this prefix (a pid
+/// can be reused). Lifecycle only: nothing reads or writes the game.
+pub fn stop_game(layout: &Layout, pid: u32, grace: Duration) -> Option<Stopped> {
     let mut system = System::new();
     refresh(&mut system);
-    let games = collect_games(&system, layout);
-    if games.is_empty() {
-        return Vec::new();
-    }
+    let game = collect_games(&system, layout).into_iter().find(|g| g.pid == pid)?;
 
-    let pids: Vec<u32> = games.iter().map(|g| g.pid).collect();
-    let stubborn = signal_all(&mut system, layout, &pids, Signal::Term, grace);
-    let stubborn_pids: Vec<u32> = stubborn.iter().copied().collect();
-    let survivors = match stubborn_pids.is_empty() {
-        true => HashSet::new(),
-        false => signal_all(&mut system, layout, &stubborn_pids, Signal::Kill, grace),
+    let disposition = match signal_all(&mut system, layout, &[pid], Signal::Term, grace).is_empty() {
+        true => Disposition::Terminated,
+        false => match signal_all(&mut system, layout, &[pid], Signal::Kill, grace).is_empty() {
+            true => Disposition::Killed,
+            false => Disposition::Survived,
+        },
     };
-
-    games
-        .into_iter()
-        .map(|game| {
-            let disposition = match (stubborn.contains(&game.pid), survivors.contains(&game.pid)) {
-                (false, _) => Disposition::Terminated,
-                (true, false) => Disposition::Killed,
-                (true, true) => Disposition::Survived,
-            };
-            Stopped { game, disposition }
-        })
-        .collect()
+    Some(Stopped { game, disposition })
 }
 
 /// Wait for a handed-off game to start.
@@ -165,14 +151,6 @@ pub fn wait_for_game_start(
         if Instant::now() >= deadline {
             return None;
         }
-        std::thread::sleep(HANDOFF_POLL);
-    }
-}
-
-/// Block until a game seen by [`wait_for_game_start`] is gone. By pid: a
-/// title that re-execs itself ends the session early instead of hanging.
-pub fn wait_for_game_exit(layout: &Layout, pid: u32) {
-    while games_running(layout).iter().any(|p| p.pid == pid) {
         std::thread::sleep(HANDOFF_POLL);
     }
 }

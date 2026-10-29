@@ -96,7 +96,7 @@ impl Lightforge {
                     self.error = Some(format!("wait for {what} to finish first").into());
                     return Ok(Task::none());
                 }
-                if self.launching.is_some() {
+                if self.in_play() {
                     self.error = Some("close the game first".into());
                     return Ok(Task::none());
                 }

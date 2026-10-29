@@ -948,7 +948,7 @@ fn a_launch_waits_for_its_paused_download_to_come_to_rest() {
 
     let _ = app.update(Message::Downloaded(code.clone(), stopped(true)));
     assert_eq!(app.launch_when_quiet, None, "started once the run stopped");
-    assert!(app.status.starts_with("running"), "{}", app.status);
+    assert!(app.status.starts_with("starting"), "{}", app.status);
     assert_eq!(app.launching, Some(code), "still this product's session");
 }
 
@@ -972,7 +972,9 @@ fn a_download_a_launch_paused_is_restarted_when_the_game_exits() {
     let _ = app.update(Message::Downloaded(code.clone(), stopped(true)));
     assert!(matches!(app.queue[0].stage, Stage::Paused(_)));
 
-    let _ = app.update(Message::Launched(Ok("exited".to_owned())));
+    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(1), generation: 1 })));
+    assert!(matches!(app.queue[0].stage, Stage::Paused(_)), "not while the game runs");
+    let _ = app.update(Message::GameExited(code, Ok("exited".to_owned())));
     assert!(
         !matches!(app.queue[0].stage, Stage::Paused(_)),
         "queued again, or already running"
@@ -1303,6 +1305,10 @@ fn the_proton_installer_opens_on_proton_ge_switches_tabs_and_closes_on_escape() 
     assert_eq!(app.proton_installer, None);
 }
 
+fn game(pid: u32) -> lightforge_core::preflight::GameProcess {
+    lightforge_core::preflight::GameProcess { pid, name: "Wow.exe".to_owned() }
+}
+
 #[test]
 fn stop_asks_first_and_play_comes_back_when_the_game_is_gone() {
     let (mut app, _) = Lightforge::new();
@@ -1313,16 +1319,17 @@ fn stop_asks_first_and_play_comes_back_when_the_game_is_gone() {
     app.update_notice = None;
     app.patch_notes = None;
     app.screen = Screen::Dashboard;
+    let code = app.selected.code.clone();
 
     // Nothing is running: STOP has nothing to ask about.
     let _ = app.update(Message::AskStopGame);
     assert!(app.stop_dialog.is_none());
 
-    // A launch of ours, and a game seen in the prefix.
+    // A launch of ours, and its game seen in the prefix.
     app.busy = true;
-    app.launching = Some(app.selected.code.clone());
-    let _ = app.update(Message::GameSeen(true));
-    assert!(app.game_up);
+    app.launching = Some(code.clone());
+    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(1), generation: 1 })));
+    assert!(app.session(&code).is_some() && !app.busy && app.launching.is_none());
     let _ = app.update(Message::AskStopGame);
     assert!(app.stop_dialog.is_some());
     assert!(matches!(app.dialog_dismissal(), Some(Message::StopGameDismiss)));
@@ -1331,21 +1338,47 @@ fn stop_asks_first_and_play_comes_back_when_the_game_is_gone() {
 
     // Keeping the game going changes nothing.
     let _ = app.update(Message::StopGameDismiss);
-    assert!(app.stop_dialog.is_none() && app.game_up && !app.stopping);
+    assert!(app.stop_dialog.is_none() && app.session(&code).is_some_and(|s| !s.stopping));
 
     // Confirmed: the game is told to go, once.
     let _ = app.update(Message::AskStopGame);
     let _ = app.update(Message::StopGameConfirm);
-    assert!(app.stopping && app.stop_dialog.is_none());
+    assert!(app.stop_dialog.is_none() && app.session(&code).is_some_and(|s| s.stopping));
     let _ = app.update(Message::StopGameConfirm);
 
     // The watcher reports the exit: PLAY is back and nothing is left over.
-    let _ = app.update(Message::Launched(Ok("game closed".to_owned())));
-    assert!(!app.busy && !app.game_up && !app.stopping);
+    let _ = app.update(Message::GameExited(code.clone(), Ok("Wow.exe exited".to_owned())));
+    assert!(app.playing.is_empty() && !app.in_play());
+}
 
-    // A scan that was out when the session ended must not bring STOP back.
-    let _ = app.update(Message::GameSeen(true));
-    assert!(!app.game_up);
+#[test]
+fn a_second_game_starts_while_the_first_one_runs() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.queue.clear();
+    let first = ProductCode::Forever;
+    let second = ProductCode::Retail;
+
+    app.selected.code = first.clone();
+    app.busy = true;
+    app.launching = Some(first.clone());
+    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(1), generation: 1 })));
+    assert!(!app.busy, "the launcher is free while the first game runs");
+
+    // STOP belongs to the running game's tile, not to every tile.
+    app.selected.code = second.clone();
+    let _ = app.update(Message::AskStopGame);
+    assert!(app.stop_dialog.is_none());
+
+    app.busy = true;
+    app.launching = Some(second.clone());
+    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(2), generation: 2 })));
+    assert_eq!(app.playing.len(), 2);
+
+    // One exiting leaves the other's session alone.
+    let _ = app.update(Message::GameExited(first.clone(), Ok("Wow.exe exited".to_owned())));
+    assert!(app.session(&first).is_none() && app.session(&second).is_some());
+    assert!(app.in_play(), "the second game still holds the store");
 }
 
 /// A run that ends short without an error used to say only "stopped", which

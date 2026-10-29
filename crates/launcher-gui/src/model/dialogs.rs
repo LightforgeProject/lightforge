@@ -209,6 +209,7 @@ pub(crate) struct ModifyDialog {
 /// The question asked before a running game is stopped.
 #[derive(Debug, Clone)]
 pub(crate) struct StopDialog {
+    pub(crate) code: ProductCode,
     pub(crate) label: String,
 }
 

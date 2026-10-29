@@ -44,13 +44,70 @@ fn a_pass_beside_the_client_leaves_it_running_and_touches_nothing() {
 
     let report = Preflight::new("steamuser")
         .keeping_client(true)
-        .run_beside_client(&layout, None, &mut NoDownloads, Vec::new())
+        .run_beside(None, &mut NoDownloads, Vec::new())
         .unwrap();
     assert!(report.processes.is_empty() && report.configs.is_empty());
     assert!(report.agent_cache_removed.is_none() && report.staging_removed.is_none());
     assert!(client.try_wait().unwrap().is_none(), "the client is still up");
     let _ = client.kill();
     let _ = client.wait();
+}
+
+/// A process in `layout`'s prefix whose `argv[0]` is `name`, the way Wine
+/// presents one. Its binary is `sleep`, whatever it is called.
+fn stand_in(layout: &Layout, name: &str) -> std::process::Child {
+    use std::process::{Command, Stdio};
+
+    Command::new("bash")
+        .args(["-c", &format!("exec -a '{name}' sleep 30")])
+        .env("WINEPREFIX", layout.prefix())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap()
+}
+
+fn runner(layout: &Layout) -> crate::prefix::ProtonRunner {
+    use crate::proton::{ProtonFlavor, ProtonRelease, ProtonSource};
+
+    let release = ProtonRelease {
+        version: "GE-Proton11-7".into(),
+        flavor: ProtonFlavor::GloriousEggroll,
+        source: ProtonSource::Managed,
+        path: PathBuf::from("/builds/GE-Proton11-7"),
+        built_at: None,
+    };
+    crate::prefix::ProtonRunner::new(&release, layout, "/steam")
+}
+
+#[test]
+fn a_second_launch_goes_beside_a_running_game() {
+    let layout = Layout::with_root("/games/beside-a-game");
+    let mut game = stand_in(&layout, r"C:\Program Files (x86)\Hearthstone\Hearthstone.exe");
+    std::thread::sleep(Duration::from_millis(300));
+
+    let report = Preflight::new("steamuser").run(&runner(&layout), &layout, None, &mut NoDownloads).unwrap();
+    assert!(report.processes.is_empty() && report.configs.is_empty());
+    assert!(game.try_wait().unwrap().is_none(), "the game is still up");
+    let _ = game.kill();
+    let _ = game.wait();
+}
+
+#[test]
+fn a_game_served_by_another_build_refuses_a_launch_beside_it() {
+    let layout = Layout::with_root("/games/another-build");
+    let mut game = stand_in(&layout, r"C:\Program Files (x86)\Hearthstone\Hearthstone.exe");
+    // Called wineserver, but its binary is not the runner's.
+    let mut server = stand_in(&layout, "/builds/GE-Proton11-6/files/bin/wineserver");
+    std::thread::sleep(Duration::from_millis(300));
+
+    let refused = Preflight::new("steamuser").run(&runner(&layout), &layout, None, &mut NoDownloads);
+    assert!(matches!(refused, Err(PreflightError::OtherBuild(_))), "{refused:?}");
+    assert!(game.try_wait().unwrap().is_none(), "the game is still up");
+    for child in [&mut game, &mut server] {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }
 
 #[test]

@@ -18,7 +18,7 @@ impl Lightforge {
                     self.error = Some(format!("wait for {what} to finish first").into());
                     return Ok(Task::none());
                 }
-                if self.launching.is_some() {
+                if self.in_play() {
                     self.error = Some("close the game first".into());
                     return Ok(Task::none());
                 }
@@ -154,7 +154,7 @@ impl Lightforge {
                 // the store open, or something else is writing it.
                 let held = match self.store_writer() {
                     Some(what) => Some(format!("wait for {what} to finish")),
-                    None => self.launching.is_some().then(|| "close the game".to_owned()),
+                    None => self.in_play().then(|| "close the game".to_owned()),
                 };
                 if let Some(held) = held {
                     self.status = format!(

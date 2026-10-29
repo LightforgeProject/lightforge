@@ -89,14 +89,8 @@ impl Lightforge {
             false => Subscription::none(),
         };
         let upgrade = self.upgrade_watch();
-        // Only during a launch of ours: asking the process table whether a
-        // game is up is what turns PLAY into STOP.
-        let game_watch = match self.busy && self.launching.is_some() {
-            true => iced::time::every(Duration::from_secs(2)).map(|_| Message::GameWatch),
-            false => Subscription::none(),
-        };
 
-        Subscription::batch([resizes, registry, upgrade, game_watch])
+        Subscription::batch([resizes, registry, upgrade])
     }
 
     /// The clock the progress bars and the splash animate off.

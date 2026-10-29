@@ -141,15 +141,19 @@ pub(crate) enum Message {
     Tick,
     Downloaded(ProductCode, Result<Box<Complete>, Problem>),
     CloseRequested(iced::window::Id),
+    /// A launch ended without a game of its own to watch: the client was
+    /// opened, the hand-off came to nothing, or it failed.
     Launched(Result<String, Problem>),
-    /// Every couple of seconds of a launch: is a game up yet?
-    GameWatch,
-    GameSeen(bool),
-    /// STOP was pressed: ask first.
+    /// A direct launch got as far as it can tell: the game is up, or it
+    /// ended before it was ever seen.
+    GameStarted(Result<tasks::Started, Problem>),
+    /// A session's game exited.
+    GameExited(ProductCode, Result<String, Problem>),
+    /// STOP was pressed on the selected game: ask first.
     AskStopGame,
     StopGameDismiss,
     StopGameConfirm,
-    GameStopped(Result<String, Problem>),
+    GameStopped(ProductCode, Result<String, Problem>),
     /// A hand-off ran to the point where there is something to say: the
     /// game is up, the client needs a person, or nothing started.
     HandoffStarted(Result<tasks::Handoff, Problem>),
