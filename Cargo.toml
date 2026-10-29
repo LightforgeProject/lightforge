@@ -48,7 +48,7 @@ iced = { version = "0.14", features = ["tokio", "image-without-codecs", "advance
 # Battle.net's marks serve; `ico` (which brings `bmp`) and `webp`
 # are for the report's screenshot picker, which offers them. None of the
 # four pulls in a crate of its own.
-image = { version = "0.24", default-features = false, features = ["jpeg", "png", "ico", "webp"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "ico", "webp"] }
 libc = "0.2"
 md5 = "0.8"
 open = "5"
