@@ -9,6 +9,11 @@ updates:
     groups:
       compatible:
         update-types: [minor, patch]
+    # A breaking update (any 0.x minor bump too) needs code changes and goes
+    # in on dev; GitHub is a push mirror, so its PR could never be merged.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
