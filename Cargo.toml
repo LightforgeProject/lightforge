@@ -92,7 +92,7 @@ semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-toml = "0.8"
+toml = "1.1"
 # Addon packages are plain deflate zips; nothing else is needed, and the
 # default feature set drags in bzip2/zstd/aes for formats WoW never uses.
 zip = { version = "2", default-features = false, features = ["deflate"] }
