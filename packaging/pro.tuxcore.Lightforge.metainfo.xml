@@ -78,6 +78,16 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.0.0-beta.8" date="2026-10-29">
+      <description>
+        <p>
+          A bigger update, mostly stability and bug fixes from bug reports.
+          Adds running two games at once, quitting Battle.net from Lightforge,
+          moving a game to another drive, pre-downloads and a diagnostics page.
+        </p>
+      </description>
+      <url>https://github.com/LightforgeProject/lightforge/blob/main/RELEASES.md</url>
+    </release>
     <release version="1.0.0-beta.7" date="2026-10-25">
       <description>
         <p>
