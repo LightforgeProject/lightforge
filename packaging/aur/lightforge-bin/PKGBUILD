@@ -27,7 +27,7 @@ options=('!debug' '!strip')
 source=("lightforge-${_tag#v}-x86_64-linux.tar.gz::$url/releases/download/$_tag/lightforge-${_tag#v}-x86_64-linux.tar.gz")
 # Of the tarball attached to the v1.0.0-beta.8 release, as published in its
 # SHA256SUMS. Regenerate with `updpkgsums` if the artifacts are ever rebuilt.
-sha256sums=('SKIP')
+sha256sums=('7b858f067265b16c63422698d021d2acd6a935feb1e5789576fc134bcbf42b27')
 _srcdir="lightforge-${_tag#v}"
 
 package() {
