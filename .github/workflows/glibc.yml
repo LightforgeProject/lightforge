@@ -16,7 +16,7 @@ jobs:
     env:
       CARGO_TARGET_DIR: target/container
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install libudev
         run: apt-get update && apt-get install --yes --no-install-recommends pkg-config libudev-dev
