@@ -1,10 +1,8 @@
 //! The fetch plan: every request the download will make, decided up front.
 //!
-//! A build's wanted files are scattered across ~1400 archives, and asking for
-//! each one separately would mean 1.57 million range requests for a single
-//! retail install. Asking for whole archives instead would mean transferring
-//! 174.5 GiB where 123.0 GiB is wanted: every locale and platform, discarded
-//! on arrival. Neither is acceptable, so the plan sits between them:
+//! A retail build's wanted files sit in ~1400 archives: one request each is
+//! 1.57 million requests, whole archives are 174.5 GiB for 123.0 GiB wanted.
+//! The plan sits between:
 //!
 //! 1. locate every wanted key in its archive index,
 //! 2. sort by `(archive, offset)`,
@@ -12,15 +10,9 @@
 //!    **run**, capped at [`Options::max_run`] bytes,
 //! 4. fetch each run with one range request and split it locally.
 //!
-//! The cost of merging is the padding between files, which is transferred and
-//! thrown away; the benefit is one request instead of many. The defaults are
-//! measured against the real 12.1.0 install rather than guessed, see
-//! [`Options`].
-//!
-//! Keys the file index lists are not in any archive and are fetched whole, by
-//! plain GET. Keys in neither are reported as [`Plan::missing`] rather than
-//! silently dropped: a wanted file nothing can locate is a broken plan, and
-//! finding that out at planning time is much cheaper than at 90% of 123 GiB.
+//! Merging costs the padding between files; the defaults are measured, see
+//! [`Options`]. Keys the file index lists are fetched whole by plain GET.
+//! Keys in neither are [`Plan::missing`], found at planning time.
 
 use std::collections::{HashMap, HashSet};
 
@@ -31,11 +23,8 @@ use super::indices::Locations;
 use super::manifest::DownloadEntry;
 use super::storage::EKey;
 
-/// How aggressively neighbouring files are merged into one request.
-///
-/// Measured over the whole of 12.1.0, 1,574,027 wanted files, 123.0 GiB
-/// across 1406 archives, so the default is a reading of the curve rather
-/// than a guess:
+/// How aggressively neighbouring files are merged into one request. Measured
+/// over 12.1.0 (1,574,027 files, 123.0 GiB, 1406 archives):
 ///
 /// ```text
 /// max_gap   requests   transfer   wasted
@@ -48,23 +37,15 @@ use super::storage::EKey;
 ///      4M     23,710    144.5 GiB  21.47 GiB
 /// ```
 ///
-/// 64 KiB is where the curve stops paying: it buys a 41% cut in requests for
-/// 0.6% more bytes, while every step past it trades roughly a gigabyte for a
-/// tenth of the requests. At 60,717 requests the average is already 2.1 MB of
-/// payload each, a comfortable size for HTTP, so the remaining win is small
-/// and the bytes are real.
+/// 64 KiB buys 41% fewer requests for 0.6% more bytes; past it, each step
+/// costs about a gigabyte. Requests already average 2.1 MB there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options {
     /// Merge two files if the unwanted bytes between them are fewer than this.
-    ///
-    /// Zero merges only files that are exactly adjacent, already a 15x
-    /// reduction, because wanted content sits densely inside an archive.
+    /// Zero merges only adjacent files, already a 15x reduction.
     pub max_gap: u32,
-    /// Never let a run exceed this many bytes.
-    ///
-    /// Bounds the memory one response needs and keeps progress and
-    /// cancellation granular, a paused download should not have to discard a
-    /// quarter-gigabyte of transfer.
+    /// Never let a run exceed this many bytes: bounds a response's memory and
+    /// what a pause throws away.
     pub max_run: u32,
 }
 
@@ -78,13 +59,9 @@ impl Default for Options {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Piece {
     pub ekey: EKey,
-    /// Content key, which is what actually verifies the decoded bytes.
-    ///
-    /// Absent when encoding does not map this key back to a content key. That
-    /// is rare but real, 2 of 12.1.0's 1,574,027 wanted files, and both of
-    /// them are present in the store Agent built, so the right response is to
-    /// store the file unverified rather than refuse it. Refusing would diverge
-    /// from a real install over two small files.
+    /// Content key, which verifies the decoded bytes. Absent when encoding has
+    /// no entry for this key (2 of 12.1.0's files, both in Agent's store), and
+    /// then the file is stored unverified, as Agent does.
     pub ckey: Option<CKey>,
     /// Offset of this file's bytes from the start of its run.
     pub at: u32,
@@ -106,20 +83,20 @@ pub struct Run {
 }
 
 impl Run {
-    /// The value of an HTTP `Range` header that fetches this run.
-    pub fn range(&self) -> String {
-        format!("bytes={}-{}", self.offset, u64::from(self.offset) + u64::from(self.length) - 1)
+    /// The HTTP `Range` value for this run, `None` if empty.
+    pub fn range(&self) -> Option<String> {
+        let last = u64::from(self.offset).checked_add(u64::from(self.length))?.checked_sub(1)?;
+        Some(format!("bytes={}-{last}", self.offset))
     }
 
     /// Bytes transferred that no wanted file needs.
     pub fn padding(&self) -> u64 {
-        u64::from(self.length) - self.pieces.iter().map(|p| u64::from(p.size)).sum::<u64>()
+        // Overlapping pieces share bytes, so their sizes can sum past the run.
+        u64::from(self.length).saturating_sub(self.pieces.iter().map(|p| u64::from(p.size)).sum())
     }
 
-    /// One piece's bytes out of a fetched run.
-    ///
-    /// `None` if the response is shorter than the plan says it should be,
-    /// which is the shape a truncated or ignored range request arrives in.
+    /// One piece's bytes out of a fetched run; `None` if the response is
+    /// short (truncated, or the range was ignored).
     pub fn slice<'a>(&self, body: &'a [u8], piece: &Piece) -> Option<&'a [u8]> {
         let start = piece.at as usize;
         let end = start.checked_add(piece.size as usize)?;
@@ -147,10 +124,7 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// Build a plan for `wanted`.
-    ///
-    /// `already_have` is asked about every key, so an interrupted download
-    /// re-plans to only what is left; pass `|_| false` for a fresh install.
+    /// Build a plan for `wanted`, skipping keys `already_have` says are stored.
     pub fn build(
         wanted: &[DownloadEntry],
         locations: &Locations,
@@ -172,6 +146,7 @@ impl Plan {
             }
 
             if let Some((archive, located)) = locations.get(&entry.ekey) {
+                #[allow(clippy::cast_possible_truncation, reason = "archive ids number in the thousands")]
                 let id = *archive_id.entry(archive.to_owned()).or_insert_with(|| {
                     archives.push(archive.to_owned());
                     (archives.len() - 1) as u32
@@ -188,8 +163,7 @@ impl Plan {
             }
         }
 
-        // Sorting is what makes the merge below a single pass, and it is also
-        // what makes each archive read sequentially rather than seeking.
+        // Sorted: the merge is one pass, and each archive reads sequentially.
         archived.sort_unstable();
 
         let mut current: Option<Run> = None;
@@ -199,17 +173,15 @@ impl Plan {
             let extends = current.as_ref().is_some_and(|run| {
                 let run_end = u64::from(run.offset) + u64::from(run.length);
                 archives[id as usize] == run.archive
-                    // Sorted, so a start before the run's end is an overlap:
-                    // two entries sharing bytes, which merging handles fine.
+                    // A start before the run's end is an overlap; merge it.
                     && u64::from(offset) <= run_end + u64::from(options.max_gap)
                     && piece_end - u64::from(run.offset) <= u64::from(options.max_run)
             });
 
             match (extends, current.as_mut()) {
                 (true, Some(run)) => {
-                    // Never shorter: a piece lying wholly inside the run so far
-                    // must not cut it back to its own end, which left every
-                    // piece past that point outside what was fetched.
+                    // Never shorter: a piece inside the run must not cut it back.
+                    #[allow(clippy::cast_possible_truncation, reason = "`extends` bounds it by max_run")]
                     let end = (piece_end - u64::from(run.offset)) as u32;
                     run.length = run.length.max(end);
                     run.pieces.push(Piece {
@@ -266,13 +238,8 @@ impl Plan {
     }
 }
 
-/// Encoding key → content key, for the keys in `wanted` only.
-///
-/// The encoding manifest is sorted by content key, so the reverse direction
-/// has no index and `Encoding::ckey_for_ekey` is a linear scan. Doing that per
-/// file would be 1.57 million scans of a 2.87 million entry manifest; one pass
-/// building a map for the keys that matter is the difference between a plan
-/// that builds in milliseconds and one that never finishes.
+/// Encoding key → content key, for the keys in `wanted` only, in one pass:
+/// the manifest is sorted by content key, so a lookup per file is a scan.
 pub fn reverse_encoding(encoding: &Encoding, wanted: &HashSet<EKey>) -> HashMap<EKey, CKey> {
     let mut map = HashMap::with_capacity(wanted.len());
     for entry in encoding.entries() {
@@ -317,6 +284,7 @@ mod tests {
         footer.extend_from_slice(&(entries.len() as u32).to_le_bytes());
         footer.extend_from_slice(&[0u8; 8]);
         out.extend_from_slice(&footer);
+        super::super::archive::seal(&mut out);
         out
     }
 
@@ -341,6 +309,7 @@ mod tests {
         footer.extend_from_slice(&(entries.len() as u32).to_le_bytes());
         footer.extend_from_slice(&[0u8; 8]);
         out.extend_from_slice(&footer);
+        super::super::archive::seal(&mut out);
         out
     }
 
@@ -371,7 +340,7 @@ mod tests {
         assert_eq!(plan.runs[0].offset, 0);
         assert_eq!(plan.runs[0].length, 300);
         assert_eq!(plan.runs[0].padding(), 0);
-        assert_eq!(plan.runs[0].range(), "bytes=0-299");
+        assert_eq!(plan.runs[0].range().unwrap(), "bytes=0-299");
         assert_eq!(
             plan.runs[0].pieces.iter().map(|p| p.at).collect::<Vec<_>>(),
             [0, 100, 200]
@@ -392,6 +361,23 @@ mod tests {
         for piece in &plan.runs[0].pieces {
             assert!(plan.runs[0].slice(&body, piece).is_some());
         }
+    }
+
+    #[test]
+    fn overlapping_pieces_count_as_no_padding() {
+        // 1000 + 20 bytes of pieces in a 1000-byte run.
+        let keys = [key(1), key(2)];
+        let locations = located("a", &[(key(1), 1000, 0), (key(2), 20, 10)], &keys);
+
+        let plan = Plan::build(&want(&keys), &locations, &no_loose(), &HashMap::new(), |_| false, Options::default());
+
+        assert_eq!(plan.padding(), 0);
+    }
+
+    #[test]
+    fn an_empty_run_has_no_range() {
+        let run = Run { archive: "a".into(), offset: 0, length: 0, pieces: Vec::new() };
+        assert_eq!(run.range(), None);
     }
 
     #[test]
@@ -475,7 +461,7 @@ mod tests {
 
         assert_eq!(plan.already_present, 1);
         assert_eq!(plan.files(), 2);
-        // The hole left behind is bridged rather than split, since the bytes
+        // The hole left behind is bridged, not split, since the bytes
         // in between are below the gap threshold.
         assert_eq!(plan.requests(), 1);
         assert_eq!(plan.runs[0].padding(), 100);
@@ -504,8 +490,7 @@ mod tests {
 
         let pieces = &plan.runs[0].pieces;
         assert_eq!(pieces[0].ckey, Some([0xAA; 16]));
-        // Storable but not verifiable, and the plan says so rather than
-        // pretending an unverified file is fine.
+        // Storable but not verifiable, and the plan says so.
         assert_eq!(pieces[1].ckey, None);
     }
 

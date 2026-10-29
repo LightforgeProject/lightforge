@@ -1,25 +1,15 @@
 //! Recognising an addon by its bytes, so a hand-installed one can be adopted.
 //!
-//! An addon Lightforge did not install has no provider and no id, so it can
-//! be listed and nothing more, no update, no channel, no removal. CurseForge
-//! solves this for its own client by publishing a **fingerprint** for every
-//! module (every addon folder) of every file it hosts: hash what is on disk,
-//! ask which project those hashes belong to, and an unmanaged folder becomes
-//! a managed one.
+//! CurseForge publishes a **fingerprint** for every addon folder it hosts:
+//! hash what is on disk, ask which project it belongs to, and a hand-installed
+//! folder can be adopted.
 //!
-//! The hash is MurmurHash2 (32-bit, Austin Appleby's original) with seed `1`,
-//! over the file's bytes **with whitespace removed**: tab, line feed,
-//! carriage return and space are dropped before hashing. That last part is
-//! what makes the fingerprint survive a checkout that rewrote line endings,
-//! which is the whole reason it is not a plain checksum.
+//! MurmurHash2 (32-bit, Appleby's original), seed `1`, over the bytes **with
+//! tab, LF, CR and space removed**, so line endings do not matter.
 //!
-//! **The algorithm is exact or it is useless.** There is no partial credit: a
-//! fingerprint that is one byte off matches nothing at all, and the failure
-//! looks identical to "this addon is not on CurseForge". So the two decisions
-//! it rests on are separated deliberately, [`murmur2`] is the published
-//! algorithm and is tested against its own reference, while [`of_file`] is
-//! the part that says *which bytes go in*, verified against fingerprints
-//! CurseForge itself published for an addon we installed from it.
+//! **Exact or useless**: one byte off matches nothing, which looks like "not on
+//! CurseForge". [`murmur2`] is tested against its reference; [`of_file`]
+//! (which bytes go in) against fingerprints CurseForge published.
 
 use std::path::Path;
 
@@ -32,13 +22,9 @@ const SEED: u32 = 1;
 /// Bytes dropped before hashing: tab, line feed, carriage return, space.
 const WHITESPACE: [u8; 4] = [9, 10, 13, 32];
 
-/// MurmurHash2, 32-bit, as published, no normalisation of its own.
-///
-/// Transcribed from Appleby's reference so the constants are his: `m` and
-/// `r` are the published mixing values, and the tail switch falls through on
-/// purpose. Wrapping arithmetic throughout, because the original is C and
-/// relies on it; in Rust that has to be said out loud or a debug build
-/// panics where a release build quietly agrees with the reference.
+/// MurmurHash2, 32-bit, transcribed from Appleby's reference: the tail falls
+/// through, and the arithmetic wraps, as the C relies on.
+#[allow(clippy::cast_possible_truncation, reason = "murmur2 takes the length mod 2^32, as CurseForge does")]
 pub fn murmur2(bytes: &[u8], seed: u32) -> u32 {
     const M: u32 = 0x5bd1_e995;
     const R: u32 = 24;
@@ -71,10 +57,7 @@ pub fn murmur2(bytes: &[u8], seed: u32) -> u32 {
     hash ^ (hash >> 15)
 }
 
-/// The fingerprint of one file's contents.
-///
-/// Whitespace is stripped first, which is what lets the same addon fingerprint
-/// identically whether it was unzipped on Windows or checked out on Linux.
+/// The fingerprint of one file's contents, whitespace stripped first.
 pub fn of_bytes(bytes: &[u8]) -> u32 {
     let stripped: Vec<u8> = bytes
         .iter()
@@ -86,9 +69,7 @@ pub fn of_bytes(bytes: &[u8]) -> u32 {
 
 /// The fingerprint of a file on disk, or `None` if it cannot be read.
 ///
-/// Unreadable means "no fingerprint", never a zero: zero is a value the hash
-/// can legitimately produce, and a file we could not open must not be allowed
-/// to claim it matched something.
+/// Never a zero for unreadable: zero is a real hash value.
 pub fn of_file(path: &Path) -> Option<u32> {
     std::fs::read(path).ok().map(|bytes| of_bytes(&bytes))
 }
@@ -105,8 +86,7 @@ pub fn of_file(path: &Path) -> Option<u32> {
 ///    numbers written as decimal and concatenated.
 /// 3. **Sorted by value**, not by name.
 ///
-/// `None` when the folder loads nothing that exists; such an addon cannot be
-/// adopted, rather than hashing an arbitrary subset.
+/// `None` when the folder loads nothing that exists.
 pub fn of_folder(dir: &Path) -> Option<u32> {
     let mut hashes: Vec<u32> = declared(dir)
         .iter()
@@ -123,10 +103,8 @@ pub fn of_folder(dir: &Path) -> Option<u32> {
 
 /// The files a folder's tocs declare, plus the tocs themselves.
 ///
-/// A `BTreeSet` so a file two tocs both load is counted once and the result
-/// does not depend on directory order. Paths are Windows-style in a toc and
-/// are read as relative to the addon folder; anything that escapes it, or
-/// that is not actually there, is dropped rather than followed.
+/// A `BTreeSet`: each file once, in a fixed order. Paths that escape the
+/// folder or do not exist are dropped.
 fn declared(dir: &Path) -> std::collections::BTreeSet<std::path::PathBuf> {
     let mut out = std::collections::BTreeSet::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -141,9 +119,7 @@ fn declared(dir: &Path) -> std::collections::BTreeSet<std::path::PathBuf> {
         })
         .collect();
 
-    // Loaded by the client from an addon folder whether a toc mentions it or
-    // not, so CurseForge counts it and a toc-only reading misses it. This
-    // was the difference between 32 of 34 folders matching and all 34.
+    // Loaded whether a toc names it or not: 32 of 34 folders matched without it.
     let bindings = dir.join(IMPLICITLY_LOADED);
     if bindings.is_file() {
         out.insert(bindings);
@@ -170,9 +146,7 @@ fn declared(dir: &Path) -> std::collections::BTreeSet<std::path::PathBuf> {
 
 /// A toc's `Libs\AceGUI-3.0\AceGUI-3.0.lua` as a path inside the folder.
 ///
-/// Refuses anything that would leave it. A toc is a text file an addon ships,
-/// so it is input like any other, and `..\..\..\something` must resolve to
-/// nothing rather than to a file outside the addon.
+/// Refuses anything that would leave it: a toc is untrusted input.
 fn under(dir: &Path, line: &str) -> Option<std::path::PathBuf> {
     let mut path = dir.to_path_buf();
     for part in line.split(['\\', '/']) {
@@ -192,22 +166,14 @@ fn under(dir: &Path, line: &str) -> Option<std::path::PathBuf> {
 mod tests {
     use super::*;
 
-    /// Reference values for MurmurHash2, computed from Appleby's own C with
-    /// the same inputs. These pin the transcription, the constants, the
-    /// little-endian read, the fall-through tail and the final avalanche,
-    /// independently of what CurseForge then does with it.
+    /// Reference values for MurmurHash2, computed from Appleby's own C.
     #[test]
     fn murmur2_matches_the_reference_implementation() {
-        // Seed zero over nothing is the one input that falls through every
-        // multiply unchanged, so it is zero, and the only case where a
-        // transcription can look right by doing nothing at all.
+        // Seed zero over nothing is zero, even for a transcription that does nothing.
         assert_eq!(murmur2(b"", 0), 0);
         assert_eq!(murmur2(b"", 1), 0x5bd1_5e36);
 
-        // One vector per tail length. The `switch` that handles 1, 2 and 3
-        // trailing bytes falls through in the original, and a transcription
-        // that turns it into exclusive arms passes every multiple of four
-        // and fails everything else.
+        // One vector per tail length: the original's switch falls through.
         assert_eq!(murmur2(b"a", 1), 0x2550_b18c);
         assert_eq!(murmur2(b"ab", 1), 0x64e1_50ee);
         assert_eq!(murmur2(b"abc", 1), 0x60a4_fcc1);
@@ -264,7 +230,7 @@ mod tests {
              a file that is not there are all out"
         );
 
-        // A folder with nothing declared has no fingerprint rather than a
+        // A folder with nothing declared has no fingerprint, not a
         // hash of whatever happened to be lying in it.
         let bare = dir.parent().unwrap().join("Empty");
         std::fs::create_dir_all(&bare).unwrap();

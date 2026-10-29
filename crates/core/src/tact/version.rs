@@ -8,28 +8,17 @@
 //! https://<region>.version.battle.net/<product>/cdns
 //! ```
 //!
-//! Neither `ribbit-client` nor `tact-client` is used to reach them.
-//! `ribbit-client` gets an HTTP 400 from Blizzard's TCP endpoint on both
-//! protocol versions, and `tact-client`'s V2 path rejects this response as an
-//! "Invalid protocol version" despite the server returning 200. Its V1 path
-//! does work, but only over **plain HTTP** on port 1119, where this host
-//! serves the identical table over TLS. Going direct through
-//! [`crate::net::Http`] costs a small parser and gains the encrypted
-//! transport.
+//! Not through `ribbit-client` (HTTP 400 from the TCP endpoint on both
+//! protocol versions) nor `tact-client` (V2 rejects the response, V1 is plain
+//! HTTP on port 1119). Direct over TLS through [`crate::net::Http`].
 //!
-//! Transport security is not the whole story and shouldn't be mistaken for it:
-//! everything these endpoints name is content-addressed, so a download is only
-//! trusted once its bytes hash to the key that named them. TLS here keeps an
-//! observer from steering the launcher at a different *valid* build; it is the
-//! hash check downstream that stops arbitrary content.
+//! TLS keeps an observer from steering the launcher at a different valid
+//! build; the hash checks downstream stop arbitrary content.
 
 use crate::net::{Http, NetError};
 
-/// Blizzard's regional version services.
-///
-/// Serialized because it is a setting now: which region a product is
-/// downloaded from is asked once, during the first run, and written to the
-/// config in Blizzard's own spelling (`eu`).
+/// Blizzard's regional version services, saved in the config in Blizzard's
+/// spelling (`eu`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Region {
@@ -48,9 +37,7 @@ impl Region {
     pub const ALL: [Region; 6] =
         [Region::Eu, Region::Us, Region::Kr, Region::Tw, Region::Cn, Region::Sg];
 
-    /// What to call this region to someone choosing one. The codes are
-    /// Blizzard's and several of them name the wrong thing, `us` serves the
-    /// whole of the Americas and Oceania.
+    /// What to call this region in a picker: `us` serves the Americas and Oceania.
     pub fn label(self) -> &'static str {
         match self {
             Self::Us => "Americas & Oceania",
@@ -99,8 +86,8 @@ impl std::str::FromStr for Region {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Version {
     pub region: String,
-    /// Hash of the build config, the value `.build.info` stores as `Build Key`
-    /// and the one an update check actually compares.
+    /// Hash of the build config, `.build.info`'s `Build Key`: what an update
+    /// check compares.
     pub build_config: String,
     pub cdn_config: String,
     pub key_ring: Option<String>,
@@ -133,12 +120,24 @@ impl Cdn {
     }
 }
 
-/// Fetch the version table for a product.
+/// Fetch the version table for a product: the build that is live.
 pub async fn versions(http: &Http, region: Region, product: &str) -> Result<Vec<Version>, VersionError> {
     let url = format!("{}/{product}/versions", region.host());
-    let table = Bpsv::parse(&http.get_text(&url).await?)?;
+    parse_versions(&http.get_text(&url).await?)
+}
 
-    table
+/// Fetch the background-download table: a build listed ahead of its release
+/// for clients to pre-load. Empty between patches, and for a product that
+/// has none the service answers `No matched data for selector …`, which
+/// parses to no rows as well.
+pub async fn bgdl(http: &Http, region: Region, product: &str) -> Result<Vec<Version>, VersionError> {
+    let url = format!("{}/{product}/bgdl", region.host());
+    parse_versions(&http.get_text(&url).await?)
+}
+
+/// `/versions` and `/bgdl` share their columns.
+fn parse_versions(text: &str) -> Result<Vec<Version>, VersionError> {
+    Bpsv::parse(text)?
         .rows()
         .map(|row| {
             Ok(Version {
@@ -173,10 +172,8 @@ pub async fn cdns(http: &Http, region: Region, product: &str) -> Result<Vec<Cdn>
         .collect()
 }
 
-/// A product code Lightforge knows by name, and the label the UI prints for it.
-///
-/// Stable labels, never expansion names: `wow_classic` is "Classic" whether it
-/// is currently serving Mists of Pandaria or whatever follows it.
+/// A product code Lightforge knows by name, and its UI label. Never an
+/// expansion name: `wow_classic` stays "Classic".
 pub const KNOWN_PRODUCTS: &[(&str, &str)] = &[
     ("wow", "Retail"),
     ("wowt", "Retail PTR"),
@@ -218,16 +215,9 @@ impl ProductStatus {
     }
 }
 
-/// Ask whether one product code is live, and what it currently ships.
-///
-/// `Ok(None)` is the service saying there is no such product, which is an
-/// answer rather than a failure; anything else is a real error.
-///
-/// There is no product *listing* to ask for. Blizzard's `summary` endpoint is
-/// gone from this host (404), and port 1119 no longer speaks Ribbit at all,
-/// it answers HTTP 400 to both protocol versions, which is the same wall
-/// documented at the top of this module. So enumeration is probing a list of
-/// candidate codes, and [`KNOWN_PRODUCTS`] is that list.
+/// Ask whether one product code is live, and what it ships. `Ok(None)`: no
+/// such product. There is no listing (`summary` is 404, Ribbit is gone), so
+/// discovery probes [`KNOWN_PRODUCTS`].
 pub async fn probe(
     http: &Http,
     region: Region,
@@ -240,11 +230,8 @@ pub async fn probe(
     }
 }
 
-/// Probe many codes at once, preserving the order given.
-///
-/// A code that errors outright (rather than answering 404) is reported as
-/// absent with its error dropped: this is a discovery tool, and one flaky
-/// request should not take the whole table down.
+/// Probe many codes at once, in the order given. A code that errors is
+/// reported absent: one flaky request should not sink the table.
 pub async fn probe_all(
     http: &Http,
     region: Region,
@@ -272,17 +259,13 @@ pub async fn probe_all(
         .collect()
         .await;
 
-    // `buffer_unordered` yields as results arrive; the caller asked for a list
-    // in the order it gave.
+    // `buffer_unordered` yields out of order.
     found.sort_by_key(|s| codes.iter().position(|c| *c == s.code).unwrap_or(usize::MAX));
     found
 }
 
-/// Pick one region's row out of a table, falling back to the first.
-///
-/// The fallback matters: every region currently reports the same build, and a
-/// launcher that hard-failed because one regional row was absent would be
-/// broken for no good reason.
+/// Pick one region's row out of a table, falling back to the first: every
+/// region reports the same build.
 pub fn for_region<T>(rows: &[T], region: Region, name: impl Fn(&T) -> &str) -> Option<&T> {
     rows.iter()
         .find(|r| name(r) == region.as_str())
@@ -296,12 +279,8 @@ pub enum Status {
     NotInstalled,
     /// Local build config matches the service's.
     Current { build: String, version: String },
-    /// The service ships a different build config.
-    ///
-    /// Deliberately not "newer": the comparison is hash equality, not an
-    /// ordering. A downgrade, a region switch, or a PTR flip all land here,
-    /// and all of them mean the same thing to the downloader, local content
-    /// no longer matches the build the service names.
+    /// The service ships a different build config. Not "newer": the check is
+    /// hash equality, so a rollback lands here too.
     Behind {
         local_build: String,
         remote_build: String,
@@ -334,11 +313,7 @@ impl Status {
         matches!(self, Self::Behind { .. })
     }
 
-    /// The button this maps to.
-    ///
-    /// `Current` becomes [`crate::ActionState::Play`] only as far as the
-    /// version check can tell, whether the files are actually intact is a
-    /// separate question, and one pre-flight and the downloader answer.
+    /// The button this maps to, as far as the version check can tell.
     pub fn action(&self) -> crate::ActionState {
         match self {
             Self::NotInstalled => crate::ActionState::Install,
@@ -352,11 +327,7 @@ impl Status {
 }
 
 /// A BPSV table: typed header row, optional `##` comments, then data rows.
-///
-/// Deliberately separate from [`crate::buildinfo`], which parses the same
-/// grammar under a much stricter contract, it has to round-trip byte for byte
-/// because Agent reads what it writes. This one only ever reads a response, so
-/// it can skip comments and ignore column types instead of preserving them.
+/// Read-only, unlike [`crate::buildinfo`], which must round-trip byte for byte.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bpsv {
     columns: Vec<String>,
@@ -373,8 +344,7 @@ impl Bpsv {
         let header = lines.next().ok_or(VersionError::EmptyTable)?;
         let columns: Vec<String> = header
             .split('|')
-            // `BuildConfig!HEX:16` -> `BuildConfig`. The type suffix is
-            // metadata for writers; a reader only needs the name.
+            // `BuildConfig!HEX:16` -> `BuildConfig`.
             .map(|c| c.split('!').next().unwrap_or(c).trim().to_owned())
             .collect();
 
@@ -407,9 +377,8 @@ pub struct Row<'a> {
 
 impl Row<'_> {
     pub fn get(&self, column: &str) -> Result<&str, VersionError> {
-        // Case-insensitive: the service spells `VersionsName!String:0` with a
-        // lower-case `s` in its type where every other column is upper-case,
-        // which is a good hint that exact spelling is not a promise.
+        // Case-insensitive: the service's own spelling is inconsistent
+        // (`VersionsName!String:0`).
         let i = self
             .columns
             .iter()
@@ -456,8 +425,7 @@ mod tests {
 
     #[test]
     fn labels_name_the_stream_not_the_expansion() {
-        // The whole point: wow_classic stays "Classic" when the progression
-        // expansion rolls over, so nothing here may name one.
+        // wow_classic stays "Classic" when its expansion rolls over.
         let banned = ["Midnight", "Pandaria", "Mists", "Burning Crusade", "Wrath", "Cataclysm"];
         for (code, label) in KNOWN_PRODUCTS {
             for word in banned {
@@ -481,8 +449,7 @@ eu|tpr/wow|level3.blizzard.com|http://level3.blizzard.com/?maxhosts=8 https://le
 
     #[test]
     fn the_seqn_comment_is_not_read_as_a_row() {
-        // `## seqn = N` sits between the header and the data. Treating it as a
-        // row yields a one-column entry that silently becomes a bogus region.
+        // `## seqn = N` sits between header and data; it is not a row.
         let table = Bpsv::parse(VERSIONS).unwrap();
         assert_eq!(table.len(), 2);
         assert_eq!(table.rows().next().unwrap().get("Region").unwrap(), "us");
@@ -547,8 +514,7 @@ eu|tpr/wow|level3.blizzard.com|http://level3.blizzard.com/?maxhosts=8 https://le
             },
         ];
         assert_eq!(for_region(&rows, Region::Us, |v| &v.region).unwrap().region, "us");
-        // Every region ships the same build today; refusing to proceed because
-        // one row is absent would break the launcher for no benefit.
+        // Every region ships the same build today.
         assert_eq!(for_region(&rows, Region::Kr, |v| &v.region).unwrap().region, "us");
         assert!(for_region::<Version>(&[], Region::Eu, |v| &v.region).is_none());
     }
@@ -591,8 +557,7 @@ eu|tpr/wow|level3.blizzard.com|http://level3.blizzard.com/?maxhosts=8 https://le
             }
         );
 
-        // A rollback is still "does not match", which is what matters to the
-        // downloader, the comparison is equality, never an ordering.
+        // A rollback is still "does not match".
         let older = remote("11110000111100001111000011110000", "12.0.5.60000");
         assert!(Status::compare(Some("9712ae9c84cc54111e9e3ddf9a6b8019"), None, &older).needs_update());
     }
@@ -604,6 +569,17 @@ eu|tpr/wow|level3.blizzard.com|http://level3.blizzard.com/?maxhosts=8 https://le
         // An empty cell is the same as no cell: .build.info has empty columns.
         assert_eq!(Status::compare(Some(""), None, &r), Status::NotInstalled);
         assert_eq!(Status::compare(None, None, &r).action(), crate::ActionState::Install);
+    }
+
+    /// `https://eu.version.battle.net/wow/bgdl` and `…/wow_classic_era/bgdl`,
+    /// both captured 2026-10-28, between patches.
+    #[test]
+    fn a_bgdl_table_between_patches_lists_no_build() {
+        let wow = "Region!STRING:0|BuildConfig!HEX:16|CDNConfig!HEX:16|KeyRing!HEX:16|BuildId!DEC:4|\
+                   VersionsName!String:0|ProductConfig!HEX:16\n## seqn = 4083842\n";
+        assert!(parse_versions(wow).unwrap().is_empty());
+        let era = "No matched data for selector 'v2/products/wow_classic_era/bgdl'";
+        assert!(parse_versions(era).unwrap().is_empty());
     }
 
     #[test]

@@ -4,6 +4,12 @@ use crate::*;
 
 impl Lightforge {
     pub(crate) fn update_navigation(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        self.update_focus_moves(message)
+            .or_else(|m| self.update_focus_settle(m))
+    }
+
+    /// An arrow, a press, or typing finishing: where the ring goes.
+    fn update_focus_moves(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
             Message::Nav(from, input) => {
                 let now = Instant::now();
@@ -11,10 +17,8 @@ impl Lightforge {
                 if from == NavFrom::Pad && !self.window_focused {
                     return Ok(Task::none());
                 }
-                // Steam can deliver one press both ways: as keys from its
-                // layout, and raw from a pad it did not name as translated.
-                // Whichever arrives first keeps the floor while presses keep
-                // coming, so neither a tap nor a held repeat counts twice.
+                // Steam can deliver a press twice (keys and raw pad); the first
+                // source keeps the floor.
                 if let Some((last, at)) = self.nav_last {
                     if last != from && now.duration_since(at) < NAV_DOUBLED {
                         trace::pad("  dropped: doubled");
@@ -22,16 +26,11 @@ impl Lightforge {
                     }
                 }
                 self.nav_last = Some((from, now));
-                // A field with the cursor in it takes a pad's buttons the way
-                // it takes the keys: arrows in a field are the field's, and
-                // only Escape gets past it. So B leaves the field and stays
-                // on it, A asks for the keyboard again, and an arrow leaves
-                // and goes on from there.
+                // In a field: B leaves it, A asks for the keyboard, an arrow
+                // leaves and moves on.
                 if from == NavFrom::Pad && !self.keys_belong_elsewhere() {
                     if let Some(field) = focus::typing_in() {
-                        // The ring can be somewhere else by now, moved off
-                        // the field while it kept the cursor: A is then for
-                        // what the ring is on.
+                        // A is for the ring's control if it moved off the field.
                         let on_field = self.focus.as_ref().is_none_or(|f| *f == field);
                         match input {
                             pad::Input::Back => {
@@ -61,11 +60,13 @@ impl Lightforge {
                     pad::Input::Back => Message::FocusBack,
                 })
             }
+
             Message::TypingDone(field) => {
                 self.focus = Some(field);
                 self.steam_keyboard_closed();
                 Task::none()
             }
+
             Message::FocusStep(step) => {
                 if self.keys_belong_elsewhere() {
                     return Ok(Task::none());
@@ -81,9 +82,7 @@ impl Lightforge {
                         None => self.scroll_page(step, None),
                     });
                 };
-                // The Settings index is a pane of its own, so Right from it
-                // reached nothing. It reads as a way in, the same as A, and
-                // Left off the edge of a section is the way back out, as B.
+                // Right from the Settings index goes in, as A; Left comes out, as B.
                 if matches!(current, focus::Target::SettingsTab(_)) && step == focus::Step::Right {
                     return Ok(self.update(Message::FocusPress));
                 }
@@ -102,6 +101,7 @@ impl Lightforge {
                     None => self.scroll_page(step, Some(&current)),
                 }
             }
+
             Message::FocusPress => {
                 if self.keys_belong_elsewhere() {
                     return Ok(Task::none());
@@ -137,6 +137,13 @@ impl Lightforge {
                 self.focus_entering = FOCUS_ENTER_FRAMES;
                 Task::batch([pressed, focus_settle()])
             }
+            other => return Err(other),
+        })
+    }
+
+    /// Where the ring lands after the page has moved, Back, and hiding it.
+    fn update_focus_settle(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::FocusSettle => {
                 if self.focus_entering == 0 {
                     return Ok(Task::none());
@@ -144,11 +151,8 @@ impl Lightforge {
                 self.focus_entering -= 1;
                 if let Some(region) = self.focus_into {
                     let mut places = focus::live_in(region);
-                    // Into the section just jumped to, not whatever was at the
-                    // top before the jump: it takes a frame or two to scroll
-                    // into view, and these retries are what wait it out.
-                    // Compared in layout coordinates, the ones the sections
-                    // were measured in.
+                    // Into the jumped-to section, retrying while it scrolls in;
+                    // in layout coordinates.
                     if region == SETTINGS_PAGE {
                         if let Some(section) = self.settings_layout.bounds(self.settings_tab) {
                             places.retain(|place| {
@@ -167,12 +171,8 @@ impl Lightforge {
                 let spots = focus::live();
                 let drawn = |target: &focus::Target| spots.iter().any(|p| &p.target == target);
                 match self.focus.clone() {
-                    // Covered by a menu or a dialog that has just opened, or
-                    // gone with the one that just closed: on to what is on
-                    // top now. Only a control still there under the cover is
-                    // somewhere to come back to; one that is gone, Install
-                    // inside a dialog once pressed, leaves the way back as
-                    // it was.
+                    // Covered or gone: on to what is on top now. Only a covered
+                    // control is somewhere to come back to.
                     Some(was) if !drawn(&was) && !spots.is_empty() => {
                         let covered = focus::spot(&was).is_some();
                         let at = self
@@ -181,10 +181,7 @@ impl Lightforge {
                             .filter(|(_, screen)| *screen == self.screen)
                             .map(|(at, _)| at);
                         self.focus = match (covered, at) {
-                            // Pressed and gone, on the same page, with nothing
-                            // open that it leads back to: whatever is now
-                            // nearest to where it was, which after Keep is the
-                            // Remove beside it.
+                            // Pressed and gone: the nearest control to where it was.
                             (false, Some(at)) if self.focus_return.as_ref().is_none_or(|t| !drawn(t)) => {
                                 focus::nearest(&spots, at)
                             }
@@ -200,6 +197,7 @@ impl Lightforge {
                     None => Task::none(),
                 }
             }
+
             Message::FocusBack => {
                 if self.keys_belong_elsewhere() {
                     return Ok(Task::none());
@@ -217,10 +215,7 @@ impl Lightforge {
                 }
                 let closed = match (self.dialog_dismissal(), self.panel_open()) {
                     (Some(dismiss), _) => self.update(dismiss),
-                    // Out of Settings from its list of sections: back to Play,
-                    // wherever Settings was opened from. Its pages are left
-                    // for the list the same way, above, so B twice from any
-                    // switch is the dashboard.
+                    // Out of Settings' list: back to Play. B twice from any switch.
                     (None, false) if self.screen == Screen::Settings && self.wizard.is_none() => {
                         self.update(Message::Show(Screen::Dashboard))
                     }
@@ -239,6 +234,7 @@ impl Lightforge {
                 self.focus_entering = FOCUS_ENTER_FRAMES;
                 Task::batch([closed, focus_settle()])
             }
+
             Message::FocusHidden => {
                 if let Some(was) = self.focus.take() {
                     self.focus_resume = Some(was);
@@ -247,7 +243,6 @@ impl Lightforge {
                 self.focus_entering = 0;
                 Task::none()
             }
-
             other => return Err(other),
         })
     }

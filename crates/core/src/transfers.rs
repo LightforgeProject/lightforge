@@ -1,12 +1,7 @@
 //! The download queue as it stood, kept across restarts.
 //!
-//! Only the queue's shape is kept, what is in it, in what order, and how far
-//! each job had got. The bytes themselves are the store's business: it is
-//! checkpointed as it goes, and a restored transfer re-plans against it like
-//! any resume.
-//!
-//! Beside the config rather than in it: this is state the app writes on every
-//! pause and resume, not settings anyone edits.
+//! Only the queue's shape; a restored transfer re-plans against the store.
+//! Beside the config, not in it: state, not settings.
 
 use std::path::Path;
 
@@ -44,10 +39,12 @@ pub struct Saved {
     /// Bytes the job's first plan asked for, if it had planned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_bytes: Option<u64>,
-    /// Bytes done when it was paused. Not tracked while running, the store
-    /// knows that better, and the next plan reads it back.
+    /// Bytes done when it was paused.
     #[serde(default)]
     pub reached: u64,
+    /// A pre-download, not an install or update; see [`crate::tact::staged`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pre_download: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,9 +65,7 @@ impl Queue {
             .map_err(|source| TransfersError::Parse { path: path.to_path_buf(), source })
     }
 
-    /// Write via a temporary file, flushed before the rename, so a crash
-    /// mid-save leaves the last good queue rather than half of one or an
-    /// empty file. An empty queue removes the file.
+    /// Write atomically; an empty queue removes the file.
     pub fn save(&self, path: &Path) -> Result<(), TransfersError> {
         let write = |source| TransfersError::Write { path: path.to_path_buf(), source };
         if self.entries.is_empty() {
@@ -80,19 +75,7 @@ impl Queue {
             };
         }
         let text = toml::to_string_pretty(self)?;
-        let dir = path.parent().unwrap_or(Path::new("."));
-        std::fs::create_dir_all(dir).map_err(write)?;
-        let temp = dir.join(".queue.toml.tmp");
-        let mut file = std::fs::File::create(&temp).map_err(write)?;
-        std::io::Write::write_all(&mut file, text.as_bytes()).map_err(write)?;
-        file.sync_all().map_err(write)?;
-        drop(file);
-        std::fs::rename(&temp, path).map_err(write)?;
-        // Durability of the rename, not of the contents.
-        if let Ok(handle) = std::fs::File::open(dir) {
-            let _ = handle.sync_all();
-        }
-        Ok(())
+        crate::fsutil::write_atomic(path, text.as_bytes()).map_err(write)
     }
 }
 
@@ -116,12 +99,14 @@ mod tests {
                     standing: Standing::Running,
                     job_bytes: Some(12 << 30),
                     reached: 0,
+                    pre_download: false,
                 },
                 Saved {
                     code: ProductCode::ClassicEra,
                     standing: Standing::Paused,
                     job_bytes: Some(4 << 30),
                     reached: 1 << 30,
+                    pre_download: true,
                 },
             ],
         };
@@ -131,5 +116,33 @@ mod tests {
         Queue::default().save(&path).unwrap();
         assert!(!path.exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn concurrent_saves_all_succeed_and_leave_one_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("queue.toml");
+        let queue = Queue {
+            entries: vec![Saved {
+                code: ProductCode::Classic,
+                standing: Standing::Queued,
+                job_bytes: None,
+                reached: 0,
+                pre_download: false,
+            }],
+        };
+
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                s.spawn(|| {
+                    for _ in 0..25 {
+                        queue.save(&path).unwrap();
+                    }
+                });
+            }
+        });
+
+        assert_eq!(Queue::load(&path).unwrap(), queue);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

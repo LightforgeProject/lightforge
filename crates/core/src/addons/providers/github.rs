@@ -13,9 +13,8 @@
 //!                   "metadata": [ { "flavor": "mists", "interface": 50504 } ] } ] }
 //! ```
 //!
-//! Without it there is nothing to go on but the file name, so a single zip is
-//! taken as universal and a multi-zip release picks the one whose name matches
-//! the flavor, a guess, and marked as one in the note.
+//! Without it, a single zip is taken as universal and a multi-zip release is
+//! matched by file name, flagged as a guess in the note.
 
 use serde::Deserialize;
 
@@ -72,16 +71,13 @@ pub async fn resolve(http: &Http, requests: &[Request], flavor: &str) -> Provide
         let repo = request.id.trim_matches('/');
         let wants_prerelease = request.channel.is_some_and(|c| c > Channel::Stable);
 
-        // `releases/latest` is GitHub's own "newest non-draft, non-prerelease",
-        // which is exactly the stable channel and one request. Anything above
-        // stable has to page the list instead and choose.
+        // `releases/latest` is exactly the stable channel; others page the list.
         let release = match wants_prerelease {
             false => {
                 let url = format!("https://api.github.com/repos/{repo}/releases/latest");
                 match http.get_json::<Release>(&url).await {
                     Ok(release) => Some(release),
-                    // A repo with no releases at all is the common case, not a
-                    // fault, ElvUI's own repo has none.
+                    // Common: ElvUI's repo has none.
                     Err(e) => {
                         resolved
                             .push(missing(&request.id, format!("no GitHub release found ({e})")));
@@ -152,9 +148,7 @@ pub async fn resolve(http: &Http, requests: &[Request], flavor: &str) -> Provide
 
 /// What kind of build a GitHub release is.
 ///
-/// GitHub publishes one pre-release flag, not three channels, so a
-/// pre-release is reported as beta whether the asker said beta or alpha.
-/// Calling it alpha would invent a distinction GitHub does not make.
+/// GitHub has one pre-release flag, reported as beta.
 fn channel_of(release: &Release) -> Channel {
     match release.prerelease {
         true => Channel::Beta,
@@ -182,11 +176,8 @@ enum Pick<'a> {
 
 /// Choose the asset for `flavor`.
 ///
-/// A release that publishes `release.json` is *authoritative*: if it lists no
-/// build for our flavor, there is no build for our flavor, and falling back to
-/// "take the only zip" would install a Classic package into a retail install.
-/// Real case: WeakAuras 5.22.0 ships one zip declaring `mists, titan, cata,
-/// classic, bcc` and no mainline build.
+/// A `release.json` is authoritative: no build listed for our flavor means
+/// none. WeakAuras 5.22.0 ships one zip for `mists, titan, cata, classic, bcc`.
 fn pick_asset<'a>(
     release: &'a Release,
     manifest: Option<&ReleaseManifest>,
@@ -246,8 +237,7 @@ fn pick_asset<'a>(
 
 /// The packager's flavor names for one of our catalog flavors.
 ///
-/// The packager distinguishes every Classic line separately, so our coarser
-/// `classic` maps to several of them.
+/// Our `classic` maps to several of the packager's Classic lines.
 fn packager_flavors(flavor: &str) -> Vec<&'static str> {
     match flavor {
         "retail" => vec!["mainline", "retail"],
@@ -317,9 +307,7 @@ mod tests {
 
     #[test]
     fn a_manifest_without_our_flavor_installs_nothing() {
-        // The real case this exists for: WeakAuras 5.22.0 declares
-        // mists/titan/cata/classic/bcc and no mainline build. Taking "the only
-        // zip" would put a Classic package into a retail install.
+        // WeakAuras 5.22.0: no mainline build, so nothing for retail.
         let manifest: ReleaseManifest = serde_json::from_str(
             r#"{"releases":[{"filename":"WeakAuras-5.22.0.zip","nolib":false,
                  "metadata":[{"flavor":"mists"},{"flavor":"classic"}]}]}"#,

@@ -160,12 +160,11 @@ pub(crate) fn casc_rebuild(src: PathBuf, dst: PathBuf, percent: u8) -> Result<()
     Ok(())
 }
 
-pub(crate) fn content(path: PathBuf, product: String, locale: String, fdid: Option<u32>, file: Option<String>) -> Result<()> {
+pub(crate) fn content(path: PathBuf, code: ProductCode, locale: String, fdid: Option<u32>, file: Option<String>) -> Result<()> {
     use lightforge_core::tact::config::BuildConfig;
     use lightforge_core::tact::content::{Content, Locale};
     use lightforge_core::tact::storage::Storage;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let locale: Locale = locale.parse().context("parsing --locale")?;
 
     // The build key is already recorded in .build.info, which is the
@@ -216,7 +215,7 @@ pub(crate) fn content(path: PathBuf, product: String, locale: String, fdid: Opti
         // Nothing asked for: prove the chain works on the first file
         // that is actually present locally. The first file id overall
         // is usually *not* installed, since root covers the whole
-        // build rather than this install's subset.
+        // build, not this install's subset.
         (None, None) => content
             .file_ids()
             .find(|id| content.ekey_for_fdid(*id).is_some_and(|k| storage.contains(&k))),
@@ -227,8 +226,8 @@ pub(crate) fn content(path: PathBuf, product: String, locale: String, fdid: Opti
         let ekey = content.ekey_for_fdid(id).context("content key has no encoding key")?;
         let bytes = content.read_fdid(&mut storage, id).context("reading the file")?;
         println!("\nfile id         {id}");
-        println!("content key     {}", lightforge_core::tact::config::to_hex(&ckey));
-        println!("encoding key    {}", lightforge_core::tact::config::to_hex(&ekey));
+        println!("content key     {}", lightforge_core::text::hex(&ckey));
+        println!("encoding key    {}", lightforge_core::text::hex(&ekey));
         println!("expected size   {}", content.size_of(&ckey).unwrap_or(0));
         println!("decoded size    {}", bytes.len());
         let magic: String = bytes.iter().take(4).map(|b| {
@@ -347,11 +346,10 @@ pub(crate) fn idx(path: PathBuf) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn build_info_set(ctx: Ctx, product: String, build_key: String, cdn_key: String, version: String) -> Result<()> {
+pub(crate) fn build_info_set(ctx: Ctx, code: ProductCode, build_key: String, cdn_key: String, version: String) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::buildinfo::BuildInfoError;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let path = layout.build_info(&code);
 
     // Read-modify-write, atomically. The caller is responsible for
@@ -367,9 +365,8 @@ pub(crate) fn build_info_set(ctx: Ctx, product: String, build_key: String, cdn_k
     Ok(())
 }
 
-pub(crate) fn build_info(ctx: Ctx, product: String) -> Result<()> {
+pub(crate) fn build_info(ctx: Ctx, code: ProductCode) -> Result<()> {
     let Ctx { layout, .. } = ctx;
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let path = layout.build_info(&code);
     let contents = std::fs::read_to_string(&path)
         .with_context(|| format!("reading {}", path.display()))?;

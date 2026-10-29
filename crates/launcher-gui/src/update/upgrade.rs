@@ -11,9 +11,8 @@ impl Lightforge {
         Ok(match message {
             Message::UpdateChecked(found) => {
                 let Some(available) = found else { return Ok(Task::none()) };
-                // Once per release. Someone who has read "beta.3 is out" and
-                // decided to stay on beta.2 should not be told again on every
-                // start until they give in.
+                self.newer_release = Some(available.clone());
+                // The notice once per release; Settings offers it from then on.
                 if self.config.update_seen.as_deref() == Some(available.latest.as_str()) {
                     return Ok(Task::none());
                 }
@@ -32,6 +31,7 @@ impl Lightforge {
                     // Shown even if this version was dismissed before: the
                     // button is the request, so "once per release" no longer applies.
                     Ok(Some(available)) => {
+                        self.newer_release = Some(available.clone());
                         if self.update_notice.is_none() {
                             self.upgrade = None;
                             self.update_notice = Some(available);
@@ -78,6 +78,16 @@ impl Lightforge {
                     Message::UpgradeReady,
                 )
             }
+            Message::UpdateNow => {
+                let Some(available) = self.newer_release.clone() else { return Ok(Task::none()) };
+                let route = self.origin.route(&available.latest);
+                self.update_notice = Some(available);
+                // Commands to copy have nothing to start: the notice shows them.
+                match route {
+                    lightforge_core::upgrade::Route::Instructions { .. } => Task::none(),
+                    _ => self.update(Message::UpgradeStart),
+                }
+            }
             Message::UpgradeReady(result) => {
                 let Some(upgrade) = self.upgrade.as_mut() else { return Ok(Task::none()) };
                 upgrade.rx = None;
@@ -108,9 +118,7 @@ impl Lightforge {
                 if !self.can_restart() {
                     return Ok(Task::none());
                 }
-                // Steam's Game Mode started this process and watches it: a
-                // copy started from here would not be its game. Closing is
-                // all that can be done; Steam starts the new one.
+                // Under Game Mode, only close: Steam starts the new one.
                 if fit::under_gamescope() {
                     return Ok(iced::exit());
                 }

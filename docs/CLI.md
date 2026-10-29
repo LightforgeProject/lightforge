@@ -56,6 +56,19 @@ Options:
   -h, --help         Print help
 ```
 
+### `lightforge doctor`
+
+```text
+Check this system for what Battle.net and the games need under Proton
+
+Usage: lightforge doctor [OPTIONS]
+
+Options:
+      --json         Print the checks as JSON
+      --root <ROOT>  Override the Blizzard root (default: ~/Games/Blizzard)
+  -h, --help         Print help
+```
+
 ### `lightforge status`
 
 ```text
@@ -294,7 +307,7 @@ Options:
       --locale <LOCALE>
           Locale to install, e.g. `enUS` [default: enUS]
       --flavor <FLAVOR>
-          Flavor directory the install files go in [default: _retail_]
+          Flavor directory the install files go in. Default: the one the product config names, e.g. `_forever_` for `wowf`
       --dry-run
           Plan and report, then stop without fetching any content
       --optional <OPTIONAL>
@@ -307,6 +320,8 @@ Options:
           Skip the loose files, which are the large ones
       --install-files
           Also extract the install manifest's files (Wow.exe and friends)
+      --stage
+          Pre-download the build Blizzard lists ahead of its release, into the store only. The installed build stays the one that launches
       --concurrency <CONCURRENCY>
           Requests in flight. These transfers are request-latency bound, not bandwidth bound: 8 measured 9-10 MB/s where 32 measured 25 [default: 32]
       --gap-kib <GAP_KIB>
@@ -358,6 +373,21 @@ Options:
 
   -h, --help
           Print help (see a summary with '-h')
+```
+
+### `lightforge move`
+
+```text
+Move a game to another library without downloading it again. Prints the plan unless `--yes` is given
+
+Usage: lightforge move [OPTIONS] --to <TO>
+
+Options:
+      --product <PRODUCT>  [default: wow]
+      --root <ROOT>        Override the Blizzard root (default: ~/Games/Blizzard)
+      --to <TO>            The library to move it to, by name or id, as `lightforge paths` lists them
+      --yes                Actually move. Without this, nothing is touched
+  -h, --help               Print help
 ```
 
 ### `lightforge uninstall`
@@ -503,7 +533,6 @@ Options:
       --product <PRODUCT>  [default: wow]
       --root <ROOT>        Override the Blizzard root (default: ~/Games/Blizzard)
       --catalog <CATALOG>  Catalog base URL, or a fixture directory. Defaults to config
-      --pinned             Install the exact files the export pinned, rather than the newest
       --dry-run            Resolve and report without writing anything
   -h, --help               Print help
 ```
@@ -594,6 +623,7 @@ Arguments:
 Options:
       --product <PRODUCT>  [default: wow]
       --root <ROOT>        Override the Blizzard root (default: ~/Games/Blizzard)
+      --account <ACCOUNT>  Only this game account's folder, as `backup-list` names it; the other accounts and what they share stay as they are
   -h, --help               Print help
 ```
 

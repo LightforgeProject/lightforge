@@ -3,17 +3,10 @@
 use crate::*;
 use iced::widget::column;
 
-/// How wide a centred message card gets, the broken-config screen. A measure
-/// rather than the full window: this one is prose, and prose set across a wide
-/// monitor is unreadable.
+/// How wide a centred message card gets: a readable measure for prose.
 pub(crate) const MESSAGE_WIDTH: f32 = 720.0;
 
-/// Width of the size column on the Storage page.
-///
-/// Fixed so every figure right-aligns to the same edge. Left to shrink, a row
-/// with a Clear button would push its size left of the rows without one, and a
-/// column of numbers that does not line up is the thing that makes a table
-/// look unfinished.
+/// Width of the size column on the Storage page, so figures right-align.
 pub(crate) const SIZE_COLUMN: f32 = 96.0;
 
 /// Width of the action slot beside a size, kept even where there is no button.
@@ -23,18 +16,11 @@ pub(crate) fn muted<'a>(content: String, size: f32) -> iced::widget::Text<'a> {
     text(content).size(size).color(theme::MUTED)
 }
 
-/// Centre a line of text on its *letters* rather than on its line box.
+/// Centre a line of text on its *letters*, not on its line box.
 ///
-/// A line box is ascent plus descent plus leading, so centring it puts the
-/// empty descent space, the room for a `g` or a `y`: below the letters and
-/// lifts them above the middle. On a word that has no descenders at all, like
-/// `GAMES` or `Battle.net`, every bit of that space is empty and the word
-/// reads as sitting high beside something that fills its box, such as a tile.
-///
-/// Collapsing the line height to the glyphs removes the leading, and the
-/// remaining half-descent is taken by a pixel of padding above. Both are of
-/// the text's own size, so this holds at any size rather than being a nudge
-/// tuned to one.
+/// Centring the line box leaves the empty descent below, so a word without
+/// descenders (`GAMES`) sits high. The line height collapses to the glyphs,
+/// and padding above takes the half-descent, at any size.
 pub(crate) fn optically_centred<'a>(text: iced::widget::Text<'a>) -> Element<'a, Message> {
     container(text.line_height(iced::widget::text::LineHeight::Relative(1.0)))
         // Top only. Padding on both sides would grow the box symmetrically and
@@ -54,19 +40,15 @@ pub(crate) const SEARCH_DEBOUNCE: std::time::Duration = std::time::Duration::fro
 /// [`optically_centred`].
 pub(crate) const OPTICAL_NUDGE: f32 = 2.0;
 
-/// The key that reveals the hints, with Control, Alt and Shift held.
-///
-/// Not a setting and not in any menu: the prose it brings back is written for
-/// whoever is building Lightforge, and a user who found it by accident would
-/// be reading notes meant for someone else. It lasts as long as the window,
-/// so nothing on disk records that it was ever pressed.
+/// The key that reveals the hints, with Control, Alt and Shift held: a
+/// developer aid, not a setting, and not saved.
 pub(crate) const HINTS_CHORD: &str = "h";
 
 /// Width of a band button, pinned so the band's arithmetic is exact rather
 /// than an estimate of how wide a glyph renders.
 pub(crate) const BAND_BUTTON: f32 = 48.0;
 
-/// How far a held tile has to travel before it is a drag rather than a click
+/// How far a held tile has to travel before it is a drag, not a click
 /// with a shaky hand.
 pub(crate) const DRAG_SLOP: f32 = 6.0;
 
@@ -99,60 +81,37 @@ pub(crate) fn focus_settle() -> Task<Message> {
 
 /// Battle.net's own mark on the button at the end of the band.
 ///
-/// Larger than [`BAND_GLYPH`], which sizes marks that sit *inside* a band
-/// control: this one sits beside a word at the end of the row of 48pt tiles,
-/// and a 16pt mark there reads as a favicon rather than the last entry in a
-/// row of games. Half a tile is the size that makes the button a peer of what
-/// it stands next to without becoming a tile itself.
+/// Half a tile, larger than [`BAND_GLYPH`]: at 16pt it read as a favicon.
 pub(crate) const BNET_GLYPH: f32 = BAND_BUTTON / 2.0;
 
-/// Mark in front of one of the three links under the action panel's status
-/// lines. A shade over the 12pt word it introduces, so the pair sits on one
-/// optical line rather than the mark hanging below the text.
+/// Mark before a link under the action panel, a shade over its 12pt word.
 pub(crate) const LINK_GLYPH: f32 = 14.0;
 
 /// Mark beside a label in the app menu, and the social squares' mark.
 pub(crate) const MENU_GLYPH: f32 = 16.0;
 
-/// The arrow on a tab that opens a browser. Smaller than [`MENU_GLYPH`]
-/// because this one is trimmed to its own ink, the way the band's marks are:
-/// it is read beside a word rather than down a column, so the box is the mark
-/// and the number is the size it actually draws. 8 sits just under the cap
-/// height of [`TAB_LABEL`] bold: a mark on a word, not a second word.
+/// The arrow on a tab that opens a browser, trimmed to its ink: just under
+/// the cap height of [`TAB_LABEL`] bold.
 pub(crate) const OUTBOUND_GLYPH: f32 = 8.0;
 
-/// How tall the wordmark is drawn in the top bar. Above [`theme::TITLE`]:
-/// the mark is artwork rather than a line of type, and the hammer between the
-/// two words carries detail that a headline's cap height loses.
+/// How tall the wordmark is drawn in the top bar, above [`theme::TITLE`] so
+/// the hammer keeps its detail.
 pub(crate) const WORDMARK_HEIGHT: f32 = 28.0;
 
-/// The navigation tabs' type. Deliberately small beside a wordmark of
-/// [`WORDMARK_HEIGHT`]: the mark is the row's voice and the tabs are its
-/// index, and setting them anywhere near the mark's size gives the row two
-/// things shouting at once. The air around them, not their size, is what
-/// keeps them readable; see [`TAB_GAP`].
+/// The navigation tabs' type, small beside the wordmark; air ([`TAB_GAP`])
+/// keeps them readable.
 pub(crate) const TAB_LABEL: f32 = theme::LABEL;
 
 /// The air between two tabs in the navigation row.
 ///
-/// All of it lives here rather than in the tabs' own padding, and that is the
-/// point. A tab's padding is what the selected pill is drawn around, so air
-/// spent there is air you see on three sides of "Play" and nowhere beside an
-/// unselected tab, which made gaps that measured the same look different.
-/// Keeping the tabs' padding at the minimum a pill needs leaves them within a
-/// few pixels of each other.
+/// Here, not in the tabs' padding: the selected pill is drawn around padding,
+/// which made equal gaps look unequal.
 pub(crate) const TAB_GAP: f32 = theme::LG;
 
-/// Extra air on top of the row's own spacing where one group of controls in
-/// the navigation row ends and the next begins, wordmark, then the arrows,
-/// then the pages. It only has to say "different kind of thing"; the groups
-/// are already told apart by what they look like, so a gap wide enough to
-/// read as a break is wider than the job needs.
+/// Extra air between groups in the navigation row: wordmark, arrows, pages.
 pub(crate) const GROUP_GAP: f32 = theme::XS;
 
-/// The wordmark's width over its height. The picture is trimmed to its own
-/// ink, so the ratio is fixed by the art: scaling by it is what keeps the
-/// hammer round instead of squeezed.
+/// The wordmark's width over its height, fixed by the art.
 pub(crate) const WORDMARK_ASPECT: f32 = 563.0 / 72.0;
 
 /// The wordmark as drawn, from its height and the artwork's aspect.
@@ -171,25 +130,15 @@ pub(crate) const APP_MENU_CHEVRON: f32 = BAND_GLYPH * 0.75;
 pub(crate) const SETTINGS_NAV_WIDTH: f32 =
     theme::SM + WORDMARK_WIDTH + theme::SM + APP_MENU_CHEVRON / 2.0 - theme::LG;
 
-/// Air between that label and its arrow.
-///
-/// Tighter than [`theme::XS`] on purpose. Every tab in the navigation row is
-/// separated by the same [`TAB_GAP`], but only this one carries anything after
-/// its label, and that padding is *inside* the button, so air there widens
-/// the space beside "Battle.net Shop" without the row's spacing changing at
-/// all. Keeping the arrow against its word is what makes the two
-/// gaps match by eye as well as in the arithmetic.
+/// Air between that label and its arrow, tight: it is inside the button and
+/// would widen the gap beside "Battle.net Shop".
 pub(crate) const OUTBOUND_GAP: f32 = 2.0;
 
 /// How far a control that has nowhere to go is faded: visibly present, plainly
 /// not available. One value so every dimmed thing dims by the same amount.
 pub(crate) const DIMMED: f32 = 0.35;
 
-/// How many status lines a bug report carries.
-///
-/// Twenty is about a minute of a busy launcher and three screens of a quiet
-/// one, enough to show what led up to the problem, short enough that nobody
-/// has to scroll the card to read what they are sending.
+/// How many status lines a bug report carries: about a minute of a busy launcher.
 pub(crate) const HISTORY: usize = 20;
 
 /// One outbound mark as a square button, Discord and X.
@@ -220,10 +169,7 @@ pub(crate) const HINT_GLYPH: f32 = 22.0;
 
 /// A product's mark in the Add a game list.
 ///
-/// Smaller than the band's [`theme::TILE`]: there the mark *is* the control,
-/// here it labels a row whose height belongs to two lines of text, and a mark
-/// taller than those two lines would set the row's height instead of fitting
-/// inside it.
+/// Smaller than [`theme::TILE`], to fit inside a two-line row.
 pub(crate) const BROWSE_MARK: f32 = theme::TILE * 0.6;
 
 /// How big a mark on a band button is drawn: the box it sits in is
@@ -265,21 +211,16 @@ pub(crate) fn mono<'a>(content: String) -> iced::widget::Text<'a> {
         .color(theme::MUTED)
 }
 
-/// A status pill.
 /// Draw one block of an addon's description or changelog.
 ///
-/// The proxy has already reduced the HTML to these few shapes (see
-/// `lightforge_core::addons::richtext`), so this is the whole renderer. An
-/// unrecognised kind draws as a paragraph on purpose: the contract is that
-/// the proxy can add one without a client release.
+/// The whole renderer (see `lightforge_core::addons::richtext`); an unknown
+/// kind draws as a paragraph.
 pub(crate) fn rich_block(block: &richtext::Block) -> Element<'_, Message> {
     use richtext::Kind;
 
     match &block.kind {
         Kind::Heading => {
-            // Two sizes, not six. A changelog's h1 and h3 mean "version" and
-            // "section", and honouring all six levels on a 620px card just
-            // makes the deep ones indistinguishable from body text.
+            // Two sizes, not six: "version" and "section".
             let size = match block.level {
                 0..=2 => theme::HEADING,
                 _ => theme::BODY,
@@ -288,9 +229,7 @@ pub(crate) fn rich_block(block: &richtext::Block) -> Element<'_, Message> {
         }
 
         Kind::Bullet => row![
-            // The marker is its own text rather than part of the string so
-            // that a wrapped bullet hangs under its text and not under the
-            // dot.
+            // Its own text, so a wrapped line hangs under the text.
             muted("•".to_owned(), theme::BODY),
             rich_paragraph(block),
         ]
@@ -306,10 +245,7 @@ pub(crate) fn rich_block(block: &richtext::Block) -> Element<'_, Message> {
         .style(theme::row)
         .into(),
 
-        // Deliberately not drawn. Showing them means fetching and decoding
-        // remote images into handles, a whole image cache for a card that is
-        // open for ten seconds; the description's words carry the meaning and
-        // the page has the pictures.
+        // Not drawn: an image cache for a card open ten seconds.
         Kind::Image => Space::new().into(),
 
         Kind::Para | Kind::Other(_) => rich_paragraph(block),
@@ -318,9 +254,7 @@ pub(crate) fn rich_block(block: &richtext::Block) -> Element<'_, Message> {
 
 /// A block's text with its links clickable.
 ///
-/// The link offsets come from the proxy precisely so this can cut the string
-/// without searching it, a search picks the wrong occurrence as soon as one
-/// block links the same words twice, which changelogs do constantly.
+/// Cut at the proxy's offsets, not by searching the text.
 pub(crate) fn rich_paragraph(block: &richtext::Block) -> Element<'_, Message> {
     let inline = block.inline_links();
     let trailing: Vec<_> = block.trailing_links().collect();
@@ -348,7 +282,7 @@ pub(crate) fn rich_paragraph(block: &richtext::Block) -> Element<'_, Message> {
     }
 
     // A link the proxy could not seat inside the text keeps its destination
-    // as a reference after it, rather than being lost.
+    // as a reference after it instead of being lost.
     for link in trailing {
         spans.push(span(" "));
         spans.push(
@@ -364,13 +298,9 @@ pub(crate) fn rich_paragraph(block: &richtext::Block) -> Element<'_, Message> {
 
 /// A state at a button's size, for where one stands beside buttons.
 ///
-/// Padded exactly like [`action_button`] and [`secondary`], for the same
-/// reason those two match each other: side by side, a control that disagrees
-/// about its height reads as a mistake.
+/// Padded like [`action_button`] and [`secondary`], so heights match.
 pub(crate) fn tag<'a>(content: String, color: iced::Color) -> Element<'a, Message> {
-    // Never wrapped. A tag is a mark at the size of the control beside it, and
-    // a two-line one makes its whole row taller than every other row on the
-    // page. Keep the words few enough to fit instead.
+    // Never wrapped: a two-line tag makes its row taller than the rest.
     container(
         text(content)
             .size(theme::LABEL)
@@ -381,6 +311,7 @@ pub(crate) fn tag<'a>(content: String, color: iced::Color) -> Element<'a, Messag
         .into()
 }
 
+/// A status pill.
 pub(crate) fn pill<'a>(content: String, color: iced::Color) -> Element<'a, Message> {
     container(text(content).size(theme::CAPTION))
         .padding([2.0, theme::SM])
@@ -404,7 +335,7 @@ pub(crate) fn empty<'a>(headline: &str, hint: &str) -> Element<'a, Message> {
     .into()
 }
 
-/// A button that is disabled rather than absent when it cannot be used,
+/// A button that is disabled, not absent when it cannot be used,
 /// buttons appearing and disappearing makes a UI feel unstable.
 pub(crate) struct Action<'a> {
     pub(crate) inner: button::Button<'a, Message>,
@@ -456,10 +387,7 @@ pub(crate) fn opted_out_note(words: &'static str) -> Element<'static, Message> {
 
 /// The quieter button: same size as [`action_button`], different colour.
 ///
-/// Padded identically on purpose. These two sit side by side all over the app,
-/// Page next to Install, Keep next to Delete, and a pair of buttons that
-/// disagree about their height reads as a mistake rather than as a hierarchy.
-/// What separates them is colour, which is the thing that carries meaning.
+/// Padded identically: side by side, only the colour differs.
 pub(crate) fn secondary(label: &str, message: Message) -> Action<'static> {
     Action {
         inner: button(text(label.to_owned()).size(theme::tap_text(theme::LABEL)))
@@ -502,6 +430,7 @@ pub(crate) fn problem(problem: &Problem) -> Element<'_, Message> {
         Fix::ProtonSettings => ("Open Proton settings", Message::ShowSettingsTab(SettingsTab::Proton)),
         Fix::StorageSettings => ("Open Storage settings", Message::ShowSettingsTab(SettingsTab::Storage)),
         Fix::CopyCommand(command) => ("Copy the command", Message::CopyRuntimeCommand(command.clone())),
+        Fix::FreshProton(version) => ("Install a fresh copy", Message::FreshProton(version.clone())),
     });
     if let Some((label, message)) = fix {
         body = body.push(secondary(label, message).keyed(format!("problem fix {label}"), true));
@@ -516,8 +445,6 @@ pub(crate) fn section<'a>(title: impl Into<String>, body: Element<'a, Message>) 
         .into()
 }
 
-/// A fixed-width label beside its control, so every control in a section
-/// starts on the same line.
 /// Width of each fact column on an addon row. One number, so the header and
 /// the rows cannot drift apart.
 pub(crate) const ADDON_COLUMN: f32 = 92.0;
@@ -525,10 +452,7 @@ pub(crate) const ADDON_COLUMN: f32 = 92.0;
 /// Width reserved for a row's controls, so the columns beside them line up
 /// with each other and with the header.
 ///
-/// Measured against the widest a row gets: the channel picker (a fixed 120),
-/// an Update or Switch button, the two-button armed Remove (Delete beside
-/// Keep, which is wider than Remove alone), and the menu glyph, with
-/// [`theme::SM`] between each.
+/// The widest row: channel picker, Update, armed Delete and Keep, menu glyph.
 pub(crate) const ADDON_ACTIONS: f32 = 380.0;
 
 /// One fact in an addon row's column, or a dash where there is none.
@@ -538,6 +462,8 @@ pub(crate) fn cell<'a>(value: Option<String>) -> Element<'a, Message> {
         None => muted("—".to_owned(), theme::CAPTION),
     }
     .width(Length::Fixed(ADDON_COLUMN))
+    // One long word would otherwise run into the next column.
+    .wrapping(iced::widget::text::Wrapping::WordOrGlyph)
     .into()
 }
 
@@ -548,6 +474,8 @@ pub(crate) fn column_head<'a>(label: &str) -> Element<'a, Message> {
         .into()
 }
 
+/// A fixed-width label beside its control, so every control in a section
+/// starts on the same line.
 pub(crate) fn field_row<'a>(label: String, control: Element<'a, Message>) -> Element<'a, Message> {
     row![muted(label, theme::LABEL).width(Length::Fixed(160.0)), control]
         .spacing(theme::MD)
@@ -643,11 +571,8 @@ pub(crate) fn clickable<'a>(key: impl Into<String>, content: impl Into<Element<'
 
 /// A button inside a [`clickable`]-style ring, drawn on the button's edge.
 ///
-/// A button's ring sends its message itself rather than click it: iced's
-/// button ignores a press once the event carrying it is captured, and the
-/// made-up click rides whatever event comes next, which on a page with text
-/// fields often is. Measured 2026-10-17: the bug report's Cancel and Send
-/// and the environment variables' Remove never pressed.
+/// The ring sends the message itself: iced's button ignores a made-up click
+/// once its event is captured (2026-10-17: Cancel and Send never pressed).
 pub(crate) fn tappable<'a>(
     key: impl Into<String>,
     on_press: Option<Message>,
@@ -667,9 +592,7 @@ pub(crate) fn dot<'a>() -> Element<'a, Message> {
 
 /// The splash's spinner: a ring with a bright arc travelling round it.
 ///
-/// A canvas, since iced has no spinner; angle and arc length come off the
-/// clock, which the 100 ms tick already redraws by. The arc breathes as it
-/// turns, which reads as work being done rather than a rigid object.
+/// A canvas, since iced has no spinner, driven by the 100 ms tick.
 pub(crate) struct Spinner;
 
 impl Spinner {
@@ -711,9 +634,7 @@ impl canvas::Program<Message> for Spinner {
                 .with_line_cap(canvas::LineCap::Round)
         };
 
-        // The track it runs on, so the ring is a ring even where the arc is
-        // not, without it the arc reads as a stray mark rather than as
-        // something going round something.
+        // The track, so the arc reads as going round something.
         frame.stroke(
             &canvas::Path::circle(centre, radius),
             stroke(iced::Color { a: 0.12, ..theme::TEXT }),
@@ -743,9 +664,7 @@ impl canvas::Program<Message> for Spinner {
 
 /// One release's notes: its intro, then a bulleted list.
 ///
-/// Shared by the popup and the Lightforge Updates page so the two cannot
-/// drift. The bullet is a character rather than a drawn mark: these are lines
-/// of prose, not controls.
+/// Shared by the popup and the Lightforge Updates page.
 pub(crate) fn release_notes(release: &lightforge_core::releases::Release) -> Element<'static, Message> {
     // Prose, so a little more leading than a label gets: a note that wraps
     // should not read as two notes run together.

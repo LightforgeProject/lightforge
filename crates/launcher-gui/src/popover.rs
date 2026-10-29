@@ -1,20 +1,8 @@
 //! A panel pinned above the widget it belongs to, drawn outside the layout.
 //!
-//! Every attempt to place the cog menu with ordinary layout traded one problem
-//! for another: inside the action panel's column it sized the card, and
-//! floating on the spacer above it the card's own top edge and padding fell
-//! between the menu and the button. Neither is a spacing mistake, a column
-//! cannot put a child *over* its sibling, and a `Stack` clips to its own
-//! bounds.
-//!
-//! An overlay is the mechanism iced already uses for exactly this: it is laid
-//! out against the whole window rather than against a parent, which is how a
-//! `pick_list`'s dropdown escapes the row it sits in. This wraps any widget so
-//! a second widget can be pinned directly above it, over whatever is behind.
-//!
-//! The anchor's bounds are known when the overlay is laid out, so the position
-//! is computed rather than configured. There is no offset to keep in step
-//! with the panel's padding or the window's size.
+//! Layout cannot put a child over its sibling, and a `Stack` clips. An
+//! overlay is laid out against the window, as `pick_list`'s dropdown is,
+//! positioned from the anchor's bounds.
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{Operation, Tree};
@@ -27,11 +15,8 @@ const GAP: f32 = 8.0;
 
 /// Which of the panel's vertical edges lines up with the anchor's.
 ///
-/// The anchor's own position decides this, not taste. A button at the end of a
-/// row has nothing to its right, so its panel hangs back over the content
-/// ([`Edge::Right`]); a button in the middle of one reads as the panel's
-/// left-hand corner ([`Edge::Left`]). Either way the panel is clamped to the
-/// window, so the choice only decides which way it grows.
+/// A button at the row's end hangs back ([`Edge::Right`]); one in the middle
+/// is the panel's corner ([`Edge::Left`]). Clamped to the window either way.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Edge {
     Left,
@@ -55,7 +40,7 @@ pub struct Popover<'a, Message, Theme, Renderer> {
     /// `None` when nothing is showing, which costs no overlay at all.
     panel: Option<Element<'a, Message, Theme, Renderer>>,
     edge: Edge,
-    /// Hang under the anchor rather than over it.
+    /// Hang under the anchor, not over it.
     below: bool,
 }
 
@@ -66,7 +51,7 @@ impl<'a, Message, Theme, Renderer> Popover<'a, Message, Theme, Renderer> {
         self
     }
 
-    /// Open downwards, the way a menu reads, rather than above the anchor.
+    /// Open downwards, the way a menu reads, not above the anchor.
     /// Still flips when there is no room on the preferred side.
     pub fn below(mut self) -> Self {
         self.below = true;
@@ -105,8 +90,8 @@ where
         renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        // Only the anchor is laid out here. That is the whole point: the panel
-        // takes no room, so opening it moves nothing.
+        // Only the anchor is laid out: the panel takes no room, so opening it
+        // moves nothing.
         self.anchor.as_widget_mut().layout(&mut tree.children[0], renderer, limits)
     }
 
@@ -188,9 +173,7 @@ where
         let panel = self.panel.as_mut()?;
         let (anchor_tree, panel_tree) = tree.children.split_at_mut(1);
 
-        // The anchor may have an overlay of its own, a pick_list inside it,
-        // say. Dropping it here would be a silent bug, so it is kept and the
-        // two are grouped.
+        // The anchor's own overlay is kept, grouped with ours.
         let beneath = self.anchor.as_widget_mut().overlay(
             &mut anchor_tree[0],
             layout,
@@ -236,10 +219,7 @@ where
         );
         let size = node.size();
 
-        // Above the anchor, lined up by whichever edge [`Edge`] names. The
-        // anchor's bounds come from this layout pass, so a panel pinned to a
-        // button that moves, the band's buttons shift as games are added and
-        // removed, follows it without anything being recomputed.
+        // Lined up by [`Edge`], from this pass's anchor bounds.
         let x = match self.edge {
             Edge::Right => self.anchor.x + self.anchor.width - size.width,
             Edge::Left => self.anchor.x,
@@ -303,12 +283,8 @@ where
             &bounds,
         );
 
-        // The panel owns its rectangle, including the gaps between its rows.
-        // Without this a pointer event that no entry wanted, a click in the
-        // spacing, a scroll, carried on to whatever the panel is covering,
-        // so clicking between two menu entries pressed the game tile beneath.
-        // The panel has already had the event by this point; capturing only
-        // stops it travelling further.
+        // The panel owns its gaps too, or a click between entries reaches
+        // the tile beneath.
         if matches!(event, Event::Mouse(_) | Event::Touch(_)) && cursor.is_over(bounds) {
             shell.capture_event();
         }
@@ -326,11 +302,8 @@ where
         let interaction =
             self.panel.as_widget().mouse_interaction(self.tree, layout, cursor, &bounds, renderer);
 
-        // What this answers decides more than the cursor's shape: iced hands
-        // the page beneath an unavailable cursor only while an overlay reports
-        // *some* interaction (`iced_runtime`'s `user_interface`). Reporting
-        // `None` anywhere over the panel would leave the widgets under it
-        // live, hovering and highlighting through a menu that covers them.
+        // Reporting `None` here leaves the widgets beneath live
+        // (`iced_runtime`'s `user_interface`).
         match (interaction, cursor.is_over(bounds)) {
             (mouse::Interaction::None, true) => mouse::Interaction::Idle,
             (interaction, _) => interaction,

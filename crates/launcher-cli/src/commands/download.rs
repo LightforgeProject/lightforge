@@ -4,14 +4,13 @@ use crate::*;
 
 // One parameter per command-line flag.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn download(dest: PathBuf, product: String, region: String, locale: String, flavor: String, dry_run: bool, optional: Vec<String>, limit_archives: Option<usize>, limit_runs: Option<usize>, skip_loose: bool, install_files: bool, concurrency: usize, gap_kib: u32, checkpoint_mib: u64, cancel_after: Option<u64>, show_install: bool) -> Result<()> {
+pub(crate) async fn download(dest: PathBuf, code: ProductCode, region: String, locale: String, flavor: String, dry_run: bool, optional: Vec<String>, limit_archives: Option<usize>, limit_runs: Option<usize>, skip_loose: bool, install_files: bool, stage: bool, concurrency: usize, gap_kib: u32, checkpoint_mib: u64, cancel_after: Option<u64>, show_install: bool) -> Result<()> {
     use lightforge_core::net::Http;
     use lightforge_core::tact::download::Cancel;
     use lightforge_core::tact::install::{self, Event, Options as InstallOptions};
     use lightforge_core::tact::version::Region;
     use std::time::Instant;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let region: Region = region.parse().context("parsing --region")?;
     let gib = |b: u64| b as f64 / 1024f64.powi(3);
 
@@ -24,6 +23,7 @@ pub(crate) async fn download(dest: PathBuf, product: String, region: String, loc
         gap_bytes: gap_kib * 1024,
         checkpoint_bytes: checkpoint_mib * 1024 * 1024,
         install_files,
+        stage,
         limit_archives,
         limit_runs,
         skip_loose,
@@ -32,7 +32,7 @@ pub(crate) async fn download(dest: PathBuf, product: String, region: String, loc
 
     // Event printing, shared by the dry run and the real one. The
     // index prelude and the transfer are both far too chatty to print
-    // per event, so both are throttled here rather than in core.
+    // per event, so both are throttled here, not in core.
     let start = Instant::now();
     let mut last_index = 0usize;
     let mut last_report = Instant::now();
@@ -110,6 +110,7 @@ pub(crate) async fn download(dest: PathBuf, product: String, region: String, loc
         Event::BuildInfo { path, version } => {
             println!("\n.build.info     {} ({version})", path.display())
         }
+        Event::Staged { version } => println!("\nstaged          {version}, waiting for its release"),
         Event::ProductDb { path } => {
             println!(".product.db     {}", path.display())
         }
@@ -165,7 +166,7 @@ pub(crate) async fn download(dest: PathBuf, product: String, region: String, loc
     for failure in summary.outcome.failed.iter().take(10) {
         eprintln!(
             "  FAILED {} — {}",
-            lightforge_core::tact::config::to_hex(&failure.ekey),
+            lightforge_core::text::hex(&failure.ekey),
             failure.reason
         );
     }
@@ -187,14 +188,14 @@ pub(crate) async fn download(dest: PathBuf, product: String, region: String, loc
     Ok(())
 }
 
-pub(crate) async fn cdn_archive(archive: Option<String>, product: String, region: String, fetch: usize, verify_with: Option<PathBuf>) -> Result<()> {
+pub(crate) async fn cdn_archive(archive: Option<String>, code: ProductCode, region: String, fetch: usize, verify_with: Option<PathBuf>) -> Result<()> {
     use lightforge_core::net::Http;
     use lightforge_core::tact::archive::ArchiveIndex;
     use lightforge_core::tact::cdn::{Client, Kind};
-    use lightforge_core::tact::config::{to_hex, BuildConfig, CdnConfig};
+    use lightforge_core::tact::config::{BuildConfig, CdnConfig};
+    use lightforge_core::text::hex;
     use lightforge_core::tact::version::{self, Region};
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let region: Region = region.parse().context("parsing --region")?;
 
     let http = Http::new()?;
@@ -221,7 +222,10 @@ pub(crate) async fn cdn_archive(archive: Option<String>, product: String, region
     // suffix, and is not itself content-addressed by that name.
     let endpoint = &client.endpoints()[0];
     let url = format!("{}.index", endpoint.url(Kind::Data, &archive)?);
-    let raw = http.get_bytes(&url).await.context("fetching the archive index")?;
+    let raw = http
+        .get_bytes(&url, lightforge_core::net::MAX_CDN_BYTES)
+        .await
+        .context("fetching the archive index")?;
     println!("index           {} bytes from {url}", raw.len());
 
     let index = ArchiveIndex::parse(&raw, &archive).context("parsing the archive index")?;
@@ -253,21 +257,21 @@ pub(crate) async fn cdn_archive(archive: Option<String>, product: String, region
             continue;
         };
         match client
-            .fetch_from_archive(&http, &archive, located, &ckey, None)
+            .fetch_from_archive(&http, &archive, located, &ckey)
             .await
         {
             Ok(decoded) => {
                 ok += 1;
                 println!(
                     "  {} -> ckey {}  {:>9} bytes decoded  verified",
-                    to_hex(&located.ekey),
-                    to_hex(&ckey),
+                    hex(&located.ekey),
+                    hex(&ckey),
                     decoded.len()
                 );
             }
             Err(e) => {
                 bad += 1;
-                println!("  {} FAILED: {e}", to_hex(&located.ekey));
+                println!("  {} FAILED: {e}", hex(&located.ekey));
             }
         }
     }
@@ -275,12 +279,11 @@ pub(crate) async fn cdn_archive(archive: Option<String>, product: String, region
     Ok(())
 }
 
-pub(crate) async fn cdn_fetch(product: String, region: String, hash: Option<String>, kind: String, compare: Option<PathBuf>) -> Result<()> {
+pub(crate) async fn cdn_fetch(code: ProductCode, region: String, hash: Option<String>, kind: String, compare: Option<PathBuf>) -> Result<()> {
     use lightforge_core::net::Http;
     use lightforge_core::tact::cdn::{Client, Kind};
     use lightforge_core::tact::version::{self, Region};
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let region: Region = region.parse().context("parsing --region")?;
     let kind = match kind.as_str() {
         "config" => Kind::Config,
@@ -330,14 +333,13 @@ pub(crate) async fn cdn_fetch(product: String, region: String, hash: Option<Stri
 
 // One parameter per command-line flag.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn plan(dest: PathBuf, product: String, region: String, locale: String, flavor: String, explain: bool, optional: Vec<String>, limit_archives: Option<usize>, concurrency: usize) -> Result<()> {
+pub(crate) async fn plan(dest: PathBuf, code: ProductCode, region: String, locale: String, flavor: String, explain: bool, optional: Vec<String>, limit_archives: Option<usize>, concurrency: usize) -> Result<()> {
     use lightforge_core::net::Http;
     use lightforge_core::tact::explain as tact_explain;
     use lightforge_core::tact::storage::Storage;
     use lightforge_core::tact::install::{self, Event, Options as InstallOptions};
     use lightforge_core::tact::version::Region;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let region: Region = region.parse().context("parsing --region")?;
     let gib = |b: u64| b as f64 / 1024f64.powi(3);
 
@@ -485,9 +487,7 @@ pub(crate) async fn plan(dest: PathBuf, product: String, region: String, locale:
         n => {
             println!("  {n} planned files ARE in the store — the probe is wrong");
             for ekey in &report.examples {
-                let hex: String =
-                    ekey.iter().map(|b| format!("{b:02x}")).collect();
-                println!("    {hex}");
+                println!("    {}", lightforge_core::text::hex(ekey));
             }
         }
     }

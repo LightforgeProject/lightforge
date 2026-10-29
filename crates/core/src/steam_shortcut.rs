@@ -1,16 +1,10 @@
 //! Lightforge as a game in the Steam library.
 //!
-//! A non-Steam game is one entry in `userdata/<account>/config/shortcuts.vdf`,
-//! Steam's binary VDF, and its pictures are files named after the entry's app
-//! id in `userdata/<account>/config/grid/`. Steam reads both when it starts.
-//! Measured against a running client on 2026-10-16: an entry written while
-//! Steam runs is left alone when it shuts down, and shows on its next start.
-//! Steam does write the file back from memory whenever it starts a non-Steam
-//! game, though, so an entry added in between is lost if one is started
-//! before Steam restarts. Adding again puts it back.
-//!
-//! Every other entry in the file is read and written back byte for byte, so a
-//! user's own shortcuts survive. Adding Lightforge twice updates the one entry.
+//! One entry in `userdata/<account>/config/shortcuts.vdf` (binary VDF), and
+//! pictures named by app id in `config/grid/`, read when Steam starts.
+//! Measured 2026-10-16: an entry written while Steam runs survives its
+//! shutdown, but starting a non-Steam game first writes the file back from
+//! memory and drops it. Other entries are kept byte for byte.
 
 use std::path::{Path, PathBuf};
 
@@ -70,6 +64,11 @@ pub enum ShortcutError {
     },
 }
 
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> ShortcutError + '_ {
+    move |source| ShortcutError::Io { path: path.to_path_buf(), source }
+}
+
+
 /// Put `name`, started by `exe`, into the Steam library of the account that
 /// signed in last, with `art` for its pictures.
 pub fn add(steam: &SteamRoot, name: &str, exe: &Path, art: &Artwork) -> Result<Added, ShortcutError> {
@@ -90,8 +89,7 @@ pub fn add(steam: &SteamRoot, name: &str, exe: &Path, art: &Artwork) -> Result<A
 
     let shortcuts = shortcuts_mut(&mut root);
     let fields = entry(appid, name, &exe_field, exe, &icon);
-    // Ours, whether found by name or by program: a launcher moved to another
-    // path is still the one entry, not a second Lightforge beside the first.
+    // Ours by name or by program: a moved launcher is still one entry.
     let ours = shortcuts.iter().position(|(_, value)| match value {
         Value::Map(entry) => {
             get_str(entry, "AppName").is_some_and(|n| n.eq_ignore_ascii_case(name.as_bytes()))
@@ -101,9 +99,7 @@ pub fn add(steam: &SteamRoot, name: &str, exe: &Path, art: &Artwork) -> Result<A
     });
     let updated = match ours {
         Some(at) => {
-            // What makes it ours and where its pictures are, and nothing
-            // else: launch options someone typed into Steam, the time it was
-            // last played and the collections it is in are theirs.
+            // Only our fields: launch options, play time and collections are theirs.
             if let (_, Value::Map(entry)) = &mut shortcuts[at] {
                 for (key, value) in fields.into_iter().filter(|(key, _)| IDENTITY.contains(key)) {
                     set(entry, key, value);
@@ -112,9 +108,7 @@ pub fn add(steam: &SteamRoot, name: &str, exe: &Path, art: &Artwork) -> Result<A
             true
         }
         None => {
-            // Keys are the positions, "0", "1", ..., so the next one is the
-            // count, as long as nobody left a gap; the largest plus one is
-            // safe either way.
+            // Keys are positions; the largest plus one is safe even with gaps.
             let next = shortcuts
                 .iter()
                 .filter_map(|(key, _)| std::str::from_utf8(key).ok()?.parse::<u32>().ok())
@@ -136,9 +130,10 @@ pub fn add(steam: &SteamRoot, name: &str, exe: &Path, art: &Artwork) -> Result<A
         (art.logo, format!("{appid}_logo.{}", art.logo.ext)),
         (art.icon, format!("{appid}_icon.{}", art.icon.ext)),
     ] {
-        write_atomic(&grid.join(file), image.bytes)?;
+        let path = grid.join(file);
+        crate::fsutil::write_atomic(&path, image.bytes).map_err(io(&path))?;
     }
-    write_atomic(&file, &render(&root))?;
+    crate::fsutil::write_atomic(&file, &render(&root)).map_err(io(&file))?;
 
     Ok(Added { account, appid, updated })
 }
@@ -205,13 +200,9 @@ fn last_account(steam: &SteamRoot) -> Option<u32> {
 
 /// The account that signed in last, by a `loginusers.vdf`.
 ///
-/// Older clients mark it `"MostRecent" "1"`; the client current in October
-/// 2026 writes no such key, only a `"timestamp"` per account, so the newest
-/// of those decides when nothing is marked.
-///
-/// The file is text VDF: quoted strings and braces. Read as a flat list of
-/// tokens, an account is a SteamID64 followed by `{`, and its fields follow.
-fn most_recent(users: &str) -> Option<u32> {
+/// Older clients mark `"MostRecent" "1"`; October 2026's writes only a
+/// `"timestamp"`, and the newest wins. Text VDF read as a flat token list.
+pub(crate) fn most_recent(users: &str) -> Option<u32> {
     let mut tokens = Vec::new();
     let mut rest = users;
     while let Some(at) = rest.find(['"', '{', '}']) {
@@ -250,7 +241,7 @@ fn most_recent(users: &str) -> Option<u32> {
         }
     }
     let (id, _, _) = accounts.into_iter().max_by_key(|&(_, marked, timestamp)| (marked, timestamp))?;
-    id.checked_sub(STEAM_ID64_BASE).map(|n| n as u32)
+    id.checked_sub(STEAM_ID64_BASE).and_then(|n| u32::try_from(n).ok())
 }
 
 // ------------------------------------------------------------ binary VDF --
@@ -258,7 +249,7 @@ fn most_recent(users: &str) -> Option<u32> {
 /// One value in a binary VDF file. Strings are kept as bytes, so whatever
 /// another tool wrote into somebody's shortcuts goes back out unchanged.
 #[derive(Debug, Clone, PartialEq)]
-enum Value {
+pub(crate) enum Value {
     Map(Vec<(Vec<u8>, Value)>),
     Str(Vec<u8>),
     Int(u32),
@@ -274,14 +265,13 @@ const LONG: u8 = 0x07;
 const END: u8 = 0x08;
 
 /// The whole file: the top-level map's entries.
-fn parse(bytes: &[u8]) -> Option<Vec<(Vec<u8>, Value)>> {
+pub(crate) fn parse(bytes: &[u8]) -> Option<Vec<(Vec<u8>, Value)>> {
     let mut at = 0;
     map(bytes, &mut at, true)
 }
 
-/// A map's entries, up to its end marker or, at the top level, the end of
-/// the file. A map inside that runs into the end of the file is a file cut
-/// short, and reading it as complete would write the shortened copy back.
+/// A map's entries, to its end marker or, at the top level, the end of the
+/// file. An inner map hitting the end is a truncated file, an error.
 fn map(bytes: &[u8], at: &mut usize, top: bool) -> Option<Vec<(Vec<u8>, Value)>> {
     let mut entries = Vec::new();
     loop {
@@ -318,7 +308,7 @@ fn take<const N: usize>(bytes: &[u8], at: &mut usize) -> Option<[u8; N]> {
     Some(chunk)
 }
 
-fn render(root: &[(Vec<u8>, Value)]) -> Vec<u8> {
+pub(crate) fn render(root: &[(Vec<u8>, Value)]) -> Vec<u8> {
     let mut out = Vec::new();
     write_map(&mut out, root);
     out.push(END);
@@ -385,24 +375,6 @@ fn set(entry: &mut Vec<(Vec<u8>, Value)>, key: &str, value: Value) {
     }
 }
 
-/// Write via a temp file in the destination directory plus a rename: a crash
-/// mid-write must not be able to truncate somebody's shortcuts.
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ShortcutError> {
-    use std::io::Write;
-
-    let io = |p: &Path| {
-        let p = p.to_path_buf();
-        move |source| ShortcutError::Io { path: p.clone(), source }
-    };
-    let dir = path.parent().unwrap_or(Path::new("."));
-    std::fs::create_dir_all(dir).map_err(io(dir))?;
-    let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(io(dir))?;
-    tmp.write_all(bytes).map_err(io(tmp.path()))?;
-    tmp.as_file().sync_all().map_err(io(tmp.path()))?;
-    tmp.persist(path).map_err(|e| ShortcutError::Io { path: path.to_path_buf(), source: e.error })?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,7 +437,7 @@ mod tests {
     }
 
     /// Someone's own shortcuts stay, byte for byte, and adding Lightforge a
-    /// second time updates its entry rather than adding another.
+    /// second time updates its entry instead of adding another.
     #[test]
     fn adding_keeps_every_other_shortcut_and_never_adds_twice() {
         let (_dir, root, account) = steam("lf-steam-add");
@@ -482,7 +454,7 @@ mod tests {
             )]),
         )];
         let file = root.path().join(format!("userdata/{account}/config/shortcuts.vdf"));
-        write_atomic(&file, &render(&theirs)).unwrap();
+        crate::fsutil::write_atomic(&file, &render(&theirs)).unwrap();
 
         let exe = Path::new("/home/deck/.local/bin/lightforge-gui");
         let first = add(&root, "Lightforge", exe, &art()).unwrap();
@@ -493,7 +465,7 @@ mod tests {
         if let Value::Map(ours) = &mut shortcuts_mut(&mut parsed)[1].1 {
             set(ours, "LaunchOptions", Value::Str(b"MANGOHUD=1 %command%".to_vec()));
         }
-        write_atomic(&file, &render(&parsed)).unwrap();
+        crate::fsutil::write_atomic(&file, &render(&parsed)).unwrap();
 
         let second = add(&root, "Lightforge", exe, &art()).unwrap();
         assert!(second.updated);

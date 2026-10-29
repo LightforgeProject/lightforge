@@ -13,10 +13,8 @@ pub struct Scanned {
 
 /// Verify the store's entries against their own headers, and drop the bad ones.
 ///
-/// Repair rewrites the indices a running client memory-maps, so the prefix
-/// has to be quiet first. A game or an open Battle.net is the user's to
-/// close; anything else, a `wineserver` waiting out its timeout or a launch's
-/// leftovers, is put to rest here exactly as a launch's pre-flight would.
+/// The prefix must be quiet: a game or Battle.net is the user's to close; any
+/// leftovers are put to rest as pre-flight does.
 pub async fn scan_and_repair(
     layout: Layout,
     code: ProductCode,
@@ -41,10 +39,12 @@ pub async fn scan_and_repair(
         }
 
         let install = layout.wow_install(&code);
+        tracing::info!("scan and repair {} at {}", code.as_str(), install.display());
         let store = Storage::open(install.join("Data")).map_err(|e| chain(&e))?;
         let report = verify::scan(&store, |progress| {
             let _ = tx.send(progress);
         });
+        tracing::info!("scan checked {} entries, {} damaged", report.checked, report.damaged.len());
 
         let removed = match report.is_healthy() {
             true => 0,
@@ -63,9 +63,7 @@ pub async fn scan_and_repair(
 
 /// Hash every stored byte against its chunk table and key.
 ///
-/// Only reads, so unlike [`scan_and_repair`] it does not wait for the game to
-/// close; the caller holds the download queue for as long as it runs, and
-/// the core refuses a result from a store that changed underneath it anyway.
+/// Read-only, so it does not wait for the game; the queue is held meanwhile.
 pub async fn deep_scan(
     layout: Layout,
     code: ProductCode,
@@ -73,10 +71,16 @@ pub async fn deep_scan(
     tx: tokio::sync::watch::Sender<lightforge_core::tact::verify::Progress>,
 ) -> Result<lightforge_core::tact::verify::Report, String> {
     tokio::task::spawn_blocking(move || {
-        lightforge_core::tact::verify::deep_scan(layout.wow_install(&code), &cancel, |progress| {
+        tracing::info!("deep scan of {} started", code.as_str());
+        let report = lightforge_core::tact::verify::deep_scan(layout.wow_install(&code), &cancel, |progress| {
             let _ = tx.send(progress);
         })
-        .map_err(|e| chain(&e))
+        .map_err(|e| chain(&e));
+        match &report {
+            Ok(r) => tracing::info!("deep scan of {} found {} damaged", code.as_str(), r.damaged.len()),
+            Err(e) => tracing::error!("deep scan of {} failed: {e}", code.as_str()),
+        }
+        report
     })
     .await
     .map_err(|e| chain(&e))?
@@ -104,8 +108,13 @@ pub async fn repair(
             return Err(Unrepaired::InUse);
         }
         let data_dir = layout.wow_install(&code).join("Data").join("data");
-        lightforge_core::tact::verify::repair_unchanged(&data_dir, &report)
-            .map_err(|e| Unrepaired::Failed(chain(&e)))
+        let repaired = lightforge_core::tact::verify::repair_unchanged(&data_dir, &report)
+            .map_err(|e| Unrepaired::Failed(chain(&e)));
+        match &repaired {
+            Ok(n) => tracing::info!("repair of {} removed {n} damaged entries", code.as_str()),
+            Err(e) => tracing::error!("repair of {} failed: {e:?}", code.as_str()),
+        }
+        repaired
     })
     .await
     .map_err(|e| Unrepaired::Failed(chain(&e)))?
@@ -168,13 +177,8 @@ pub async fn uninstall_plan(
 /// was the last product), and its entry in Battle.net's registry. Returns
 /// the bytes freed.
 ///
-/// Refuses while anything is alive in the prefix, the same gate repair uses:
-/// deleting files a running client has open, or a registry Agent rewrites on
-/// exit, is not something to race.
-///
-/// Everything is planned again here rather than trusted from when the dialog
-/// opened. The reclaim is planned *before* the product's row goes, since the
-/// row is what names the build whose files it was.
+/// Refuses while anything runs in the prefix. Planned afresh, the reclaim
+/// before the row goes, since the row names the build.
 pub async fn uninstall(
     http: Option<Http>,
     layout: Layout,
@@ -197,6 +201,7 @@ pub async fn uninstall(
         .map(|library| library.windows_wow_path())
         .unwrap_or_else(|| lightforge_core::paths::WINDOWS_WOW_PATH.to_owned());
     let plan = uninstall::plan(&install, &code).map_err(|e| Problem::of(&e))?;
+    tracing::info!("uninstalling {} from {}", code.as_str(), install.display());
     // A reclaim that cannot be planned is skipped, not fatal: the uninstall
     // itself is still exactly what was asked for.
     let reclaim = match &http {
@@ -215,6 +220,7 @@ pub async fn uninstall(
             None => 0,
         };
         productdb::unregister(&layout.agent_dir(), code.as_str()).map_err(|e| Problem::of(&e))?;
+        tracing::info!("uninstalled {}: {} B removed, {reclaimed} B reclaimed", code.as_str(), removed.bytes);
         Ok(removed.bytes + reclaimed)
     })
     .await
@@ -239,8 +245,7 @@ pub async fn optional_plan(
 
 /// Carry out a plan from [`optional_plan`], returning the bytes freed.
 ///
-/// Behind the same gate as repair and uninstall: the files and the indices
-/// being rewritten are ones a running client has open.
+/// Behind the same gate as repair and uninstall.
 pub async fn optional_remove(
     layout: Layout,
     code: ProductCode,
@@ -288,7 +293,7 @@ pub async fn unused_plan(http: Option<Http>, install: PathBuf) -> Result<Unused,
 }
 
 /// Free the unused data in the store under `install`: drop what no version
-/// uses, then compact. Planned again here rather than trusted from when the
+/// uses, then compact. Planned again here, not trusted from when the
 /// page opened. Returns the bytes freed; `copied` hears the copy's progress.
 pub async fn free_unused(
     http: Option<Http>,
@@ -356,15 +361,67 @@ pub async fn clear_cache(dirs: AppDirs) -> Result<u64, String> {
         .map_err(|e| chain(&e))
 }
 
+/// Copy `code` into `to` and commit it there; see [`migrate::copy`].
+pub async fn move_copy(
+    http: Option<Http>,
+    layout: Layout,
+    code: ProductCode,
+    to: library::Library,
+    cancel: Cancel,
+    progress: Arc<std::sync::Mutex<migrate::Progress>>,
+) -> Result<migrate::Moved, String> {
+    let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
+    // Minutes of blocking reads and writes: off the runtime's workers.
+    let runtime = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        runtime
+            .block_on(migrate::copy(&http, &layout, &code, &to, &cancel, |p| {
+                if let Ok(mut shown) = progress.lock() {
+                    *shown = p;
+                }
+            }))
+            .map_err(|e| chain(&e))
+    })
+    .await
+    .map_err(|e| chain(&e))?
+}
+
+/// Take `code` out of `from` once the config names its new library; see
+/// [`migrate::release`].
+pub async fn move_release(
+    http: Option<Http>,
+    layout: Layout,
+    code: ProductCode,
+    from: library::Library,
+) -> Result<u64, String> {
+    let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
+    let runtime = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        runtime.block_on(migrate::release(&http, &layout, &code, &from)).map_err(|e| chain(&e))
+    })
+    .await
+    .map_err(|e| chain(&e))?
+}
+
+/// Delete one product's shader cache; `false` when it had none. Off the GUI
+/// thread because the NVIDIA cache in it has no size cap.
+pub async fn clear_shader_cache(dir: PathBuf) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || match std::fs::remove_dir_all(&dir) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(format!("{}: {e}", dir.display())),
+    })
+    .await
+    .map_err(|e| chain(&e))?
+}
+
 #[cfg(test)]
 mod uninstall_tests {
     use super::*;
     use lightforge_core::tact::productdb;
 
-    /// Uninstalling one version from a throwaway library built from copies of
-    /// the real `.build.info` and Agent registry: only that version goes, and
-    /// every other row and record stays. Skipped where there is no real
-    /// install to copy from.
+    /// On copies of the real `.build.info` and registry: only that version
+    /// goes. Skipped without a real install that holds another version too.
     #[test]
     fn uninstalling_one_version_leaves_the_rest() {
         let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
@@ -375,6 +432,10 @@ mod uninstall_tests {
         ) else {
             return;
         };
+        let rows = lightforge_core::buildinfo::BuildInfo::load(real.build_info(&ProductCode::ClassicEra));
+        if !rows.is_ok_and(|rows| rows.products().count() > 1) {
+            return;
+        }
 
         let root = std::env::temp_dir()
             .join(format!("lightforge-uninstall-{}", std::process::id()));

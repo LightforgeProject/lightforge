@@ -1,5 +1,6 @@
 //! Checking, repairing and reclaiming the store.
 
+use super::{default_install, windows_wow_path};
 use crate::*;
 
 pub(crate) fn verify(ctx: Ctx, path: Option<PathBuf>, deep: bool, repair: bool, all: bool) -> Result<()> {
@@ -100,8 +101,7 @@ pub(crate) fn verify(ctx: Ctx, path: Option<PathBuf>, deep: bool, repair: bool, 
     };
     println!();
     for damage in &report.damaged[..show] {
-        let key: String =
-            damage.entry.key.iter().map(|b| format!("{b:02x}")).collect();
+        let key = lightforge_core::text::hex(&damage.entry.key);
         println!(
             "  {key}  data.{:03} +{}  {}",
             damage.entry.archive_id, damage.entry.offset, damage.fault.describe()
@@ -172,16 +172,64 @@ pub(crate) fn reindex(ctx: Ctx, path: Option<PathBuf>) -> Result<()> {
     println!("rewrote         {} indices", summary.indices.len());
     for path in &summary.indices {
         let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-        println!("  {}  {size} bytes", path.file_name().unwrap().to_string_lossy());
+        println!("  {}  {size} bytes", path.file_name().expect("index paths end in a file name").to_string_lossy());
     }
     Ok(())
 }
 
-pub(crate) fn uninstall(ctx: Ctx, product: String, path: Option<PathBuf>, yes: bool) -> Result<()> {
+pub(crate) async fn move_game(ctx: Ctx, code: ProductCode, to: String, yes: bool) -> Result<()> {
+    use lightforge_core::migrate::{self, Moved};
+    use lightforge_core::net::Http;
+    use lightforge_core::tact::download::Cancel;
+
+    let Ctx { layout, mut config } = ctx;
+    let target = config
+        .libraries
+        .iter()
+        .find(|l| l.id == to || l.label == to)
+        .cloned()
+        .with_context(|| format!("no library named {to}; `lightforge paths` lists them"))?;
+    let source = layout.library(&code).cloned().context("the product has no library")?;
+    println!("product         {}", code.as_str());
+    println!("from            {} ({})", source.label, layout.wow_install(&code).display());
+    println!("to              {} ({})", target.label, layout.wow_install_in(&target).display());
+    if !yes {
+        println!("\nnothing moved; add --yes to move it");
+        return Ok(());
+    }
+
+    let http = Http::new()?;
+    let mut shown = u64::MAX;
+    let moved = migrate::copy(&http, &layout, &code, &target, &Cancel::new(), |p| {
+        let percent = p.bytes_done * 100 / p.bytes_total.max(1);
+        if percent / 5 != shown {
+            shown = percent / 5;
+            println!("{:<15} {percent}%", if p.verifying { "verifying" } else { "copying" });
+        }
+    })
+    .await?;
+    match &moved {
+        Moved::Renamed => println!("moved           the install folder, renamed"),
+        Moved::Copied { files, bytes } => println!("copied          {files} files, {bytes} bytes, all read back"),
+    }
+
+    // The new library is recorded before the old copy goes.
+    config
+        .product_mut(&code)
+        .context("the product is not in the config")?
+        .profile
+        .library = Some(target.id.clone());
+    config.save(&AppDirs::discover()?.config_file())?;
+
+    let freed = migrate::release(&http, &config.layout()?, &code, &source).await?;
+    println!("freed           {freed} bytes in {}", source.label);
+    Ok(())
+}
+
+pub(crate) fn uninstall(ctx: Ctx, code: ProductCode, path: Option<PathBuf>, yes: bool) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::tact::uninstall;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let install = path.unwrap_or_else(|| layout.wow_install(&code));
     let plan = uninstall::plan(&install, &code)?;
 
@@ -221,19 +269,27 @@ pub(crate) fn uninstall(ctx: Ctx, product: String, path: Option<PathBuf>, yes: b
         return Ok(());
     }
 
-    let removed = uninstall::execute(&install, &code, &plan, &windows_wow_path(&layout, &code))?;
+    // `--path` can name another library than the product's own, as after a
+    // move that left a copy behind; the products left there keep its path.
+    let windows_path = layout
+        .libraries()
+        .all()
+        .iter()
+        .find(|library| layout.wow_install_in(library) == install)
+        .map(|library| library.windows_wow_path())
+        .unwrap_or_else(|| windows_wow_path(&layout, &code));
+    let removed = uninstall::execute(&install, &code, &plan, &windows_path)?;
     println!("\ndeleted         {} paths, {:.2} GiB", removed.paths.len(), gib(removed.bytes));
     Ok(())
 }
 
-pub(crate) async fn reclaim(ctx: Ctx, product: String, build_key: Option<String>, region: String, path: Option<PathBuf>, yes: bool) -> Result<()> {
+pub(crate) async fn reclaim(ctx: Ctx, code: ProductCode, build_key: Option<String>, region: String, path: Option<PathBuf>, yes: bool) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::buildinfo::BuildInfo;
     use lightforge_core::net::Http;
     use lightforge_core::tact::version::{self, Region};
     use lightforge_core::tact::reclaim;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let install = path.unwrap_or_else(|| layout.wow_install(&code));
     let http = Http::new()?;
     let departing = match build_key {
@@ -317,7 +373,7 @@ pub(crate) async fn prune(ctx: Ctx, path: Option<PathBuf>, yes: bool) -> Result<
 
 pub(crate) async fn drop_optional(
     ctx: Ctx,
-    product: String,
+    product: ProductCode,
     tag: String,
     keep: Vec<String>,
     path: Option<PathBuf>,
@@ -328,7 +384,6 @@ pub(crate) async fn drop_optional(
     use lightforge_core::tact::reclaim;
 
     let install = path.unwrap_or_else(|| default_install(&layout));
-    let product: lightforge_core::product::ProductCode = product.parse()?;
     let gib = |b: u64| b as f64 / 1024f64.powi(3);
     let http = Http::new()?;
     let plan = reclaim::plan_optional(&http, &install, &product, &tag, &keep).await?;
@@ -380,4 +435,20 @@ pub(crate) fn compact(ctx: Ctx, path: Option<PathBuf>, yes: bool) -> Result<()> 
     let freed = compact::execute(&install, &plan, &snapshot, copy_progress(plan.moved))?;
     println!("\nfreed           {:.2} GiB", gib(freed));
     Ok(())
+}
+
+/// A progress callback for a compaction copying `total` bytes: one line per
+/// whole percent, overwritten in place.
+fn copy_progress(total: u64) -> impl FnMut(u64) {
+    let mut shown = None;
+    move |copied| {
+        let percent = (copied * 100).checked_div(total).unwrap_or(100).min(100);
+        if shown != Some(percent) {
+            shown = Some(percent);
+            eprint!("\rcopying         {percent:3}%");
+            if percent == 100 {
+                eprintln!();
+            }
+        }
+    }
 }

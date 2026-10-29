@@ -1,15 +1,13 @@
 //! The installer's route: Lightforge replaces its own files in the home
 //! folder, as running `install.sh` again would.
 //!
-//! The same steps as the script, in the same places: both binaries into
-//! `~/.local/bin`, the menu entry with its full path, the icons. Each binary
-//! is renamed over the old one, so a failure halfway leaves every file either
-//! old or new, never torn. The running process keeps the file it started
-//! from until it exits, which is why a restart is all the user has to do.
+//! The script's steps: binaries into `~/.local/bin`, the menu entry, icons.
+//! Each binary is renamed over the old one; the running process keeps its
+//! file until it exits, so a restart finishes the job.
 
 use std::path::{Component, Path, PathBuf};
 
-use super::{fetch_asset, UpgradeError};
+use super::{fetch_asset, io, UpgradeError};
 use crate::net::Http;
 
 /// The menu entry's file name, which is also the app id.
@@ -43,10 +41,6 @@ pub async fn install(
 /// Unpack `archive` beside the binaries it replaces, then move each file
 /// into place.
 fn put_in_place(archive: &Path, bin_dir: &Path, data_dir: &Path) -> Result<(), UpgradeError> {
-    let io = |path: &Path| {
-        let path = path.to_path_buf();
-        move |source| UpgradeError::Io { path, source }
-    };
     std::fs::create_dir_all(bin_dir).map_err(io(bin_dir))?;
     // In `bin_dir` itself, so every move below is a rename on one filesystem.
     let staging = crate::staging::create_in(bin_dir).map_err(io(bin_dir))?;
@@ -58,9 +52,7 @@ fn put_in_place(archive: &Path, bin_dir: &Path, data_dir: &Path) -> Result<(), U
         std::fs::rename(&staged, bin_dir.join(name)).map_err(io(&bin_dir.join(name)))?;
     }
 
-    // The menu entry names the binary by its full path: not every session
-    // has `~/.local/bin` on its PATH, and an entry whose TryExec is not found
-    // is hidden rather than broken.
+    // Full path: `~/.local/bin` is not on every session's PATH.
     let apps = data_dir.join("applications");
     std::fs::create_dir_all(&apps).map_err(io(&apps))?;
     let entry = std::fs::read_to_string(release.join(ENTRY)).map_err(io(&release.join(ENTRY)))?;
@@ -70,27 +62,26 @@ fn put_in_place(archive: &Path, bin_dir: &Path, data_dir: &Path) -> Result<(), U
     // Not a rename: the applications folder can be on another filesystem.
     std::fs::copy(&written, apps.join(ENTRY)).map_err(io(&apps.join(ENTRY)))?;
 
-    copy_tree(&release.join("icons/hicolor"), &data_dir.join("icons/hicolor"))?;
+    crate::fsutil::copy_tree(&release.join("icons/hicolor"), &data_dir.join("icons/hicolor"))
+        .map_err(|(path, source)| UpgradeError::Io { path, source })?;
     refresh_menu(&apps);
     Ok(())
 }
 
 /// Extract a release tarball into `into`, returning its one top folder.
 fn unpack(archive: &Path, into: &Path) -> Result<PathBuf, UpgradeError> {
-    let io = |source| UpgradeError::Io { path: archive.to_path_buf(), source };
-    let file = std::fs::File::open(archive).map_err(io)?;
+    let file = std::fs::File::open(archive).map_err(io(archive))?;
     let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
-    for entry in tar.entries().map_err(io)? {
-        let mut entry = entry.map_err(io)?;
-        let path = entry.path().map_err(io)?.into_owned();
+    for entry in tar.entries().map_err(io(archive))? {
+        let mut entry = entry.map_err(io(archive))?;
+        let path = entry.path().map_err(io(archive))?.into_owned();
         if path.is_absolute() || path.components().any(|c| c == Component::ParentDir) {
             return Err(UpgradeError::NotARelease(archive.to_path_buf()));
         }
-        entry.unpack_in(into).map_err(io)?;
+        entry.unpack_in(into).map_err(io(archive))?;
     }
 
-    let top = std::fs::read_dir(into)
-        .map_err(io)?
+    let top = std::fs::read_dir(into).map_err(io(archive))?
         .filter_map(Result::ok)
         .map(|e| e.path())
         .find(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("lightforge-")));
@@ -98,26 +89,6 @@ fn unpack(archive: &Path, into: &Path) -> Result<PathBuf, UpgradeError> {
         Some(top) if BINARIES.iter().all(|b| top.join(b).is_file()) && top.join(ENTRY).is_file() => Ok(top),
         _ => Err(UpgradeError::NotARelease(archive.to_path_buf())),
     }
-}
-
-/// Copy every file under `from` into the same place under `to`.
-fn copy_tree(from: &Path, to: &Path) -> Result<(), UpgradeError> {
-    let io = |path: &Path| {
-        let path = path.to_path_buf();
-        move |source| UpgradeError::Io { path, source }
-    };
-    std::fs::create_dir_all(to).map_err(io(to))?;
-    for entry in std::fs::read_dir(from).map_err(io(from))?.filter_map(Result::ok) {
-        let (source, target) = (entry.path(), to.join(entry.file_name()));
-        match entry.file_type().map_err(io(&source))? {
-            kind if kind.is_dir() => copy_tree(&source, &target)?,
-            kind if kind.is_file() => {
-                std::fs::copy(&source, &target).map_err(io(&target))?;
-            }
-            _ => {}
-        }
-    }
-    Ok(())
 }
 
 fn set_executable(path: &Path) -> std::io::Result<()> {

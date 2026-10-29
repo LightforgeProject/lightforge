@@ -8,7 +8,6 @@ repository.workspace = true
 description = "UI-agnostic core: product models, path layout, .build.info engine, TACT/CASC, addons"
 
 [dependencies]
-blte.workspace = true
 directories.workspace = true
 flate2.workspace = true
 liblzma.workspace = true
@@ -22,7 +21,6 @@ serde_json.workspace = true
 sha2.workspace = true
 sysinfo.workspace = true
 md5.workspace = true
-ngdp-crypto.workspace = true
 tact-parser.workspace = true
 tar.workspace = true
 tempfile.workspace = true
@@ -31,9 +29,15 @@ thiserror.workspace = true
 # crate to enable it would break the moment that dependency changed.
 tokio = { workspace = true, features = ["fs", "io-util", "rt", "time"] }
 toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 zip.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]
-semver.workspace = true
+blte.workspace = true
+proptest.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "time"] }
+
+[lints]
+workspace = true

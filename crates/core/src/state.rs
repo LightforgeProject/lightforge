@@ -1,22 +1,13 @@
 //! The primary action button's state machine.
 //!
-//! The UI renders exactly one of these per product. The resolver below
-//! decides which one a product is in.
+//! Three rules:
 //!
-//! Three rules are deliberate and none are obvious:
-//!
-//! 1. **`.build.info` is the completion marker.** The downloader writes it last
-//!    and only on a complete run, so a half-finished install has none and reads
-//!    as `Install` rather than offering `Play` on a broken game. During an
-//!    update it still names the *previous* build, which is the one the store is
-//!    complete for and therefore the one that is safe to launch.
-//! 2. **An unreachable version service does not block launching.** If the
-//!    install is complete and Blizzard cannot be asked whether it is current,
-//!    the answer is `Play`, not `Error`. A launcher that refuses to start a
-//!    working game because a metadata endpoint is down is broken.
-//! 3. **A live transfer outranks everything.** What the app is doing now
-//!    describes the button better than what the disk looked like when it was
-//!    last inspected.
+//! 1. **`.build.info` is the completion marker**, written last and only on a
+//!    complete run. During an update it still names the previous build, the
+//!    one safe to launch.
+//! 2. **An unreachable version service does not block launching**: a
+//!    complete install is `Play`.
+//! 3. **A live transfer outranks everything.**
 
 use std::path::PathBuf;
 
@@ -40,10 +31,7 @@ pub enum ActionState {
         local_build: String,
         remote_build: String,
     },
-    /// Waiting for another product's download to finish.
-    ///
-    /// One transfer runs at a time: two would split one connection and write
-    /// into the same CASC store, making both slower and both ETAs fiction.
+    /// Waiting for another product's download: one transfer at a time.
     Queued,
     /// A download or patch is running. Carries live progress for the speed/ETA UI.
     Downloading(Progress),
@@ -54,13 +42,8 @@ pub enum ActionState {
     Play,
     /// Something went wrong; the message is user-facing.
     Error { message: String },
-    /// The drive this product lives on is not mounted.
-    ///
-    /// Not an error, and never resolved by downloading: the files are intact
-    /// on a volume that is simply not here. Everything that writes, launch,
-    /// update, repair, is held, and the only action offered is to look
-    /// again. Decided outside [`decide`], because it is a fact about the
-    /// filesystem rather than about a build.
+    /// The drive this product lives on is not mounted. Everything that writes
+    /// waits; decided outside [`decide`].
     Offline { drive: String },
 }
 
@@ -96,13 +79,12 @@ pub struct Progress {
 }
 
 impl Progress {
-    /// Completion in `0.0..=1.0`. Returns 0.0 while the total is still unknown
-    /// rather than dividing by zero.
+    /// Completion in `0.0..=1.0`, 0.0 while the total is unknown.
     pub fn fraction(&self) -> f32 {
         if self.total_bytes == 0 {
             return 0.0;
         }
-        (self.downloaded_bytes as f64 / self.total_bytes as f64).clamp(0.0, 1.0) as f32
+        (self.downloaded_bytes as f32 / self.total_bytes as f32).clamp(0.0, 1.0)
     }
 
     pub fn remaining_bytes(&self) -> u64 {
@@ -122,8 +104,7 @@ impl Progress {
 
 /// What one product looks like on this machine, read without any network.
 ///
-/// Cheap enough to call on every refresh: the store is opened only to count
-/// its files, which is an index read rather than a scan of 4.5 GiB.
+/// Cheap: the store is only counted, by index.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Local {
     /// `Build Key` from `.build.info`, absent if the file or row is missing.
@@ -134,6 +115,8 @@ pub struct Local {
     pub executable: Option<PathBuf>,
     /// Files the CASC store holds. Zero means no readable store.
     pub store_files: usize,
+    /// A build pre-downloaded ahead of its release.
+    pub staged: Option<crate::tact::staged::Staged>,
 }
 
 impl Local {
@@ -157,15 +140,14 @@ impl Local {
             version: cell(crate::buildinfo::COL_VERSION),
             executable: exe.is_file().then_some(exe),
             store_files,
+            staged: crate::tact::staged::get(&layout.wow_install(code), code),
         }
     }
 
-    /// Whether this is a finished install rather than a partial one.
+    /// Whether this is a finished install, not a partial one.
     ///
-    /// All three have to hold. A `.build.info` naming a build proves a download
-    /// once completed, the binary proves the flavor directory was extracted,
-    /// and a non-empty store proves the content is there, any one alone is a
-    /// shape an interrupted run leaves behind.
+    /// A build key, the binary and a non-empty store: any one alone is what
+    /// an interrupted run leaves.
     pub fn is_installed(&self) -> bool {
         self.build_key.is_some() && self.executable.is_some() && self.store_files > 0
     }
@@ -182,9 +164,8 @@ pub enum Transfer {
 
 /// Decide which button a product shows.
 ///
-/// Pure, so every combination is testable without a disk or a network:
-/// [`Local::inspect`] supplies the disk half and the caller supplies `remote`,
-/// which is `None` when the version service could not be reached.
+/// Pure: [`Local::inspect`] supplies the disk half; `remote` is `None` when
+/// the version service could not be reached.
 pub fn decide(local: &Local, remote: Option<&Version>, transfer: Option<Transfer>) -> ActionState {
     // What is happening now beats what the disk said a moment ago.
     match transfer {
@@ -211,10 +192,46 @@ pub fn decide(local: &Local, remote: Option<&Version>, transfer: Option<Transfer
         crate::tact::version::Status::Behind { local_build, remote_build, .. } => {
             ActionState::Update { local_build, remote_build }
         }
-        // `NotInstalled` cannot happen here, `is_installed` already required a
-        // build key, and `Current` is the ordinary ready case.
+        // `is_installed` required a build key, so not `NotInstalled`.
         _ => ActionState::Play,
     }
+}
+
+/// The pre-download beside the primary button, which it never replaces:
+/// the installed build stays what PLAY launches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreDownload {
+    /// `/bgdl` lists `version`, and its data is not here yet.
+    Available { version: String },
+    /// `version` is in the store, waiting for its release.
+    Ready { version: String },
+}
+
+/// `live` is the region's `/versions` row, `bgdl` its `/bgdl` row; either is
+/// `None` when unknown. A build that is live already is an update, not a
+/// pre-download.
+pub fn pre_download(local: &Local, live: Option<&Version>, bgdl: Option<&Version>) -> Option<PreDownload> {
+    if !local.is_installed() {
+        return None;
+    }
+    let released =
+        |key: &str| local.build_key.as_deref() == Some(key) || live.is_some_and(|l| l.build_config == key);
+
+    if let Some(next) = bgdl.filter(|b| !released(&b.build_config)) {
+        return Some(match &local.staged {
+            Some(staged) if staged.build_key == next.build_config => {
+                PreDownload::Ready { version: staged.version.clone() }
+            }
+            _ => PreDownload::Available { version: next.versions_name.clone() },
+        });
+    }
+    // `/bgdl` unreachable, or emptied ahead of the release: what is staged
+    // still counts until it goes live.
+    local
+        .staged
+        .as_ref()
+        .filter(|staged| !released(&staged.build_key))
+        .map(|staged| PreDownload::Ready { version: staged.version.clone() })
 }
 
 #[cfg(test)]
@@ -239,7 +256,55 @@ mod tests {
             version: Some("1.15.9.69722".into()),
             executable: Some("/games/_classic_era_/WowClassic.exe".into()),
             store_files: 146_669,
+            staged: None,
         }
+    }
+
+    fn staged(build_key: &str) -> crate::tact::staged::Staged {
+        crate::tact::staged::Staged {
+            product: ProductCode::ClassicEra,
+            build_key: build_key.into(),
+            version: "1.15.10.71000".into(),
+            cdn_path: "tpr/wow".into(),
+            cdn_hosts: Vec::new(),
+            cdn_servers: Vec::new(),
+        }
+    }
+
+    const INSTALLED: &str = "3645f0fe9dc5215ea90eaf7cdb7379ce";
+    const NEXT: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+    #[test]
+    fn a_build_listed_ahead_of_release_can_be_pre_downloaded() {
+        let offer = pre_download(&complete(), Some(&remote(INSTALLED)), Some(&remote(NEXT)));
+        assert!(matches!(offer, Some(PreDownload::Available { .. })));
+    }
+
+    #[test]
+    fn a_pre_downloaded_build_reads_ready_even_offline() {
+        let local = Local { staged: Some(staged(NEXT)), ..complete() };
+        assert!(matches!(
+            pre_download(&local, Some(&remote(INSTALLED)), Some(&remote(NEXT))),
+            Some(PreDownload::Ready { .. })
+        ));
+        assert!(matches!(pre_download(&local, None, None), Some(PreDownload::Ready { .. })));
+    }
+
+    #[test]
+    fn a_released_build_is_an_update_not_a_pre_download() {
+        let local = Local { staged: Some(staged(NEXT)), ..complete() };
+        assert_eq!(pre_download(&local, Some(&remote(NEXT)), Some(&remote(NEXT))), None);
+        assert!(matches!(decide(&local, Some(&remote(NEXT)), None), ActionState::Update { .. }));
+    }
+
+    #[test]
+    fn a_newer_listing_supersedes_what_was_staged() {
+        let local = Local { staged: Some(staged(NEXT)), ..complete() };
+        let newer = "dddddddddddddddddddddddddddddddd";
+        assert!(matches!(
+            pre_download(&local, Some(&remote(INSTALLED)), Some(&remote(newer))),
+            Some(PreDownload::Available { .. })
+        ));
     }
 
     #[test]
@@ -262,15 +327,12 @@ mod tests {
 
     #[test]
     fn an_unreachable_version_service_still_lets_a_finished_install_play() {
-        // Refusing to launch a working game because a metadata endpoint is
-        // down would be a broken launcher.
         assert_eq!(decide(&complete(), None, None), ActionState::Play);
     }
 
     #[test]
     fn every_partial_shape_reads_as_install_not_play() {
-        // Each of these is a shape an interrupted run leaves behind, and every
-        // one of them would launch a broken game if it offered Play.
+        // Shapes an interrupted run leaves; none may offer Play.
         let no_marker = Local { build_key: None, ..complete() };
         let no_binary = Local { executable: None, ..complete() };
         let no_content = Local { store_files: 0, ..complete() };
@@ -348,6 +410,7 @@ mod queue_tests {
             version: Some("1.0.0".into()),
             executable: Some(PathBuf::from("/games/_retail_/Wow.exe")),
             store_files: 1,
+            staged: None,
         }
     }
 
@@ -367,7 +430,7 @@ mod queue_tests {
     #[test]
     fn a_queued_product_says_so_rather_than_looking_ready() {
         // Not installed and waiting its turn: neither Install nor Downloading
-        // is honest, which is why Queued exists.
+        // is honest, hence Queued.
         assert_eq!(
             decide(&Local::default(), None, Some(Transfer::Queued)),
             ActionState::Queued

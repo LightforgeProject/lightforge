@@ -1,19 +1,16 @@
 //! Starting a game, and the pre-flight in front of it.
 
+use super::{managed_products, print_preflight, proton_runner};
 use crate::*;
 
-pub(crate) fn play(ctx: Ctx, product: String, proton: Option<String>, dry_run: bool) -> Result<()> {
+pub(crate) fn play(ctx: Ctx, code: ProductCode, proton: Option<String>, dry_run: bool) -> Result<()> {
     let Ctx { layout, config } = ctx;
     use lightforge_core::config::Config;
     use lightforge_core::preflight::{NoDownloads, Preflight};
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
-
-    // The game is launched through the symlink, so Wine sees the
-    // conventional Windows path, the same thing that keeps CEF happy
-    // for the in-game store.
-    let flavor_dir = layout.wow_symlink().join(&*code.install_dir());
-    let exe = lightforge_core::paths::game_executable(&flavor_dir, &code);
+    // Through the `C:` symlink. The GUI launches the native path instead,
+    // which the in-game shop needs (see `Layout::wow_drive`).
+    let exe = layout.wow_symlink().join(layout.wow_exe(&code).strip_prefix(layout.wow_install(&code))?);
     if !exe.is_file() {
         anyhow::bail!(
             "no game at {} — is the symlink pointing at an install?",
@@ -28,14 +25,9 @@ pub(crate) fn play(ctx: Ctx, product: String, proton: Option<String>, dry_run: b
 
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let (runner, build) = proton_runner(&layout, proton.as_deref())?;
-    // Made here rather than trusting DXVK and VKD3D to create it. Failing
-    // only costs the cache, so the launch goes on either way.
-    let _ = std::fs::create_dir_all(dirs.shader_cache_dir(&code));
     let mut runner = runner
         .with_compat_mount(&target)
-        // Per-product shader cache: the prefix is shared, so pooling
-        // it would mean a Proton swap for one product discarding
-        // another's accumulated shaders.
+        // Per product: the prefix is shared.
         .with_shader_cache(dirs.shader_cache_dir(&code));
 
     // The same per-product settings Game Settings writes. A launcher that honoured them from one entry point and
@@ -81,12 +73,9 @@ pub(crate) fn play(ctx: Ctx, product: String, proton: Option<String>, dry_run: b
     Ok(())
 }
 
-pub(crate) fn preflight(ctx: Ctx, proton: Option<String>, product: Option<String>, dry_run: bool, grace: u64) -> Result<()> {
+pub(crate) fn preflight(ctx: Ctx, proton: Option<String>, code: Option<ProductCode>, dry_run: bool, grace: u64) -> Result<()> {
     let Ctx { layout, config } = ctx;
     use lightforge_core::preflight::{self, NoDownloads, Preflight};
-
-    let code: Option<ProductCode> =
-        product.map(|p| p.parse().expect("product codes are infallible"));
 
     if dry_run {
         let found = preflight::scan(&layout);

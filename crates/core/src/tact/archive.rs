@@ -1,11 +1,8 @@
 //! Archive indices: which archive holds a file, and where inside it.
 //!
-//! Ordinary content is not fetchable by its own key, the CDN answers 403 for
-//! a file that lives in an archive. Instead each of a build's archives (1362
-//! of them for 12.1.0) publishes a `<hash>.index` next to itself, and the
-//! archive answers HTTP range requests. Downloading one file therefore means:
-//! find its archive, read the offset and size out of that archive's index,
-//! and ask for exactly those bytes.
+//! Content inside an archive answers 403 at its own key. Each archive (1362
+//! for 12.1.0) publishes a `<hash>.index` giving every file's offset and
+//! size, and a range request fetches it.
 //!
 //! ```text
 //! blocks   ceil(count / per_block) x block_size, entries then zero padding
@@ -13,13 +10,15 @@
 //! footer   28 bytes, at the very end of the file
 //! ```
 //!
-//! The footer is read first because it carries the field widths everything
-//! else depends on. Sizes are validated against the file length: blocks, TOC
-//! and footer must account for every byte, which is a strong check that the
-//! widths were read correctly rather than merely plausible.
+//! The footer comes first: it carries the field widths. Blocks, TOC and
+//! footer must account for every byte, which catches misread widths.
 //!
-//! Entry layout, `size` before `offset`: the order matters and is easy to
-//! get backwards, since both are 4-byte big-endian:
+//! Checksums are the first 8 bytes of an MD5: one per block in the TOC, one
+//! over the TOC in the footer, one over the footer (bytes 8..20, then 8 zero
+//! bytes). The index's name is the MD5 of the whole footer. Checked against
+//! 10 real indices, CDN and Battle.net cache, file index included.
+//!
+//! Entries put `size` before `offset`, both 4-byte big-endian, easy to swap:
 //!
 //! ```text
 //! [u8; 16]  encoding key
@@ -27,10 +26,15 @@
 //! u32 BE    offset of those bytes from the start of the archive
 //! ```
 
+use crate::text::hex;
 use super::storage::EKey;
 
 /// Bytes of footer at the end of every archive index.
 const FOOTER_SIZE: usize = 28;
+
+/// Width of every checksum in the file. The 28-byte footer only adds up
+/// with 8.
+const CHECKSUM_SIZE: usize = 8;
 
 /// One file's location inside one archive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,12 +47,11 @@ pub struct Located {
 }
 
 impl Located {
-    /// The value of an HTTP `Range` header that fetches exactly this file.
-    pub fn range(&self) -> String {
-        // Inclusive on both ends, which is what RFC 9110 specifies and what
-        // an off-by-one here would silently violate, a short read only shows
-        // up later as a BLTE decode failure.
-        format!("bytes={}-{}", self.offset, self.offset as u64 + u64::from(self.size) - 1)
+    /// The HTTP `Range` value for exactly this file; `None` for a zero size.
+    pub fn range(&self) -> Option<String> {
+        // Inclusive end (RFC 9110); an off-by-one surfaces later as a BLTE decode error.
+        let last = u64::from(self.offset).checked_add(u64::from(self.size))?.checked_sub(1)?;
+        Some(format!("bytes={}-{last}", self.offset))
     }
 }
 
@@ -63,25 +66,33 @@ pub struct ArchiveIndex {
 
 impl ArchiveIndex {
     pub fn parse(bytes: &[u8], archive: impl Into<String>) -> Result<Self, ArchiveError> {
+        let archive = archive.into();
         let (footer, rows) = walk(bytes)?;
         if footer.offset_bytes == 0 {
-            // The file index shares this container but has no offset column,
-            // because its files are not inside an archive at all.
+            // The file index has no offset column.
             return Err(ArchiveError::NotAnArchiveIndex);
         }
 
-        let mut entries: Vec<Located> = rows
+        let mut entries = rows
             .into_iter()
-            .map(|(ekey, size, offset)| Located { ekey, size: size as u32, offset: offset as u32 })
-            .collect();
+            // A zero-size row cannot be range-requested; drop the file, keep the index.
+            .filter(|&(ekey, size, _)| {
+                if size == 0 {
+                    tracing::warn!("archive {archive} lists {} with size 0, skipping it", hex(&ekey));
+                }
+                size != 0
+            })
+            .map(|(ekey, size, offset)| {
+                Ok(Located { ekey, size: narrow(size)?, offset: narrow(offset)? })
+            })
+            .collect::<Result<Vec<_>, ArchiveError>>()?;
 
-        // Lookups binary search, so ordering is a correctness requirement
-        // rather than an optimisation.
+        // Lookups binary search.
         if !entries.windows(2).all(|w| w[0].ekey <= w[1].ekey) {
             entries.sort_unstable_by_key(|e| e.ekey);
         }
 
-        Ok(Self { archive: archive.into(), entries })
+        Ok(Self { archive, entries })
     }
 
     /// Hash of the archive this indexes.
@@ -116,18 +127,13 @@ impl ArchiveIndex {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Loose {
     pub ekey: EKey,
-    /// Bytes the CDN serves for this key. There is no CASC entry header on a
-    /// loose file, that header is a property of being inside an archive.
+    /// Bytes the CDN serves for this key, with no CASC entry header.
     pub size: u32,
 }
 
-/// The build's file index: the keys that are *not* in any archive.
-///
-/// Named by `file-index` in the CDN config and fetched like any other index,
-/// but its footer declares `offset_bytes = 0`: there is no offset column,
-/// because there is nothing to be offset into. These ~25k keys are the only
-/// content fetchable by a plain GET; everything else answers 403 loose and
-/// must be range-requested out of its archive.
+/// The build's file index (`file-index` in the CDN config): the ~25k keys in
+/// no archive, the only content a plain GET fetches. Its footer declares
+/// `offset_bytes = 0`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileIndex {
     entries: Vec<Loose>,
@@ -140,10 +146,10 @@ impl FileIndex {
             return Err(ArchiveError::NotAFileIndex { offset_bytes: footer.offset_bytes });
         }
 
-        let mut entries: Vec<Loose> = rows
+        let mut entries = rows
             .into_iter()
-            .map(|(ekey, size, _)| Loose { ekey, size: size as u32 })
-            .collect();
+            .map(|(ekey, size, _)| Ok(Loose { ekey, size: narrow(size)? }))
+            .collect::<Result<Vec<_>, ArchiveError>>()?;
         if !entries.windows(2).all(|w| w[0].ekey <= w[1].ekey) {
             entries.sort_unstable_by_key(|e| e.ekey);
         }
@@ -178,6 +184,20 @@ impl FileIndex {
     }
 }
 
+/// Check that `bytes` is the index named `hash`, every checksum included.
+pub fn verify(bytes: &[u8], hash: &str) -> Result<(), ArchiveError> {
+    let footer = bytes.get(bytes.len().saturating_sub(FOOTER_SIZE)..).unwrap_or_default();
+    let found = hex(&md5::compute(footer).0);
+    if !found.eq_ignore_ascii_case(hash) {
+        return Err(ArchiveError::NameMismatch { expected: hash.to_owned(), found });
+    }
+    walk(bytes).map(drop)
+}
+
+fn short_md5(bytes: &[u8]) -> [u8; CHECKSUM_SIZE] {
+    md5::compute(bytes).0[..CHECKSUM_SIZE].try_into().expect("8 of 16 bytes")
+}
+
 /// Read the block/TOC/footer container both index shapes share.
 ///
 /// Returns the footer and every non-padding row as `(key, size, offset)`,
@@ -193,12 +213,29 @@ fn walk(bytes: &[u8]) -> Result<(Footer, Vec<(EKey, u64, u64)>), ArchiveError> {
     }
     let blocks = footer.count.div_ceil(per_block);
 
-    // Every byte must be accounted for. If the field widths were misread,
-    // this is where it shows up, rather than as garbage entries.
+    // Every byte accounted for, or the widths were misread.
     let expected =
         blocks * footer.block_size + blocks * (footer.key_size + footer.checksum_size) + FOOTER_SIZE;
     if expected != bytes.len() {
         return Err(ArchiveError::SizeMismatch { expected, actual: bytes.len() });
+    }
+
+    let toc = &bytes[blocks * footer.block_size..bytes.len() - FOOTER_SIZE];
+    let sums = &toc[blocks * footer.key_size..];
+    for block in 0..blocks {
+        let page = &bytes[block * footer.block_size..(block + 1) * footer.block_size];
+        if short_md5(page) != sums[block * CHECKSUM_SIZE..(block + 1) * CHECKSUM_SIZE] {
+            return Err(ArchiveError::BlockChecksum(block));
+        }
+    }
+    let f = &bytes[bytes.len() - FOOTER_SIZE..];
+    if short_md5(toc) != f[..CHECKSUM_SIZE] {
+        return Err(ArchiveError::Checksum("table of contents"));
+    }
+    let mut zeroed = [0u8; 20];
+    zeroed[..12].copy_from_slice(&f[8..20]);
+    if short_md5(&zeroed) != f[20..] {
+        return Err(ArchiveError::Checksum("footer"));
     }
 
     let mut rows = Vec::with_capacity(footer.count);
@@ -246,9 +283,7 @@ impl Footer {
         }
         let f = &bytes[bytes.len() - FOOTER_SIZE..];
 
-        // 0..8 is the toc hash, 20..28 the footer's own checksum; neither is
-        // verified here, the content itself is verified by its encoding key
-        // after the range request, which is the check that actually matters.
+        // 0..8 is the toc hash, 20..28 the footer's own; checked after the geometry.
         let version = f[8];
         if version != 1 {
             return Err(ArchiveError::UnsupportedVersion(version));
@@ -267,8 +302,10 @@ impl Footer {
         if footer.key_size != 16 {
             return Err(ArchiveError::UnsupportedKeySize(footer.key_size));
         }
-        // `offset_bytes == 0` is legal and means the file index, which has no
-        // offset column; the two index shapes are told apart by their callers.
+        if footer.checksum_size != CHECKSUM_SIZE {
+            return Err(ArchiveError::UnsupportedChecksumSize(footer.checksum_size));
+        }
+        // `offset_bytes == 0` is the file index; callers know which they read.
         if footer.offset_bytes > 8 || footer.size_bytes == 0 || footer.size_bytes > 8 {
             return Err(ArchiveError::UnusableGeometry {
                 block_size: footer.block_size,
@@ -277,6 +314,46 @@ impl Footer {
         }
         Ok(footer)
     }
+}
+
+/// The footer allows columns up to 8 bytes wide, entries are stored as `u32`.
+fn narrow(value: u64) -> Result<u32, ArchiveError> {
+    u32::try_from(value).map_err(|_| ArchiveError::Overflow(value))
+}
+
+/// Fill in every checksum of a test index built with zeroes there, and
+/// return the name it then has.
+#[cfg(test)]
+pub(crate) fn seal(bytes: &mut [u8]) -> String {
+    try_seal(bytes).expect("an index to seal")
+}
+
+/// [`seal`], or `None` when the footer's geometry does not match the length.
+#[cfg(any(test, fuzzing))]
+pub(crate) fn try_seal(bytes: &mut [u8]) -> Option<String> {
+    let footer = Footer::parse(bytes).ok()?;
+    let entry_size = footer.key_size + footer.size_bytes + footer.offset_bytes;
+    let per_block = footer.block_size / entry_size;
+    if per_block == 0 {
+        return None;
+    }
+    let blocks = footer.count.div_ceil(per_block).max(1);
+    let (len, toc_start) = (bytes.len(), blocks * footer.block_size);
+    if len != toc_start + blocks * (footer.key_size + footer.checksum_size) + FOOTER_SIZE {
+        return None;
+    }
+    let sums_at = toc_start + blocks * footer.key_size;
+    for b in 0..blocks {
+        let sum = short_md5(&bytes[b * footer.block_size..(b + 1) * footer.block_size]);
+        bytes[sums_at + b * CHECKSUM_SIZE..sums_at + (b + 1) * CHECKSUM_SIZE].copy_from_slice(&sum);
+    }
+    let toc = short_md5(&bytes[toc_start..len - FOOTER_SIZE]);
+    bytes[len - FOOTER_SIZE..len - 20].copy_from_slice(&toc);
+    let mut zeroed = [0u8; 20];
+    zeroed[..12].copy_from_slice(&bytes[len - 20..len - 8]);
+    let own = short_md5(&zeroed);
+    bytes[len - 8..].copy_from_slice(&own);
+    Some(hex(&md5::compute(&bytes[len - FOOTER_SIZE..]).0))
 }
 
 /// Big-endian integer of 1..=8 bytes.
@@ -298,8 +375,23 @@ pub enum ArchiveError {
     #[error("archive index geometry is unusable: {entry_size}-byte entries in {block_size}-byte blocks")]
     UnusableGeometry { block_size: usize, entry_size: usize },
 
+    #[error("archive index uses {0}-byte checksums; only 8 is supported")]
+    UnsupportedChecksumSize(usize),
+
     #[error("archive index should be {expected} bytes by its own footer but is {actual}")]
     SizeMismatch { expected: usize, actual: usize },
+
+    #[error("archive index block {0} does not match its checksum")]
+    BlockChecksum(usize),
+
+    #[error("archive index {0} does not match its checksum")]
+    Checksum(&'static str),
+
+    #[error("archive index footer hashes to {found}, but it was fetched as {expected}")]
+    NameMismatch { expected: String, found: String },
+
+    #[error("archive index entry value {0} does not fit in 32 bits")]
+    Overflow(u64),
 
     #[error("this is the file index, not an archive index: it has no offset column")]
     NotAnArchiveIndex,
@@ -320,8 +412,7 @@ mod tests {
         k
     }
 
-    /// Build an index in the real layout, so a test fails if the geometry is
-    /// ever "simplified" into something the CDN does not actually serve.
+    /// Build an index in the real layout the CDN serves.
     fn index(entries: &[(EKey, u32, u32)], block_size: usize) -> Vec<u8> {
         let entry_size = 24;
         let per_block = block_size / entry_size;
@@ -356,6 +447,7 @@ mod tests {
         assert_eq!(footer.len(), FOOTER_SIZE);
 
         out.extend_from_slice(&footer);
+        seal(&mut out);
         out
     }
 
@@ -392,6 +484,7 @@ mod tests {
         assert_eq!(footer.len(), FOOTER_SIZE);
 
         out.extend_from_slice(&footer);
+        seal(&mut out);
         out
     }
 
@@ -454,9 +547,7 @@ mod tests {
 
     #[test]
     fn entries_round_trip_with_size_before_offset() {
-        // Both fields are 4-byte big-endian, so swapping them parses cleanly
-        // and yields nonsense, a 786-byte file at offset 186 MB rather than
-        // the other way round.
+        // Swapped, they parse cleanly into nonsense.
         let entries = [(key(1), 786u32, 186_722_006u32), (key(2), 12_345, 2_803_136)];
         let parsed = ArchiveIndex::parse(&index(&entries, 4096), "0017a402").unwrap();
 
@@ -472,10 +563,22 @@ mod tests {
         let located = Located { ekey: key(1), size: 100, offset: 1000 };
         // 1000..=1099 is 100 bytes. `bytes=1000-1100` would fetch 101 and
         // corrupt the following file's first byte into this one's payload.
-        assert_eq!(located.range(), "bytes=1000-1099");
+        assert_eq!(located.range().unwrap(), "bytes=1000-1099");
 
         let single = Located { ekey: key(2), size: 1, offset: 0 };
-        assert_eq!(single.range(), "bytes=0-0");
+        assert_eq!(single.range().unwrap(), "bytes=0-0");
+    }
+
+    #[test]
+    fn a_zero_size_entry_has_no_range() {
+        assert_eq!(Located { ekey: key(1), size: 0, offset: 0 }.range(), None);
+    }
+
+    #[test]
+    fn a_zero_size_row_is_skipped_not_fatal() {
+        let parsed = ArchiveIndex::parse(&index(&[(key(1), 0, 0), (key(2), 5, 0)], 4096), "x").unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert!(parsed.lookup(&key(1)).is_none());
     }
 
     #[test]
@@ -510,14 +613,64 @@ mod tests {
 
     #[test]
     fn a_footer_that_disagrees_with_the_file_length_is_refused() {
-        // The check that catches misread field widths: if the geometry were
-        // wrong, entries would still "parse", just into garbage.
+        // Misread widths still "parse", into garbage; this catches them.
         let mut bytes = index(&[(key(1), 1, 2)], 4096);
         let len = bytes.len();
         bytes[len - 12..len - 8].copy_from_slice(&9_999u32.to_le_bytes());
         assert!(matches!(
             ArchiveIndex::parse(&bytes, "x"),
             Err(ArchiveError::SizeMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn an_offset_past_four_gib_is_refused_not_truncated() {
+        // A 5-byte offset column: one 25-byte entry at offset 2^32 + 7.
+        let mut bytes = vec![0u8; 4096];
+        bytes[..16].copy_from_slice(&key(1));
+        bytes[16..20].copy_from_slice(&10u32.to_be_bytes());
+        bytes[20..25].copy_from_slice(&(u64::from(u32::MAX) + 8).to_be_bytes()[3..]);
+        bytes.extend_from_slice(&key(1));
+        bytes.extend_from_slice(&[0u8; 8]);
+        bytes.extend_from_slice(&[0u8; 8]);
+        bytes.extend_from_slice(&[1, 0, 0, 4, 5, 4, 16, 8]);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 8]);
+        seal(&mut bytes);
+
+        assert!(matches!(
+            ArchiveIndex::parse(&bytes, "x"),
+            Err(ArchiveError::Overflow(v)) if v == u64::from(u32::MAX) + 8
+        ));
+    }
+
+    #[test]
+    fn a_changed_byte_anywhere_fails_a_checksum() {
+        let good = index(&[(key(1), 10, 30), (key(2), 20, 40)], 4096);
+        let len = good.len();
+        for (at, part) in [(18, "block"), (4096 + 3, "table of contents"), (len - 5, "footer")] {
+            let mut bad = good.clone();
+            bad[at] ^= 1;
+            let result = ArchiveIndex::parse(&bad, "x");
+            let failed = match &result {
+                Err(ArchiveError::BlockChecksum(0)) => "block",
+                Err(ArchiveError::Checksum(what)) => what,
+                _ => "",
+            };
+            assert_eq!(failed, part, "byte {at}: {result:?}");
+        }
+    }
+
+    #[test]
+    fn an_index_is_verified_against_the_name_it_was_fetched_by() {
+        let mut bytes = index(&[(key(1), 10, 30)], 4096);
+        let name = seal(&mut bytes);
+
+        assert!(verify(&bytes, &name).is_ok());
+        assert!(verify(&bytes, &name.to_ascii_uppercase()).is_ok());
+        assert!(matches!(
+            verify(&bytes, "0017a402f556f4a4b8ec7a0b6e3b5f77"),
+            Err(ArchiveError::NameMismatch { .. })
         ));
     }
 

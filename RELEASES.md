@@ -1,6 +1,35 @@
 # Lightforge release notes
 
 
+## 1.0.0-beta.8
+
+Lightforge 1.0.0-beta.8 is a bigger update, mostly stability and bug fixes, many of them from your bug reports. Thank you for sending them. It also brings a few new things: running two games at once, quitting Battle.net from Lightforge, and moving a game to another drive.
+
+- Fixed starting a second game while one is already running. Each running game now has its own STOP button, and stopping one leaves the others alone.
+- The Battle.net button shows a green dot while Battle.net is running. Its menu brings the window back or quits Battle.net. Quitting leaves running games open, and asks first while one is running.
+- Fixed an Issue where imported addons get version pinned by default, they are no longer pinned now.
+- When a Proton folder holds files from two different versions, setup now says so instead of showing Wine errors, and offers to install a fresh copy. The Proton window can install Lightforge's own copy of a version another tool installed.
+- The language you picked during setup can now be changed in Settings,
+  Downloads. Installed games keep their language; Modify Install changes it per game.
+- When a new Lightforge version is known, Settings, About shows an Update now button, even after the notice was closed.
+- Games can be moved to another drive. A failed move offers to remove the copy it left behind.
+- Pre-downloads: when Blizzard lists the next patch ahead of time, the play page offers to download it early.
+- Added Diagnostics in Settings, About, and lightforge doctor in the terminal: a list of system checks to copy into a bug report.
+- Added an Open Folder button to the addon manager.
+- Lightforge now keeps a rolling log in the background, for bug reports.
+- Opening Lightforge a second time brings the open window to the front
+  instead of starting another one.
+- NVIDIA: Battle.net's missing 32-bit driver libraries are detected with the command to install them, and Game Settings has switches for PRIME offload on hybrid laptops and for NVAPI.
+- NVIDIA and Mesa shader caches are now kept per game.
+- Settings backups can restore a single account's settings.
+- Addons: the version is shown instead of the file name, folders shared by two addons are flagged, and missing dependencies are listed.
+- Removed enGB and ptPT from the languages. Blizzard ships no game files for them, so a download in either language fetched nothing.
+- A download that stops now says why.
+- Fixed installing an addon for a game that is not installed creating an empty game folder.
+- Fixed Vulkan drivers not being found in some places the loader looks.
+- Fixed the game writing its log files into whatever folder Lightforge was started from.
+- Downloads and the game store were hardened against damaged or unexpected data from the network and from disk.
+
 ## 1.0.0-beta.7
 
 Lightforge 1.0.0-beta.7 fixes the Battle.net install on SteamOS and the

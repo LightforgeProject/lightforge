@@ -6,10 +6,7 @@ use iced::widget::{column, text_editor};
 impl Lightforge {
     /// The Game Settings popup.
     ///
-    /// Every row has the shape Settings uses, what it is and what it does on
-    /// the left, the control at the right edge, so the two read as one
-    /// application. The sections scroll under a fixed title and Close, the way
-    /// the patch notes do.
+    /// Rows shaped as in Settings; sections scroll under a fixed title.
     pub(crate) fn game_settings_card<'a>(&'a self, settings: &'a GameSettings) -> Element<'a, Message> {
         // The figure is [`WINDOW_MIN`]'s height less the title, the footer and
         // the padding.
@@ -57,7 +54,7 @@ impl Lightforge {
     }
 
     /// A switch for a tool that may not be installed: dimmed, and said so,
-    /// when it is missing, rather than gone, so nobody wonders where it went.
+    /// when it is missing, not gone, so nobody wonders where it went.
     pub(crate) fn tool_switch<'a>(
         &self,
         key: &'static str,
@@ -137,10 +134,7 @@ impl Lightforge {
 
         let mut rows = vec![setting(
             "Wayland backend",
-            match self.tools.wayland {
-                true => "Runs on Proton's Wayland backend instead of XWayland.",
-                false => "Only available in a Wayland session.",
-            },
+            wayland_about(&self.tools),
             self.hint("Newer and less travelled than the X11 path, so it is off until asked for."),
             self.tool_switch(
                 "wayland",
@@ -150,6 +144,25 @@ impl Lightforge {
                 Tweak::Wayland,
             ),
         )];
+        if self.tools.hybrid {
+            rows.push(setting(
+                "Run on the NVIDIA GPU",
+                "Renders on the NVIDIA card instead of the integrated one.",
+                self.hint("Through the driver's PRIME render offload. Faster, and uses more power."),
+                self.tool_switch("nvidia gpu", true, tweaks.nvidia_gpu, scope, Tweak::NvidiaGpu),
+            ));
+        }
+        if self.tools.nvidia.is_some() {
+            rows.push(setting(
+                "NVIDIA features",
+                "Reflex and other NVIDIA-only options, through DXVK-NVAPI.",
+                self.hint(
+                    "Proton reports an NVIDIA card as an AMD one unless this is on, so games \
+                     leave their NVIDIA-only options out.",
+                ),
+                self.tool_switch("nvapi", true, tweaks.nvapi, scope, Tweak::Nvapi),
+            ));
+        }
 
         // Only where the build has textures behind the option.
         if let Some(bytes) = settings.textures_bytes {
@@ -170,7 +183,7 @@ impl Lightforge {
                     size_of(bytes)
                 ),
             };
-            let switch: Element<'a, Message> = match working || self.busy {
+            let switch: Element<'a, Message> = match working || self.locked() {
                 true => iced::widget::toggler(on)
                     .size(theme::tap_text(20.0))
                     .style(theme::switch)
@@ -197,7 +210,7 @@ impl Lightforge {
                     row![
                         secondary("Keep them", Message::KeepOptional).enabled(true),
                         action_button("Delete", theme::ERROR, Message::RemoveOptional)
-                            .enabled(!self.busy),
+                            .enabled(!self.locked()),
                     ]
                     .spacing(theme::SM),
                 ));
@@ -265,13 +278,17 @@ impl Lightforge {
             None => dir.display().to_string(),
         };
 
-        setting_group([
+        let mut rows = vec![
             setting(
                 "Location",
                 shown,
                 None,
                 secondary("Show in Explorer", Message::OpenFiles).enabled(true),
             ),
+            self.drive_row(settings, can.move_game),
+        ];
+        rows.extend(self.leftover_rows(settings, can.move_game));
+        rows.extend([
             setting(
                 "Game files",
                 "Check them against the build and fetch what is damaged.",
@@ -304,7 +321,90 @@ impl Lightforge {
                 )
                 .enabled(can.uninstall),
             ),
-        ])
+        ]);
+        setting_group(rows)
+    }
+
+    /// A copy a move left in another library, offered for removal. Hidden
+    /// while a move runs: its own last step is what removes it.
+    fn leftover_rows<'a>(&'a self, settings: &'a GameSettings, can_remove: bool) -> Vec<Element<'a, Message>> {
+        if self.moving.as_ref().is_some_and(|m| m.code == settings.code) {
+            return Vec::new();
+        }
+        settings
+            .leftovers
+            .iter()
+            .map(|library| {
+                let controls = match settings.leftover_confirm.as_deref() == Some(library.id.as_str()) {
+                    true => row![
+                        secondary("Cancel", Message::CancelRemoveLeftover).enabled(true),
+                        action_button("Delete", theme::ERROR, Message::RemoveLeftover).enabled(can_remove),
+                    ],
+                    false => row![
+                        secondary("Remove", Message::AskRemoveLeftover(library.id.clone())).enabled(can_remove),
+                    ],
+                };
+                setting(
+                    format!("Old copy on {}", library.label),
+                    "A move could not delete it. The game plays from where it is now.",
+                    self.hint("Its settings and addons are older than the ones in use and go with it."),
+                    controls.spacing(theme::SM),
+                )
+            })
+            .collect()
+    }
+
+    /// Which library the game is on, and moving it to another one.
+    fn drive_row<'a>(&'a self, settings: &'a GameSettings, can_move: bool) -> Element<'a, Message> {
+        let here = self.layout.library(&settings.code);
+        if let Some(moving) = self.moving.as_ref().filter(|m| m.code == settings.code) {
+            let progress = moving.progress.lock().map(|p| *p).unwrap_or_default();
+            let percent = progress.bytes_done * 100 / progress.bytes_total.max(1);
+            let doing = match (moving.releasing, progress.verifying) {
+                (true, _) => format!("Removing the old copy from {}…", moving.from.label),
+                (false, true) => format!("Checking the copy on {}: {percent}%", moving.to.label),
+                (false, false) => format!("Copying to {}: {percent}%", moving.to.label),
+            };
+            return setting("Drive", doing, None, secondary("Cancel", Message::CancelMove).enabled(!moving.releasing));
+        }
+
+        let about = here.map_or_else(String::new, |library| format!("On {}.", library.label));
+        let targets: Vec<(String, String)> = self
+            .config
+            .libraries
+            .iter()
+            .filter(|library| here.is_none_or(|h| h.id != library.id))
+            .map(|library| (library.label.clone(), library.id.clone()))
+            .collect();
+        if targets.is_empty() {
+            return setting("Drive", about, self.hint("Add another drive under Settings › Storage to move the game there."), Space::new());
+        }
+        let picked = settings
+            .move_to
+            .as_ref()
+            .and_then(|id| targets.iter().find(|(_, t)| t == id))
+            .map(|(label, _)| label.clone());
+        let labels = targets.iter().map(|(label, _)| label.clone()).collect();
+        let picker = self.picker(
+            "move to".to_owned(),
+            labels,
+            picked.clone(),
+            "another drive",
+            move |label: String| {
+                let id = targets.iter().find(|(l, _)| *l == label).map(|(_, id)| id.clone()).unwrap_or_default();
+                Message::MoveTargetPicked(id)
+            },
+            Length::Shrink,
+            theme::LABEL,
+        );
+        setting(
+            "Drive",
+            about,
+            self.hint("Copies the game's files to the other drive, checks every one, then removes the old copy. Nothing is downloaded again."),
+            row![picker, secondary("Move", Message::MoveGame).enabled(can_move && picked.is_some())]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
+        )
     }
 
     /// The same pin as Settings › Proton, for whoever is here.
@@ -358,7 +458,7 @@ impl Lightforge {
     /// The WTF backups, each restorable or deletable, and the button that
     /// takes one now.
     fn backups_group<'a>(&'a self, settings: &'a GameSettings) -> Element<'a, Message> {
-        let idle = !settings.working && !self.busy;
+        let idle = !settings.working && !self.locked();
 
         let mut rows: Vec<Element<'a, Message>> = vec![setting(
             "Your in-game settings",
@@ -380,6 +480,9 @@ impl Lightforge {
                     // The question replaces the details under the date while
                     // it is asked, so the row only ever holds two buttons.
                     let about = match asking {
+                        Some(BackupAction::Restore) if backup.accounts.len() > 1 => {
+                            "Restore every account's settings from this backup, or one account's?".to_owned()
+                        }
                         Some(BackupAction::Restore) => {
                             "Replace the current settings with this backup?".to_owned()
                         }
@@ -395,9 +498,17 @@ impl Lightforge {
                         .join(" · "),
                     };
                     let controls = match asking {
+                        Some(BackupAction::Restore) if backup.accounts.len() > 1 => row![
+                            secondary("Cancel", Message::CancelRestore).enabled(true),
+                            action_button("All accounts", theme::UPDATE, Message::ConfirmRestore(None))
+                                .enabled(idle),
+                        ]
+                        .extend(backup.accounts.iter().map(|name| {
+                            secondary(name, Message::ConfirmRestore(Some(name.clone()))).enabled(idle)
+                        })),
                         Some(BackupAction::Restore) => row![
                             secondary("Cancel", Message::CancelRestore).enabled(true),
-                            action_button("Restore", theme::UPDATE, Message::ConfirmRestore)
+                            action_button("Restore", theme::UPDATE, Message::ConfirmRestore(None))
                                 .enabled(idle),
                         ],
                         Some(BackupAction::Delete) => row![
@@ -426,5 +537,17 @@ impl Lightforge {
             });
         }
         body.into()
+    }
+}
+
+/// The Wayland backend row's description, in Game Settings and Settings ›
+/// Battle.net alike.
+pub(crate) fn wayland_about(tools: &HostTools) -> &'static str {
+    match tools.wayland {
+        false => "Only available in a Wayland session.",
+        true if tools.nvidia_lacks_explicit_sync() => {
+            "NVIDIA drivers before 555 lack explicit sync, so expect flicker."
+        }
+        true => "Runs on Proton's Wayland backend instead of XWayland.",
     }
 }

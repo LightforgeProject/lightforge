@@ -1,19 +1,14 @@
 //! The package managers' route: their own command, in a terminal.
 //!
-//! Lightforge fetches and checks what will be installed, writes a short
-//! script beside it and opens a terminal on it. The package manager asks for
-//! the password itself, where the user can see exactly what it runs, and the
-//! script waits for Enter at the end so its last lines stay readable.
-//!
-//! Linux has no one way to say "open a terminal and run this". The newer
-//! `xdg-terminal-exec` is asked first, then `$TERMINAL`, then the terminals
-//! the common desktops ship, each with its own way of being handed a command.
-//! None of them is a requirement: without one, the dialog shows the command.
+//! Lightforge fetches and checks the files and writes a script; the package
+//! manager asks for the password in a terminal, and the script waits for
+//! Enter. `xdg-terminal-exec` first, then `$TERMINAL`, then common terminals;
+//! without one the dialog shows the command.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use super::{fetch_asset, fetch_pkgbuild, Package, UpgradeError};
+use super::{fetch_asset, fetch_pkgbuild, io, Package, UpgradeError};
 use crate::net::Http;
 
 /// Terminals the common desktops ship, and what each needs before the
@@ -46,14 +41,12 @@ pub async fn prepare(
     work: &Path,
     on_progress: impl FnMut(u64, Option<u64>),
 ) -> Result<(PathBuf, String), UpgradeError> {
-    let io = |source| UpgradeError::Io { path: work.to_path_buf(), source };
-    // Whatever the last update left: nothing reads it once its terminal is
-    // closed, and Lightforge cannot tell when that was.
+    // The last update's leftovers.
     match std::fs::remove_dir_all(work) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(io(e)),
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(io(work)(e)),
         _ => {}
     }
-    std::fs::create_dir_all(work).map_err(io)?;
+    std::fs::create_dir_all(work).map_err(io(work))?;
 
     let command = match package {
         // `makepkg` builds in the folder it is run from and asks for the
@@ -61,7 +54,7 @@ pub async fn prepare(
         Package::Pacman { package } => {
             let pkgbuild = fetch_pkgbuild(http, package, version).await?;
             let path = work.join("PKGBUILD");
-            std::fs::write(&path, pkgbuild).map_err(|source| UpgradeError::Io { path, source })?;
+            std::fs::write(&path, pkgbuild).map_err(io(&path))?;
             "makepkg -si --noconfirm".to_owned()
         }
         Package::Deb => {
@@ -75,14 +68,12 @@ pub async fn prepare(
     };
 
     let script = work.join(SCRIPT);
-    std::fs::write(&script, script_text(work, version, &command))
-        .map_err(|source| UpgradeError::Io { path: script.clone(), source })?;
+    std::fs::write(&script, script_text(work, version, &command)).map_err(io(&script))?;
     Ok((script, command))
 }
 
-/// Open a terminal on `script`. Returns as soon as it is started: some
-/// terminals hand the window to a server and exit at once, so waiting tells
-/// nothing about the update.
+/// Open a terminal on `script` and return once started: some terminals exit
+/// at once, handing the window to a server.
 pub fn open(script: &Path) -> Result<(), UpgradeError> {
     let path = std::env::var_os("PATH").unwrap_or_default();
     let chosen = std::env::var_os("TERMINAL");
@@ -93,10 +84,8 @@ pub fn open(script: &Path) -> Result<(), UpgradeError> {
         .args(&argv[1..])
         .current_dir(script.parent().unwrap_or(Path::new("/")))
         .stdin(std::process::Stdio::null())
-        .spawn()
-        .map_err(|source| UpgradeError::Io { path: PathBuf::from(&argv[0]), source })?;
-    // Reaped on the side, so a terminal that stays in the foreground does
-    // not linger as a zombie once it closes.
+        .spawn().map_err(io(&PathBuf::from(&argv[0])))?;
+    // Reaped on the side, so no zombie lingers.
     std::thread::spawn(move || child.wait());
     Ok(())
 }

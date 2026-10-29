@@ -1,8 +1,9 @@
 # Installing Lightforge
 
-There's a package for Debian/Ubuntu, a COPR repository and a package for Fedora, a PKGBUILD for Arch, and
-an installer for SteamOS, Bazzite and everything else. Failing that, Lightforge is a Rust program with almost no dependencies, so
-building it is three commands and a couple of minutes of your CPU fan.
+There's a package for Debian/Ubuntu, a COPR repository and a package for
+Fedora, a PKGBUILD for Arch, and an installer for SteamOS, Bazzite and
+everything else. You can also build it yourself: it's a Rust program with
+very few dependencies, so that takes three commands and a few minutes.
 
 Everything below installs the same two binaries, the menu entry and the icons.
 
@@ -10,29 +11,30 @@ Everything below installs the same two binaries, the menu entry and the icons.
 
 Download `lightforge_<version>_amd64.deb` from the
 [releases page](https://github.com/LightforgeProject/lightforge/releases).
-The filename says `1.0.0.beta.5` because GitHub will not serve a `~` in an
-asset name; the version inside the package, which is the one `apt` reads and
-orders by, is `1.0.0~beta.5`:
+The file name says `1.0.0.beta.7` because GitHub doesn't allow a `~` in an
+asset name. The version inside the package, which `apt` reads and sorts by,
+is `1.0.0~beta.7`:
 
 ```bash
-sudo apt install ./lightforge_1.0.0.beta.5-1_amd64.deb
+sudo apt install ./lightforge_1.0.0.beta.7-1_amd64.deb
 ```
 
-It asks for glibc 2.36 or newer — Debian 12, Ubuntu 22.10 and anything after
-them. `apt` pulls in nothing else; see [what you need](#to-run) below.
+It needs glibc 2.36 or newer: Debian 12, Ubuntu 22.10 or anything later.
+`apt` installs nothing else with it; see [what you need](#to-run) below.
 
-Ubuntu 22.04 LTS is glibc 2.35 and `apt` will refuse the package. The binaries
-themselves only import 2.34 and 2.35, so the [installer](#steamos-bazzite-and-other-systems)
-below works there — the `.deb` states the container's own 2.36 because that is
-the version it can actually promise for every future build.
+Ubuntu 22.04 LTS has glibc 2.35, and `apt` will refuse the package. The
+binaries themselves only need 2.34 and 2.35, so the
+[installer](#steamos-bazzite-and-other-systems) below works there. The `.deb`
+asks for 2.36 because that's the version of the build container, and the only
+one I can promise for every future build.
 
 ## Fedora
 
 ### From COPR (recommended)
 
 Lightforge has its own [COPR repository](https://copr.fedorainfracloud.org/coprs/simplykenny/lightforge/),
-built from source for every current Fedora release. Add it once and
-`dnf upgrade` brings each new version along with the rest of your system:
+built from source for every current Fedora release. Add it once, and
+`dnf upgrade` updates Lightforge together with the rest of your system:
 
 ```bash
 sudo dnf copr enable simplykenny/lightforge
@@ -43,20 +45,19 @@ sudo dnf install lightforge
 
 Without the repository, download `lightforge-<version>.x86_64.rpm` from the
 [releases page](https://github.com/LightforgeProject/lightforge/releases)
-and install it by hand. Updates are then up to you, one download per release:
+and install it by hand. You then download each new release yourself:
 
 ```bash
-sudo dnf install ./lightforge-1.0.0.beta.5-1.x86_64.rpm
+sudo dnf install ./lightforge-1.0.0.beta.7-1.x86_64.rpm
 ```
 
-The same file installs on openSUSE with `sudo zypper install`. It needs
-glibc 2.36 or newer, like the `.deb`.
+The same file installs on openSUSE with `sudo zypper install`. Like the
+`.deb`, it needs glibc 2.36 or newer.
 
-## Arch, CachyOS, EndeavourOS
+## Arch, CachyOS, EndeavourOS, Omarchy
 
-**Not on the AUR yet** — registrations there are closed and there's no account
-to upload from. The PKGBUILDs are finished and in the repository, so until
-that changes:
+**Not on the AUR yet.** AUR registrations are closed, so I have no account to
+upload from. The PKGBUILDs are finished and in the repository, so for now:
 
 ```bash
 git clone https://git.tuxcore.pro/kenny/lightforge.git
@@ -64,20 +65,18 @@ cd lightforge/packaging/aur/lightforge-bin   # prebuilt binaries
 makepkg -si
 ```
 
-Use `packaging/aur/lightforge` instead to build it from source. Both were
-built and installed in a clean Arch container before they were committed, and
-both land on the AUR as `lightforge` and `lightforge-bin` the day an account
-is possible.
+Use `packaging/aur/lightforge` instead to build it from source. I built and
+installed both in a clean Arch container before committing them, and both go
+on the AUR as `lightforge` and `lightforge-bin` once I can get an account.
 
 ## SteamOS, Bazzite and other systems
 
 The installer works on any distribution with glibc 2.36 or newer, needs no
-root, and touches nothing outside your home folder. Run it again any time to
-update.
+root, and only touches your home folder. Run it again any time to update.
 
 **Double-click:** download `lightforge-installer.desktop` from the
 [releases page](https://github.com/LightforgeProject/lightforge/releases) and
-double-click it. Your desktop will warn that the file is untrusted, choose
+double-click it. Your desktop will warn that the file is untrusted; choose
 Continue. A terminal window shows the download, checks it, installs Lightforge
 and starts it. GNOME Files opens the file as text instead of running it, so on
 GNOME use the command below.
@@ -96,7 +95,7 @@ curl -fsSL https://raw.githubusercontent.com/LightforgeProject/lightforge/main/p
 
 Uninstalling removes Lightforge itself. Your games, the Wine prefix and your
 settings stay where they are; see [Uninstalling](#uninstalling) for where they
-live.
+are.
 
 On a Steam Deck, do this in Desktop Mode (Steam button, Power, Switch to
 Desktop). SteamOS already has the 32-bit libraries Battle.net's installer
@@ -115,70 +114,67 @@ cargo build --release --locked
 
 That gives you two binaries in `target/release/`:
 
-- **`lightforge-gui`** — the launcher. This is the one you want.
-- **`lightforge`** — the command line, if you like that sort of thing. See
-  [docs/CLI.md](docs/CLI.md).
+- **`lightforge-gui`**: the launcher.
+- **`lightforge`**: the command line. See [docs/CLI.md](docs/CLI.md).
 
-Run it straight out of the tree:
+Run it from the build folder:
 
 ```bash
 ./target/release/lightforge-gui
 ```
 
-Or install it properly, which also gives you the menu entry and the icons a
-package would:
+Or install it, which also adds the menu entry and the icons, like a package
+would:
 
 ```bash
 make install PREFIX=~/.local          # no root needed
 sudo make install                     # or system-wide, into /usr/local
 ```
 
-`make uninstall` takes the same `PREFIX` and removes exactly what it put
-there. The binaries are self-contained — every icon and the chrome are
-compiled in — so there's no data directory either way.
+`make uninstall` takes the same `PREFIX` and removes exactly what it
+installed. Every icon and the window decorations are compiled into the
+binaries, so there's no data directory either way.
 
-`--locked` matters more than it looks: it builds against the exact dependency
-versions the project was tested with, rather than whatever resolved today.
+Use `--locked`: it builds with the exact dependency versions the project was
+tested with, instead of whatever is newest today.
 
 ## What you need
 
 ### To build
 
-A Rust toolchain, **1.90 or newer** — from [rustup](https://rustup.rs) if your
-distro's is older, which it often is. That's nearly it. No GTK, no Qt, no
-Vulkan headers. The one `-dev` package is libudev's, for gamepads
-(`libudev-dev` on Debian/Ubuntu, `systemd-devel` on Fedora, part of `systemd`
-on Arch): the launcher links `libc`, `libm`, `libgcc_s` and `libudev` and
-nothing else, because everything a desktop app normally links against is
-opened at runtime instead.
+A Rust toolchain, **1.90 or newer**. Get it from [rustup](https://rustup.rs)
+if your distro's is older. You don't need GTK, Qt or Vulkan headers. The only
+`-dev` package is libudev's, for gamepads (`libudev-dev` on Debian/Ubuntu,
+`systemd-devel` on Fedora, part of `systemd` on Arch). The launcher links
+`libc`, `libm`, `libgcc_s` and `libudev` and nothing else; everything else a
+desktop app needs is loaded at runtime.
 
 ### To run
 
-**Fonts.** Text is drawn with whatever fontconfig gives us; nothing is
-embedded. Any normal desktop has this. A bare container doesn't, and renders
-blank labels.
+**Fonts.** Text is drawn with whatever fontconfig provides; no fonts are
+built in. Every normal desktop has them. A minimal container doesn't, and
+shows blank labels.
 
-**A GPU driver.** The launcher prefers Vulkan and falls back to software
-rendering on its own if it can't get it, so it will start on almost anything.
-If you've got a GPU that makes it unhappy, force the fallback:
+**A GPU driver.** The launcher uses Vulkan and falls back to software
+rendering by itself if Vulkan doesn't work, so it starts almost anywhere. If
+your GPU gives it trouble, force software rendering:
 
 ```bash
 ICED_BACKEND=tiny-skia lightforge-gui
 ```
 
-**That's all WoW needs.** Proton-GE is downloaded and checked by Lightforge
-itself, so you don't need Steam, Lutris, or a system Wine for any of it.
+**That's all WoW needs.** Lightforge downloads and checks Proton-GE itself, so
+you don't need Steam, Lutris or a system Wine.
 
 ### To use Battle.net
 
-One extra thing, and it catches people out: **a 32-bit userspace**.
+Battle.net needs one more thing: **32-bit libraries**.
 
-Everything Lightforge does to build the prefix is 64-bit and works fine
-without it. Then `Battle.net-Setup.exe` turns out to be the single 32-bit
-binary in the whole sequence, so a machine without one sails happily through
-Proton and prefix creation and dies in under a second on the last step. The
-launcher checks for this before it starts and tells you the command for your
-distro, but here they are:
+Everything Lightforge does to build the prefix is 64-bit and works without
+them. `Battle.net-Setup.exe` is the only 32-bit program in the setup, so
+without 32-bit libraries, Proton and the prefix set up fine and then the
+installer exits within a second. The launcher checks for this before it
+starts and shows the command for your distro. Here they are:
 
 | | |
 | --- | --- |
@@ -188,108 +184,105 @@ distro, but here they are:
 | **Arch** | `sudo pacman -S wine` (multilib must be enabled) |
 | **openSUSE** | `sudo zypper install wine-32bit` |
 
-Being honest about that table: **only the Fedora line has been run on a real
-machine.** The others are right as far as I can tell from how those
-distributions are put together, but I haven't proved them, and I'd rather say
-so than let you find out. If one of them is wrong, tell me in Discord and I'll
-fix it the same day.
+**Only the Fedora line has been tested on a real machine.** The others should
+be right for how those distributions are packaged, but I haven't tested them.
+If one is wrong, tell me in Discord and I'll fix it.
 
-Two things worth knowing if you go digging:
+Two more details:
 
-- It's named as the *Wine* package on purpose, even though Lightforge uses
-  Proton's own Wine. What's actually needed is the 32-bit graphics stack
-  underneath it, and the distro's `wine` package is maintained by people who
-  package that for a living. On Fedora, `glibc.i686` and `freetype.i686`
-  alone pass every check and the installer still fails.
-- Installing Steam also fixes it, on Debian at least — but only by accident,
-  because the Steam package enables i386 and drags the 32-bit chain in with
-  it. Nobody should need Steam to run this.
+- The table names the *Wine* package even though Lightforge uses Proton's own
+  Wine. What's really needed is the 32-bit graphics stack, and the distro's
+  `wine` package pulls in all of it. On Fedora, `glibc.i686` and
+  `freetype.i686` alone pass every check, and the installer still fails.
+- On Debian, installing Steam also fixes it, because the Steam package enables
+  i386 and pulls in the 32-bit libraries. You shouldn't need Steam for this,
+  though.
 
-**Don't want Battle.net at all?** Decline it during setup. WoW works without
-it; you lose the shop, the Token and the other games.
+**You can skip Battle.net.** Decline it during setup. WoW works without it,
+but you won't have the in-game shop, the Token or the other games.
 
 ## A binary that runs on other machines
 
-If you want to hand the result to someone, don't hand them a build from your
-own machine — it demands whatever glibc you happen to have, which on a rolling
-distro is a version nobody else has yet. Measured here: a local build wanted
-glibc 2.44, which SteamOS and Bazzite are both older than, so it started on
-neither.
+If you want to give a build to someone else, don't use one built on your own
+machine. It needs the glibc version you have, and on a rolling distro that's
+newer than everyone else's. Here, a local build needed glibc 2.44, which is
+newer than SteamOS and Bazzite have, so it didn't start on either.
 
 ```bash
 make release
 ```
 
-builds inside a Debian 12 container (glibc 2.36) and **refuses to finish if
-the result asks for anything newer**, which is the bit that makes it
-trustworthy rather than hopeful. The binaries land in
-`target/container/release/`, stripped, and run on Arch, Fedora, Ubuntu,
-Bazzite and the Steam Deck alike.
+builds inside a Debian 12 container (glibc 2.36) and **fails if the result
+needs anything newer**. The binaries end up in `target/container/release/`,
+stripped, and run on Arch, Fedora, Ubuntu, Bazzite and the Steam Deck.
 
-Needs `podman` (or `make release CONTAINER=docker`).
+You need `podman` (or `make release CONTAINER=docker`).
 
 ## First run
 
-The launcher walks you through a short setup the first time:
+The first time, the launcher takes you through a short setup:
 
-1. **Where games should live** — by default `~/Games/Blizzard`, and you can
-   add other drives later or right now.
-2. **Region and language**, so you're not downloading English from Europe
-   when you wanted neither.
+1. **Where games should live**: `~/Games/Blizzard` by default. You can add
+   other drives now or later.
+2. **Region and language**, so you get the right game version and language.
 3. **A scan for Blizzard games already on this machine.** If you've played
-   through Lutris, Bottles, Heroic, Faugus or a hand-made prefix, your installs are
-   found and adopted **where they already are** — nothing is moved and
-   nothing is re-downloaded. This reads Battle.net's own registry rather than
-   crawling your disks.
-4. **Battle.net**, if you want it — the prefix, a verified Proton-GE build
-   and the client itself, in three steps you can watch.
+   through Lutris, Bottles, Heroic, Faugus or your own prefix, your installs
+   are found and used **where they are**. Nothing is moved or downloaded
+   again. The scan reads Battle.net's own registry, so it doesn't search your
+   whole disk.
+4. **Battle.net**, if you want it: the prefix, a verified Proton-GE build and
+   the client itself, in three steps you can follow.
 
-Then you're on the Play page and it's one button.
+After that you're on the Play page.
 
 ## Updating
 
-From the Fedora COPR, `sudo dnf upgrade` and that's it. With a downloaded
-package, install the new `.deb` or `.rpm` over the old one, or `makepkg -si`
-again on Arch. With the
-installer, run it again. From a source tree:
+When a new version is out, Lightforge shows an update notice:
+
+- **Installer**: the notice updates Lightforge for you. Running the installer
+  again works too.
+- **`.deb` or `.rpm` you downloaded**: the notice fetches and checks the new
+  package and opens a terminal where your package manager installs it and
+  asks for your password. Or install the new file over the old one yourself.
+- **Fedora COPR and Fedora Atomic**: `sudo dnf upgrade`, or your system's
+  normal update.
+- **Arch**: `makepkg -si` again with the new PKGBUILD.
+- **From source**:
 
 ```bash
 git pull
 cargo build --release --locked
 ```
 
-Nothing migrates behind your back; your config, games and addons are outside
-the build directory and stay where they are. There's no self-updater, which is
-most of the argument for installing a package or using the installer rather
-than a bare binary.
+Updating never touches your config, games or addons; they are stored outside
+the program.
 
 ## Uninstalling
 
 `sudo apt remove lightforge`, `sudo dnf remove lightforge`,
 `sudo pacman -R lightforge-bin`, the installer's
 [uninstall command](#steamos-bazzite-and-other-systems), or
-`make uninstall PREFIX=~/.local` — then as
-much of this as you want gone:
+`make uninstall PREFIX=~/.local`. Then delete whichever of these you want
+gone:
 
 ```text
 ~/.config/lightforge/        settings
-~/.local/share/lightforge/   Proton builds, addon ledger
-~/.cache/lightforge/         artwork, catalogues — safe to delete any time
+~/.local/share/lightforge/   Proton builds, addon ledger, logs
+~/.cache/lightforge/         artwork, catalogues (safe to delete any time)
 ```
 
-The games are somewhere else on purpose:
+The games are stored separately:
 
 ```text
-~/Games/Blizzard/prefix/     the Wine prefix — disposable, rebuild any time
-~/Games/Blizzard/games/      your actual games. Possibly 120 GB of them.
+~/Games/Blizzard/prefix/     the Wine prefix (can be rebuilt any time)
+~/Games/Blizzard/games/      your games, often more than 100 GB
 ```
 
-Removing the prefix costs you nothing but a rebuild. **Removing `games/` costs
-you the downloads**, so check what's in there first — and if you added other
-drives as libraries, each of those has its own `Lightforge/games/` folder too.
+Deleting the prefix only means it gets rebuilt. **Deleting `games/` deletes
+your downloads**, so check what's in there first. If you added other drives as
+libraries, each of them has its own `Lightforge/games/` folder too.
 
-## Stuck?
+## Getting help
 
-Come and say so in **[Discord](https://discord.gg/vtTgmUV9Bq)** — install
-problems are the most useful bug reports I get, because they're the ones I
-can't reproduce on my own machine.
+Ask in **[Discord](https://discord.gg/vtTgmUV9Bq)**. Install problems are the
+reports that help me most, because I can't reproduce them on my own machine.

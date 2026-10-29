@@ -4,11 +4,7 @@ use crate::*;
 use iced::widget::column;
 
 impl Lightforge {
-    /// The menu under the wordmark: the app's own business, as opposed to the
-    /// band's (which game) and the tabs' (which page).
-    ///
-    /// Settings lives here rather than in the ribbon because it is somewhere
-    /// you go rarely and deliberately, unlike Play.
+    /// The menu under the wordmark: the app's own business.
     pub(crate) fn app_menu(&self) -> Element<'_, Message> {
         // No destination yet means no press and a dimmed face: the entry says
         // what is coming without pretending it is here.
@@ -62,10 +58,7 @@ impl Lightforge {
                 .width(Length::Fill)
                 .style(theme::divider),
             entry(exit_icon(), "Exit", Some(Message::Exit)),
-            // Where to find me, and where to say thanks. One row rather
-            // than two entries with words: these are marks people recognise,
-            // and a menu that ends in a line of labels reading "Ko-fi" and
-            // "PayPal" would read as the point of the menu.
+            // One row of recognisable marks.
             row![
                 square(discord_icon(), DISCORD_URL),
                 square(x_icon(), X_URL),
@@ -81,11 +74,10 @@ impl Lightforge {
         focus::layer(container(rows).padding(theme::SM).style(theme::menu))
     }
 
-    /// One addon's own settings: what is true of this addon rather than what
+    /// One addon's own settings: what is true of this addon, not what
     /// to do to it right now.
     ///
-    /// A version pin and re-install belong here too, which is the reason for
-    /// a menu rather than more buttons on an already full row.
+    /// A menu: the row is full.
     pub(crate) fn addon_row_menu(
         &self,
         managed: &addonwork::Managed,
@@ -139,10 +131,7 @@ impl Lightforge {
             ));
         }
 
-        // Choosing an older build on purpose, which is the other half of
-        // pinning: "Pin to <version>" holds what is here, this goes and gets
-        // something else. Only CurseForge publishes a build list, so this is
-        // the only provider it is offered for.
+        // Choosing an older build; only CurseForge publishes a build list.
         if managed.provider.eq_ignore_ascii_case("curse") {
             rows = rows.push(entry(
                 "Details and changelog…".to_owned(),
@@ -159,9 +148,7 @@ impl Lightforge {
             ));
         }
 
-        // Pinning names the version it will hold, because "pin" alone does
-        // not say *to what*: and after an update that is a different file.
-        // An addon whose file the ledger never recorded has nothing to hold.
+        // Names the version it will hold.
         match (&managed.pinned, &managed.file_id) {
             (Some(_), _) => {
                 rows = rows.push(entry(
@@ -178,16 +165,8 @@ impl Lightforge {
             (None, None) => {}
         }
 
-        // Where the addon came from and who wrote it. Above the rule
-        // because they leave Lightforge rather than change anything in it,
-        // and the project page first: on CurseForge that page is where an
-        // author is actually paid, so sending people to it is the point
-        // rather than a courtesy.
-        //
-        // Each entry appears only when there is somewhere to go. A provider
-        // that publishes no repository, and an addon installed before the
-        // ledger kept these, both leave the menu one line shorter, which is
-        // better than a line that opens nothing.
+        // Links out, above the rule, the project page first (where CurseForge
+        // pays authors). Each only when known.
         let support = managed.support_url().map(str::to_owned);
         if managed.website_url.is_some() || support.is_some() {
             rows = rows.push(
@@ -199,18 +178,12 @@ impl Lightforge {
         if let Some(url) = managed.website_url.clone() {
             rows = rows.push(entry("Open project page".to_owned(), Message::OpenUrl(url)));
         }
-        // Source before author profile, because that is where the money can
-        // actually go: a repository usually carries a Sponsor button, where a
-        // provider's author page is a list of their projects. Neither is a
-        // donation link as such, no catalogue publishes one, so the label
-        // promises help, not a payment form.
+        // See `support_url`; the label promises help, not a payment form.
         if let Some(url) = support {
             rows = rows.push(entry("Support the author…".to_owned(), Message::OpenUrl(url)));
         }
 
-        // An action, not a setting, so it sits under a rule of its own,
-        // and busy means busy: a second fetch into the same directory while
-        // one is running is the race the whole page guards against.
+        // An action, under its own rule; disabled while busy.
         rows = rows.push(
             container(Space::new().height(Length::Fixed(1.0)))
                 .width(Length::Fill)
@@ -275,10 +248,8 @@ impl Lightforge {
 
     /// A dropdown the ring can open and move through.
     ///
-    /// A button and a menu of our own rather than a `pick_list`, whose list
-    /// keeps its open state to itself, so a keyboard can neither open it nor
-    /// move through it. Looks the same, and a mouse uses it the same way.
-    /// `key` names it, and has to be unique on the page.
+    /// Not a `pick_list`, which a keyboard cannot open. `key` must be unique
+    /// on the page.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn picker<'a, T: ToString + PartialEq + Clone>(
         &self,
@@ -343,6 +314,35 @@ impl Lightforge {
         popover::popover(face, menu).align_left().into()
     }
 
+    /// The menu beside a running Battle.net: bring it up, or quit it.
+    pub(crate) fn client_menu(&self) -> Element<'_, Message> {
+        let free = !self.busy && !self.quitting_client;
+        let item = |label: &'static str, message: Message| {
+            self.ring(
+                focus::Target::Menu(label),
+                free.then(|| message.clone()),
+                button(text(label).size(theme::LABEL))
+                    .style(theme::ghost)
+                    .padding(theme::tap([theme::SM, theme::MD]))
+                    .width(Length::Fill)
+                    .on_press_maybe(free.then_some(message)),
+            )
+        };
+        let menu = container(
+            column![
+                item("Show Battle.net", Message::ShowBattleNet),
+                item("Quit Battle.net", Message::AskQuitBattleNet),
+            ]
+            .spacing(theme::XS),
+        )
+        .padding(theme::XS)
+        .width(Length::Fixed(200.0))
+        .style(theme::floating);
+
+        focus::layer(mouse_area(menu).on_press(Message::MenuClick))
+    }
+
+    /// The cog menu: what you do *about* a game, not to play it.
     pub(crate) fn gear_menu(&self) -> Element<'_, Message> {
         let item = |label: &'static str, message: Message, enabled: bool| {
             self.ring(
@@ -358,9 +358,7 @@ impl Lightforge {
 
         let installed = self.local.version.is_some();
         let can = self.can_maintain();
-        // Anything in the queue for this product can be given up, running,
-        // paused or still waiting its turn. Pause is on the button itself;
-        // this is the one that ends it.
+        // Anything queued for this product can be given up.
         let queued = self.queue.iter().any(|d| d.code == self.selected.code);
         // Battle.net's order and wording: the game's own entries, then the
         // two that change the install below a rule.
@@ -370,7 +368,7 @@ impl Lightforge {
                 item("Show in Explorer", Message::ShowInExplorer, installed),
                 item("Game Version", Message::AskGameVersion, installed),
                 item("Scan and Repair", Message::ScanAndRepair, can.scan),
-                item("Check for Updates", Message::CheckForUpdates, !self.busy),
+                item("Check for Updates", Message::CheckForUpdates, !self.locked()),
             ]
             .extend(
                 self.owed_repair
@@ -391,7 +389,7 @@ impl Lightforge {
         )
         .padding(theme::XS)
         // The width of the split button beneath it, so the menu reads as
-        // belonging to that control rather than floating near it.
+        // belonging to that control instead of floating near it.
         .width(Length::Fixed(240.0))
         .style(theme::floating);
 

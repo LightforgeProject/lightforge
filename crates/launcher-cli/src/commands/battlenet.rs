@@ -1,5 +1,6 @@
 //! Battle.net: installing, configuring and running it, and Agent's registry.
 
+use super::{default_install, managed_products, print_preflight, proton_runner, windows_wow_path};
 use crate::*;
 
 pub(crate) async fn battlenet_fetch() -> Result<()> {
@@ -111,7 +112,7 @@ pub(crate) fn battlenet_config(ctx: Ctx) -> Result<()> {
 
 // One parameter per command-line flag.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<String>, exec: Option<String>, uri: Option<String>, install_game: Option<String>, skip_preflight: bool) -> Result<()> {
+pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<ProductCode>, exec: Option<String>, uri: Option<String>, install_game: Option<String>, skip_preflight: bool) -> Result<()> {
     let Ctx { layout, config } = ctx;
     use lightforge_core::battlenet::{self, Launch};
     use lightforge_core::config::Config;
@@ -123,7 +124,7 @@ pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<St
         },
         (_, Some(family)) => Launch::Uri(battlenet::game_uri(family)),
         (Some(code), None) => Launch::Product {
-            code: code.parse().expect("product codes are infallible"),
+            code: code.clone(),
             exec: exec.clone(),
         },
         (None, None) => Launch::Client,
@@ -166,11 +167,8 @@ pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<St
     }
 
     println!("running {}{}", exe.display(), if args.is_empty() { String::new() } else { format!(" {}", args.join(" ")) });
-    // The shared Battle.net profile, the same one the GUI applies,
-    // a launcher that honoured it from one entry point and not the
-    // other would make every measurement unreproducible. Unlike the
-    // GUI this always *is* the client (the CLI has no running-client
-    // fast path), so the wrappers always belong here.
+    // The shared Battle.net profile, as the GUI applies it. This is always
+    // the client, so the wrappers belong here.
     let shared = AppDirs::discover()
         .ok()
         .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
@@ -192,9 +190,7 @@ pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<St
         }
     }
 
-    // Battle.net exits non-zero on perfectly ordinary paths (a window
-    // closed mid-update, a hand-off to the game), so a code is worth
-    // printing but not worth failing the command over.
+    // Battle.net exits non-zero on ordinary paths: printed, not fatal.
     match status.code() {
         Some(0) | None => println!("exited"),
         Some(code) => println!("exited with code {code}"),
@@ -202,7 +198,7 @@ pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<St
     Ok(())
 }
 
-pub(crate) fn product_db(ctx: Ctx, path: Option<PathBuf>, products: Vec<String>, account_country: String, geo_country: String, agent_tags: bool, dry_run: bool) -> Result<()> {
+pub(crate) fn product_db(ctx: Ctx, path: Option<PathBuf>, products: Vec<ProductCode>, account_country: String, geo_country: String, agent_tags: bool, dry_run: bool) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::tact::productdb::{self, ProductInstall};
 
@@ -210,14 +206,10 @@ pub(crate) fn product_db(ctx: Ctx, path: Option<PathBuf>, products: Vec<String>,
     let info = BuildInfo::load(install.join(".build.info"))
         .with_context(|| format!("reading {}/.build.info", install.display()))?;
 
-    // Every product the install actually has a row for, unless told
-    // otherwise, a `.product.db` naming a product that is not there is
-    // exactly the inconsistency Agent refuses.
+    // Every product with a row, unless told otherwise: Agent refuses a
+    // record for a product that is not there.
     let codes: Vec<ProductCode> = match products.is_empty() {
-        false => products
-            .iter()
-            .map(|p| p.parse().expect("product codes are infallible"))
-            .collect(),
+        false => products,
         true => info.products().collect(),
     };
 
@@ -225,13 +217,12 @@ pub(crate) fn product_db(ctx: Ctx, path: Option<PathBuf>, products: Vec<String>,
     let mut info = info;
     for code in &codes {
         let windows_path = windows_wow_path(&layout, code);
-        let mut record = ProductInstall::from_build_info(&info, code, &windows_path)?
+        let flavor = lightforge_core::paths::flavor_dir_name(&install, code);
+        let mut record = ProductInstall::from_build_info(&info, code, &flavor, &windows_path)?
             .with_countries(&account_country, &geo_country);
         if agent_tags {
             record = record.with_agent_tags();
-            // Keep `.build.info` saying the same thing; the two
-            // disagreeing is exactly the kind of inconsistency Agent
-            // refuses an install for.
+            // `.build.info` must agree, or Agent refuses the install.
             info.set(code, "Tags", record.tags.clone())?;
         }
         println!(
@@ -257,4 +248,50 @@ pub(crate) fn product_db(ctx: Ctx, path: Option<PathBuf>, products: Vec<String>,
         }
     }
     Ok(())
+}
+
+/// Render a config tweak list: key, value, and why it is set.
+fn print_tweaks(tweaks: &[lightforge_core::battlenet::Tweak]) {
+    for tweak in tweaks {
+        println!("  {:<40} {}\n    {}", tweak.key(), tweak.value, tweak.reason);
+    }
+}
+
+/// The build a Battle.net verb should use: `--proton` if given, else the pin
+/// from `config.toml`, else the newest installed.
+///
+/// A named product's own pin first, else Battle.net's. Leaks a `String`: the
+/// process is about to exit.
+fn battle_net_pin<'a>(explicit: Option<&'a str>, code: Option<&ProductCode>) -> Option<&'a str> {
+    if explicit.is_some() {
+        return explicit;
+    }
+    let dirs = AppDirs::discover().ok()?;
+    let config = Config::load_or_default(&dirs.config_file()).ok()?;
+    let version = match code {
+        Some(code) => config.handoff_proton(code)?,
+        None => config.battle_net_proton_version()?,
+    }
+    .to_owned();
+    Some(Box::leak(version.into_boxed_str()))
+}
+
+/// Say so when the build about to run is older than the one that built the
+/// prefix every product shares.
+///
+/// A line on stderr, not a refusal: `--proton` is how one tries an older build.
+fn warn_on_downgrade(layout: &Layout, build: &lightforge_core::proton::ProtonRelease) {
+    use lightforge_core::proton;
+
+    let built_by = proton::prefix_build(&layout.compat_data());
+    if let proton::PrefixFit::Older { built_by } =
+        proton::prefix_fit(&build.version, built_by.as_deref())
+    {
+        eprintln!(
+            "warning: {} is older than {built_by}, which last upgraded this prefix.\n\
+             \x20        Proton migrates a prefix forward only; the shared prefix may not \
+             survive it.",
+            build.version,
+        );
+    }
 }

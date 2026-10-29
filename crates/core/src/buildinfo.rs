@@ -14,16 +14,10 @@
 //! 2. **Only the target product's row is ever mutated.** Retail, Classic and
 //!    PTR share one file, so a whole-file rewrite would clobber siblings.
 //!
-//! Writes go through an atomic temp-file-and-rename writer, never in
-//! place: Agent memory-maps this file and a torn write is exactly the
-//! corruption that triggers the full repair scan Lightforge exists to
-//! avoid.
-//!
-//! Nothing here checks whether Agent is running. That gate belongs to
-//! [`crate::preflight`], which every caller must pass through first.
+//! Writes are atomic: Agent memory-maps this file, and a torn write triggers
+//! its repair scan. Whether Agent is running is [`crate::preflight`]'s check.
 
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::product::ProductCode;
@@ -54,7 +48,7 @@ pub struct BuildInfo {
     rows: Vec<Row>,
 }
 
-/// One product's row, stored as raw cells aligned to [`BuildInfo::headers`].
+/// One product's row, stored as raw cells aligned to the header row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     cells: Vec<String>,
@@ -103,10 +97,7 @@ impl BuildInfo {
         &self.rows
     }
 
-    /// Every product this file has a row for.
-    ///
-    /// The `Product` column is the last one, and it is what Agent keys on, a
-    /// file can carry several products sharing one install root.
+    /// Every product this file has a row for, by the `Product` column.
     pub fn products(&self) -> impl Iterator<Item = ProductCode> + '_ {
         self.rows().iter().filter_map(|row| {
             self.column(COL_PRODUCT)
@@ -123,8 +114,7 @@ impl BuildInfo {
         self.rows.iter().find(|r| r.cells.get(product_col).map(String::as_str) == Some(code.as_str()))
     }
 
-    /// Mutable access to a single product's row. Every other row is untouched
-    /// by construction. This is the row-isolation guarantee.
+    /// Mutable access to one product's row; the others cannot be touched.
     pub fn row_mut(&mut self, code: &ProductCode) -> Result<&mut Row, BuildInfoError> {
         let product_col = self.index[COL_PRODUCT];
         self.rows
@@ -133,10 +123,7 @@ impl BuildInfo {
             .ok_or_else(|| BuildInfoError::UnknownProduct(code.as_str().to_owned()))
     }
 
-    /// Drop a product's row entirely. Returns whether one was there.
-    ///
-    /// The file keeps its header and every other row: products share one
-    /// `.build.info`, so removing Classic Era must leave Retail untouched.
+    /// Drop a product's row, keeping the rest. Returns whether one was there.
     pub fn remove_product(&mut self, code: &ProductCode) -> bool {
         let Ok(product_col) = self.column(COL_PRODUCT) else {
             return false;
@@ -171,65 +158,19 @@ impl BuildInfo {
     /// Read and parse a `.build.info` from disk.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, BuildInfoError> {
         let path = path.as_ref();
-        let contents = std::fs::read_to_string(path)
-            .map_err(|source| BuildInfoError::Io { path: path.to_path_buf(), source })?;
+        let contents = std::fs::read_to_string(path).map_err(io(path))?;
         Self::parse(&contents)
     }
 
-    /// Atomically replace `path` with this document.
-    ///
-    /// Temp file in the destination directory, `fsync`, then `rename`: the
-    /// rename is the only step an observer can see, so the file is either the
-    /// old bytes or the new ones and never a prefix of either. The directory
-    /// is synced afterwards so the rename itself survives a power loss, which
-    /// is the half that a plain tempfile-and-persist leaves undone.
-    ///
-    /// The original file's permissions are carried over. `tempfile` creates
-    /// `0600`, and silently tightening a file Wine shares would be a change
-    /// nobody asked for.
+    /// Atomically replace `path` with this document, keeping its mode.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), BuildInfoError> {
         let path = path.as_ref();
-        let dir = path.parent().unwrap_or(Path::new("."));
-        std::fs::create_dir_all(dir)
-            .map_err(|source| BuildInfoError::Io { path: dir.to_path_buf(), source })?;
-
-        let io = |p: &Path| {
-            let p = p.to_path_buf();
-            move |source| BuildInfoError::Io { path: p.clone(), source }
-        };
-
-        let mut tmp = tempfile::NamedTempFile::new_in(dir).map_err(io(dir))?;
-        tmp.write_all(self.to_file_contents().as_bytes())
-            .map_err(io(tmp.path()))?;
-        tmp.as_file().sync_all().map_err(io(tmp.path()))?;
-
-        match std::fs::metadata(path) {
-            // Carry the existing file's mode over rather than imposing one.
-            Ok(meta) => {
-                let _ = tmp.as_file().set_permissions(meta.permissions());
-            }
-            // A fresh install would otherwise keep tempfile's 0600, where a
-            // real `.build.info` is 0644, the same tightening the indices had.
-            Err(_) => {
-                let _ = tmp
-                    .as_file()
-                    .set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o644));
-            }
-        }
-        tmp.persist(path).map_err(|e| BuildInfoError::Io { path: path.to_path_buf(), source: e.error })?;
-
-        // Durability of the rename, not of the contents.
-        if let Ok(handle) = std::fs::File::open(dir) {
-            let _ = handle.sync_all();
-        }
-        Ok(())
+        crate::fsutil::write_atomic(path, self.to_file_contents().as_bytes()).map_err(io(path))
     }
 
     /// Load, mutate, and atomically write back in one call.
     ///
-    /// The read-modify-write is deliberately not held open across the
-    /// mutation: `.build.info` has no lock protocol, and pre-flight, not a
-    /// file handle, is what guarantees nobody else is writing.
+    /// No lock: pre-flight guarantees nobody else is writing.
     pub fn update<E>(
         path: impl AsRef<Path>,
         edit: impl FnOnce(&mut Self) -> Result<(), E>,
@@ -247,9 +188,8 @@ impl BuildInfo {
     /// Point a product's row at a new build, the three cells Agent compares
     /// against the CDN.
     ///
-    /// Grouped into one call because writing two of the three is worse than
-    /// writing none: a `Version` that disagrees with its `Build Key` is what
-    /// makes Agent decide the install is damaged.
+    /// All three or none: a `Version` disagreeing with its `Build Key` makes
+    /// Agent call the install damaged.
     pub fn set_build(
         &mut self,
         code: &ProductCode,
@@ -273,20 +213,23 @@ impl BuildInfo {
 
     /// An empty `.build.info` with the column schema Agent writes.
     ///
-    /// For a fresh install, where there is no file to update. The schema is
-    /// copied from a real retail install rather than invented: Agent reads
-    /// these by name, but a file whose columns it does not recognise is not
-    /// worth finding out about the hard way.
+    /// For a fresh install; the schema is copied from a real retail one.
     pub fn with_default_schema() -> Self {
         Self::parse(DEFAULT_SCHEMA).expect("the pinned schema parses")
     }
 
+    /// A product's row as `(column, value)` pairs, to carry it into another
+    /// `.build.info` with [`BuildInfo::set_product`].
+    pub fn named_row(&self, code: &ProductCode) -> Option<Vec<(String, String)>> {
+        let row = self.row(code)?;
+        let names = self.headers.iter().map(|h| h.split('!').next().unwrap_or(h).to_owned());
+        Some(names.zip(row.cells.iter().cloned()).collect())
+    }
+
     /// Add or replace a product's row, taking cells by column name.
     ///
-    /// Columns not named are left empty, which is what Agent itself writes for
-    /// the ones it does not use on a fresh install, `Install Key`, `IM Size`,
-    /// `Armadillo`, `Last Activated`. Naming a column the schema does not have
-    /// is an error rather than a silently dropped value.
+    /// Unnamed columns stay empty, as Agent leaves them on a fresh install.
+    /// An unknown column is an error.
     pub fn set_product(
         &mut self,
         code: &ProductCode,
@@ -358,16 +301,18 @@ pub enum BuildInfoError {
     },
 }
 
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> BuildInfoError + '_ {
+    move |source| BuildInfoError::Io { path: path.to_path_buf(), source }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// A real single-product `.build.info` from a live 12.1.0 retail install.
     ///
-    /// Account and geoip tags are neutralized; everything else, column set,
-    /// `!TYPE:N` suffixes, empty `HEX:16`/`DEC:4` cells, the `?`/`:` tag
-    /// grammar, trailing newline, is verbatim, because that is exactly the
-    /// shape hand-written fixtures get wrong.
+    /// Account and geoip tags neutralized; everything else verbatim.
     const REAL_RETAIL: &str = concat!(
         "Branch!STRING:0|Active!DEC:1|Build Key!HEX:16|CDN Key!HEX:16|Install Key!HEX:16|",
         "IM Size!DEC:4|CDN Path!STRING:0|CDN Hosts!STRING:0|CDN Servers!STRING:0|Tags!STRING:0|",
@@ -446,7 +391,7 @@ mod tests {
         assert_eq!(info.get(&code, "Install Key").unwrap(), "");
         assert_eq!(info.get(&code, "Product").unwrap(), "wow");
 
-        // A second call replaces the row rather than appending a duplicate.
+        // A second call replaces the row instead of appending a duplicate.
         info.set_product(&code, &[(COL_VERSION, "12.1.5.70000")]).unwrap();
         assert_eq!(info.rows().len(), 1);
         assert_eq!(info.get(&code, COL_VERSION).unwrap(), "12.1.5.70000");

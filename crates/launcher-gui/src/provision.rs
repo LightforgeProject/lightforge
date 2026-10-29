@@ -1,10 +1,7 @@
 //! Driving [`lightforge_core::setup`] from the GUI.
 //!
-//! Same shape as the download plumbing: the work runs off the UI thread and
-//! publishes into a `watch` channel the dashboard samples on its timer. Setup
-//! is chattier than it is frequent, so the channel carries the whole log rather
-//! than one line. It is a handful of strings, and a UI that samples can
-//! otherwise miss a line entirely.
+//! Like downloads, through a `watch` channel, but carrying the whole log: a
+//! sampling UI would miss lines.
 
 use lightforge_core::error::chain;
 use crate::tasks::Problem;
@@ -29,14 +26,13 @@ impl Progress {
     /// Fraction of the current step's download, when it has a known size.
     pub fn fraction(&self) -> Option<f32> {
         let total = self.total?;
-        (total > 0).then(|| (self.done as f64 / total as f64).clamp(0.0, 1.0) as f32)
+        (total > 0).then(|| (self.done as f32 / total as f32).clamp(0.0, 1.0))
     }
 }
 
 /// Install one Proton build, publishing progress to `tx`.
 ///
-/// Deliberately not [`run`] with a pinned version: that goes on to the prefix
-/// and Battle.net, which is not what Install beside a version list means.
+/// Not [`run`], which goes on to the prefix and Battle.net.
 pub async fn install_build(
     version: String,
     tx: tokio::sync::watch::Sender<Progress>,
@@ -50,8 +46,7 @@ pub async fn install_build(
 
 /// Turn setup [`Event`]s into [`Progress`] updates on `tx`.
 ///
-/// Shared by [`run`] and [`install_build`] so the log reads the same whichever
-/// started the work.
+/// Shared by [`run`] and [`install_build`].
 fn reporter(tx: tokio::sync::watch::Sender<Progress>) -> impl FnMut(Event) {
     let mut progress = Progress::default();
     move |event: Event| {
@@ -107,9 +102,7 @@ pub async fn status(layout: Layout, config: Config) -> Option<Status> {
 /// What one trip to GitHub tells us: whether a newer build exists, and every
 /// build that could be installed.
 ///
-/// Both come out of the same release lists, so they are fetched together, the
-/// requests are ETag-revalidated and asking twice would buy nothing.
-/// Notify-only, per the policy: nothing here installs anything by itself.
+/// Both from the same release lists. Nothing installs by itself.
 #[derive(Debug, Clone, Default)]
 pub struct ProtonReleases {
     /// A newer stable Proton-GE than the installed one, if there is one.
@@ -140,9 +133,7 @@ pub async fn check_proton(
             }
         };
 
-        // Pre-releases are deliberately not offered: `latest_stable` skips
-        // them for the update check, and a list that could install one would
-        // make the two disagree about what "available" means.
+        // No pre-releases, as `latest_stable` skips them.
         let tags = releases
             .iter()
             .filter(|release| !release.prerelease && release.tarball().is_some())
@@ -169,8 +160,7 @@ pub async fn check_proton(
 
 /// Measure every installed build, off the UI thread.
 ///
-/// A Proton build is ~400 MB across thousands of files, so this is a task and
-/// its answer is kept, walking it from `view` would cost that on every frame.
+/// A build is ~400 MB in thousands of files, so the answer is kept.
 pub async fn measure(builds: Vec<std::path::PathBuf>) -> Vec<(std::path::PathBuf, u64)> {
     tokio::task::spawn_blocking(move || {
         builds

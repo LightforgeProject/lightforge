@@ -1,26 +1,17 @@
 //! Storage libraries: the partitions Lightforge is allowed to put games on.
 //!
-//! A library is one directory on one filesystem, holding a `games/` folder the
-//! same shape as the one under the Blizzard root. The first library is that
-//! root, the user's home, and every other is a partition they added, where
-//! Lightforge creates `Lightforge/games/` and nothing else.
+//! A library is a `games/` folder on one filesystem: the Blizzard root's, or
+//! `Lightforge/games/` on a partition the user added.
 //!
 //! # Why a marker file
 //!
-//! An unmounted drive does not disappear; its mount point stays behind as an
-//! empty directory on whatever filesystem holds it. A library identified by
-//! path alone is therefore indistinguishable, at exactly the wrong moment,
-//! from a library that is simply empty, and the cost of that mistake is a
-//! 120 GB download onto the system disk, or a client that reports a perfectly
-//! good install as needing repair.
+//! An unmounted drive leaves its mount point behind as an empty directory, so
+//! by path alone it looks like an empty library: a 120 GB download onto the
+//! system disk, or a good install reported as needing repair.
 //!
-//! So the truth about a library lives *on the volume*: [`MARKER`], holding the
-//! id the config recorded. A library is usable only when that file reads back
-//! with the matching id, which an unmounted drive fails immediately and
-//! without any guessing. The filesystem UUID and the path relative to the
-//! mount point are recorded too, but only as hints. They are what lets a
-//! drive that came back at a different mount point be found again
-//! ([`relocate`]) rather than declared lost.
+//! A library is usable only when its [`MARKER`] reads back with the config's
+//! id. The filesystem UUID and mount-relative path are hints for finding a
+//! drive at a new mount point ([`relocate`]).
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::CString;
@@ -32,9 +23,7 @@ use serde::{Deserialize, Serialize};
 /// The file that proves a library is the one the config means, written at the
 /// root of its `games/` directory.
 ///
-/// Inside `games/` rather than beside it deliberately: the hazard being
-/// guarded against is "the games directory exists and is empty", so the proof
-/// has to live where that emptiness would be measured.
+/// Inside `games/`, where the emptiness it guards against would be measured.
 pub const MARKER: &str = ".lightforge-library";
 
 /// Folder created on an added partition, under which `games/` lives. The
@@ -47,16 +36,11 @@ const GAMES_DIR: &str = "games";
 /// Id of the default library: the one derived from the Blizzard root, where
 /// Battle.net and the prefix live.
 ///
-/// Fixed, because it is re-seeded from the config on every start and a random
-/// id would not match its own marker the next time. Still `"main"` although
-/// the concept is now called "default": that string is already in the marker
-/// of every library set up before the rename.
+/// Fixed: it is re-seeded every start. `"main"` because existing markers say so.
 pub const DEFAULT_ID: &str = "main";
 
-/// Drive letter the first library's WoW install has always had. Pinned rather
-/// than allocated: `product.db` and `.build.info` record the path Battle.net
-/// matches an install by, and re-lettering an install it has already adopted
-/// is how a 150 GB library stops being recognised.
+/// Drive letter the first library's WoW install has always had. Pinned:
+/// re-lettering an adopted install makes Battle.net stop recognising it.
 pub const DEFAULT_WOW_LETTER: &str = "d:";
 /// Drive letter for the first library's `games/` directory, the one that
 /// goes into Battle.net's `DefaultInstallPath`.
@@ -64,10 +48,8 @@ pub const DEFAULT_GAMES_LETTER: &str = "e:";
 
 /// Letters a library pair may be allocated from, in order.
 ///
-/// `c:` is the prefix's own `drive_c` and `z:` is Wine's catch-all mapping of
-/// `/`; `a:` and `b:` are left alone because enough Windows software still
-/// treats them as removable media. That leaves 23 letters, so 11 libraries
-/// beyond the first.
+/// Not `c:` (`drive_c`), `z:` (Wine's `/`), or `a:`/`b:` (floppies to Windows
+/// software): 23 letters, 11 libraries beyond the first.
 const LETTER_POOL: &[&str] = &[
     "d:", "e:", "f:", "g:", "h:", "i:", "j:", "k:", "l:", "m:", "n:", "o:", "p:", "q:", "r:",
     "s:", "t:", "u:", "v:", "w:", "x:", "y:",
@@ -76,28 +58,20 @@ const LETTER_POOL: &[&str] = &[
 /// One partition Lightforge may install games to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Library {
-    /// Opaque id, also written into this library's [`MARKER`]. The only thing
-    /// that actually identifies the library.
+    /// Opaque id, also in this library's [`MARKER`]: its identity.
     pub id: String,
     /// What the user sees: the partition label, else the device name.
     pub label: String,
-    /// The `games/` directory itself, as last resolved. A cache of where the
-    /// library was, not proof that it is still there.
+    /// The `games/` directory as last resolved; not proof it is still there.
     pub games: PathBuf,
-    /// Filesystem UUID of the partition, when one could be read. A hint for
-    /// [`relocate`], not an identity: btrfs gives every subvolume of one
-    /// filesystem the same UUID, so `/` and `/home` are indistinguishable by
-    /// it.
+    /// Filesystem UUID, a hint for [`relocate`], not an identity: btrfs
+    /// subvolumes share one.
     pub uuid: Option<String>,
     /// `games` relative to the mount point it was under, so the library can be
     /// rebuilt from a mount point found by UUID.
     pub relative: PathBuf,
-    /// The standard place to install: where a game goes unless another drive
-    /// is picked, and the folder Battle.net proposes for its own titles.
-    ///
-    /// Only that. It is not "the drive Lightforge lives on", the Wine prefix
-    /// and the Battle.net client stay at the Blizzard root chosen during
-    /// setup, whichever drive is the default and however many are added.
+    /// The standard place to install, and Battle.net's proposed folder. The
+    /// prefix stays at the Blizzard root regardless.
     #[serde(rename = "default", alias = "main")]
     pub is_default: bool,
     /// `dosdevices` entry mapping a drive letter over `games`, giving
@@ -108,14 +82,8 @@ pub struct Library {
     /// browser only starts when the install is a drive *root*: see
     /// [`crate::paths::Layout::wow_drive`].
     pub wow_letter: String,
-    /// Whether [`Library::claim`] has ever succeeded here.
-    ///
-    /// This is what separates "the drive is not mounted" from "this library
-    /// has not been set up yet", which look identical on disk: both are a
-    /// path with no marker under it. Without it, the first setup of a brand
-    /// new library and a 150 GB install whose drive is asleep are the same
-    /// state, and whichever way Lightforge guessed would be wrong half the
-    /// time.
+    /// Whether [`Library::claim`] has ever succeeded here: what tells "not
+    /// mounted" from "not set up yet", both a path without a marker.
     #[serde(default)]
     pub claimed: bool,
 }
@@ -141,12 +109,8 @@ impl State {
         matches!(self, Self::Ready)
     }
 
-    /// Why this library cannot be written to, if it cannot.
-    ///
-    /// [`State::New`] is deliberately not a reason: a library that has never
-    /// been written to is the normal state of a drive before the first
-    /// install, and saying so in the colour of an error would make a first run
-    /// look broken.
+    /// Why this library cannot be written to, if it cannot. [`State::New`] is
+    /// normal before the first install, not a reason.
     pub fn reason(self, label: &str) -> Option<String> {
         match self {
             Self::Ready | Self::New => None,
@@ -155,11 +119,8 @@ impl State {
         }
     }
 
-    /// Whether the drive is here at all, whether or not we have written to it.
-    ///
-    /// The question the *measurements* ask, where [`State::is_ready`] is the
-    /// question a *write* asks: a drive with nothing of ours on it still has
-    /// free space worth reporting.
+    /// Whether the drive is here at all: what measurements ask, where a
+    /// write asks [`State::is_ready`].
     pub fn is_present(self) -> bool {
         matches!(self, Self::Ready | Self::New)
     }
@@ -182,13 +143,8 @@ impl Library {
         }
     }
 
-    /// A library made out of a games directory that already exists, the
-    /// parent of a WoW install found somewhere else on this machine.
-    ///
-    /// The difference from [`Library::on_partition`] is that nothing is placed:
-    /// the directory is taken as it is, because the games in it are already
-    /// there and the point of adoption is that no byte moves. See
-    /// [`crate::discover::adopt`].
+    /// A library made of an existing games directory, a found install's
+    /// parent, taken as it is ([`crate::discover::adopt`]).
     pub fn adopted(games: PathBuf, label: impl Into<String>) -> Self {
         Self {
             id: new_id(),
@@ -206,9 +162,7 @@ impl Library {
     /// The first library: whatever games directory the install already used,
     /// with the drive letters it already had.
     ///
-    /// Used when migrating a config written before libraries existed. Keeping
-    /// the path and the letters means the prefix's links, the recorded Windows
-    /// paths and an install Battle.net has already adopted all stay valid.
+    /// For configs from before libraries; the recorded paths stay valid.
     pub fn main_at(games: PathBuf, label: impl Into<String>) -> Self {
         Self {
             id: DEFAULT_ID.to_owned(),
@@ -223,13 +177,8 @@ impl Library {
         }
     }
 
-    /// Fill in the hints [`relocate`] needs by reading the mount table.
-    ///
-    /// Kept out of the constructors on purpose: a [`Library`] is built every
-    /// time a [`crate::paths::Layout`] is, and reading `/proc/self/mounts` on
-    /// each of those would be I/O in what callers treat as a pure value. This
-    /// runs once, where a library is genuinely being added or migrated, and
-    /// the result is persisted.
+    /// Fill in the hints [`relocate`] needs from the mount table. Not in the
+    /// constructors: a [`Library`] is built with every layout.
     pub fn probe(&mut self) {
         let mount = mount_point_of(&self.games);
         self.relative = self.games.strip_prefix(&mount).unwrap_or(&self.games).to_path_buf();
@@ -252,8 +201,7 @@ impl Library {
         self.games.join(MARKER)
     }
 
-    /// What this library is doing right now, the question every write to it
-    /// has to ask first.
+    /// What this library is doing right now; every write asks first.
     pub fn state(&self) -> State {
         match (read_marker(&self.marker()), self.claimed) {
             (Some(id), _) if id == self.id => State::Ready,
@@ -270,17 +218,9 @@ impl Library {
 
     /// Create the library's directories and write its marker.
     ///
-    /// Idempotent, and only ever called where the user has asked for this
-    /// library to be set up, adding a drive, or provisioning the prefix.
-    ///
-    /// A library that has never been claimed adopts a marker that is already
-    /// there, so a `Lightforge/` folder left by an earlier install is picked
-    /// back up rather than duplicated. One that *has* been claimed never
-    /// adopts: a different id under our path means we are looking at the
-    /// wrong volume, and quietly rebinding to it is how a config entry ends
-    /// up pointing at someone else's games.
+    /// Idempotent. A never-claimed library adopts an existing marker; a
+    /// claimed one never does: a different id means the wrong volume.
     pub fn claim(&mut self) -> Result<(), LibraryError> {
-        let io = |path: &Path, source| LibraryError::Io { path: path.to_path_buf(), source };
         match self.state() {
             State::Ready => {
                 self.claimed = true;
@@ -292,12 +232,12 @@ impl Library {
             State::Missing => return Err(LibraryError::Offline { label: self.label.clone() }),
             State::Foreign | State::New => {}
         }
-        std::fs::create_dir_all(&self.games).map_err(|e| io(&self.games, e))?;
+        std::fs::create_dir_all(&self.games).map_err(io(&self.games))?;
         let marker = self.marker();
         match read_marker(&marker) {
             Some(existing) => self.id = existing,
             None => {
-                std::fs::write(&marker, marker_text(&self.id)).map_err(|e| io(&marker, e))?
+                std::fs::write(&marker, marker_text(&self.id)).map_err(io(&marker))?
             }
         }
         self.claimed = true;
@@ -313,26 +253,15 @@ impl Library {
             .flatten()
     }
 
-    /// The Windows path this library's `games/` directory is reachable at,
-    /// what Battle.net is told to install into.
-    ///
-    /// Spelled with a backslash because this one goes into
-    /// `Battle.net.config`, where Blizzard writes its own default as
-    /// `C:\Program Files (x86)`; [`Library::windows_wow_path`] keeps forward
-    /// slashes because that is the spelling already recorded in every
-    /// `.product.db` Lightforge has written.
+    /// The Windows path of this library's `games/`, for `Battle.net.config`:
+    /// backslashes there, forward slashes in `.product.db`.
     pub fn windows_games_path(&self) -> String {
         format!("{}\\", drive(&self.games_letter))
     }
 
     /// The Windows path this library's WoW install is recorded under in
-    /// `.product.db`, which is how Battle.net matches it.
-    ///
-    /// The first library keeps [`crate::paths::WINDOWS_WOW_PATH`], the
-    /// `C:\Program Files (x86)` symlink, because that is the string an
-    /// already-adopted install has on disk. Every other library is presented
-    /// under its own `games/` drive, which is a real Windows directory with a
-    /// parent, as Battle.net expects.
+    /// `.product.db`: [`crate::paths::WINDOWS_WOW_PATH`] for the first
+    /// library, its own `games/` drive for the others.
     pub fn windows_wow_path(&self) -> String {
         match self.is_default {
             true => crate::paths::WINDOWS_WOW_PATH.to_owned(),
@@ -349,8 +278,7 @@ fn drive(letter: &str) -> String {
 /// Everything the config holds about storage, resolved against the machine as
 /// it is right now.
 ///
-/// Cheap to clone and free of I/O once built, so [`crate::paths::Layout`] can
-/// carry one and answer path questions without touching the filesystem.
+/// Free of I/O once built, so [`crate::paths::Layout`] can carry one.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Libraries {
     entries: Vec<Library>,
@@ -387,13 +315,9 @@ impl Libraries {
     }
 
     /// Where a product is installed, or would be: its own library when it has
-    /// one that still exists, else [`Libraries::main`].
+    /// one that still exists, else [`Libraries::default`].
     ///
-    /// Falling back rather than failing keeps a product whose library was
-    /// *removed from the config* installable again, which is the only way out
-    /// of that state. It does **not** cover a library that is merely offline:
-    /// that one is still in the config, so this returns it and the caller sees
-    /// [`Library::online`] come back false.
+    /// A removed library falls back; an offline one is still returned.
     pub fn of(&self, code: &crate::product::ProductCode) -> Option<&Library> {
         self.assigned
             .get(code)
@@ -429,10 +353,7 @@ pub struct Partition {
 
 /// Filesystems that can hold a game install.
 ///
-/// An allow-list rather than a deny-list: the question is not "is this a real
-/// filesystem" but "would a 100 GB install on it work", and a list of the ones
-/// known to is far shorter, and fails safe, next to a list of every pseudo
-/// filesystem a kernel might mount.
+/// An allow-list: it fails safe.
 const GAME_FILESYSTEMS: &[&str] = &[
     "ext2", "ext3", "ext4", "btrfs", "xfs", "f2fs", "jfs", "reiserfs", "nilfs2", "bcachefs",
     "zfs", "vfat", "exfat", "ntfs", "ntfs3", "fuseblk",
@@ -440,11 +361,8 @@ const GAME_FILESYSTEMS: &[&str] = &[
 
 /// Mount points never offered: the system's own, whatever they hold.
 ///
-/// A writability check is not enough on its own. A sticky, world-writable
-/// system directory passes it perfectly well, `/var/tmp` is the one that
-/// actually turned up on the machine this was written on, a btrfs subvolume of
-/// the root filesystem, and is still the last place a 150 GB game install
-/// belongs.
+/// Writability is not enough: `/var/tmp`, a world-writable btrfs subvolume,
+/// passes it.
 const SYSTEM_PREFIXES: &[&str] = &[
     "/boot", "/dev", "/efi", "/etc", "/proc", "/root", "/run", "/sys", "/tmp", "/usr", "/var",
 ];
@@ -453,7 +371,7 @@ const SYSTEM_PREFIXES: &[&str] = &[
 /// mounted, which is exactly what this is all for.
 const REMOVABLE_PREFIXES: &[&str] = &["/run/media", "/media"];
 
-/// Whether a mount point is the system's rather than the user's.
+/// Whether a mount point is the system's, not the user's.
 fn is_system_path(point: &Path) -> bool {
     if point == Path::new("/") {
         return true;
@@ -466,9 +384,7 @@ fn is_system_path(point: &Path) -> bool {
 
 /// Every mounted filesystem, from `/proc/self/mounts`.
 ///
-/// Read directly rather than shelled out to `lsblk` or `findmnt`: a launcher
-/// that needs a particular distribution's `util-linux` in `PATH` to list the
-/// user's own disks is a launcher that breaks on an immutable image.
+/// Read directly, not through `lsblk` or `findmnt`, which immutable images may lack.
 pub fn mounts() -> Vec<Mount> {
     let Ok(text) = std::fs::read_to_string("/proc/self/mounts") else {
         return Vec::new();
@@ -513,12 +429,8 @@ fn unescape(field: &str) -> String {
 
 /// The partitions worth offering as a library, most interesting first.
 ///
-/// Two filters, because neither alone is enough. Writability keeps out the
-/// mounts that would need privileges Lightforge does not ask for: most of the
-/// root filesystem's subvolumes. [`is_system_path`] keeps out the ones that
-/// are writable and still wrong, `/var/tmp` being the real example. A
-/// partition that is not mounted is not offered at all, mounting it would mean a dependency on udisks2 or a
-/// setuid helper, and the system's own file manager already does it better.
+/// Writable and not `is_system_path`. Unmounted partitions are not offered:
+/// mounting would need udisks2 or a setuid helper.
 pub fn partitions(existing: &[Library]) -> Vec<Partition> {
     let labels = by_id("/dev/disk/by-label");
     let uuids = by_id("/dev/disk/by-uuid");
@@ -577,11 +489,8 @@ fn is_writable(path: &Path) -> bool {
 /// Find a library whose drive came back somewhere else, and return its new
 /// `games` directory.
 ///
-/// Only ever called for a library that is offline at its recorded path. The
-/// UUID narrows the search to the mount points that *could* be it; the marker
-/// decides. A library with no recorded UUID is searched for the same way
-/// across every mount, since that is cheaper than telling the user their drive
-/// is gone when it is sitting at a new path.
+/// For a library offline at its recorded path. The UUID narrows the mounts
+/// searched (all of them without one); the marker decides.
 pub fn relocate(library: &Library) -> Option<PathBuf> {
     let uuids = by_id("/dev/disk/by-uuid");
     mounts()
@@ -590,8 +499,7 @@ pub fn relocate(library: &Library) -> Option<PathBuf> {
             (Some(want), Some(device)) => {
                 uuids.get(device.to_string_lossy().as_ref()) == Some(want)
             }
-            // Nothing recorded, or a device `/dev/disk` has no entry for:
-            // every mount is a candidate and the marker is the filter.
+            // No UUID to go on: every mount is a candidate.
             _ => library.uuid.is_none(),
         })
         .map(|mount| mount.point.join(&library.relative))
@@ -611,9 +519,7 @@ pub fn mount_point_of(path: &Path) -> PathBuf {
 /// How the user would name the drive `path` is on, with the folder the
 /// library sits in when that is not the drive's root: "nvme2 · Battle.net".
 ///
-/// The partition label, else the device name, as [`partitions`] spells it, so
-/// a library adopted from a folder and one added from the same partition read
-/// as the same drive. `None` when no device backs the path.
+/// Spelled as [`partitions`] does. `None` when no device backs the path.
 pub fn drive_label(games: &Path) -> Option<String> {
     let mount = mount_point_of(games);
     let device = mounts().into_iter().find(|m| m.point == mount)?.device;
@@ -637,9 +543,8 @@ pub fn uuid_of(path: &Path) -> Option<String> {
 /// Two free drive letters for a new library: one for `games/`, one for the WoW
 /// install inside it.
 ///
-/// `None` when the prefix has run out of letters, which takes twelve
-/// libraries. The caller refuses the add rather than reusing a letter, a
-/// letter that moves is a recorded install path that stops resolving.
+/// `None` when the prefix is out of letters (twelve libraries); a letter is
+/// never reused.
 pub fn allocate_letters(existing: &[Library]) -> Option<(String, String)> {
     let taken: Vec<&str> = existing
         .iter()
@@ -670,15 +575,14 @@ fn marker_text(id: &str) -> String {
 
 /// A short opaque id, from the kernel's entropy pool.
 ///
-/// Falls back to the clock and the process id on the vanishingly unlikely
-/// chance `/dev/urandom` cannot be read; an id only has to be unique among the
-/// handful of drives one machine has.
+/// Falls back to the clock and pid without `/dev/urandom`.
 fn new_id() -> String {
     use std::io::Read;
 
     let mut bytes = [0u8; 6];
     let read = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes));
     if read.is_err() {
+        #[allow(clippy::cast_possible_truncation, reason = "only the low bits matter for a fallback id")]
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
@@ -686,7 +590,7 @@ fn new_id() -> String {
             ^ u64::from(std::process::id());
         bytes.copy_from_slice(&now.to_le_bytes()[..6]);
     }
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    crate::text::hex(&bytes)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -704,6 +608,11 @@ pub enum LibraryError {
     #[error("the Wine prefix has no drive letters left; remove a drive before adding another")]
     NoLettersLeft,
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> LibraryError + '_ {
+    move |source| LibraryError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -805,7 +714,7 @@ mod tests {
         assert!(is_system_path(Path::new("/var/tmp")));
         assert!(is_system_path(Path::new("/")));
         assert!(is_system_path(Path::new("/boot/efi")));
-        // Where a removable drive lands, which is the whole point.
+        // Where removable drives land.
         assert!(!is_system_path(Path::new("/run/media/kenny/games")));
         assert!(!is_system_path(Path::new("/media/games")));
         assert!(!is_system_path(Path::new("/mnt/games")));

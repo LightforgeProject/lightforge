@@ -1,18 +1,11 @@
 //! Blizzard installs that were on this machine before Lightforge was.
 //!
-//! A first run should not ask someone to download 120 GB they already have.
-//! Almost everyone arriving here has played WoW on this machine through Lutris,
-//! Bottles, Heroic or a hand-made prefix, and every one of those put a
-//! Battle.net in a Wine prefix, which means Agent's own registry, `product.db`,
-//! is already on disk saying which products are installed and exactly where.
-//! That file is the whole discovery mechanism: no filesystem crawl, no
-//! guessing, and it answers for games on other disks because the paths it holds
-//! are absolute.
+//! Lutris, Bottles, Heroic or a hand-made prefix each left a Battle.net whose
+//! Agent registry, `product.db`, says what is installed and where, games on
+//! other disks included. That file is the whole mechanism: no crawl.
 //!
-//! The scan is deliberately bounded. It looks only where a Battle.net prefix is
-//! actually put ([`hints`]), reads two files per prefix, and never walks a
-//! drive it was not pointed at. Nothing leaves the machine and nothing is
-//! written, [`adopt`] is a separate call the user has to ask for.
+//! The scan looks only where prefixes are kept ([`hints`]) and reads two
+//! files per prefix. Nothing is written until the user asks to [`adopt`].
 
 use std::path::{Path, PathBuf};
 
@@ -24,13 +17,11 @@ use crate::tact::productdb;
 
 /// How deep under a hint directory a prefix may sit before it is given up on.
 ///
-/// Two: Lutris keeps prefixes at `~/Games/<game>`, Bottles at
-/// `<bottles>/<name>`, Steam at `compatdata/<appid>/pfx`. Nobody nests one
-/// deeper than that, and every level costs a `read_dir` of someone's home.
+/// Two: Lutris `~/Games/<game>`, Bottles `<bottles>/<name>`, Steam
+/// `compatdata/<appid>/pfx`.
 const MAX_DEPTH: usize = 2;
 
-/// Directories read per level. A guard against being pointed at something
-/// enormous, not a real limit, no launcher keeps hundreds of prefixes.
+/// Directories read per level: a guard, not a real limit.
 const MAX_ENTRIES: usize = 128;
 
 /// Which launcher left a prefix behind, for a sentence the user can recognise.
@@ -96,11 +87,8 @@ pub struct WowInstall {
 impl WowInstall {
     /// Adopting this install means renaming its folder first.
     ///
-    /// A library installs its games as `<games>/World of Warcraft`, so a folder
-    /// called anything else cannot be adopted in place without moving it. The
-    /// rename is within one directory, which costs nothing, but it is still a
-    /// change to someone's existing install, so it is said out loud rather than
-    /// done quietly.
+    /// A library expects `<games>/World of Warcraft`. The rename is cheap but
+    /// changes someone's install, so it is announced.
     pub fn needs_rename(&self) -> bool {
         self.path.file_name().is_some_and(|name| name != WOW_DIR)
     }
@@ -111,8 +99,7 @@ impl WowInstall {
 pub struct HandOff {
     /// Agent's product code, e.g. `hs_beta`.
     pub code: String,
-    /// The install folder's own name, "Hearthstone". Agent's codes name
-    /// nothing to anyone, and the folder is what the user recognises.
+    /// The install folder's own name, "Hearthstone".
     pub label: String,
     pub path: PathBuf,
     pub version: Option<String>,
@@ -121,8 +108,7 @@ pub struct HandOff {
 
 /// Every place a Battle.net prefix is plausibly kept, under `home`.
 ///
-/// Ordered by how likely it is to hold a real one, because the wizard shows
-/// what it found in this order.
+/// Most likely first: the wizard shows them in this order.
 pub fn hints(home: &Path) -> Vec<(PathBuf, Origin)> {
     let flatpak = home.join(".var").join("app");
     let mut found = vec![
@@ -156,9 +142,7 @@ pub fn hints(home: &Path) -> Vec<(PathBuf, Origin)> {
 
 /// Scan this machine for Battle.net prefixes, skipping `ours`.
 ///
-/// `ours` is the prefix Lightforge manages: it is found by exactly the same
-/// rules as everyone else's, and offering someone their own games back would
-/// be a comedy.
+/// `ours` is Lightforge's own prefix.
 pub fn scan(ours: &Path) -> Vec<Found> {
     let Some(dirs) = directories::UserDirs::new() else {
         return Vec::new();
@@ -186,12 +170,7 @@ fn prefixes_under(dir: &Path, depth: usize) -> Vec<PathBuf> {
     if paths::is_prefix(dir) {
         return vec![dir.to_path_buf()];
     }
-    // Proton always builds its prefix at `<compat data>/pfx`, so a directory
-    // that holds one is a prefix one level down by a name that is never
-    // anything else. Checked here rather than by spending a level of `depth`
-    // on it: Lightforge's own root is `<root>/prefix/pfx`, three deep under
-    // `~/Games`, and a scan that walked three levels of someone's home to find
-    // it would read every game directory they have.
+    // Proton's `pfx` is checked here without spending a level of `depth`.
     if paths::is_prefix(&dir.join("pfx")) {
         return vec![dir.join("pfx")];
     }
@@ -211,16 +190,13 @@ fn prefixes_under(dir: &Path, depth: usize) -> Vec<PathBuf> {
 
 /// Read one prefix: what Battle.net has installed in it, and where.
 ///
-/// `None` only when the directory is not a prefix at all. A prefix with a
-/// Battle.net and no games still comes back, so the wizard can say "Battle.net
-/// is here but it has nothing installed" rather than nothing.
+/// `None` only when the directory is not a prefix; one with no games still
+/// comes back.
 pub fn inspect(prefix: &Path, origin: Origin) -> Option<Found> {
     if !paths::is_prefix(prefix) {
         return None;
     }
-    // Someone else's prefix has no [`Layout`], Lightforge does not own it and
-    // its root is not laid out like ours. What is the same in every prefix is
-    // the inside of `drive_c`, which is what these three free functions read.
+    // Not ours, so no [`Layout`]: only `drive_c` is the same everywhere.
     let dosdevices = prefix.join("dosdevices");
     let battle_net = paths::battle_net_dir_in(prefix);
     let mut entry = Found {
@@ -244,11 +220,7 @@ pub fn inspect(prefix: &Path, origin: Origin) -> Option<Found> {
         if !path.is_dir() {
             continue;
         }
-        // Through the symlinks, deliberately. A Windows path inside a prefix
-        // routinely resolves to a link pointing at the real install elsewhere,
-        // Lightforge's own `C:\Program Files (x86)\World of Warcraft` is one,
-        // and adopting the link would make a library out of `drive_c` instead
-        // of the directory the games are actually in.
+        // Through the symlinks, to where the games really are.
         let path = std::fs::canonicalize(&path).unwrap_or(path);
         match is_wow(&record) {
             true => {
@@ -262,29 +234,26 @@ pub fn inspect(prefix: &Path, origin: Origin) -> Option<Found> {
                 code: record.product,
                 label: folder_name(&path),
                 version: record.version,
-                bytes: crate::storage::dir_size(&path),
+                bytes: crate::fsutil::dir_size(&path),
                 path,
             }),
         }
     }
 
     for (path, mut products) in wow_roots {
-        // `.build.info` is the authority on which flavours are really there:
-        // Agent keeps a record for a product whose files were deleted by hand,
-        // and offering to adopt a flavour that is not on disk would end in a
-        // client that offers a 90 GB repair.
+        // `.build.info` decides: Agent keeps records of deleted products.
         if let Ok(info) = BuildInfo::load(path.join(".build.info")) {
             let rows: Vec<ProductCode> = info.products().collect();
             if !rows.is_empty() {
                 products = rows;
             }
         }
-        products.retain(|code| path.join(code.install_dir().as_ref()).is_dir());
+        products.retain(|code| path.join(crate::paths::flavor_dir_name(&path, code)).is_dir());
         if products.is_empty() {
             continue;
         }
         entry.wow.push(WowInstall {
-            bytes: crate::storage::dir_size(&path),
+            bytes: crate::fsutil::dir_size(&path),
             blocked: None,
             products,
             path,
@@ -295,9 +264,7 @@ pub fn inspect(prefix: &Path, origin: Origin) -> Option<Found> {
 
 /// Inspect a directory the user pointed at themselves.
 ///
-/// Accepts either a Wine prefix or a WoW install root, because people point at
-/// what they recognise and "the folder with my game in it" is far more
-/// recognisable than "the directory containing drive_c".
+/// Accepts a Wine prefix or a WoW install root.
 pub fn inspect_pointed(path: &Path) -> Option<Found> {
     if let Some(found) = inspect(path, Origin::Pointed) {
         return Some(found);
@@ -319,15 +286,12 @@ pub fn inspect_pointed(path: &Path) -> Option<Found> {
 
 /// Read a WoW install root directly, with no Battle.net anywhere in sight.
 ///
-/// The `.build.info` is what makes this safe to offer: it names the products,
-/// their builds and their CDN configuration, which is everything an adopted
-/// install needs to be patched from. A directory of game files without one is
-/// not an install Lightforge can manage, however much it looks like one.
+/// Requires a `.build.info`: it is what an adopted install is patched from.
 pub fn wow_install_at(path: &Path) -> Option<WowInstall> {
     let info = BuildInfo::load(path.join(".build.info")).ok()?;
     let products: Vec<ProductCode> = info
         .products()
-        .filter(|code| path.join(code.install_dir().as_ref()).is_dir())
+        .filter(|code| path.join(crate::paths::flavor_dir_name(path, code)).is_dir())
         .collect();
     if products.is_empty() {
         return None;
@@ -335,17 +299,14 @@ pub fn wow_install_at(path: &Path) -> Option<WowInstall> {
     Some(WowInstall {
         path: path.to_path_buf(),
         products,
-        bytes: crate::storage::dir_size(path),
+        bytes: crate::fsutil::dir_size(path),
         blocked: None,
     })
 }
 
-/// Whether an Agent record describes a WoW flavour rather than another game.
+/// Whether an Agent record describes a WoW flavour, not another game.
 ///
-/// The family field is the honest answer, Agent writes `wow` for every
-/// flavour, but it is empty in records written by older clients, so the code
-/// prefix is the fallback. Both are needed: `w1r` (Warcraft I Remastered)
-/// starts with `w` and is nobody's WoW.
+/// By family (`wow`), else by code prefix for older records; `w1r` is not WoW.
 fn is_wow(record: &productdb::Installed) -> bool {
     record.family == "wow" || record.product.starts_with("wow")
 }
@@ -371,15 +332,8 @@ pub struct Plan {
 
 /// Plan the adoption of a WoW install found elsewhere, without touching disk.
 ///
-/// Adoption is **in place**: not one byte is copied. The install's parent
-/// directory becomes a Lightforge storage library, the products in it are
-/// assigned to that library, and the prefix reaches them through the library's
-/// own two drive letters like any other. A 123 GB install is adopted in the
-/// time it takes to write a marker file.
-///
-/// The parent, not the install: a library is a `games/` directory with game
-/// folders inside it, which is exactly what the parent of
-/// `…/World of Warcraft` is.
+/// Adoption is **in place**: the install's parent becomes a storage library,
+/// reached through its own drive letters. Nothing is copied.
 pub fn plan(install: &WowInstall, existing: &[Library]) -> Result<Plan, AdoptError> {
     let parent = install.path.parent().ok_or(AdoptError::NoParent)?;
     let rename = install.needs_rename().then(|| parent.join(WOW_DIR));
@@ -413,28 +367,20 @@ pub struct Adopted {
     pub library: Library,
     /// The install root's owner-write bit was missing and was added.
     pub repaired: bool,
-    /// Why Battle.net was not told about the install. The games are adopted
-    /// either way; this is the half that only Battle.net needs.
+    /// Why Battle.net was not told about the install; adopted either way.
     pub battle_net: Option<String>,
 }
 
 /// Carry out a [`Plan`]: rename if it must, claim the library, and tell
 /// Battle.net where the install now is.
 ///
-/// Returns the library to add; the caller assigns products, saves and
-/// relinks, as for adding a drive. Battle.net is told through `.product.db`
-/// (what Locate reads) and Agent's registry (what the library is built
-/// from), both rewritten from the install's `.build.info`. **Neither is
-/// fatal**: the marker, config entry and drive letter already make the
-/// install Lightforge's, and a root that refused `.product.db` once left a
-/// 100 GB game reading Install. The reason comes back for the caller to show.
+/// Returns the library to add; the caller assigns, saves and relinks.
+/// Battle.net is told through `.product.db` and Agent's registry; **neither
+/// is fatal**, and the reason comes back to show.
 pub fn adopt(plan: &Plan, layout: &Layout) -> Result<Adopted, AdoptError> {
     let mut library = plan.library.clone();
     if let Some(target) = &plan.rename {
-        std::fs::rename(&plan.install, target).map_err(|source| AdoptError::Io {
-            path: target.clone(),
-            source,
-        })?;
+        std::fs::rename(&plan.install, target).map_err(io(target))?;
     }
     library.claim()?;
 
@@ -449,14 +395,13 @@ pub fn adopt(plan: &Plan, layout: &Layout) -> Result<Adopted, AdoptError> {
         records.push(productdb::ProductInstall::from_build_info(
             &info,
             code,
+            &crate::paths::flavor_dir_name(&install, code),
             windows_wow_path(&library),
         )?);
     }
 
     let battle_net = match productdb::write(&install, &records) {
-        // A prefix that has not been built yet has no registry to merge into,
-        // which is the ordinary case during a first run. The next pre-flight
-        // writes it, so a `false` here is not worth reporting.
+        // No registry yet during a first run; pre-flight writes it later.
         Ok(_) => match productdb::register(&layout.agent_dir(), &records) {
             Ok(_) => None,
             Err(e) => Some(crate::error::chain(&e)),
@@ -478,25 +423,29 @@ fn drive(letter: &str) -> String {
 /// Make a game Battle.net installed elsewhere visible to Lightforge's
 /// Battle.net, without moving it.
 ///
-/// The folder is symlinked into the default library's `games/` (already a
-/// drive, so it gets `E:\Hearthstone`), and its registry record is copied
-/// from the other prefix **as raw bytes** with only the path rewritten:
-/// Agent's record has dozens of fields nothing here understands. `false` when
-/// there was no record, meaning Battle.net will have to find it itself.
+/// Symlinked into the default library's `games/` (`E:\Hearthstone`), and its
+/// registry record copied **as raw bytes** with the path rewritten. `false`
+/// without a record.
 pub fn link_hand_off(
     game: &HandOff,
     foreign: &Path,
     layout: &Layout,
     library: &Library,
 ) -> Result<bool, AdoptError> {
+    use crate::prefix::LinkState;
+
     let link = library.games().join(&game.label);
-    match std::fs::symlink_metadata(&link) {
+    match crate::prefix::inspect_link(&link, &game.path) {
         // Already linked, by us or by a previous run of this.
-        Ok(meta) if meta.is_symlink() => {}
-        Ok(_) => return Err(AdoptError::Occupied(link)),
-        Err(_) => std::os::unix::fs::symlink(&game.path, &link).map_err(|source| {
-            AdoptError::Io { path: link.clone(), source }
-        })?,
+        LinkState::Correct | LinkState::Pending(_) => {}
+        // Left by an earlier adoption of the same game from somewhere else.
+        // Only the symlink goes, never what it pointed at.
+        LinkState::Mislinked(_) => {
+            std::fs::remove_file(&link).map_err(io(&link))?;
+            std::os::unix::fs::symlink(&game.path, &link).map_err(io(&link))?;
+        }
+        LinkState::Missing => std::os::unix::fs::symlink(&game.path, &link).map_err(io(&link))?,
+        LinkState::OccupiedEmpty | LinkState::Occupied => return Err(AdoptError::Occupied(link)),
     }
 
     let their_registry = paths::agent_dir_in(foreign).join("product.db");
@@ -537,6 +486,11 @@ pub enum AdoptError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> AdoptError + '_ {
+    move |source| AdoptError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -587,7 +541,7 @@ mod tests {
         std::fs::create_dir_all(prefix.join("dosdevices")).unwrap();
         std::os::unix::fs::symlink("../drive_c", prefix.join("dosdevices").join("c:")).unwrap();
         // A second drive letter over a directory outside the prefix: the whole
-        // reason the install paths are resolved rather than assumed.
+        // reason the install paths are resolved, not assumed.
         std::fs::create_dir_all(games).unwrap();
         std::os::unix::fs::symlink(games, prefix.join("dosdevices").join("f:")).unwrap();
 
@@ -726,10 +680,7 @@ mod tests {
         );
     }
 
-    /// The install root a user already has is not always one that will take a
-    /// new file. Adoption writes `.product.db` into it, and that used to be
-    /// the step that decided whether a 100 GB game appeared in the launcher
-    /// at all.
+    /// An install root that will not take a new file gets its owner-write bit.
     #[test]
     fn an_install_root_that_refuses_a_file_is_still_adopted() {
         use std::os::unix::fs::PermissionsExt;
@@ -753,9 +704,7 @@ mod tests {
         assert!(install.join(".product.db").is_file());
     }
 
-    /// And when it cannot be written for a reason no permission change fixes,
-    /// the games are still adopted. Only Battle.net's half is lost, and the
-    /// caller is told which half and why.
+    /// When it still cannot be written, the games are adopted anyway.
     #[test]
     fn a_product_db_that_cannot_be_written_costs_battle_net_and_nothing_else() {
         let dir = scratch("no-product-db");
@@ -844,6 +793,28 @@ mod tests {
 
         // Running it twice is not an error: the link is already there.
         assert!(link_hand_off(game, &prefix, &layout, &library).is_ok());
+    }
+
+    #[test]
+    fn a_hand_off_link_pointing_elsewhere_is_repointed() {
+        let dir = scratch("handoff-stale");
+        let games = dir.join("games");
+        let prefix = foreign_prefix(&dir, &games);
+        let found = inspect(&prefix, Origin::Lutris).unwrap();
+        let game = &found.hand_offs[0];
+
+        let mut library = Library::main_at(dir.join("Blizzard").join("games"), "Home");
+        library.claim().unwrap();
+        let layout = Layout::with_root(dir.join("Blizzard"));
+        let old = dir.join("moved-away");
+        std::fs::create_dir_all(&old).unwrap();
+        let link = library.games().join("Hearthstone");
+        std::os::unix::fs::symlink(&old, &link).unwrap();
+
+        link_hand_off(game, &prefix, &layout, &library).unwrap();
+
+        assert_eq!(std::fs::read_link(&link).unwrap(), game.path);
+        assert!(old.is_dir(), "the old target is left alone");
     }
 
     #[test]

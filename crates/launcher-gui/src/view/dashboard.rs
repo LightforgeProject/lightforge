@@ -1,9 +1,14 @@
 //! The Play page: art and the action panel.
 
 use crate::*;
-use iced::widget::column;
+use iced::widget::{column, Column};
 
 impl Lightforge {
+    /// The action panel for a game Battle.net installs and starts.
+    ///
+    /// Bare: no Install, no Update, no Play, not even greyed out.
+    /// Offering those disabled would say Lightforge could manage this game and
+    /// merely will not.
     pub(crate) fn handoff_panel(&self) -> Element<'_, Message> {
         let mut left = column![].spacing(theme::SM).width(Length::Fill);
         left = left.push(match &self.error {
@@ -27,10 +32,7 @@ impl Lightforge {
 
         let act = self.handoff_act();
         left = left.extend(self.hint(act.hint()).map(Element::from));
-        // The managed panel has a row of links and this one had none, so a
-        // hand-off game had no route to any launch settings. It is phrased
-        // for the shared profile on purpose, "its games", not "this game",
-        // because one environment covers every game the client starts.
+        // "its games": one environment covers every game the client starts.
         left = left.push(self.ring(
             focus::Target::HandOffSettings,
             Some(Message::ShowSettingsTab(SettingsTab::BattleNet)),
@@ -48,24 +50,19 @@ impl Lightforge {
             .style(theme::ghost)
             .padding(theme::tap([theme::XS, theme::SM])),
         ));
-        let stoppable = self.busy && self.game_up && !self.stopping;
+        // STOP on this game's own tile only: another one can still start.
+        let session = self.session(&self.selected.code);
+        let stoppable = session.is_some_and(|s| !s.stopping);
         let open = button(
-            container(text(match self.busy && self.game_up {
-                true => self.stop_label(),
-                false => act.label(),
+            container(text(match session {
+                Some(session) => stop_label(session),
+                None => act.label(),
             })
             .size(theme::HEADING))
             .center_x(Length::Fill),
         )
-        // Dressed as the Play control on a game Lightforge runs itself,
-        // same 240 by CONTROL_HEIGHT, same heading, same filled face, because
-        // it is the same act. The hand-off drives Battle.net end to end now,
-        // so a quiet outlined button would be understating what it does.
-        //
-        // Blue rather than PLAY's gold: it starts through Battle.net, and
-        // the colour is the one thing that can say so without a second line
-        // of text. When there is no game family to ask for, the button only
-        // opens the client, not a launch, so it does not dress as one.
+        // Dressed as Play, in blue: it starts through Battle.net. Without a
+        // game family it only opens the client, and is not dressed as a launch.
         .style(move |base: &iced::Theme, status| match (stoppable, act.colour()) {
             (true, _) => theme::filled(theme::ERROR)(base, status),
             (_, Some(colour)) => theme::filled(colour)(base, status),
@@ -79,7 +76,7 @@ impl Lightforge {
             true => Message::AskStopGame,
             false => act.message(),
         };
-        let can_press = stoppable || !self.busy;
+        let can_press = stoppable || (session.is_none() && !self.busy);
 
         container(
             row![
@@ -101,14 +98,10 @@ impl Lightforge {
         .into()
     }
 
-    /// A screen that is not the dashboard: header, title, content.
     /// A page with a title, optionally something at the far end of that line,
     /// and a scrolling body.
     ///
-    /// `aside` is for a fact about the page rather than a control, a count,
-    /// a state. It rides on the title's line because that is where the eye
-    /// already is, and because a figure like that under the title reads as a
-    /// subtitle explaining the page, which it is not.
+    /// `aside` is a fact (a count, a state), not a control.
     pub(crate) fn page<'a>(
         &'a self,
         title: &'a str,
@@ -148,18 +141,8 @@ impl Lightforge {
         let action = self.action();
         let kind = self.kind_of(&self.selected.code);
 
-        // A hand-off wears art only when the manifest names it *itself*.
-        //
-        // The `default` entry catches every code the manifest does not name,
-        // which is deliberate for a WoW product, a line released after this
-        // binary should look like WoW rather than like nothing, and wrong for
-        // a hand-off, where it would dress Hearthstone in Retail's logo and
-        // key art. That was the whole reason hand-offs showed no art at all.
-        //
-        // Now that each one carries its own logo, the rule can be the precise
-        // one instead of the blunt one: inherit if you are WoW, otherwise show
-        // art only if it is yours. A Blizzard game that appears in the catalog
-        // before its art is published still gets nothing, which is correct.
+        // A hand-off wears art only when the manifest names it itself: the
+        // `default` fallback would dress Hearthstone in Retail's art.
         let themed_itself = self.manifest.as_ref().is_some_and(|manifest| {
             manifest
                 .own_theme(&self.selected.code)
@@ -170,10 +153,7 @@ impl Lightforge {
             Kind::HandOff => self.branding.as_ref().filter(|_| themed_itself),
         };
 
-        // The wordmark hangs under the app title in the top-left rather than
-        // floating mid-page: the centre of the dashboard belongs to the art,
-        // and a product logo reads as branding when it sits with Lightforge's
-        // own rather than competing with the background for the middle.
+        // The wordmark hangs top-left; the centre belongs to the art.
         let logo: Element<Message> = match branding {
             // Equal area per mark (see [`theme::logo_size`]) in a box that
             // never moves: centred down it and near its left edge, with
@@ -207,10 +187,7 @@ impl Lightforge {
         let content = column![
             self.header(),
             column![
-                // The wordmark hangs straight under the band (a gap leaves it
-                // floating in the art) and is inset by [`theme::LOGO_INSET`],
-                // since a mark trimmed to its ink would otherwise touch the
-                // page edge.
+                // Straight under the band, inset by [`theme::LOGO_INSET`].
                 row![
                     column![
                         container(logo)
@@ -228,23 +205,14 @@ impl Lightforge {
                 ]
                 .spacing(theme::MD)
                 .height(Length::Fill),
-                // A product Battle.net owns gets a panel that offers only what
-                // Lightforge can actually do for it. Running the normal one
-                // would put an INSTALL button on a game this launcher has no
-                // way to install, and, worse, one that would plan a CASC
-                // download into the WoW directory.
+                // Battle.net's games get the hand-off panel, never INSTALL.
                 match kind {
                     Kind::Managed => self.action_panel(&action),
                     Kind::HandOff => self.handoff_panel(),
                 },
             ]
             .spacing(theme::MD)
-            // No inset at all at the top, where the other three sides take
-            // the page's: that inset is right for the action panel against
-            // the window edge and wrong for a wordmark, which should read as
-            // hanging from the band directly above it. The logo box carries
-            // its own slack anyway, the mark is centred in it, so the gap
-            // under the band is real without being spent here.
+            // No top inset: the wordmark hangs from the band.
             .padding(iced::Padding {
                 top: 0.0,
                 right: theme::LG,
@@ -259,12 +227,8 @@ impl Lightforge {
                     .content_fit(ContentFit::Cover)
                     .width(Length::Fill)
                     .height(Length::Fill),
-                // A scrim at both ends: the controls at the bottom and the
-                // navigation row at the top sit straight on the art. Offsets
-                // run bottom (0.0) to top (1.0). The top pair holds rather than
-                // ramps, so the nav row (about 6% down) sits on full cover
-                // instead of mid-fade; the fade lands over the game band, which
-                // has its own card.
+                // A scrim at both ends, bottom 0.0 to top 1.0. The top pair
+                // holds, so the nav row sits on full cover.
                 container(Space::new().height(Length::Fill))
                     .width(Length::Fill)
                     .style(|_| container::Style {
@@ -285,33 +249,24 @@ impl Lightforge {
         }
     }
 
-    /// The word on the button while a game is up.
-    fn stop_label(&self) -> &'static str {
-        match self.stopping {
-            true => "STOPPING…",
-            false => "STOP",
-        }
-    }
-
     /// Status, progress, and every action for the selected product.
     pub(crate) fn action_panel(&self, action: &ActionState) -> Element<'_, Message> {
-        let color = match action {
-            ActionState::Install => theme::INSTALL,
-            ActionState::Update { .. } => theme::UPDATE,
-            ActionState::Play => theme::PLAY,
-            ActionState::Downloading(_) | ActionState::Paused(_) | ActionState::Queued => {
-                theme::PAUSE
-            }
-            ActionState::Error { .. } => theme::ERROR,
-            ActionState::Unknown | ActionState::Offline { .. } => theme::PAUSE,
-        };
+        container(
+            row![self.action_details(action), self.action_buttons(action)]
+                .spacing(theme::XL)
+                .align_y(Alignment::Center),
+        )
+        .padding(theme::LG)
+        .style(theme::floating)
+        .into()
+    }
 
+    /// The left of the panel: branch, status, progress or the installed
+    /// version, optional content, and the links under them.
+    fn action_details(&self, action: &ActionState) -> Element<'_, Message> {
         let mut left = column![].spacing(theme::SM).width(Length::Fill);
 
-        // The branch belongs here rather than in the header: it is not
-        // navigation, it decides what every line below it refers to, which
-        // version is "latest", which install "installed", which files "Open
-        // Files" opens. Only shown where there is a choice to make.
+        // Here, not in the header: every line below refers to the branch.
         if let Some((branches, current)) = self.branch_choices() {
             left = left.push(
                 row![
@@ -333,9 +288,7 @@ impl Lightforge {
 
         left = left.push(match (&self.error, action) {
             (Some(e), _) => problem(e),
-            // The drive outranks whatever the last refresh had to say: a
-            // "latest 11.2.7" under a game that cannot be started is the
-            // wrong fact to be reading.
+            // The missing drive outranks the version line.
             (None, ActionState::Offline { drive }) => text(format!(
                 "{drive} is not mounted — the game is still on it, untouched"
             ))
@@ -348,37 +301,11 @@ impl Lightforge {
         left = self.scan_progress(left);
 
         if let Some(progress) = progress_of(action) {
-            // Two jobs for one bar. While bytes are moving it reports them.
-            // Before the total is known, and again after the last byte lands
-            // while the install is still extracting and writing `.build.info`,
-            // there is no fraction to report but there is still work going on,
-            // so the bar sweeps instead of sitting at a number that would be
-            // a lie in one direction or the other.
-            let sweeping = progress.total_bytes == 0
-                || progress.downloaded_bytes >= progress.total_bytes;
-            let value = match sweeping {
-                true => sweep(),
-                false => progress.fraction(),
-            };
-            left = left.push(progress_bar(0.0..=1.0, value).girth(6));
-            left = left.push(
-                row![
-                    mono(bytes_of(progress.downloaded_bytes, progress.total_bytes)),
-                    dot(),
-                    mono(rate_of(progress.bytes_per_second)),
-                    dot(),
-                    mono(eta_of(progress)),
-                ]
-                .spacing(theme::SM)
-                .align_y(Alignment::Center),
-            );
             let stage = self
                 .download_for(&self.selected.code)
                 .map(|d| d.sample.stage.clone())
                 .unwrap_or_default();
-            if !stage.is_empty() {
-                left = left.push(muted(stage, theme::CAPTION));
-            }
+            left = transfer_lines(left, progress, stage);
         } else if let Some(version) = &self.local.version {
             left = left.push(
                 row![muted("installed".to_owned(), theme::CAPTION), mono(version.clone())]
@@ -386,10 +313,11 @@ impl Lightforge {
                     .align_y(Alignment::Center),
             );
         }
+        if action.is_playable() {
+            left = self.pre_download_lines(left);
+        }
 
-        // What an Install or Update would actually fetch beyond the base game.
-        // The size surprise this prevents is the whole reason the gate exists:
-        // on the Forever beta the texture pack alone is 37 GiB.
+        // What would come beyond the base game (37 GiB of textures on Forever).
         let opted = self.opted_optional(&self.selected.code);
         if !opted.is_empty() && matches!(action, ActionState::Install | ActionState::Update { .. })
         {
@@ -400,16 +328,58 @@ impl Lightforge {
             ));
         }
 
-        // Three words in a row with nothing on them read as a caption, not as
-        // somewhere to go. A mark in front of each says "this is a control"
-        // before the word is read at all.
-        //
-        // Padded on all four sides, not just vertically: the hover fill is the
-        // button's own bounds, so with no horizontal padding the glyph and the
-        // last letter sit flush against the rounded edge and the label reads as
-        // if it were spilling out of the box. The cost is that the group starts
-        // one [`theme::SM`] in from "version" and "installed" above it, which
-        // is a smaller wrong than text touching its own border.
+        left.push(self.product_links()).into()
+    }
+
+    /// The pre-download beside PLAY: what can be fetched ahead of a release,
+    /// how far it has got, or that it is done.
+    fn pre_download_lines<'a>(&'a self, left: Column<'a, Message>) -> Column<'a, Message> {
+        let code = &self.selected.code;
+        let offer = state::pre_download(&self.local, self.remote.as_ref(), self.bgdl.as_ref());
+        let version = match &offer {
+            Some(state::PreDownload::Available { version } | state::PreDownload::Ready { version }) => {
+                version.clone()
+            }
+            None => String::new(),
+        };
+        let action = |label: &str, message: Message| {
+            self.ring(focus::Target::PreDownload, Some(message.clone()), secondary(label, message).enabled(true))
+        };
+
+        if let Some(download) = self.download_for(code).filter(|d| d.pre_download) {
+            let control = match download.stage {
+                Stage::Running { .. } => action("Pause", Message::PauseDownload(code.clone())),
+                Stage::Paused(_) => action("Resume", Message::ResumeDownload(code.clone())),
+                Stage::Queued => muted("queued".to_owned(), theme::CAPTION).into(),
+            };
+            let left = left.push(
+                row![muted(format!("pre-downloading {version}"), theme::CAPTION).width(Length::Fill), control]
+                    .spacing(theme::SM)
+                    .align_y(Alignment::Center),
+            );
+            return transfer_lines(left, download.progress(), download.sample.stage.clone());
+        }
+        match offer {
+            Some(state::PreDownload::Available { version }) => left.push(
+                row![
+                    muted(format!("{version} can be pre-downloaded before its release"), theme::CAPTION)
+                        .width(Length::Fill),
+                    action("Pre-download", Message::PreDownload),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center),
+            ),
+            Some(state::PreDownload::Ready { version }) => {
+                left.push(muted(format!("{version} is pre-downloaded, ready for release day"), theme::CAPTION))
+            }
+            None => left,
+        }
+    }
+
+    /// Manage Addons, Game Settings, Manage Subscription.
+    fn product_links(&self) -> Element<'_, Message> {
+        // A mark before each says "control". Padded on all sides, or the
+        // text touches the hover fill's edge.
         let link = |mark: image::Handle, label: &'static str, message: Option<Message>| {
             button(
                 row![
@@ -429,54 +399,60 @@ impl Lightforge {
             .style(theme::ghost)
             .padding(theme::tap([theme::XS, theme::SM]))
         };
-
-        left = left.push(
-            row![
-                // Addons are already per-product, the screen titles itself
-                // with the selection and every task takes its code, so this
-                // is navigation, not a second copy of it. Disabled until
-                // there is an install to put an addon into.
-                self.ring(
-                    focus::Target::Addons,
+        row![
+            // Disabled until there is an install.
+            self.ring(
+                focus::Target::Addons,
+                self.local.version.is_some().then_some(Message::Show(Screen::Addons)),
+                link(
+                    package_icon(),
+                    "Manage Addons",
                     self.local.version.is_some().then_some(Message::Show(Screen::Addons)),
-                    link(
-                        package_icon(),
-                        "Manage Addons",
-                        self.local.version.is_some().then_some(Message::Show(Screen::Addons)),
-                    ),
                 ),
-                self.ring(
-                    focus::Target::GameSettings,
-                    Some(Message::OpenGameSettings),
-                    link(sliders_icon(), "Game Settings", Some(Message::OpenGameSettings)),
-                ),
-                self.ring(
-                    focus::Target::Subscription,
-                    Some(Message::ManageSubscription),
-                    link(card_icon(), "Manage Subscription", Some(Message::ManageSubscription)),
-                ),
-            ]
-            // Each link now carries its own air, so the row's gap only has to
-            // keep two hover fills from touching; [`theme::MD`] on top of that
-            // padding would read as three separate groups.
-            .spacing(theme::XS)
-            .align_y(Alignment::Center),
-        );
+            ),
+            self.ring(
+                focus::Target::GameSettings,
+                Some(Message::OpenGameSettings),
+                link(sliders_icon(), "Game Settings", Some(Message::OpenGameSettings)),
+            ),
+            self.ring(
+                focus::Target::Subscription,
+                Some(Message::ManageSubscription),
+                link(card_icon(), "Manage Subscription", Some(Message::ManageSubscription)),
+            ),
+        ]
+        // Each link carries its own air.
+        .spacing(theme::XS)
+        .align_y(Alignment::Center)
+        .into()
+    }
 
-        // Battle.net's own words for a game that downloads before it opens.
-        // A caption and a label only: PLAY stays PLAY, because whether the
-        // game is open is decided on Blizzard's side, and this cache can
-        // still say "pre-install" on release day.
+    /// The right of the panel: the primary action with its cog, Battle.net
+    /// under it, and the release date when there is one.
+    fn action_buttons(&self, action: &ActionState) -> Element<'_, Message> {
+        let color = match action {
+            ActionState::Install => theme::INSTALL,
+            ActionState::Update { .. } => theme::UPDATE,
+            ActionState::Play => theme::PLAY,
+            ActionState::Downloading(_) | ActionState::Paused(_) | ActionState::Queued => {
+                theme::PAUSE
+            }
+            ActionState::Error { .. } => theme::ERROR,
+            ActionState::Unknown | ActionState::Offline { .. } => theme::PAUSE,
+        };
+
+        // Battle.net's pre-install wording, as a caption only: PLAY stays PLAY.
         let release_date = self.families.release_date(self.selected.code.as_str(), "default");
-        let label = match (action, release_date) {
-            _ if self.busy && self.game_up => self.stop_label(),
-            (ActionState::Install, Some(_)) => "PRE-INSTALL",
+        let session = self.session(&self.selected.code);
+        let label = match (session, action, release_date) {
+            (Some(session), ..) => stop_label(session),
+            (None, ActionState::Install, Some(_)) => "PRE-INSTALL",
             _ => action.label(),
         };
-        // A game that is up turns PLAY into STOP, in the colour of the other
-        // thing this button never is: an error.
-        let stoppable = self.busy && self.game_up && !self.stopping;
-        let color = if self.busy && self.game_up { theme::ERROR } else { color };
+        // This game being up turns its PLAY into STOP, in the colour of the
+        // other thing this button never is: an error.
+        let stoppable = session.is_some_and(|s| !s.stopping);
+        let color = if session.is_some() { theme::ERROR } else { color };
         let primary = button(
             container(text(label).size(theme::HEADING).color(iced::Color::WHITE))
                 .center_x(Length::Fill),
@@ -484,7 +460,7 @@ impl Lightforge {
         .style(theme::filled_left(color))
         .padding([theme::MD, theme::LG])
         // 190 + the tab's 50 is 240: the width of the Battle.net button
-        // underneath, so the two stack flush rather than nearly flush.
+        // underneath, so the two stack flush, not nearly flush.
         .width(Length::Fixed(190.0))
         .height(Length::Fixed(theme::CONTROL_HEIGHT));
         let battle_net = button(
@@ -494,13 +470,7 @@ impl Lightforge {
         .padding(theme::tap([theme::SM, theme::MD]))
         .width(Length::Fixed(240.0));
 
-        // A split button, welded to the primary action rather than floating
-        // beside it: the cog is a second way into the same thing, which is how
-        // Battle.net builds it. Zero spacing and complementary corner radii
-        // are what make the pair read as one control.
-        //
-        // The icon is an image, not a glyph, the UI font has no U+2699 and
-        // renders it as a tofu box.
+        // A split button, as Battle.net's. The cog is an image: the font has no U+2699.
         let gear = button(
             image(gear_icon())
                 .width(Length::Fixed(18.0))
@@ -508,22 +478,19 @@ impl Lightforge {
         )
         .style(theme::filled_right(color))
         .padding([theme::MD, theme::MD])
-        // The same fixed height as the action half, never `Fill`: inside a
-        // column, `Fill` resolves against the *column*, and the tab grows into
-        // a green stripe the height of the whole stack.
+        // Fixed, never `Fill`, which resolves against the whole column.
         .height(Length::Fixed(theme::CONTROL_HEIGHT))
         .on_press(Message::ToggleGear);
 
         let primary_press = match () {
             _ if stoppable => Some(Message::AskStopGame),
-            _ if self.busy || matches!(action, ActionState::Unknown) => None,
+            _ if session.is_some() || self.busy || matches!(action, ActionState::Unknown) => None,
+            // Beside another game only PLAY: downloads and repairs wait for it.
+            _ if !self.playing.is_empty() && !matches!(action, ActionState::Play) => None,
             _ => Some(Message::Primary),
         };
 
-        // Pinned to the control rather than placed near it. Everything else
-        // was layout, and layout cannot put a child over its sibling: in the
-        // panel's column the menu sized the card, and above the card its top
-        // edge fell between the menu and the button.
+        // A popover: layout cannot put a child over its sibling.
         let control = popover::popover(
             row![
                 self.ring(
@@ -540,12 +507,12 @@ impl Lightforge {
             self.gear_open.then(|| self.gear_menu()),
         );
 
-        let right = column![
+        column![
             control,
             self.ring(
                 focus::Target::LaunchViaBattleNet,
-                (!self.busy).then_some(Message::BattleNet),
-                match self.busy {
+                (!self.busy && session.is_none()).then_some(Message::BattleNet),
+                match self.busy || session.is_some() {
                     true => battle_net,
                     false => battle_net.on_press(Message::BattleNet),
                 },
@@ -554,11 +521,41 @@ impl Lightforge {
         .push(release_date.map(|date| muted(servers_open(date), theme::CAPTION)))
         .spacing(theme::SM)
         .align_x(Alignment::Center)
-        .width(Length::Shrink);
+        .width(Length::Shrink)
+        .into()
+    }
+}
 
-        container(row![left, right].spacing(theme::XL).align_y(Alignment::Center))
-            .padding(theme::LG)
-            .style(theme::floating)
-            .into()
+/// The word on a running game's button.
+fn stop_label(session: &Session) -> &'static str {
+    match session.stopping {
+        true => "STOPPING…",
+        false => "STOP",
+    }
+}
+
+/// A transfer's bar, its figures, and what it is doing.
+fn transfer_lines<'a>(left: Column<'a, Message>, progress: state::Progress, stage: String) -> Column<'a, Message> {
+    // Sweeps while there is work but no fraction: before the total, and
+    // while extracting after the last byte.
+    let sweeping = progress.total_bytes == 0 || progress.downloaded_bytes >= progress.total_bytes;
+    let value = match sweeping {
+        true => sweep(),
+        false => progress.fraction(),
+    };
+    let left = left.push(progress_bar(0.0..=1.0, value).girth(6)).push(
+        row![
+            mono(bytes_of(progress.downloaded_bytes, progress.total_bytes)),
+            dot(),
+            mono(rate_of(progress.bytes_per_second)),
+            dot(),
+            mono(eta_of(progress)),
+        ]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center),
+    );
+    match stage.is_empty() {
+        true => left,
+        false => left.push(muted(stage, theme::CAPTION)),
     }
 }

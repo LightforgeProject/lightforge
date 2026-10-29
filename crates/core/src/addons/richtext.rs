@@ -1,13 +1,7 @@
-//! Addon descriptions and changelogs, as blocks rather than markup.
+//! Addon descriptions and changelogs, as blocks, not markup.
 //!
-//! CurseForge publishes both as HTML fragments. The proxy reduces them to a
-//! short list of blocks before they reach us, so this module holds no parser:
-//! a site changing its markup is a redeploy, not a release.
-//!
-//! What arrives is deliberately lossy. Bold, italics, tables and inline
-//! styling are already flattened to text upstream; what survives is the
-//! structure that carries meaning in a changelog, the heading, the bullet,
-//! the link and the image.
+//! The proxy reduces CurseForge's HTML to blocks, so a markup change is a
+//! redeploy, not a release. Only headings, bullets, links and images survive.
 
 use serde::{Deserialize, Serialize};
 
@@ -16,13 +10,8 @@ use serde::{Deserialize, Serialize};
 pub struct Link {
     pub text: String,
     pub url: String,
-    /// Byte offsets into the owning block's `text`.
-    ///
-    /// The proxy sends offsets rather than leaving us to search for `text`,
-    /// because a search picks the wrong occurrence the moment one block links
-    /// the same words twice, "see here" and "here", which changelogs do
-    /// constantly. `start == end` means the proxy could not re-find the span
-    /// and the link should be drawn as a reference after the text.
+    /// Byte offsets into the block's `text`: a text search picks the wrong
+    /// "here". `start == end` means draw it as a reference after the text.
     #[serde(default)]
     pub start: usize,
     #[serde(default)]
@@ -39,9 +28,7 @@ impl Link {
 
 /// What kind of block this is.
 ///
-/// `Other` is not a parse failure: the proxy may add kinds, and the contract
-/// is that an unrecognised one renders its `text` as a paragraph. Keeping the
-/// raw name lets that happen without a release.
+/// `Other` is a kind the proxy added later; it renders as a paragraph.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
@@ -75,9 +62,8 @@ pub struct Block {
 impl Block {
     /// The links that sit inside the text, in the order they appear.
     ///
-    /// Sorted and clamped, because the offsets arrive from a service: a
-    /// malformed pair would otherwise panic the slicing in a renderer, and a
-    /// blank card is a better failure than a crashed launcher.
+    /// Sorted and clamped: the offsets come from a service, and a bad pair
+    /// would panic a renderer's slicing.
     pub fn inline_links(&self) -> Vec<Link> {
         let mut links: Vec<Link> = self
             .links
@@ -87,8 +73,7 @@ impl Block {
             .cloned()
             .collect();
         links.sort_by_key(|l| l.start);
-        // Drop any that overlap the one before, so a renderer walking them in
-        // order never has to seek backwards.
+        // Drop overlaps, so a renderer never seeks backwards.
         let mut cursor = 0;
         links.retain(|l| {
             let keep = l.start >= cursor;
@@ -111,8 +96,7 @@ impl Block {
 pub struct Document {
     #[serde(default)]
     pub blocks: Vec<Block>,
-    /// The document was longer than the proxy's caps. Offer the CurseForge
-    /// page for the rest rather than ending mid-list.
+    /// Longer than the proxy's caps; offer the CurseForge page for the rest.
     #[serde(default)]
     pub truncated: bool,
 }

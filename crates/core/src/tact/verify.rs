@@ -1,44 +1,26 @@
 //! Verifying a local store against itself: is each file where the index says,
 //! and is it the file the index claims?
 //!
-//! The planner already answers "what is missing" by comparing the index
-//! against a build's download manifest. It cannot answer "what is *wrong*",
-//! because an index entry is believed on sight. This closes that gap without
-//! reading the store.
+//! The planner knows what is missing; this finds what is *wrong*.
 //!
-//! **What makes it cheap.** Every file inside a `data.NNN` carries a 30-byte
-//! CASC entry header (see [`crate::tact::entry`]), and that header's second
-//! checksum mixes in the archive number and the byte offset. So reading 30
-//! bytes tells you that the bytes at this offset really are this key, at this
-//! size, written to this place. Across a 140 GB store that is about 55 MB of
-//! reads rather than 140 GB, and sorting by `(archive, offset)` makes it
-//! sequential.
+//! **Header scan.** Every file in a `data.NNN` has a 30-byte entry header
+//! ([`crate::tact::entry`]) whose checksum B mixes in archive and offset, so
+//! 30 bytes prove these bytes are this key, at this size, in this place:
+//! about 55 MB of reads for a 140 GB store, sequential by `(archive, offset)`.
+//! A payload that rotted behind an intact header passes.
 //!
-//! **What it cannot tell you.** A payload that rotted while its header stayed
-//! intact reads as healthy here. [`deep_scan`] is the answer to that, and it
-//! costs a read of the whole store.
+//! **Deep scan** ([`deep_scan`]) never decodes. A BLTE chunk table holds the
+//! MD5 of each chunk as stored (compressed, still encrypted), and the
+//! encoding key is the MD5 of that table, so hashing raw bytes checks every
+//! byte without zlib or keys. Measured on 12.1.0: 3,672 of 3,672 keys match
+//! their table, 5,810 of 5,810 chunks their checksum, 77 encrypted.
 //!
-//! **What makes the deep scan affordable.** It never decodes anything. A BLTE
-//! file carries a chunk table giving an MD5 of every chunk *as stored*:
-//! compressed, and for encrypted chunks still encrypted, and the file's
-//! encoding key is the MD5 of that table. So hashing the raw bytes verifies the
-//! table against the key and every chunk against the table, which covers every
-//! stored byte without zlib, without the encoding manifest, and without
-//! decryption keys. Measured against a real 12.1.0 store: 3,672 of 3,672
-//! sampled keys equal the MD5 of their chunk table, and 5,810 of 5,810 chunks
-//! match their checksum, 77 of them encrypted.
+//! A deep scan runs beside the game, but Agent or a transfer may write
+//! meanwhile, and a file read mid-write looks damaged: a [`Snapshot`] before
+//! and after turns that into [`VerifyError::StoreChanged`].
 //!
-//! **Why a deep scan checks the store did not move under it.** It runs while
-//! the game is up, because it only reads. Something else may not: an
-//! `Agent.exe` update or a transfer writes the same archives, and reading a
-//! file mid-write looks exactly like damage. A [`Snapshot`] of every index and
-//! archive, taken before and compared after, turns that into
-//! [`VerifyError::StoreChanged`] instead of a false report, whoever the
-//! writer was.
-//!
-//! Repair is deliberately not a separate mechanism: a damaged entry is removed
-//! from the index, which makes the planner see the file as absent, which makes
-//! the ordinary download path fetch it again.
+//! Repair removes damaged entries from the index; the planner then sees the
+//! files as absent and the download path fetches them again.
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -52,14 +34,14 @@ use super::download::Cancel;
 use super::entry::Header;
 use super::idx::{Entry, Index, CASC_ENTRY_HEADER, KEY_SIZE};
 use super::storage::{archive_name, blte_payload, resolve_data_dir, Storage, StorageError};
+use super::writer::StoreLock;
 
 /// Why one entry failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fault {
     /// The `data.NNN` the entry points into is not there at all.
     MissingArchive,
-    /// The entry runs past the end of its archive. Arithmetic alone catches
-    /// this, and it is what a truncated or half-written archive looks like.
+    /// The entry runs past the end of its archive: truncated or half-written.
     PastEnd,
     /// The archive is long enough, but reading the header failed.
     Unreadable,
@@ -67,9 +49,8 @@ pub enum Fault {
     KeyMismatch,
     /// The header's size disagrees with the index's.
     SizeMismatch,
-    /// One of the two header checksums did not reproduce. Checksum B covers
-    /// the entry's location, so this also catches a file written at the wrong
-    /// offset or copied from elsewhere in the store.
+    /// A header checksum did not reproduce. B covers the location, so this
+    /// also catches a file at the wrong offset.
     BadChecksum,
     /// The bytes after the header are not a BLTE file at all.
     NotBlte,
@@ -113,8 +94,7 @@ pub struct Progress {
     pub checked: u64,
     pub total: u64,
     pub damaged: u64,
-    /// Payload bytes hashed so far, and in all. Zero for a header scan, which
-    /// reads so little that files are the only honest measure.
+    /// Payload bytes hashed so far, and in all. Zero for a header scan.
     pub bytes: u64,
     pub bytes_total: u64,
 }
@@ -123,17 +103,14 @@ pub struct Progress {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Report {
     pub checked: u64,
-    /// Headers actually read. Lower than `checked` when entries failed the
-    /// free arithmetic checks and never needed a read.
+    /// Headers actually read; entries that failed the arithmetic need none.
     pub headers_read: u64,
     pub bytes_read: u64,
     pub archives: usize,
     /// Archives named by the index that are not on disk.
     pub missing_archives: Vec<u16>,
     pub damaged: Vec<Damage>,
-    /// Files a deep scan could read but has no way to check, see
-    /// [`Payload::Unverifiable`]. Healthy as far as anyone can tell, and never
-    /// repaired.
+    /// Files a deep scan cannot check (patch manifests); never repaired.
     pub unverifiable: u64,
     /// The store as it was when the scan began, for [`repair_unchanged`].
     pub snapshot: Snapshot,
@@ -145,11 +122,8 @@ impl Report {
     }
 }
 
-/// Verify every file entry in `store`.
-///
-/// Read-only. `on_progress` is called periodically rather than per entry,
-/// there are over a million of them, and a callback per entry costs more than
-/// the check does.
+/// Verify every file entry in `store`, read-only. `on_progress` is called
+/// periodically: per entry it would cost more than the check.
 pub fn scan(store: &Storage, mut on_progress: impl FnMut(Progress)) -> Report {
     let data_dir = store.data_dir().to_path_buf();
     let mut report = Report {
@@ -157,9 +131,7 @@ pub fn scan(store: &Storage, mut on_progress: impl FnMut(Progress)) -> Report {
         ..Report::default()
     };
 
-    // Sorted by where the bytes are, not by key: the whole point of reading
-    // headers rather than files is that the reads stay near each other, and
-    // index order is hash order, which is to say random.
+    // By position, not key: index order is hash order, which is random.
     let mut entries: Vec<Entry> = store.files().copied().collect();
     entries.sort_unstable_by_key(|e| (e.archive_id, e.offset));
     let total = entries.len() as u64;
@@ -192,8 +164,7 @@ pub fn scan(store: &Storage, mut on_progress: impl FnMut(Progress)) -> Report {
             continue;
         };
 
-        // Free: no read can make an entry fit inside an archive that ends
-        // before it does.
+        // Free: no read needed.
         if u64::from(entry.offset) + u64::from(entry.size) > length {
             report.damaged.push(Damage { entry, fault: Fault::PastEnd });
             continue;
@@ -243,10 +214,8 @@ pub fn scan(store: &Storage, mut on_progress: impl FnMut(Progress)) -> Report {
 
 /// Check one header against the index entry that pointed at it.
 ///
-/// An entry pointing straight at `BLTE` has no header to check: it is the
-/// headerless alias of a file indexed again 30 bytes earlier, see
-/// [`super::storage`]. Reading those bytes as a header reported every alias
-/// as a key mismatch, and repairing that dropped real entries.
+/// An entry pointing straight at `BLTE` is a headerless alias (see
+/// [`super::storage`]) and has no header to check.
 fn fault_in(header: &[u8], entry: &Entry) -> Option<Fault> {
     if header.starts_with(b"BLTE") {
         return None;
@@ -266,19 +235,16 @@ fn fault_in(header: &[u8], entry: &Entry) -> Option<Fault> {
 
 /// Verify every file in the store at `path` down to its last byte.
 ///
-/// [`scan`] plus the payload, chunk table against encoding key and every chunk
-/// against the table, with no decoding (see the module docs). Read-only, so
-/// safe beside a running client (see [`VerifyError::StoreChanged`]). Archives
-/// are spread over threads: hashing caps one thread at about 730 MB/s.
-/// `on_progress` runs on the calling thread a few times a second.
+/// [`scan`] plus the payload, without decoding (see the module docs).
+/// Read-only. Archives are spread over threads: hashing caps one at about
+/// 730 MB/s. `on_progress` runs on the calling thread a few times a second.
 pub fn deep_scan(
     path: impl AsRef<Path>,
     cancel: &Cancel,
     mut on_progress: impl FnMut(Progress),
 ) -> Result<Report, VerifyError> {
     let data_dir = resolve_data_dir(path.as_ref());
-    // Before the indices are read, so a write that lands while they load is
-    // caught too.
+    // Before the indices load, so a write during the load is caught too.
     let before = Snapshot::take(&data_dir)?;
     let store = Storage::open(path.as_ref())?;
 
@@ -378,8 +344,7 @@ fn deep_worker(
     cancel: &Cancel,
 ) -> Part {
     let mut part = Part::default();
-    // Reused across entries: the largest file is a few hundred MB, and
-    // allocating per entry would churn that for a million small ones.
+    // Reused: files run to a few hundred MB.
     let mut buf = Vec::new();
 
     while let Some((archive_id, entries)) = work.get(shared.next.fetch_add(1, Ordering::Relaxed)) {
@@ -439,12 +404,9 @@ fn deep_worker(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Payload {
     Verified,
-    /// Stored raw, in a format whose key is not a hash of anything the scan
-    /// can see. The only ones in a real store are patch manifests (`PA`), which
-    /// Agent keeps for patching old builds; their key is neither the MD5 of
-    /// the file nor of any part checked so far. Calling them damaged would be
-    /// worse than useless: the downloader never fetches them, so a repair
-    /// would delete them outright.
+    /// Stored raw with a key that hashes nothing visible: patch manifests
+    /// (`PA`), kept by Agent. The downloader never fetches them, so a repair
+    /// would delete them for good.
     Unverifiable,
     Damaged(Fault),
 }
@@ -459,8 +421,7 @@ enum Payload {
 /// 0x0c  per chunk: u32 BE stored size, u32 BE decoded size, [u8; 16] MD5 ...
 /// ```
 ///
-/// The MD5 in the table is of the chunk as stored, mode byte included, which
-/// is what lets this run without decoding.
+/// The table's MD5 is of the chunk as stored, mode byte included.
 fn payload(raw: &[u8], key: &[u8; KEY_SIZE]) -> Payload {
     let Some(blte) = blte_payload(raw) else {
         return match raw.get(CASC_ENTRY_HEADER..CASC_ENTRY_HEADER + 2) {
@@ -474,7 +435,7 @@ fn payload(raw: &[u8], key: &[u8; KEY_SIZE]) -> Payload {
     }
 }
 
-pub(super) fn blte_fault(blte: &[u8], key: &[u8; KEY_SIZE]) -> Option<Fault> {
+pub(crate) fn blte_fault(blte: &[u8], key: &[u8; KEY_SIZE]) -> Option<Fault> {
     let be32 = |at: usize| {
         blte.get(at..at + 4)
             .map(|b| u32::from_be_bytes(b.try_into().expect("four bytes")) as usize)
@@ -490,8 +451,7 @@ pub(super) fn blte_fault(blte: &[u8], key: &[u8; KEY_SIZE]) -> Option<Fault> {
     let Some(table) = blte.get(..header_size) else {
         return Some(Fault::MalformedBlte);
     };
-    // First, and before any size in it is believed: a table that hashes to
-    // the key is the one Blizzard published, so its sizes can be trusted.
+    // First: a table that hashes to the key can be believed.
     if !hashes_to_key(table) {
         return Some(Fault::WrongPayload);
     }
@@ -524,26 +484,22 @@ pub(super) fn blte_fault(blte: &[u8], key: &[u8; KEY_SIZE]) -> Option<Fault> {
     (at != blte.len()).then_some(Fault::MalformedBlte)
 }
 
-/// Every index and archive file in a store, by size and modification time.
-///
-/// Cheap, a couple of hundred `stat`s, and deliberately blunt: it cannot say
-/// *who* wrote, only that the bytes a scan read may no longer be the bytes on
-/// disk. That is the whole question a scan needs answered.
+/// Every index and archive file in a store, by size and mtime: a few hundred
+/// `stat`s that say whether anything wrote, not who.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Snapshot(BTreeMap<String, (u64, SystemTime)>);
 
 impl Snapshot {
     pub fn take(data_dir: &Path) -> Result<Self, VerifyError> {
-        let io = |source| VerifyError::Io { path: data_dir.to_path_buf(), source };
         let mut files = BTreeMap::new();
-        for entry in std::fs::read_dir(data_dir).map_err(io)? {
-            let entry = entry.map_err(io)?;
+        for entry in std::fs::read_dir(data_dir).map_err(io(data_dir))? {
+            let entry = entry.map_err(io(data_dir))?;
             let name = entry.file_name().to_string_lossy().into_owned();
             if !name.starts_with("data.") && super::idx::parse_file_name(&name).is_none() {
                 continue;
             }
-            let meta = entry.metadata().map_err(io)?;
-            files.insert(name, (meta.len(), meta.modified().map_err(io)?));
+            let meta = entry.metadata().map_err(io(data_dir))?;
+            files.insert(name, (meta.len(), meta.modified().map_err(io(data_dir))?));
         }
         Ok(Self(files))
     }
@@ -551,28 +507,20 @@ impl Snapshot {
 
 /// [`repair`], but only if the store is still the one `report` describes.
 ///
-/// A scan's findings are positions in files. If an index generation or an
-/// archive changed since, those positions may name healthy files now, and
-/// dropping them would throw away good data.
+/// Findings are positions; once the store changed they may name healthy files.
 pub fn repair_unchanged(data_dir: &Path, report: &Report) -> Result<usize, VerifyError> {
+    let _lock = StoreLock::acquire(data_dir)?;
     if Snapshot::take(data_dir)? != report.snapshot {
         return Err(VerifyError::StoreChanged);
     }
-    repair(data_dir, &report.damaged)
+    remove_entries(data_dir, report.damaged.iter().map(|d| d.entry))
 }
 
-/// Remove damaged entries from the store's indices.
-///
-/// This *is* the repair: the planner asks the index what the store holds, so
-/// an entry that is gone becomes a file the next download fetches again. The
-/// archives are not touched, the bad bytes stay where they are and are
-/// written over or orphaned, which is exactly what the writer already does
-/// with superseded content.
-///
-/// Returns how many entries were removed. Never call it against a live client;
-/// it rewrites the files the client memory-maps, which is what pre-flight
-/// exists to prevent.
+/// Remove damaged entries from the store's indices, returning how many: the
+/// next download fetches them again. Archives are not touched. Never against
+/// a live client, which memory-maps the indices.
 pub fn repair(data_dir: &Path, damaged: &[Damage]) -> Result<usize, VerifyError> {
+    let _lock = StoreLock::acquire(data_dir)?;
     remove_entries(data_dir, damaged.iter().map(|d| d.entry))
 }
 
@@ -580,7 +528,7 @@ pub fn repair(data_dir: &Path, damaged: &[Damage]) -> Result<usize, VerifyError>
 /// a new generation per bucket touched. Returns how many were removed.
 ///
 /// The archives are not touched. Same rule as [`repair`]: never against a
-/// live client.
+/// live client. The caller holds the store's [`StoreLock`].
 pub fn remove_entries(
     data_dir: &Path,
     entries: impl IntoIterator<Item = Entry>,
@@ -598,8 +546,7 @@ pub fn remove_entries(
         let path = data_dir.join(super::idx::file_name(bucket, sequence));
         let mut index = Index::load(&path)?;
         for entry in entries {
-            // The entry itself, not the first with its key: a key can be
-            // indexed twice, and the other one may be the healthy copy.
+            // This entry, not the first with its key: the other may be healthy.
             if index.remove_entry(&entry) {
                 removed += 1;
             }
@@ -620,6 +567,9 @@ pub enum VerifyError {
     #[error("the scan was cancelled")]
     Cancelled,
 
+    #[error(transparent)]
+    Write(#[from] super::writer::WriteError),
+
     /// Something wrote to the store while it was being read, so what the scan
     /// saw may not be what is on disk. Run it again once the writer is done.
     #[error("the store changed while it was being checked — run the scan again")]
@@ -632,6 +582,11 @@ pub enum VerifyError {
         source: std::io::Error,
     },
 }
+
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> VerifyError + '_ {
+    move |source| VerifyError::Io { path: path.to_path_buf(), source }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -696,8 +651,7 @@ mod tests {
         let archive = dir.path().join("Data").join("data").join(archive_name(0));
         let entry = *open(&dir).files().next().unwrap();
 
-        // A bit flipped inside checksum A: the key and size still agree with
-        // the index, so this only fails if the checksums are actually checked.
+        // A bit flipped inside checksum A: key and size still agree.
         let mut bytes = std::fs::read(&archive).unwrap();
         bytes[entry.offset as usize + 0x16] ^= 0x40;
         std::fs::write(&archive, &bytes).unwrap();

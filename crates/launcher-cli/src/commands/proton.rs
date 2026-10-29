@@ -1,5 +1,6 @@
 //! Proton builds, the prefix and first-run setup.
 
+use super::proton_runner;
 use crate::*;
 
 pub(crate) fn proton() -> Result<()> {
@@ -159,7 +160,7 @@ pub(crate) fn prefix(ctx: Ctx) -> Result<()> {
         "built by        {}",
         status.built_by.as_deref().unwrap_or("—")
     );
-    println!("symlink         {}", describe_link(&status.link));
+    println!("symlink         {}", status.link.describe());
     println!(
         "ready           {}",
         if status.is_ready() { "yes" } else { "no" }
@@ -175,7 +176,7 @@ pub(crate) fn prefix_init(ctx: Ctx, proton: Option<String>) -> Result<()> {
 
     let status = lightforge_core::prefix::provision(&runner, &layout)
         .context("provisioning the prefix")?;
-    println!("symlink         {}", describe_link(&status.link));
+    println!("symlink         {}", status.link.describe());
     println!(
         "ready           {}",
         if status.is_ready() { "yes" } else { "no" }
@@ -191,7 +192,7 @@ pub(crate) fn prefix_link(ctx: Ctx) -> Result<()> {
     let (link, target) = (layout.wow_symlink(), layout.wow_install_in(main));
     let before = lightforge_core::prefix::ensure_link(&link, &target)
         .with_context(|| format!("linking {} -> {}", link.display(), target.display()))?;
-    println!("was             {}", describe_link(&before));
+    println!("was             {}", before.describe());
     println!("now             {} -> {}", link.display(), target.display());
     Ok(())
 }

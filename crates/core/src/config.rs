@@ -1,11 +1,9 @@
 //! Persisted application configuration.
 //!
-//! TOML at `~/.config/lightforge/config.toml`, deliberately outside
-//! `~/Games/Blizzard` so wiping the game root never destroys the user's
-//! per-product pins and overrides. The format is hand-editable on purpose,
-//! realmlist and CDN overrides are exactly the fields people poke manually.
+//! TOML at `~/.config/lightforge/config.toml`, outside `~/Games/Blizzard` so
+//! wiping the game root keeps the pins. Meant to be hand-editable.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -30,16 +28,11 @@ pub enum SteamOsUse {
 pub struct Config {
     /// Root of the dual-directory layout. Defaults to `~/Games/Blizzard`.
     pub blizzard_root: Option<PathBuf>,
-    /// Where games are installed, when not under `blizzard_root`.
-    ///
-    /// Superseded by `libraries`, and kept only so a config written before
-    /// them still points at the right drive: [`Config::ensure_libraries`]
-    /// turns it into the first library once, and nothing reads it afterwards.
+    /// Where games were installed before `libraries`; only
+    /// [`Config::ensure_libraries`] reads it.
     pub games_dir: Option<PathBuf>,
     /// Every drive Lightforge may install games to, the default one first.
-    ///
-    /// Empty in a config written before multi-drive storage, and seeded from
-    /// `blizzard_root`/`games_dir` by [`Config::ensure_libraries`].
+    /// Seeded by [`Config::ensure_libraries`] for older configs.
     #[serde(default)]
     pub libraries: Vec<crate::library::Library>,
     /// Windows user name within the prefix.
@@ -48,142 +41,80 @@ pub struct Config {
     pub battle_net_proton: ProtonPin,
     /// Fallback Proton build for products that don't pin their own.
     pub default_proton: ProtonPin,
-    /// An override for where themed branding is read from: a base URL, or a
-    /// local directory for trying out new art. Deliberately absent from the
-    /// UI, `None` means [`DEFAULT_ASSETS_SOURCE`], which is what everyone
-    /// but whoever is making the art should be on.
+    /// Where themed branding is read from: a base URL, or a local directory
+    /// for trying out art. Not in the UI; `None` is [`DEFAULT_ASSETS_SOURCE`].
     pub assets_source: Option<String>,
     /// Base URL of the addon catalog proxy, or a local fixture directory.
-    /// `None` disables addon management rather than failing at use.
+    /// `None` disables addon management instead of failing at use.
     pub addon_catalog: Option<String>,
     /// Which addon builds to accept for an addon that has no channel of its
     /// own. Stable by default; a per-addon override lives in the ledger.
     #[serde(default)]
     pub addon_channel: crate::addons::Channel,
-    /// Whether addons update themselves when Lightforge makes its own pass,
-    /// for an addon that has no opinion of its own.
-    ///
-    /// On by default: keeping addons current is what an addon manager is for,
-    /// and an addon that should not move has two ways to say so, its own
-    /// auto-update choice, or being ignored outright.
+    /// Whether addons with no choice of their own update in Lightforge's own
+    /// pass. On by default.
     #[serde(default = "yes")]
     pub addon_auto_update: bool,
-    /// Where the person can be reached about a bug report, an address, a
-    /// Discord name, whatever they chose to type. Optional, kept only so the
-    /// report dialog can offer it back rather than asking twice, and never
-    /// sent anywhere except with a report they pressed Send on.
+    /// Contact for bug reports, as typed. Kept to prefill the dialog; only
+    /// ever sent with a report.
     #[serde(default)]
     pub contact: Option<String>,
-    /// Cap on game download speed, in megabytes per second. `None` is
-    /// unlimited.
-    ///
-    /// MB rather than MiB because it is the unit the progress readout already
-    /// uses, and a limit that does not match the number beside it is a support
-    /// question waiting to happen.
+    /// Cap on game download speed in MB/s (the progress readout's unit).
+    /// `None` is unlimited.
     pub download_limit_mbps: Option<u64>,
     /// Whether launching a game also pauses downloads for *other* products.
-    ///
-    /// The launched product's own download is always paused. That one is a
-    /// correctness guard, not a preference, since the client and the
-    /// downloader would be reading and writing one CASC store. This governs
-    /// the rest of the queue, which shares that same store and the same
-    /// connection.
+    /// The launched product's own is always paused.
     pub pause_downloads_while_playing: bool,
-    /// Whether the launcher gets out of the way once a game is up.
-    ///
-    /// Off by default: a window that disappears without being asked is
-    /// startling, and the launcher is where the download queue and the status
-    /// line live. Nothing is restored when the game exits, the window is in
-    /// the taskbar, and a launcher that raises itself over whatever came next
-    /// is the behaviour people disable this kind of setting to avoid.
+    /// Whether the launcher minimizes once a game is up. Off by default;
+    /// nothing is restored when the game exits.
     #[serde(default)]
     pub minimize_on_launch: bool,
-    /// Whether Battle.net comes up minimized when it is only being used to
-    /// hand a game over.
-    ///
-    /// On by default, and still only honoured where the client can sign itself
-    /// in; see [`crate::battlenet::signs_in_by_itself`]. A sign-in form
-    /// nobody can see is a launch that quietly never happens.
+    /// Whether Battle.net comes up minimized for a hand-off. On by default,
+    /// honoured only when [`crate::battlenet::signs_in_by_itself`].
     #[serde(default = "yes")]
     pub battle_net_minimized: bool,
-    /// Whether PLAY closes a running Battle.net first.
-    ///
-    /// Off by default: a direct launch leaves the client alone, so the
-    /// friends list and chat stay up beside the game. It only governs PLAY;
-    /// a launch through Battle.net starts the client afresh either way.
+    /// Whether PLAY closes a running Battle.net first. Off by default, so
+    /// friends and chat stay up.
     #[serde(default)]
     pub close_battle_net_on_play: bool,
-    /// How Battle.net and every game it launches are started.
-    ///
-    /// Shared, not per game: Lightforge only sets the environment of a client
-    /// it starts cold, and a running client takes launches over IPC, so two
-    /// games from one session cannot differ (`SPEC.md`, "Per-product
-    /// pinning"). A hand-off game has no `Config.wtf`, so only the host and
-    /// runtime half of [`crate::tweaks::Tweaks`] is read.
+    /// How Battle.net and every game it launches are started. Shared: a
+    /// running client takes launches over IPC, so games cannot differ. Only
+    /// the host and runtime half of [`crate::tweaks::Tweaks`] applies.
     #[serde(default)]
     pub battle_net_tweaks: crate::tweaks::Tweaks,
-    /// Which of Blizzard's regions products are downloaded from.
-    ///
-    /// Asked once, during the first run. It decides which version service is
-    /// read, and it is written into `.build.info` and `product.db`: the client
-    /// and Battle.net both expect the install to say where it came from.
+    /// Which of Blizzard's regions products are downloaded from; also written
+    /// into `.build.info` and `product.db`.
     #[serde(default)]
     pub region: crate::tact::version::Region,
-    /// The language the game is installed in, e.g. `deDE`.
-    ///
-    /// A download decision, not a display one: root lists most files once per
-    /// locale, and the locale is what selects the right ones. Changing it after
-    /// an install means downloading the new language's files, which is why it is
-    /// asked at setup rather than guessed from `LANG`.
+    /// The language the game is installed in, e.g. `deDE`: it selects which
+    /// files are downloaded, so it is asked at setup.
     #[serde(default = "default_locale")]
     pub locale: String,
-    /// Whether the first-run wizard has been seen through to the end.
-    ///
-    /// Not the same question as "is the machine provisioned": someone who
-    /// dismissed the wizard with "set up later" has seen it, and showing it
-    /// again on every start would be nagging. [`crate::setup::Status`] still
-    /// knows what is missing, and Settings still says so.
+    /// Whether the first-run wizard has been seen through, "set up later"
+    /// included. [`crate::setup::Status`] knows what is missing.
     #[serde(default)]
     pub setup_complete: bool,
-    /// Battle.net was declined during setup.
-    ///
-    /// Only WoW works without it, so this is also what hides the Battle.net
-    /// button and the hand-off titles: a button that opens a client that is not
-    /// installed is worse than no button. Reversible from Settings, and the
-    /// wizard says so when it is set.
+    /// Battle.net was declined during setup, which hides its button and the
+    /// hand-off titles. Reversible from Settings.
     #[serde(default)]
     pub battle_net_declined: bool,
-    /// What a SteamOS machine is used as, asked during setup and only there.
-    ///
-    /// `None` everywhere else, and on SteamOS until the question is answered.
-    /// The same OS runs a handheld, a box under a television, and an ordinary
-    /// desktop, and nothing on the machine says which one this is.
+    /// What a SteamOS machine is used as, asked during setup: nothing on the
+    /// machine tells a Deck from a desktop. `None` elsewhere.
     #[serde(default)]
     pub steamos_use: Option<SteamOsUse>,
-    /// Whether the release-notes popup has been switched off for good.
-    ///
-    /// The checkbox on it says "never show this again", and that is what it
-    /// means: no future release opens it either. Settings › General turns it
-    /// back on, and Lightforge Updates shows the notes whatever this says.
+    /// Whether the release-notes popup is off for good ("never show this
+    /// again"). Settings › General turns it back on.
     #[serde(default)]
     pub patch_notes_muted: bool,
-    /// The version whose notes have already been shown.
-    ///
-    /// Without this the popup would open on every start rather than once per
-    /// update. `None` on a machine that has never seen it, which includes
-    /// every install from before the popup existed, and those *should* see the
-    /// notes for what they just updated to.
+    /// The version whose notes have already been shown. `None` shows them.
     #[serde(default)]
     pub patch_notes_seen: Option<String>,
-    /// Whether to ask GitHub, once per start, if a newer Lightforge exists.
-    ///
-    /// On by default and listed in `DISCLAIMER.md`, which is the file that
-    /// says exactly what this program contacts. Nothing is ever installed:
-    /// the answer is a sentence and a link to the releases page.
+    /// Whether to ask GitHub once per start if a newer Lightforge exists. On
+    /// by default, listed in `DISCLAIMER.md`; nothing installs by itself.
     #[serde(default = "yes")]
     pub check_for_updates: bool,
     /// The newest version already mentioned, so the notice opens once per
-    /// release rather than on every start.
+    /// release, not on every start.
     #[serde(default)]
     pub update_seen: Option<String>,
     /// How many `WTF/Account` backups each game keeps.
@@ -198,19 +129,14 @@ pub const DEFAULT_ASSETS_SOURCE: &str = "https://lightforge.tuxcore.pro/assets/"
 
 /// Where the addon catalog is read from unless `addon_catalog` says otherwise.
 ///
-/// The CurseForge API needs a key, and a key cannot live in a GPL binary, so
-/// CurseForge is reachable only through a proxy that holds one. Defaulting to
-/// ours means addon search works out of the box; pointing `addon_catalog` at
-/// your own proxy, or at a fixture directory, replaces it.
-///
-/// The keyless providers (WoWInterface, Tukui, GitHub) never come through
-/// here, so addon management keeps working whatever this says.
+/// CurseForge needs a key, so it goes through a proxy; ours by default. The
+/// keyless providers never come through here.
 pub const DEFAULT_ADDON_CATALOG: &str = "https://lightforge.tuxcore.pro/";
 
 /// Bytes in the megabyte this config counts in.
 const BYTES_PER_MB: u64 = 1_000_000;
 
-/// `true`, for a `serde(default)` that is on rather than off.
+/// `true`, for a `serde(default)` that is on, not off.
 fn yes() -> bool {
     true
 }
@@ -265,9 +191,7 @@ impl Config {
     /// Config seeded with the official products, for a first run.
     pub fn with_default_products() -> Self {
         Self {
-            // The live WoW products, named the way Battle.net names them.
-            // Labels stay generic where the content rotates: "Classic" is
-            // whatever expansion the progression realms are on.
+            // Labels stay generic: "Classic" is whatever expansion is current.
             products: vec![
                 Product::new(ProductCode::Retail, "World of Warcraft"),
                 Product::new(ProductCode::ClassicEra, "World of Warcraft Classic"),
@@ -279,15 +203,11 @@ impl Config {
         }
     }
 
-    /// Read `config.toml`, or fall back to the seeded defaults when it does
-    /// not exist yet. A file that exists but does not parse is an error, not a
-    /// silent reset, overwriting someone's hand-edited pins is worse than
-    /// refusing to start.
+    /// Read `config.toml`, or the seeded defaults when it does not exist. One
+    /// that does not parse is an error, not a reset.
     pub fn load_or_default(path: &std::path::Path) -> Result<Self, ConfigError> {
         match std::fs::read_to_string(path) {
-            // Lightforge never writes an empty file, so one is a save that
-            // did not finish. Read as TOML it would be every default, the
-            // home library included, which is the worst possible guess.
+            // An empty file is a save that did not finish, not "all defaults".
             Ok(text) if text.trim().is_empty() => Err(ConfigError::Empty(path.to_path_buf())),
             Ok(text) => Self::from_toml(&text),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -301,36 +221,26 @@ impl Config {
     }
 
     pub fn from_toml(s: &str) -> Result<Self, ConfigError> {
-        toml::from_str(s).map_err(ConfigError::Deserialize)
+        let mut config: Self = toml::from_str(s).map_err(ConfigError::Deserialize)?;
+        // Skipped: one bad hand-typed code must not cost every setting.
+        config.products.retain(|p| {
+            let keep = p.code.is_well_formed();
+            if !keep {
+                tracing::warn!(
+                    "ignoring product `{}` in the config: a code is letters, digits and `_` only; \
+                     it goes on the next save",
+                    p.code.as_str()
+                );
+            }
+            keep
+        });
+        Ok(config)
     }
 
-    /// Write `config.toml` atomically: temp file in the same directory,
-    /// fsync, then rename. A settings screen saves on every change, so a crash
-    /// mid-write must not be able to leave a half-written or empty file
-    /// behind, losing the user's Proton pins to a truncated table would be
-    /// worse than losing the edit. The temp name is unique, so the GUI and
-    /// the CLI saving at once cannot rename each other's half-written file.
+    /// Write `config.toml` atomically: settings save on every change.
     pub fn save(&self, path: &std::path::Path) -> Result<(), ConfigError> {
-        use std::io::Write;
-
         let text = self.to_toml()?;
-        let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-        let io = |p: &std::path::Path| {
-            let p = p.to_path_buf();
-            move |source| ConfigError::Io { path: p, source }
-        };
-        std::fs::create_dir_all(dir).map_err(io(dir))?;
-
-        let mut temp = tempfile::NamedTempFile::new_in(dir).map_err(io(dir))?;
-        temp.write_all(text.as_bytes()).map_err(io(temp.path()))?;
-        temp.as_file().sync_all().map_err(io(temp.path()))?;
-        temp.persist(path).map_err(|e| ConfigError::Io { path: path.to_path_buf(), source: e.error })?;
-
-        // Durability of the rename, not of the contents.
-        if let Ok(handle) = std::fs::File::open(dir) {
-            let _ = handle.sync_all();
-        }
-        Ok(())
+        crate::fsutil::write_atomic(path, text.as_bytes()).map_err(io(path))
     }
 
     pub fn to_toml(&self) -> Result<String, ConfigError> {
@@ -347,9 +257,25 @@ impl Config {
 
     /// The language `code` is downloaded in: its own, else the setup choice.
     pub fn locale_for(&self, code: &ProductCode) -> &str {
-        self.product(code)
-            .and_then(|p| p.profile.locale.as_deref())
-            .unwrap_or(&self.locale)
+        crate::tact::install::current_locale(
+            self.product(code)
+                .and_then(|p| p.profile.locale.as_deref())
+                .unwrap_or(&self.locale),
+        )
+    }
+
+    /// Change the setup language for games installed from now on. Each game
+    /// `on_disk` names, and that follows the setup language, keeps the one it
+    /// has as its own: switching it means a download, which is Modify
+    /// Install's to start, not this.
+    pub fn set_locale(&mut self, locale: &str, on_disk: impl Fn(&ProductCode) -> bool) {
+        let old = crate::tact::install::current_locale(&self.locale).to_owned();
+        for product in self.products.iter_mut().filter(|p| p.profile.locale.is_none()) {
+            if on_disk(&product.code) {
+                product.profile.locale = Some(old.clone());
+            }
+        }
+        self.locale = locale.to_owned();
     }
 
     /// Add a product, rejecting a duplicate code.
@@ -363,48 +289,53 @@ impl Config {
     }
 
     /// The layout this config describes: `blizzard_root` when set, else the
-    /// default under the user's home.
-    ///
-    /// Both front-ends resolve it through here. A `blizzard_root` that only the
-    /// CLI honoured would mean the GUI quietly managing a different install
-    /// than the one the user configured.
+    /// default. Both front ends resolve it here.
     pub fn layout(&self) -> Result<crate::paths::Layout, crate::paths::PathError> {
         let layout = match &self.blizzard_root {
             Some(root) => crate::paths::Layout::with_root(root),
             None => crate::paths::Layout::default_for_user()?,
         };
-        if self.libraries.is_empty() {
-            return Ok(layout.with_games(self.games_dir.clone()));
-        }
-        let mut libraries = crate::library::Libraries::new(self.libraries.clone());
+        let mut layout = match self.libraries.is_empty() {
+            true => layout.with_games(self.games_dir.clone()),
+            false => {
+                let mut libraries = crate::library::Libraries::new(self.libraries.clone());
+                for product in &self.products {
+                    if let Some(id) = &product.profile.library {
+                        libraries.assign(product.code.clone(), id);
+                    }
+                }
+                layout.with_libraries(libraries)
+            }
+        };
+        // Recorded at install; for an install from before that, or from
+        // Battle.net, the folder whose `.flavor.info` names the game.
         for product in &self.products {
-            if let Some(id) = &product.profile.library {
-                libraries.assign(product.code.clone(), id);
+            let profile = &product.profile;
+            let dir = profile.install_dir.clone().or_else(|| {
+                let install = layout.wow_install(&product.code);
+                let found = crate::paths::flavor_dir_name(&install, &product.code);
+                install.join(&found).is_dir().then_some(found)
+            });
+            if let Some(dir) = dir {
+                let flavor = crate::paths::Flavor { dir, executable: profile.executable.clone() };
+                layout = layout.with_flavor(product.code.clone(), flavor);
             }
         }
-        Ok(layout.with_libraries(libraries))
+        Ok(layout)
     }
 
     /// Seed the library list from a config written before multi-drive storage,
     /// returning whether anything changed and the config needs saving.
     ///
-    /// The first library keeps the games directory the install already used and
-    /// the drive letters it already had, so a 150 GB install Battle.net has
-    /// adopted stays recognised. It is *not* claimed here, writing a marker
-    /// file is a side effect on the user's disk, and this runs on every start;
-    /// [`crate::library::Library::claim`] happens where a library is set up.
-    ///
-    /// Nor does it need to be saved to be correct: the seeded library's id is
-    /// [`crate::library::DEFAULT_ID`], a constant, so the same seed comes back on
-    /// the next start whether or not it was written down.
+    /// The first library keeps the existing games directory and drive letters,
+    /// so an adopted install stays recognised. Not claimed here (that writes a
+    /// marker); its id is [`crate::library::DEFAULT_ID`] either way.
     pub fn ensure_libraries(&mut self) -> Result<bool, crate::paths::PathError> {
         if !self.libraries.is_empty() {
             return Ok(false);
         }
         let games = self.layout()?.games_root();
-        // "Home" where it is, which is where the prefix lives and where a
-        // first run puts the games; otherwise the directory it is under, which
-        // is the only name we have for a hand-pointed `games_dir`.
+        // "Home" at the default place, else the parent directory's name.
         let home = directories::UserDirs::new().map(|d| d.home_dir().to_path_buf());
         let label = match home.filter(|home| games.starts_with(home)) {
             Some(_) => "Home".to_owned(),
@@ -431,8 +362,7 @@ impl Config {
 
     /// Where the asset pipeline should read from, if configured.
     ///
-    /// Anything carrying a scheme is a base URL; anything else is a path to a
-    /// fixture directory. Unset or blank is the built-in source.
+    /// A scheme makes it a base URL, else a fixture directory; blank is the default.
     pub fn asset_origin(&self) -> crate::assets::Origin {
         let source = match self.assets_source.as_deref().map(str::trim) {
             Some(source) if !source.is_empty() => source,
@@ -446,12 +376,7 @@ impl Config {
 
     /// Where to read the addon catalog from.
     ///
-    /// Same shape as [`Config::asset_origin`]: a URL is a proxy, anything else
-    /// is a fixture directory, and absent means [`DEFAULT_ADDON_CATALOG`].
-    ///
-    /// This used to be `Option`, with `None` disabling CurseForge entirely,
-    /// written before the proxy existed, and the reason a stock install could
-    /// not find a single CurseForge addon.
+    /// Same shape as [`Config::asset_origin`]; absent is [`DEFAULT_ADDON_CATALOG`].
     pub fn catalog_origin(&self) -> crate::addons::catalog::Origin {
         let source = match self.addon_catalog.as_deref().map(str::trim) {
             Some(source) if !source.is_empty() => source,
@@ -473,17 +398,14 @@ impl Config {
 
     /// The download cap in bytes per second, `0` meaning unlimited.
     ///
-    /// A configured `0` is unlimited too rather than a cap of nothing, which
-    /// would be a download that never moves.
+    /// A configured `0` is unlimited too.
     pub fn download_limit_bytes(&self) -> u64 {
         self.download_limit_mbps.unwrap_or(0).saturating_mul(BYTES_PER_MB)
     }
 
     /// Every configured product Lightforge downloads itself.
     ///
-    /// The set whose Battle.net auto-update has to stay off: two programs
-    /// patching one CASC store is the corruption pre-flight exists to
-    /// prevent. A hand-off title is Battle.net's to update and is never here.
+    /// Their Battle.net auto-update stays off: two programs must not patch one store.
     pub fn managed_products(&self) -> Vec<ProductCode> {
         self.products
             .iter()
@@ -494,10 +416,8 @@ impl Config {
 
     /// The Proton build Battle.net and Agent launch under.
     ///
-    /// Its own pin rather than the selected product's: the client and Agent
-    /// are a different workload from the game, CEF, an updater, a storefront,
-    /// and `SPEC.md` notes that "latest" is not always best for them. Falls
-    /// back to the app default, so the pin only has to be set when it differs.
+    /// Its own pin ("latest" is not always best for CEF and Agent), else the
+    /// app default.
     pub fn battle_net_proton_version(&self) -> Option<&str> {
         self.battle_net_proton
             .version()
@@ -506,16 +426,9 @@ impl Config {
 
     /// The Proton build a Battle.net *hand-off* for `code` runs under.
     ///
-    /// The product's own pin first, because the thing being started is that
-    /// game: a title Battle.net launches is still that title, and a user who
-    /// pinned Diablo IV to a build meant it for Diablo IV. Falls through to
-    /// Battle.net's pin, which is where a choice about the client itself
-    /// belongs, and then to the app default.
-    ///
-    /// The prefix is shared, so a pin that is *older* than the build which
-    /// last ran in it is a downgrade of everything, see
-    /// [`crate::proton::prefix_fit`]. Resolved here all the same; refusing a
-    /// pin silently would be the worse answer.
+    /// The product's own pin, then Battle.net's, then the app default. An
+    /// older pin downgrades the shared prefix ([`crate::proton::prefix_fit`]);
+    /// it is honoured all the same.
     pub fn handoff_proton(&self, code: &ProductCode) -> Option<&str> {
         self.product(code)
             .and_then(|p| p.profile.proton_ge_version.as_deref())
@@ -524,10 +437,7 @@ impl Config {
 
     /// Everything pinned to `version`, named the way the user named it.
     ///
-    /// Only *explicit* pins count. A product following the app default is not
-    /// listed even though it currently launches under this build: unpinning
-    /// the default is one edit that moves all of them, and naming every
-    /// follower would make an ordinary default look like a thicket of pins.
+    /// Only explicit pins; products following the default are not listed.
     pub fn pinned_to(&self, version: &str) -> Vec<String> {
         let mut users = Vec::new();
         if self.default_proton.version() == Some(version) {
@@ -565,6 +475,11 @@ pub enum ConfigError {
     },
 }
 
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> ConfigError + '_ {
+    move |source| ConfigError::Io { path: path.to_path_buf(), source }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -592,9 +507,19 @@ mod tests {
         assert_eq!(names, ["config.toml"]);
     }
 
-    // The shared profile is new, so every config on disk predates it. A
-    // missing key must default rather than fail the load, or an upgrade
-    // bricks the launcher for everyone who already had one.
+    #[test]
+    fn a_new_setup_language_leaves_installed_games_in_theirs() {
+        let mut config = Config::with_default_products();
+        config.locale = "enUS".to_owned();
+        config.product_mut(&ProductCode::ClassicEra).unwrap().profile.locale = Some("frFR".to_owned());
+
+        config.set_locale("deDE", |code| matches!(code, ProductCode::Retail | ProductCode::ClassicEra));
+        assert_eq!(config.locale_for(&ProductCode::Retail), "enUS", "installed: keeps its language");
+        assert_eq!(config.locale_for(&ProductCode::ClassicEra), "frFR", "its own choice stands");
+        assert_eq!(config.locale_for(&ProductCode::Forever), "deDE", "not installed: follows");
+    }
+
+    // Older configs lack it; a missing key defaults.
     #[test]
     fn a_config_without_a_battle_net_profile_still_loads() {
         let config: Config = toml::from_str("blizzard_root = \"/games/Blizzard\"").unwrap();
@@ -653,7 +578,7 @@ mod tests {
         // No pin of its own: the client's build, which is the old behaviour.
         assert_eq!(config.handoff_proton(&diablo), Some("GE-Proton11-8"));
 
-        // Pinned, and the hand-off follows the game rather than the client.
+        // Pinned, and the hand-off follows the game, not the client.
         config.product_mut(&diablo).unwrap().profile.proton_ge_version =
             Some("GE-Proton10-34".to_owned());
         assert_eq!(config.handoff_proton(&diablo), Some("GE-Proton10-34"));
@@ -687,9 +612,7 @@ mod tests {
 
     #[test]
     fn the_launch_window_settings_default_the_way_a_fresh_install_behaves() {
-        // A config written before these existed has to keep working, and has
-        // to keep behaving the way it did: the launcher stayed put, and a
-        // hand-off already put Battle.net out of the way where it could.
+        // A config from before these keeps its old behaviour.
         let old: Config = toml::from_str("prefix_user = \"steamuser\"\n").unwrap();
         assert!(!old.minimize_on_launch);
         assert!(old.battle_net_minimized);
@@ -702,6 +625,16 @@ mod tests {
         let config = Config::with_default_products();
         let parsed = Config::from_toml(&config.to_toml().unwrap()).unwrap();
         assert_eq!(config, parsed);
+    }
+
+    #[test]
+    fn a_product_code_that_is_not_a_folder_name_is_skipped_not_fatal() {
+        let mut config = Config::with_default_products();
+        config.products.push(Product::new(ProductCode::Custom("../../outside".into()), "Escape"));
+        let parsed = Config::from_toml(&config.to_toml().unwrap()).unwrap();
+
+        assert!(parsed.product(&ProductCode::Custom("../../outside".into())).is_none());
+        assert_eq!(parsed.products.len(), config.products.len() - 1, "every other product kept");
     }
 
     #[test]
@@ -746,9 +679,8 @@ mod tests {
         assert!(layout.wow_symlink().starts_with("/mnt/games/blizzard/prefix"));
     }
 
-    /// A config written before multi-drive storage keeps pointing at the same
-    /// games folder, on the same drive letters. Anything else would make an
-    /// install Battle.net has already adopted stop being recognised.
+    /// A config from before multi-drive storage keeps its games folder and
+    /// drive letters, so adopted installs stay recognised.
     #[test]
     fn migrating_a_config_keeps_the_games_folder_and_the_letters() {
         let mut config = Config::with_default_products();
@@ -804,9 +736,8 @@ mod tests {
         assert_eq!(layout.prefix(), PathBuf::from("/home/u/Games/Blizzard/prefix/pfx"));
     }
 
-    /// The default drive decides where *games* go. Battle.net, the Wine
-    /// prefix and everything inside it stay at the Blizzard root chosen during
-    /// setup, however many drives are added and whichever one is default.
+    /// The default drive decides where games go; the prefix stays at the
+    /// Blizzard root.
     #[test]
     fn making_another_drive_the_default_does_not_move_battle_net() {
         let mut config = Config::with_default_products();
@@ -869,10 +800,8 @@ mod tests {
         assert_eq!(Config::load_or_default(&missing).unwrap(), Config::with_default_products());
     }
 
-    /// The regression this default exists for: a stock install, with no
-    /// `addon_catalog` line, could not find a single CurseForge addon.
-    /// CurseForge needs a key, the key needs a proxy, and `None` meant "no
-    /// proxy" rather than "the usual one".
+    /// A stock install, with no `addon_catalog` line, once found no
+    /// CurseForge addon at all.
     #[test]
     fn an_unconfigured_install_still_reaches_curseforge() {
         use crate::addons::catalog::Origin as CatalogOrigin;

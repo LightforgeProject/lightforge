@@ -20,7 +20,7 @@ impl Lightforge {
                 },
             ),
             // Fires first and usually lands first: it reads the cache and
-            // nothing else, so the window opens themed rather than snapping
+            // nothing else, so the window opens themed instead of snapping
             // to art once the revalidation below comes back.
             Task::perform(
                 tasks::cached_theme(self.pipeline.clone(), self.product_codes(), code.clone()),
@@ -78,7 +78,6 @@ impl Lightforge {
         left.push(progress_bar(0.0..=1.0, done).girth(6)).push(muted(caption, theme::CAPTION))
     }
 
-    /// Every configured product, in the order the bar draws them.
     /// Every product whose mark the UI may draw.
     ///
     /// Not just the configured ones: the browse panel lists the whole catalog
@@ -96,10 +95,6 @@ impl Lightforge {
         codes
     }
 
-    /// Progress against the whole product, not against this run.
-    ///
-    /// A resumed run plans only what is missing, so run-relative numbers read
-    /// as "starting over" every time a download is paused and picked up again.
     /// Refresh only when the finished product is the one on screen.
     pub(crate) fn reload_if_showing(&mut self, code: &ProductCode) -> Task<Message> {
         match code == &self.selected.code {
@@ -133,6 +128,15 @@ impl Lightforge {
 
     /// Put `code` in the queue, starting it if nothing is running.
     pub(crate) fn enqueue_for(&mut self, code: ProductCode) -> Task<Message> {
+        self.enqueue_job(code, false)
+    }
+
+    /// Queue the selected product's pre-download, see [`state::pre_download`].
+    pub(crate) fn enqueue_pre_download(&mut self) -> Task<Message> {
+        self.enqueue_job(self.selected.code.clone(), true)
+    }
+
+    fn enqueue_job(&mut self, code: ProductCode, pre_download: bool) -> Task<Message> {
         let label = self.label_of(&code);
         // The panel above should never offer this, but the download path is
         // the one that writes to disk, so it checks for itself.
@@ -159,16 +163,24 @@ impl Lightforge {
             if matches!(self.queue[existing].stage, Stage::Queued | Stage::Running { .. }) {
                 return Task::none();
             }
-            job = self.queue.remove(existing).resumed();
+            // A paused pre-download is not part of an update's bar.
+            let paused = self.queue.remove(existing);
+            if paused.pre_download == pre_download {
+                job = paused.resumed();
+            }
         }
 
         self.queue.push(Download {
             code,
-            label,
+            label: match pre_download {
+                true => format!("{label} (pre-download)"),
+                false => label,
+            },
             stage: Stage::Queued,
             sample: TransferState { stage: "queued".to_owned(), ..TransferState::default() },
             rate: Rate::default(),
             job,
+            pre_download,
         });
         let started = self.pump();
         // Not started: waiting on another download, or on this one's own
@@ -186,7 +198,7 @@ impl Lightforge {
     /// remove a cancelled download's files, or start the first queued
     /// transfer, in that order. Called whenever a writer finishes.
     ///
-    /// One at a time on purpose: two downloads would split one connection and
+    /// One at a time: two downloads would split one connection and
     /// write into the same CASC store, making both slower and both ETAs
     /// fiction.
     pub(crate) fn pump(&mut self) -> Task<Message> {
@@ -240,16 +252,20 @@ impl Lightforge {
                 self.config.locale_for(&code).to_owned(),
                 self.config.download_limit_bytes(),
                 self.opted_optional(&code),
+                self.queue[next].pre_download,
                 cancel,
                 tx,
             ),
             move |result| {
-                let mapped = result.map(|summary| Complete {
+                let mapped = result.map(|summary| Box::new(Complete {
                     complete: summary.complete,
                     cancelled: summary.outcome.cancelled,
                     files: summary.outcome.files_stored,
                     version: summary.version,
-                });
+                    reasons: summary.reasons,
+                    flavor: summary.flavor,
+                    executable: summary.executable,
+                }));
                 Message::Downloaded(code.clone(), mapped)
             },
         )
@@ -309,14 +325,9 @@ impl Lightforge {
         )
     }
 
-    /// Record what a build offers, if it has changed.
-    ///
-    /// Saved rather than held in memory: the list is the only thing standing
-    /// between the settings panel and a hardcoded guess, and a guess is what
-    /// put a 37 GiB texture pack in a plan nobody asked for.
     /// The optional downloads a product is opted into, limited to the ones
     /// Lightforge offers; see [`OFFERED_OPTIONAL`]. An opt-in to anything
-    /// else, from before that list existed, is ignored rather than fetched
+    /// else, from before that list existed, is ignored, not fetched
     /// behind a switch the user can no longer see.
     pub(crate) fn opted_optional(&self, code: &ProductCode) -> Vec<String> {
         offered_only(
@@ -324,6 +335,11 @@ impl Lightforge {
         )
     }
 
+    /// Record what a build offers, if it has changed.
+    ///
+    /// Saved, not held in memory: the list is the only thing standing
+    /// between the settings panel and a hardcoded guess, and a guess is what
+    /// put a 37 GiB texture pack in a plan nobody asked for.
     pub(crate) fn remember_optional(&mut self, code: &ProductCode, offered: Vec<String>) {
         let changed = self
             .config
@@ -338,11 +354,10 @@ impl Lightforge {
         self.save_config();
     }
 
-    /// Persist the config, surfacing a write failure rather than swallowing it.
     /// The queue as the next start should find it.
     pub(crate) fn queue_snapshot(&self) -> transfers::Queue {
         // Paused only because a game is running: owed a restart, and one the
-        // next start should give it rather than leave it waiting.
+        // next start should give it, not leave it waiting.
         let owed = {
             let mut owed = self.downloads.pending();
             owed.extend(self.resume_after_play.iter().cloned());
@@ -358,7 +373,13 @@ impl Lightforge {
                     Stage::Queued => (Standing::Queued, d.job.reached),
                     Stage::Paused(p) => (Standing::Paused, p.downloaded_bytes),
                 };
-                Saved { code: d.code.clone(), standing, job_bytes: d.job.total, reached }
+                Saved {
+                    code: d.code.clone(),
+                    standing,
+                    job_bytes: d.job.total,
+                    reached,
+                    pre_download: d.pre_download,
+                }
             })
             .collect();
         transfers::Queue { entries }
@@ -410,11 +431,15 @@ impl Lightforge {
             };
             self.queue.push(Download {
                 code: entry.code.clone(),
-                label: choice.label.clone(),
+                label: match entry.pre_download {
+                    true => format!("{} (pre-download)", choice.label),
+                    false => choice.label.clone(),
+                },
                 stage,
                 sample: TransferState { stage: "queued".to_owned(), ..TransferState::default() },
                 rate: Rate::default(),
                 job,
+                pre_download: entry.pre_download,
             });
         }
         self.saved_queue = self.queue_snapshot();

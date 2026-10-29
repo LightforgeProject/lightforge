@@ -7,6 +7,9 @@ use super::*;
 pub struct Refreshed {
     pub local: Local,
     pub remote: Option<Version>,
+    /// The build `/bgdl` lists ahead of its release. A failure here is not
+    /// "offline": most of the year the table is empty.
+    pub bgdl: Option<Version>,
     /// Why the remote half is missing, if it is. Not an error state: an
     /// unreachable version service must not stop a complete install launching.
     pub offline: Option<String>,
@@ -18,9 +21,7 @@ pub const NO_HTTP: &str = "no HTTP client available";
 /// Read the disk and, when `check_remote`, ask the version service what is
 /// current.
 ///
-/// `check_remote` is `false` for a product Blizzard does not serve us builds
-/// for: the probe can only fail there, and would report itself as the version
-/// service being down.
+/// `check_remote` is `false` where Blizzard serves us no builds.
 pub async fn refresh(
     http: Option<Http>,
     layout: Layout,
@@ -39,7 +40,7 @@ pub async fn refresh(
     };
 
     if !check_remote {
-        return Refreshed { local, remote: None, offline: None };
+        return Refreshed { local, remote: None, bgdl: None, offline: None };
     }
 
     let (remote, offline) = match &http {
@@ -53,13 +54,20 @@ pub async fn refresh(
         None => (None, Some(NO_HTTP.to_owned())),
     };
 
-    Refreshed { local, remote, offline }
+    let bgdl = match (&http, &remote) {
+        (Some(http), Some(_)) => version::bgdl(http, region, code.as_str())
+            .await
+            .ok()
+            .and_then(|rows| version::for_region(&rows, region, |v| &v.region).cloned()),
+        _ => None,
+    };
+
+    Refreshed { local, remote, bgdl, offline }
 }
 
 /// What a build is and what it offers, for the Check for Updates action.
 ///
-/// Much lighter than planning: the download manifest only, so pressing the
-/// button costs one manifest rather than the whole prelude a download needs.
+/// The download manifest only, not the whole prelude.
 pub async fn offerings(
     http: Option<Http>,
     code: ProductCode,
@@ -70,7 +78,6 @@ pub async fn offerings(
     let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
     let options = InstallOptions {
         region,
-        flavor: code.install_dir().into_owned(),
         optional_tags,
         ..InstallOptions::default()
     };
@@ -89,9 +96,7 @@ pub async fn offerings(
 
 /// Ask GitHub whether a newer Lightforge exists.
 ///
-/// Runs beside the splash's artwork fetch. Answers `None` for every reason
-/// not to interrupt someone: the check is off, no connection, GitHub errors,
-/// the list does not parse, or this is already the newest build.
+/// Beside the splash's fetch. `None` for every reason not to interrupt.
 pub async fn check_for_update(
     http: Option<Http>,
     enabled: bool,
@@ -101,14 +106,21 @@ pub async fn check_for_update(
     if !enabled || cfg!(debug_assertions) {
         return None;
     }
-    latest_release(http?).await.ok().flatten()
+    match latest_release(http?).await {
+        Ok(found) => {
+            tracing::info!("update check: {}", found.as_ref().map_or("up to date", |_| "a newer release exists"));
+            found
+        }
+        Err(e) => {
+            tracing::warn!("update check failed: {e}");
+            None
+        }
+    }
 }
 
 /// The same question, asked because someone pressed the button in Settings.
 ///
-/// Unlike the start-up check it says why when it cannot answer, and it runs
-/// in a development build too: pressing the button is the request, not an
-/// interruption.
+/// Says why when it cannot answer, and runs in a development build too.
 pub async fn check_for_update_now(
     http: Option<Http>,
 ) -> Result<Option<lightforge_core::update::Available>, String> {
@@ -125,10 +137,7 @@ async fn latest_release(http: Http) -> Result<Option<lightforge_core::update::Av
     // check, so the ETag is what keeps a start from costing two of it.
     let cache = ETagCache::new(dirs.asset_cache_dir().join("lightforge-releases.json"));
     let releases = update::fetch(&http, &cache).await.map_err(|e| e.to_string())?;
-    // `LIGHTFORGE_PRETEND_VERSION` is for development, like
-    // `LIGHTFORGE_OS_RELEASE`: a build that calls itself older is offered
-    // the real newest release, which is the only way to walk an update
-    // through before the next one exists.
+    // For development: pretend to be older to be offered the newest release.
     let running = std::env::var("LIGHTFORGE_PRETEND_VERSION")
         .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_owned());
     let found = update::newer_than(&running, &releases);
@@ -141,8 +150,7 @@ async fn latest_release(http: Http) -> Result<Option<lightforge_core::update::Av
 
 /// Read the client's cached catalogue, for the game families in it.
 ///
-/// About 25 ms against a real cache, and only at startup: the answer changes
-/// when Blizzard publishes a new title, not while the launcher is open.
+/// About 25 ms, at startup only.
 pub async fn game_families(layout: Layout, user: String, region: Region) -> Families {
     tokio::task::spawn_blocking(move || Families::read(&layout, &user, region))
         .await
@@ -150,7 +158,7 @@ pub async fn game_families(layout: Layout, user: String, region: Region) -> Fami
 }
 
 /// The product codes Battle.net's own config lists, so the catalog can use
-/// the codes the client uses rather than the ones our table happens to carry.
+/// the codes the client uses, not the ones our table happens to carry.
 pub async fn known_codes(layout: Layout, user: String) -> Vec<String> {
     tokio::task::spawn_blocking(move || {
         lightforge_core::battlenet::known_product_codes(&layout, &user)
@@ -161,10 +169,8 @@ pub async fn known_codes(layout: Layout, user: String) -> Vec<String> {
 
 /// Index Battle.net's registry by every name a record answers to.
 ///
-/// The registry is keyed by install key, the tiles by CDN code, and the two
-/// differ for Hearthstone (`hs_beta` vs `hsb`), which left it reading Install
-/// forever. A record with no version is skipped: Agent writes the row before
-/// the download finishes.
+/// Install key and CDN code (`hs_beta`, `hsb`). A record with no version is
+/// skipped: Agent writes it before the download finishes.
 pub(crate) fn by_every_name(
     installs: Vec<lightforge_core::tact::productdb::Installed>,
 ) -> HashMap<String, String> {
@@ -179,6 +185,7 @@ pub(crate) fn by_every_name(
     found
 }
 
+/// What Battle.net reports as installed, keyed by product code.
 pub async fn installed_versions(layout: Layout) -> HashMap<String, String> {
     tokio::task::spawn_blocking(move || {
         use lightforge_core::tact::productdb;

@@ -48,31 +48,15 @@ pub enum CoreError {
     },
 }
 
-impl CoreError {
-    /// Attach the offending path to an [`std::io::Error`].
-    ///
-    /// Bare io errors say *what* failed but never *which file*, which is the
-    /// half that actually helps a user debugging a broken prefix.
-    pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
-        Self::Io {
-            path: path.into(),
-            source,
-        }
-    }
-}
-
 /// Render an error together with everything that caused it, as one line.
 ///
-/// `thiserror`'s `Display` prints the variant's own message and nothing else,
-/// so `i/o error at {path}` reaches a bug report having dropped the only part
-/// that says what went wrong. Walking `source` puts it back:
+/// `thiserror`'s `Display` drops the cause; walking `source` puts it back:
 ///
 /// ```text
 /// i/o error at /home/u/games/World of Warcraft: Permission denied (os error 13)
 /// ```
 ///
-/// Used at the crate boundary, where an error stops being a type and becomes a
-/// string for the status line, the bug report and the CLI.
+/// Used where an error becomes a string.
 pub fn chain(error: &dyn std::error::Error) -> String {
     let mut out = error.to_string();
     let mut source = error.source();
@@ -95,10 +79,10 @@ mod tests {
 
     #[test]
     fn a_cause_is_appended_once_however_deep_it_sits() {
-        let error = CoreError::io(
-            "/games/World of Warcraft",
-            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
-        );
+        let error = CoreError::Io {
+            path: "/games/World of Warcraft".into(),
+            source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        };
         assert_eq!(
             chain(&error),
             "i/o error at /games/World of Warcraft: permission denied"

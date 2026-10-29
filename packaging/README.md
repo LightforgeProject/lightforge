@@ -47,18 +47,18 @@ the others do not, the taskbar shows a placeholder instead of the icon.
 ## Building the packages
 
 ```bash
-make release    # the binaries, in a Debian 12 container — see ../Containerfile
+make release    # the binaries, in a Debian 12 container (see ../Containerfile)
 make packages   # tarball + .deb + .rpm + installer + SHA256SUMS, into target/dist/
 ```
 
-`make packages` deliberately does not depend on `make release`: it would
-rebuild 27 MB of GUI three times over to produce three files from the same two
-binaries. Run `release` first; each package target checks the binaries are
-there and says so if they are not.
+`make packages` doesn't run `make release` itself, because that would rebuild
+27 MB of GUI three times to make three files from the same two binaries. Run
+`release` first; each package target checks that the binaries are there and
+says so if they aren't.
 
-Neither `dpkg` nor `rpmbuild` has to exist on the machine doing this —
-`cargo-deb` and `cargo-generate-rpm` write both formats natively, which is
-what makes an Arch box a usable release machine:
+Neither `dpkg` nor `rpmbuild` has to be installed: `cargo-deb` and
+`cargo-generate-rpm` write both formats themselves, so an Arch machine can
+build the release:
 
 ```bash
 cargo install cargo-deb cargo-generate-rpm
@@ -66,14 +66,14 @@ cargo install cargo-deb cargo-generate-rpm
 
 ### Why the version changes shape
 
-`1.0.0-beta.5` is a valid semver prerelease and an invalid package version
-nearly everywhere else.
+`1.0.0-beta.5` is valid semver, but not a valid package version for most
+package managers.
 
 | | |
 | --- | --- |
 | Cargo | `1.0.0-beta.5` |
-| deb / rpm | `1.0.0~beta.5` — `~` sorts *before* `1.0.0`, `-` does not |
-| AUR | `1.0.0beta.5` — hyphens are not allowed at all |
+| deb / rpm | `1.0.0~beta.5`: `~` sorts *before* `1.0.0`, `-` does not |
+| AUR | `1.0.0beta.5`: hyphens are not allowed at all |
 
 `vercmp 1.0.0beta.5 1.0.0` is `-1`, so the Arch version orders correctly too
 and the stable release will need no `epoch`. The Makefile derives the deb and
@@ -94,31 +94,31 @@ podman run --rm -v "$PWD/packaging:/p:Z" registry.fedoraproject.org/fedora:41 \
          appstreamcli validate /p/pro.tuxcore.Lightforge.metainfo.xml'
 ```
 
-All three pass as of 1.0.0-beta.4. `appstreamcli --pedantic` has one remaining
-note — the component id contains capitals — which is a style preference
-(`org.gnome.Software` has them too) and not an error.
+All three passed with 1.0.0-beta.4. `appstreamcli --pedantic` has one
+remaining note, that the component id contains capitals. That's a style
+preference (`org.gnome.Software` has them too), not an error.
 
 ## The public mirror
 
 Upstream is Forgejo, but that instance asks for a login for anything except
 `git clone`: no raw files, no API, no release attachments. A package manager
 cannot download from it, so releases are published to a GitHub mirror and
-everything user-facing — the PKGBUILD sources, the AppStream screenshot, the
-homepage field in both packages — points there.
+everything user-facing (the PKGBUILD sources, the AppStream screenshot, the
+homepage field in both packages) points there.
 
-It fails quietly, which is why it was missed until `1.0.0-beta.2`: an
-anonymous `GET` of a Forgejo raw URL answers **200 with the sign-in page**,
-not 401. A software centre fetching the screenshot that way shows no
-screenshot and no error. Every browser-facing URL in the AppStream file —
-homepage, bugtracker, help, vcs-browser and the screenshot — is therefore a
-`github.com` or `raw.githubusercontent.com` one. The `git clone` URLs in the
-docs stay on Forgejo, because cloning is the one thing that does work.
+It fails silently, so I only noticed with `1.0.0-beta.2`: an anonymous `GET`
+of a Forgejo raw URL returns **200 with the sign-in page**, not 401. A
+software centre fetching the screenshot that way shows no screenshot and no
+error. So every browser-facing URL in the AppStream file (homepage,
+bugtracker, help, vcs-browser and the screenshot) is a `github.com` or
+`raw.githubusercontent.com` one. The `git clone` URLs in the
+docs stay on Forgejo, because cloning works.
 
 Setting it up once:
 
 ```bash
-# an empty repo at github.com/LightforgeProject/lightforge first — no README,
-# no licence, nothing to merge around
+# first create an empty repo at github.com/LightforgeProject/lightforge:
+# no README, no licence, nothing to merge
 git remote add github git@github.com:LightforgeProject/lightforge.git
 git push github main
 ```
@@ -130,8 +130,8 @@ git remote set-url --add --push origin https://git.tuxcore.pro/kenny/lightforge.
 git remote set-url --add --push origin git@github.com:LightforgeProject/lightforge.git
 ```
 
-Forgejo can also do it by itself — **Settings → Mirror Settings → Push
-Mirror**, with a GitHub token that has `repo` scope — which keeps the mirror
+Forgejo can also do this itself under **Settings → Mirror Settings → Push
+Mirror**, with a GitHub token that has `repo` scope. That keeps the mirror
 current even when a push came from somewhere else.
 
 ## Cutting a release
@@ -148,12 +148,11 @@ git push github v1.0.0-beta.5
 gh release create v1.0.0-beta.5 \
   --repo LightforgeProject/lightforge \
   --title 'Lightforge 1.0.0-beta.5' \
-  --prerelease \
   target/dist/*
 ```
 
-Then fill the two `sha256sums` in the PKGBUILDs — they are `SKIP` until the
-tag exists, because the sums are of files GitHub has not generated yet:
+Then fill in the two `sha256sums` in the PKGBUILDs. They stay `SKIP` until the
+tag exists, because they are sums of files GitHub only generates then:
 
 - `lightforge` hashes GitHub's own source archive
   (`.../archive/refs/tags/v1.0.0-beta.5.tar.gz`), which is not byte-identical
@@ -208,11 +207,11 @@ make -f .copr/Makefile srpm outdir=/out spec=packaging/rpm/lightforge.spec
 dnf builddep /out/*.src.rpm && rpmbuild --rebuild /out/*.src.rpm
 ```
 
-## The AUR, when it will have us
+## The AUR
 
 **Not published yet: AUR registrations are closed**, so there is no account to
-upload from. Nothing here is wasted — both PKGBUILDs work today, and until the
-AUR reopens they are the Arch install path:
+upload from. Both PKGBUILDs work today, and until the AUR reopens they are how
+you install on Arch:
 
 ```bash
 git clone https://git.tuxcore.pro/kenny/lightforge.git
@@ -233,10 +232,10 @@ makepkg --printsrcinfo > .SRCINFO     # mandatory, and must match the PKGBUILD
 git add PKGBUILD .SRCINFO && git commit -m 'Lightforge 1.0.0-beta.5' && git push
 ```
 
-`.SRCINFO` is generated rather than written, and is not kept in this repo for
-that reason: it would be a second copy of the PKGBUILD, free to drift.
+`.SRCINFO` is generated from the PKGBUILD, so it isn't kept in this repo; a
+second copy could get out of sync.
 
 ## Flatpak
 
-Not done yet. The pieces it needs — the app id, the desktop entry and the
-AppStream file — are all here and all validate, which was most of the work.
+Not done yet. The app id, the desktop entry and the AppStream file it needs
+are all here and pass validation.

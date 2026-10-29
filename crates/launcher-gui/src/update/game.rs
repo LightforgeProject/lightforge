@@ -2,8 +2,19 @@
 
 use crate::*;
 
+/// How long the env editor waits after the last keystroke before saving.
+const ENV_SAVE_AFTER: std::time::Duration = std::time::Duration::from_millis(750);
+
 impl Lightforge {
     pub(crate) fn update_game(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        self.update_game_version(message)
+            .or_else(|m| self.update_game_settings(m))
+            .or_else(|m| self.update_optional_content(m))
+            .or_else(|m| self.update_backups(m))
+    }
+
+    /// Which build is installed, and modifying an install.
+    fn update_game_version(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
             Message::PickVersion(provider, id, name, installed) => {
                 self.addon_menu_open = None;
@@ -25,10 +36,9 @@ impl Lightforge {
                     |result| Message::VersionsListed(Box::new(result)),
                 )
             }
+
             Message::VersionsListed(result) => {
-                // Dropped on the floor if the picker was closed while the
-                // request was out: an answer to a question nobody is asking
-                // any more.
+                // Dropped if the picker was closed meanwhile.
                 if let Some(picker) = self.version_picker.as_mut() {
                     match *result {
                         Ok(builds) => picker.builds = Some(builds),
@@ -40,10 +50,12 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::CancelVersionPicker => {
                 self.version_picker = None;
                 Task::none()
             }
+
             Message::ShowInExplorer => {
                 self.gear_open = false;
                 let dir = self.layout.wow_install(&self.selected.code);
@@ -52,6 +64,7 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::AskGameVersion => {
                 self.gear_open = false;
                 self.version_dialog = Some(VersionDialog {
@@ -61,10 +74,12 @@ impl Lightforge {
                 });
                 Task::none()
             }
+
             Message::CloseGameVersion => {
                 self.version_dialog = None;
                 Task::none()
             }
+
             Message::AskModifyInstall => {
                 self.gear_open = false;
                 let code = self.selected.code.clone();
@@ -77,16 +92,19 @@ impl Lightforge {
                 });
                 Task::none()
             }
+
             Message::ModifyLocale(locale) => {
                 if let Some(dialog) = self.modify_dialog.as_mut() {
                     dialog.locale = locale;
                 }
                 Task::none()
             }
+
             Message::ModifyCancel => {
                 self.modify_dialog = None;
                 Task::none()
             }
+
             Message::ModifyStart => {
                 let Some(dialog) = self.modify_dialog.take() else {
                     return Ok(Task::none());
@@ -104,6 +122,13 @@ impl Lightforge {
                 // only what the store lacks.
                 self.enqueue_for(dialog.code)
             }
+            other => return Err(other),
+        })
+    }
+
+    /// The Game Settings card: opening it, its switches and its environment editor.
+    fn update_game_settings(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::OpenGameSettings => {
                 self.close_panels();
                 self.game_settings = Some(GameSettings {
@@ -115,10 +140,11 @@ impl Lightforge {
                     note: None,
                     textures_bytes: None,
                     textures: TexturesStep::Idle,
+                    move_to: None,
+                    leftovers: lightforge_core::migrate::leftovers(&self.layout, &self.selected.code),
+                    leftover_confirm: None,
                 });
-                // The manifest says whether this build has textures behind
-                // the option; retail's does not, and a switch for nothing is
-                // not a choice.
+                // Only if the manifest offers it (retail's does not).
                 let code = self.selected.code.clone();
                 Task::batch([
                     self.list_backups(),
@@ -134,6 +160,65 @@ impl Lightforge {
                     ),
                 ])
             }
+
+            Message::CloseGameSettings => {
+                self.game_settings = None;
+                Task::none()
+            }
+
+            Message::FromGameSettings(message) => {
+                self.game_settings = None;
+                self.update(*message)
+            }
+
+            Message::Tweak(scope, which, on) => {
+                self.edit_tweaks(scope, |tweaks| match which {
+                    // `Some`: the default is on, so off must be recorded.
+                    Tweak::GamePerformance => tweaks.game_performance = Some(on),
+                    Tweak::MangoHud => tweaks.mangohud = on,
+                    Tweak::Wayland => tweaks.wayland = on,
+                    Tweak::NvidiaGpu => tweaks.nvidia_gpu = on,
+                    Tweak::Nvapi => tweaks.nvapi = on,
+                });
+                Task::none()
+            }
+
+            Message::EnvEdit(scope, action) => {
+                let editor = match scope {
+                    Scope::Product => &mut self.env_editor,
+                    Scope::BattleNet => &mut self.bnet_env_editor,
+                };
+                let edited = action.is_edit();
+                editor.perform(action);
+                if !edited {
+                    return Ok(Task::none());
+                }
+                // The lines that parse apply as typed; bad ones show under it.
+                let (env, _) = lightforge_core::tweaks::parse_env(&editor.text());
+                self.change_tweaks(scope, |tweaks| tweaks.env = env);
+                // On disk once typing pauses: a save is a full rewrite with
+                // two fsyncs, on this thread.
+                self.env_edits += 1;
+                self.env_unsaved = true;
+                let edit = self.env_edits;
+                Task::perform(async { tokio::time::sleep(ENV_SAVE_AFTER).await }, move |()| {
+                    Message::EnvSettled(edit)
+                })
+            }
+
+            Message::EnvSettled(edit) => {
+                if edit == self.env_edits && self.env_unsaved {
+                    self.save_config();
+                }
+                Task::none()
+            }
+            other => return Err(other),
+        })
+    }
+
+    /// Optional downloads such as the high-resolution textures: sizing, adding, removing.
+    fn update_optional_content(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::OptionalSized(code, result) => {
                 if let (Ok(offerings), Some(settings)) = (&*result, self.game_settings.as_mut()) {
                     if settings.code == code {
@@ -147,12 +232,13 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::OptionalContent(name, on) => {
                 let code = self.selected.code.clone();
                 self.set_optional(&code, &name, on);
                 if on {
-                    // The download is the point of switching it on. Out of the
-                    // popup, onto the page where its bar is.
+                    // Switching it on starts a download: out of the popup,
+                    // onto the page with its bar.
                     self.game_settings = None;
                     return Ok(self.enqueue_for(code));
                 }
@@ -173,6 +259,7 @@ impl Lightforge {
                     |result| Message::OptionalPlanned(result.map(Box::new)),
                 )
             }
+
             Message::OptionalPlanned(result) => {
                 if let Some(settings) = self.game_settings.as_mut() {
                     settings.textures = TexturesStep::Idle;
@@ -191,6 +278,7 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::KeepOptional => {
                 if let Some(settings) = self.game_settings.as_mut() {
                     settings.textures = TexturesStep::Idle;
@@ -200,12 +288,16 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::RemoveOptional => {
                 let Some(code) = self.game_settings.as_ref().map(|s| s.code.clone()) else {
                     return Ok(Task::none());
                 };
                 let busy = self.downloading_into(&self.layout.wow_install(&code));
-                let (layout, settings) = (self.layout.clone(), self.game_settings.as_mut().unwrap());
+                let layout = self.layout.clone();
+                let Some(settings) = self.game_settings.as_mut() else {
+                    return Ok(Task::none());
+                };
                 let TexturesStep::Ask(plan) = std::mem::take(&mut settings.textures) else {
                     return Ok(Task::none());
                 };
@@ -219,6 +311,7 @@ impl Lightforge {
                 settings.textures = TexturesStep::Removing;
                 Task::perform(tasks::optional_remove(layout, code, *plan), Message::OptionalRemoved)
             }
+
             Message::OptionalRemoved(result) => {
                 if let Some(settings) = self.game_settings.as_mut() {
                     settings.textures = TexturesStep::Idle;
@@ -229,14 +322,13 @@ impl Lightforge {
                 }
                 Task::none()
             }
-            Message::CloseGameSettings => {
-                self.game_settings = None;
-                Task::none()
-            }
-            Message::FromGameSettings(message) => {
-                self.game_settings = None;
-                self.update(*message)
-            }
+            other => return Err(other),
+        })
+    }
+
+    /// WTF backups: listing, taking, restoring, deleting.
+    fn update_backups(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::BackupsListed(result) => {
                 // Dropped if the popup closed while the listing was out.
                 if let Some(settings) = self.game_settings.as_mut() {
@@ -250,6 +342,7 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::BackupNow => {
                 let Some(settings) = self.game_settings.as_mut() else {
                     return Ok(Task::none());
@@ -261,18 +354,21 @@ impl Lightforge {
                     Message::BackupFinished,
                 )
             }
+
             Message::AskRestore(archive) => {
                 if let Some(settings) = self.game_settings.as_mut() {
                     settings.confirm = Some((archive, BackupAction::Restore));
                 }
                 Task::none()
             }
+
             Message::AskDeleteBackup(archive) => {
                 if let Some(settings) = self.game_settings.as_mut() {
                     settings.confirm = Some((archive, BackupAction::Delete));
                 }
                 Task::none()
             }
+
             Message::ConfirmDeleteBackup => {
                 let Some(settings) = self.game_settings.as_mut() else {
                     return Ok(Task::none());
@@ -286,13 +382,15 @@ impl Lightforge {
                     Message::BackupFinished,
                 )
             }
+
             Message::CancelRestore => {
                 if let Some(settings) = self.game_settings.as_mut() {
                     settings.confirm = None;
                 }
                 Task::none()
             }
-            Message::ConfirmRestore => {
+
+            Message::ConfirmRestore(account) => {
                 let Some(settings) = self.game_settings.as_mut() else {
                     return Ok(Task::none());
                 };
@@ -301,10 +399,11 @@ impl Lightforge {
                 };
                 settings.working = true;
                 Task::perform(
-                    tasks::restore_backup(self.layout.clone(), settings.code.clone(), archive),
+                    tasks::restore_backup(self.layout.clone(), settings.code.clone(), archive, account),
                     Message::BackupFinished,
                 )
             }
+
             Message::BackupFinished(result) => {
                 let Some(settings) = self.game_settings.as_mut() else {
                     return Ok(Task::none());
@@ -315,34 +414,6 @@ impl Lightforge {
                 // the backup of what it replaced.
                 self.list_backups()
             }
-            Message::Tweak(scope, which, on) => {
-                self.edit_tweaks(scope, |tweaks| match which {
-                    // Stored as an explicit refusal rather than a bare `false`:
-                    // the default is on wherever the tool exists, so "off" has
-                    // to be recorded to survive a restart.
-                    Tweak::GamePerformance => tweaks.game_performance = Some(on),
-                    Tweak::MangoHud => tweaks.mangohud = on,
-                    Tweak::Wayland => tweaks.wayland = on,
-                });
-                Task::none()
-            }
-            Message::EnvEdit(scope, action) => {
-                let editor = match scope {
-                    Scope::Product => &mut self.env_editor,
-                    Scope::BattleNet => &mut self.bnet_env_editor,
-                };
-                let edited = action.is_edit();
-                editor.perform(action);
-                // Saved as it is typed, the lines that parse. A bad line is
-                // shown under the editor and left out of the launch rather
-                // than refusing the rest, so a half-typed name costs nothing.
-                if edited {
-                    let (env, _) = lightforge_core::tweaks::parse_env(&editor.text());
-                    self.edit_tweaks(scope, |tweaks| tweaks.env = env);
-                }
-                Task::none()
-            }
-
             other => return Err(other),
         })
     }

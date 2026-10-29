@@ -4,6 +4,14 @@ use crate::*;
 
 impl Lightforge {
     pub(crate) fn update_launch(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        self.update_play(message)
+            .or_else(|m| self.update_battle_net_launch(m))
+            .or_else(|m| self.update_client(m))
+            .or_else(|m| self.update_install_dialog(m))
+    }
+
+    /// Play and Stop, and watching the game in between.
+    fn update_play(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
             Message::Primary => {
                 // Pressed on a game only being looked at: it joins the band.
@@ -45,139 +53,102 @@ impl Lightforge {
                     }
                 }
             }
-            Message::GameWatch => {
-                if !(self.busy && self.launching.is_some()) {
-                    return Ok(Task::none());
+
+            Message::GameStarted(result) => match result {
+                Ok(tasks::Started::Up { game, generation }) => self.game_up(game, Some(generation)),
+                Ok(tasks::Started::Over(note)) => self.update(Message::Launched(Ok(note))),
+                Err(e) => self.update(Message::Launched(Err(e))),
+            },
+
+            Message::GameExited(code, result) => {
+                self.playing.retain(|s| s.code != code);
+                if self.stop_dialog.as_ref().is_some_and(|d| d.code == code) {
+                    self.stop_dialog = None;
                 }
-                Task::perform(tasks::game_running(self.layout.clone()), Message::GameSeen)
-            }
-            Message::GameSeen(up) => {
-                // A scan that was out when the session ended must not bring
-                // the button back.
-                self.game_up = up && self.busy && self.launching.is_some();
-                Task::none()
-            }
-            Message::AskStopGame => {
-                if !self.game_up || self.stopping {
-                    return Ok(Task::none());
-                }
-                let code = self.launching.clone().unwrap_or_else(|| self.selected.code.clone());
-                let label = self
-                    .choices
-                    .iter()
-                    .find(|c| c.code == code)
-                    .map(|c| c.label.clone())
-                    .unwrap_or_else(|| code.as_str().to_owned());
-                self.stop_dialog = Some(StopDialog { label });
-                Task::none()
-            }
-            Message::StopGameDismiss => {
-                self.stop_dialog = None;
-                Task::none()
-            }
-            Message::StopGameConfirm => {
-                self.stop_dialog = None;
-                if !self.game_up || self.stopping {
-                    return Ok(Task::none());
-                }
-                self.stopping = true;
-                self.status = "stopping the game…".to_owned();
-                Task::perform(tasks::stop_game(self.layout.clone()), Message::GameStopped)
-            }
-            Message::GameStopped(result) => {
-                // The launch's own watcher sees the process go and sends
-                // `Launched`, which is what hands PLAY back; this only
-                // reports how the stop went.
-                self.stopping = false;
-                self.game_up = false;
                 match result {
                     Ok(note) => self.status = note,
                     Err(e) => self.error = Some(e),
                 }
+                self.after_play(code)
+            }
+
+            Message::AskStopGame => {
+                let code = self.selected.code.clone();
+                if !self.session(&code).is_some_and(|s| !s.stopping) {
+                    return Ok(Task::none());
+                }
+                self.stop_dialog = Some(StopDialog { label: self.label_of(&code), code });
                 Task::none()
             }
-            Message::Launched(result) => {
-                self.game_up = false;
-                self.stopping = false;
+
+            Message::StopGameDismiss => {
                 self.stop_dialog = None;
+                Task::none()
+            }
+
+            Message::StopGameConfirm => {
+                let Some(dialog) = self.stop_dialog.take() else {
+                    return Ok(Task::none());
+                };
+                let Some(session) = self.playing.iter_mut().find(|s| s.code == dialog.code && !s.stopping) else {
+                    return Ok(Task::none());
+                };
+                session.stopping = true;
+                let game = session.game.clone();
+                self.status = "stopping the game…".to_owned();
+                let code = dialog.code;
+                Task::perform(tasks::stop_game(self.layout.clone(), game), move |result| {
+                    Message::GameStopped(code.clone(), result)
+                })
+            }
+
+            Message::GameStopped(code, result) => {
+                // The exit watcher's `GameExited` hands PLAY back; this only reports.
+                match result {
+                    Ok(note) => self.status = note,
+                    Err(e) => {
+                        // Still up: STOP is offered again.
+                        if let Some(session) = self.playing.iter_mut().find(|s| s.code == code) {
+                            session.stopping = false;
+                        }
+                        self.error = Some(e);
+                    }
+                }
+                Task::none()
+            }
+
+            Message::Launched(result) => {
                 self.busy = false;
                 let launched = self.launching.take().unwrap_or_else(|| self.selected.code.clone());
                 match result {
                     Ok(note) => self.status = note,
                     Err(e) => self.error = Some(e),
                 }
-                // A launch may have paused transfers, its own product through
-                // pre-flight's guard, and the rest of the queue through the
-                // setting. Both are owed a restart, and resuming means
-                // planning afresh.
-                for code in std::mem::take(&mut self.resume_after_play) {
-                    if let Some(at) = self.queue.iter().position(|d| d.code == code) {
-                        self.queue[at].stage = Stage::Queued;
-                        self.queue[at].sample.stage = "queued".to_owned();
-                    }
-                }
-                let owed = self.downloads.pending().contains(&launched);
-                if owed {
-                    if let Some(at) = self.queue.iter().position(|d| d.code == launched) {
-                        self.queue[at].stage = Stage::Queued;
-                    }
-                }
-                // A Battle.net session may have filled a cache that was
-                // empty when the app started, the first non-WoW install in
-                // a prefix is exactly when its catalogue first appears. It is
-                // 25 ms of reading, so it costs less than remembering not to.
-                Task::batch([
-                    self.pump(),
-                    self.reload(self.selected.code.clone()),
-                    Task::perform(
-                        tasks::game_families(
-                            self.layout.clone(),
-                            self.config.prefix_user.clone(),
-                            self.config.region,
-                        ),
-                        |families| Message::FamiliesRead(Box::new(families)),
-                    ),
-                    // And what it has installed: an install handed over to
-                    // Battle.net finishes in Battle.net, so Agent's registry
-                    // is the only thing that knows it happened.
-                    Task::perform(
-                        tasks::installed_versions(self.layout.clone()),
-                        Message::InstalledVersions,
-                    ),
-                ])
+                self.after_play(launched)
             }
+            other => return Err(other),
+        })
+    }
+
+    /// Going through Battle.net: hand-offs, the client itself, and the pre-flight before it.
+    fn update_battle_net_launch(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::HandoffStarted(result) => {
                 match result {
-                    // Found it. `busy` stays set and the queue stays paused
-                    // for the length of the session, exactly as a direct
-                    // launch does, the whole point of watching.
+                    // The paused queue lasts the session, as on PLAY.
                     Ok(tasks::Handoff::Playing(game)) => {
-                        self.status = format!(
-                            "{} is running — this unlocks when it exits",
-                            game.name,
-                        );
-                        // Not when the hand-off started: the client's window
-                        // and its sign-in are things the user is meant to see.
-                        Task::batch([
-                            Task::perform(
-                                tasks::await_game_exit(self.layout.clone(), game),
-                                Message::Launched,
-                            ),
-                            self.minimize_if_asked(),
-                        ])
+                        // Minimized only now, not when the hand-off started: the
+                        // client's window and its sign-in are meant to be seen.
+                        // The client stays up, so the prefix is not settled after.
+                        Task::batch([self.game_up(game, None), self.minimize_if_asked()])
                     }
-                    // The client is up and waiting on a person, two-factor,
-                    // an outage, an update of its own. Said plainly, with the
-                    // client left running so it can be finished there.
-                    // Closed while we were waiting for it to sign in. Not a
-                    // failure to report as one, just nothing to hand off to.
+                    // Closed while signing in: nothing to hand off to.
                     Ok(tasks::Handoff::ClientClosed) => self.update(Message::Launched(Ok(
                         "Battle.net was closed before the game could start".to_owned(),
                     ))),
                     Ok(tasks::Handoff::NeedsAttention { minimized }) => {
-                        // Where it is matters as much as that it needs
-                        // something: a client started minimized is in the
-                        // tray, and "its window" is not on screen to look at.
+                        // Waiting on a person (two-factor, an update); left
+                        // running, and said where: a minimized client is in the tray.
                         self.update(Message::Launched(Ok(match minimized {
                             true => "Battle.net needs attention — open it from the tray, \
                                      finish there and press Play"
@@ -194,18 +165,22 @@ impl Lightforge {
                     Err(e) => self.update(Message::Launched(Err(e))),
                 }
             }
+
             Message::BattleNet => {
                 self.track_selected();
                 self.preflight(Launch::BattleNet)
             }
+
             Message::InstallViaBattleNet => {
                 self.track_selected();
                 self.preflight(Launch::Install)
             }
+
             Message::OpenBattleNet => {
                 self.track_selected();
                 self.preflight(Launch::Client)
             }
+
             Message::PreflightDone(what, result) => {
                 if let Err(e) = result {
                     self.busy = false;
@@ -213,10 +188,7 @@ impl Lightforge {
                     self.error = Some(e);
                     return Ok(self.pump());
                 }
-                // Pre-flight trips the paused downloads' tokens and returns;
-                // the runs themselves are still flushing what was in flight
-                // and checkpointing their indices. The client opening the
-                // store under them is the overlap this whole gate exists for.
+                // Paused runs still checkpoint; the client must not open the store yet.
                 if self.launch_must_wait() {
                     self.launch_when_quiet = Some(what);
                     self.status = "pre-flight… waiting for the download to pause".to_owned();
@@ -224,12 +196,14 @@ impl Lightforge {
                 }
                 self.start_launch(what)
             }
+
             Message::ManageSubscription => {
                 if let Err(e) = tasks::open_url(ACCOUNT_URL) {
                     self.error = Some(e.into());
                 }
                 Task::none()
             }
+
             Message::OpenFiles => {
                 let dir = self.layout.product_dir(&self.selected.code);
                 let dir = if dir.is_dir() { dir } else { self.layout.games_root() };
@@ -238,6 +212,88 @@ impl Lightforge {
                 }
                 Task::none()
             }
+            other => return Err(other),
+        })
+    }
+
+    /// The Battle.net client itself while it runs: seeing it, showing it,
+    /// quitting it.
+    fn update_client(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
+            Message::ClientWatch => self.check_client(),
+
+            Message::ClientSeen(up) => {
+                self.client_up = up;
+                if !up {
+                    self.client_menu_open = false;
+                }
+                Task::none()
+            }
+
+            Message::ToggleClientMenu => {
+                self.client_menu_open = !self.client_menu_open;
+                Task::none()
+            }
+
+            Message::ShowBattleNet => {
+                self.client_menu_open = false;
+                // No pre-flight: it would close the client this is meant to
+                // show. A second invocation hands it the request over IPC.
+                Task::perform(
+                    tasks::open_battle_net(
+                        self.layout.clone(),
+                        self.selected.code.clone(),
+                        self.config.prefix_user.clone(),
+                    ),
+                    Message::BattleNetShown,
+                )
+            }
+
+            Message::BattleNetShown(result) => {
+                if let Err(e) = result {
+                    self.error = Some(e);
+                }
+                self.check_client()
+            }
+
+            Message::AskQuitBattleNet => {
+                self.client_menu_open = false;
+                Task::perform(tasks::running_games(self.layout.clone()), Message::QuitBattleNetChecked)
+            }
+
+            Message::QuitBattleNetChecked(games) => match games.is_empty() {
+                true => self.quit_client(),
+                false => {
+                    self.quit_client_dialog = Some(QuitClientDialog { games });
+                    Task::none()
+                }
+            },
+
+            Message::QuitBattleNetDismiss => {
+                self.quit_client_dialog = None;
+                Task::none()
+            }
+
+            Message::QuitBattleNetConfirm => {
+                self.quit_client_dialog = None;
+                self.quit_client()
+            }
+
+            Message::BattleNetQuit(result) => {
+                self.quitting_client = false;
+                match result {
+                    Ok(note) => self.status = note,
+                    Err(e) => self.error = Some(e),
+                }
+                self.check_client()
+            }
+            other => return Err(other),
+        })
+    }
+
+    /// The install dialog, and the downgrade warning in front of a launch.
+    fn update_install_dialog(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
             Message::InstallOffered(code, result) => {
                 if let Ok(offerings) = result.as_ref() {
                     self.remember_optional(&code, offerings.optional.clone());
@@ -250,12 +306,14 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::InstallHighRes(on) => {
                 if let Some(dialog) = self.install_dialog.as_mut() {
                     dialog.high_res = on;
                 }
                 Task::none()
             }
+
             Message::InstallTarget(index) => {
                 if let Some(dialog) = self.install_dialog.as_mut() {
                     if index < dialog.targets.len() {
@@ -264,15 +322,19 @@ impl Lightforge {
                 }
                 Task::none()
             }
+
             Message::InstallCancel => {
                 self.install_dialog = None;
                 Task::none()
             }
+
             Message::InstallStart => self.start_install(),
+
             Message::DowngradeCancel => {
                 self.downgrade_dialog = None;
                 Task::none()
             }
+
             Message::DowngradeConfirm => {
                 let Some(dialog) = self.downgrade_dialog.take() else {
                     return Ok(Task::none());
@@ -282,7 +344,6 @@ impl Lightforge {
                 self.downgrade_ok.insert(dialog.pick);
                 self.preflight(dialog.what)
             }
-
             other => return Err(other),
         })
     }

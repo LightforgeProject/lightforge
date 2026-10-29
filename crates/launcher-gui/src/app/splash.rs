@@ -11,14 +11,9 @@ impl Lightforge {
         // Nothing is fetched yet: the cache-only pass `reload` starts beside
         // this decides whether anything needs to be. See `splash_decide`.
         Task::batch([
-            // The window is the launcher's size but only the card is painted,
-            // so the rest of it is a transparent rectangle that would still
-            // swallow every click landing on whatever is behind it. On
-            // Wayland this sets a real empty input region, not a hint.
+            // The transparent rest of the window must not swallow clicks.
             iced::window::oldest().and_then(iced::window::enable_mouse_passthrough),
-            // Beside the artwork rather than before it: this is the one moment
-            // a start is already waiting on the network, and nothing on screen
-            // depends on the answer, so it never holds the splash open.
+            // Alongside the art; it never holds the splash open.
             Task::perform(
                 tasks::check_for_update(self.http.clone(), self.config.check_for_updates),
                 Message::UpdateChecked,
@@ -29,12 +24,8 @@ impl Lightforge {
     /// The splash's one decision, made when the selected game's cache-only
     /// pass lands: close, or wait for the network.
     ///
-    /// The splash exists so nobody sees a grey launcher, so it closes early
-    /// only when the cache already holds everything the first screen draws,
-    /// decoded and in state by now. The revalidation `reload` started runs
-    /// on behind the launcher and swaps in whatever changed, exactly as on a
-    /// product switch. Anything missing, or a first run, whose wizard counts
-    /// off the prefetch, waits for the full fetch as it always has.
+    /// Early only when the cache holds all the first screen draws; the
+    /// revalidation goes on behind. Otherwise, and on a first run, it waits.
     pub(crate) fn splash_decide(&mut self, warm: bool) -> Task<Message> {
         let Some(splash) = self.splash.as_mut().filter(|s| !s.decided) else {
             return Task::none();
@@ -62,11 +53,7 @@ impl Lightforge {
             Some(left) if !left.is_zero() => {
                 Task::perform(tasks::after(left), |()| Message::FinishSplash)
             }
-            // Both ways out go through `finish_splash` and nothing else. An
-            // earlier version did the work in two places, and the two copies
-            // drifted: the one taken whenever the fetch outlasts the floor,
-            // which is every start with anything to fetch, missed a step the
-            // other had.
+            // The only way out is `finish_splash`.
             _ => self.finish_splash(),
         }
     }
@@ -74,12 +61,8 @@ impl Lightforge {
     /// Put the release notes up, if this start is the first one on this
     /// version.
     ///
-    /// Four conditions, and each one is a case that should not see a popup:
-    /// setup must be finished (a first run has the wizard to get through, and
-    /// notes for a version nothing has been done with yet say nothing); the
-    /// checkbox must not have been ticked; the notes must not already have
-    /// been seen for this version; and the shipped file must actually describe
-    /// this version, which a development build between releases does not.
+    /// Only after setup, unless muted or already seen, and when the shipped
+    /// notes describe this version.
     pub(crate) fn open_patch_notes(&mut self) {
         let version = env!("CARGO_PKG_VERSION");
         if !self.config.setup_complete
@@ -93,27 +76,15 @@ impl Lightforge {
         }
     }
 
-    /// Turn the splash window into the launcher's own.
-    ///
-    /// Put the splash away and show the launcher.
-    ///
-    /// The one way out of the splash, reached whether the fetch outlasted
-    /// [`SPLASH_FLOOR`] or the floor outlasted the fetch. There is deliberately
-    /// no second copy of this: when there were two, they drifted.
-    ///
-    /// Nothing is resized or moved, the window has been the launcher's size
-    /// and in the middle of the screen since it was mapped (see [`main`]).
-    /// All that changes is that the frame goes on, the window starts taking
-    /// clicks again, and `view` stops drawing the card.
+    /// Put the splash away and show the launcher: the one way out. Nothing is
+    /// resized (see [`main`]); the frame goes on and clicks come back.
     pub(crate) fn finish_splash(&mut self) -> Task<Message> {
         self.splash = None;
         trace::mark("splash done, showing the launcher");
         self.open_patch_notes();
         let console = self.console();
         let frame = iced::window::oldest().and_then(move |id| {
-            // iced reads the frame's live state and inverts it, so given a
-            // window mapped without one, this is "put it on". A console's
-            // window goes fullscreen instead, where a frame has no place.
+            // A toggle, from a window without one; a console goes fullscreen.
             let frame = match console {
                 true => Task::none(),
                 false => iced::window::toggle_decorations(id),
@@ -124,9 +95,7 @@ impl Lightforge {
             true => frame.chain(self.window_mode()),
             false => frame,
         };
-        // Nobody ever *navigates* to the opening screen, so `arrived` has
-        // never run for it. Through the same function the navigation uses, so
-        // every page has one definition of what it wants on the way in.
+        // Nobody navigated to the opening screen, so `arrived` runs here.
         Task::batch([frame, self.arrived()])
     }
 
@@ -137,14 +106,12 @@ impl Lightforge {
         const SPIN: f32 = 30.0;
         let note = match splash.products {
             // No tracked products at all is a machine that has never been set
-            // up, which is a wizard away rather than an artwork fetch.
+            // up, which is a wizard away, not an artwork fetch.
             0 => "Getting ready…".to_owned(),
             1 => "Fetching artwork for 1 game…".to_owned(),
             n => format!("Fetching artwork for {n} games…"),
         };
-        // The card, at [`SPLASH`]'s size. `theme::menu` rather than
-        // `theme::floating`: floating is 12% transparent, which over a
-        // transparent window means the desktop showing through the splash.
+        // `theme::menu`: `floating` would show the desktop through it.
         let card = container(
             column![
                 image(wordmark_image())
@@ -160,12 +127,7 @@ impl Lightforge {
         .height(Length::Fixed(SPLASH.height))
         .style(theme::menu);
 
-        // Centred on a window the size of the launcher, with **no background
-        // of its own**: the window was created `transparent`, so everything
-        // around the card is see-through and what anyone sees is a small
-        // panel in the middle of their screen. Painting a backdrop here
-        // instead would show a full-size empty launcher, which is the thing
-        // the splash exists to avoid.
+        // **No background**: around the card the window is see-through.
         container(card).center(Length::Fill).into()
     }
 }

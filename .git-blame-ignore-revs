@@ -1,0 +1,43 @@
+# Comment-only commits, skipped by git blame.
+# git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# doc: fix misplaced doc comments
+771d4aec2963576c844714b5326ede8b84e22b23
+
+# docs: trim battlenet comments
+3044f46ae52e0a70b7b502b647177ca55c5088ee
+
+# docs: trim prefix, proton and preflight comments
+253e470a1872757be5ad86ee24b7b40beec6192e
+
+# docs: trim tact writer, idx, storage, archive and download comments
+b9cddf789b602dbba594522ef535e7d089cd0ea2
+1c0a10be8016a1db39d245bfa52cca64e5e499f0
+52fec03d80398cf38147df171221d7da4e6a5dd5
+
+# docs: trim tact manifest, verify, reclaim, cdn, version and plan comments
+e8fa35c8f155f4eedcb14e9137319d5909e04ba2
+3809218a11a7ab80cc97f114c2ffbc7f5fec38e6
+a4635073a3bfc171cad0450cf08b0a8fe971013c
+
+# docs: trim tact productdb, encoding, install, config, explain and remaining comments
+b1b1cf2575b3d83e29c7c84bc149681b4bfbb8e1
+747714807be466591392a9f494f771a9c16e1958
+3f81abd9347e615747c778e7bd090e7435a83a9d
+
+# docs: trim addons comments
+3b2f6716d091d58387d4ba94c3c2eedc70d6e785
+54fca39770cc9d94fef92d1f0eebed86334848dc
+
+# docs: trim assets, paths and storage comments
+50540b71f38a3203ce33d14a5662b1f4125e054f
+6a90c22cf75ae3d1660a0d3ce76e4b7053cd9c66
+
+# docs: trim remaining core comments
+e3aa76ed8740e5142ec8b35889f3d3642cb41874
+
+# docs: trim gui comments
+dee60b359687a6336a19072987308fe059b836ff
+
+# docs: finish comment trim and drop filler phrases
+979ff4d6a63f86a7a389670dacb0e9c3809e286d

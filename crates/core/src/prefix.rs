@@ -1,16 +1,13 @@
 //! Prefix lifecycle: creation via Proton, and the POSIX symlink that puts the
 //! game inside a Windows-shaped path.
 //!
-//! Everything here runs Proton the way Steam does, the `proton` entry-point
-//! script with `STEAM_COMPAT_DATA_PATH` and `STEAM_COMPAT_CLIENT_INSTALL_PATH`
-//! in the environment, rather than reaching for a system `wine` binary. That
-//! keeps the prefix byte-identical to one Steam would have produced, which is
-//! what makes an imported install and a Lightforge-created one interchangeable.
+//! Proton runs the way Steam runs it, the `proton` script with
+//! `STEAM_COMPAT_DATA_PATH` and `STEAM_COMPAT_CLIENT_INSTALL_PATH` set, never
+//! a system `wine`, so the prefix matches one Steam would have made.
 //!
-//! Proton owns the directory naming: it always creates the Wine prefix at
-//! `$STEAM_COMPAT_DATA_PATH/pfx`. [`crate::paths::Layout::compat_data`] is
-//! therefore the value handed to Proton, and [`crate::paths::Layout::prefix`]
-//! is the `pfx` directory inside it.
+//! Proton always puts the Wine prefix at `$STEAM_COMPAT_DATA_PATH/pfx`:
+//! [`crate::paths::Layout::compat_data`] is what Proton is handed, and
+//! [`crate::paths::Layout::prefix`] is the `pfx` inside it.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -23,13 +20,13 @@ use crate::proton::ProtonRelease;
 /// `files/`; older builds and some forks ship `dist/`.
 const DIST_DIRS: &[&str] = &["files", "dist"];
 
-/// Assembles and runs Proton against Lightforge's shared prefix.
-///
-/// Cheap to construct and free of side effects until [`ProtonRunner::run`] is
-/// called, so [`ProtonRunner::command`] can be asserted against in tests
-/// without Wine anywhere in the picture.
+/// Assembles and runs Proton against Lightforge's shared prefix. Nothing
+/// happens until [`ProtonRunner::run`], so tests can inspect
+/// [`ProtonRunner::command`] without Wine.
 #[derive(Debug, Clone)]
 pub struct ProtonRunner {
+    /// The build's own name for itself, `GE-Proton11-7`.
+    version: String,
     entry_point: PathBuf,
     dist: PathBuf,
     compat_data: PathBuf,
@@ -47,16 +44,13 @@ pub struct ProtonRunner {
 }
 
 impl ProtonRunner {
-    /// Run `release` against the prefix described by `layout`.
-    ///
-    /// `steam_client` is what Proton is told to treat as the Steam client
-    /// install, the user's real Steam root when they have one, otherwise a
-    /// Lightforge-owned stub directory (see
-    /// [`ProtonRunner::steam_client_path`]). Proton only consults it for
-    /// `steamclient.dll` plumbing that Lightforge never exercises, but the
-    /// variable being unset makes some builds bail out early.
+    /// Run `release` against the prefix described by `layout`. `steam_client`
+    /// is the Steam root Proton is told about (see
+    /// [`ProtonRunner::steam_client_path`]); unused, but some builds bail
+    /// out when it is unset.
     pub fn new(release: &ProtonRelease, layout: &Layout, steam_client: impl Into<PathBuf>) -> Self {
         Self {
+            version: release.version.clone(),
             entry_point: release.entry_point(),
             dist: dist_dir(&release.path),
             compat_data: layout.compat_data(),
@@ -69,12 +63,8 @@ impl ProtonRunner {
         }
     }
 
-    /// The Steam client path to hand Proton: the real Steam root if Steam is
-    /// installed, else a Lightforge-owned stub under its data directory.
-    ///
-    /// Proton is not a Steam dependency for Lightforge's purposes, so a missing
-    /// Steam install must not be fatal, but the variable still has to point
-    /// somewhere that exists.
+    /// The Steam client path to hand Proton: the real Steam root if there is
+    /// one, else a stub under the data directory. It only has to exist.
     pub fn steam_client_path(
         steam: Option<&crate::steam::SteamRoot>,
         dirs: &crate::paths::AppDirs,
@@ -85,13 +75,18 @@ impl ProtonRunner {
         }
     }
 
-    /// Keep one product's DXVK and VKD3D shader caches in `dir`.
+    /// Keep one product's shader caches in `dir`: DXVK's and VKD3D's in it,
+    /// the NVIDIA and Mesa drivers' in `nvidia` and `mesa` under it.
     ///
-    /// Left alone, DXVK writes to `%LOCALAPPDATA%\dxvk` inside the prefix.
-    /// Here both sit beside Lightforge's other caches, where Storage can size
-    /// and clear them per product.
+    /// Otherwise DXVK writes into the prefix and the drivers into `~/.cache`,
+    /// shared with every program; here Storage can size and clear them per
+    /// product. Creating the directories may fail; that only costs the cache.
     pub fn with_shader_cache(mut self, dir: impl Into<PathBuf>) -> Self {
-        self.shader_cache = Some(dir.into());
+        let dir = dir.into();
+        for driver in [NVIDIA_CACHE, MESA_CACHE] {
+            let _ = std::fs::create_dir_all(dir.join(driver));
+        }
+        self.shader_cache = Some(dir);
         self
     }
 
@@ -108,9 +103,8 @@ impl ProtonRunner {
     }
 
     /// Run Proton inside the Steam Linux Runtime whose `_v2-entry-point` this
-    /// is. Its libraries replace the host's, and it sees only what it is
-    /// told to: the prefix, the mounts, the Proton build, and the program's
-    /// own directory.
+    /// is. It sees only the prefix, the mounts, the Proton build and the
+    /// program's own directory.
     pub fn in_container(mut self, entry_point: impl Into<PathBuf>) -> Self {
         self.container = Some(entry_point.into());
         self
@@ -121,12 +115,10 @@ impl ProtonRunner {
         self.container.is_some()
     }
 
-    /// Run alongside a session the prefix already has, rather than after it.
-    ///
-    /// In a container a plain run becomes `waitforexitandrun`, which waits
-    /// for the prefix's wineserver to exit first. Right for the call that
-    /// becomes the client, and a hang for one that only hands a running
-    /// client its arguments: measured, it waited until the client was closed.
+    /// Join a session the prefix already has. In a container a plain run is
+    /// `waitforexitandrun`, which waits for the prefix's wineserver to exit:
+    /// right for the call that becomes the client, a hang (measured, until
+    /// the client closed) for one that hands a running client its arguments.
     pub fn joining_session(mut self) -> Self {
         self.joins_session = true;
         self
@@ -169,36 +161,39 @@ impl ProtonRunner {
             }
         };
         cmd.arg(verb).arg(program).args(args);
+        // In the program's own folder, as Windows starts it: the client
+        // writes `Logs/cpu.log` relative to it, which otherwise lands in
+        // whatever directory the launcher was started from.
+        if let Some(dir) = Path::new(program).parent().filter(|dir| dir.is_absolute() && dir.is_dir()) {
+            cmd.current_dir(dir);
+        }
 
         cmd.env("STEAM_COMPAT_DATA_PATH", &self.compat_data);
         cmd.env("STEAM_COMPAT_CLIENT_INSTALL_PATH", &self.steam_client);
         if !mounts.is_empty() {
             cmd.env("STEAM_COMPAT_MOUNTS", join_paths(&mounts));
         }
-        // Proton keys parts of its runtime state off the app id. Lightforge
-        // isn't a Steam app, so pin a stable placeholder instead of letting
-        // each build invent its own.
+        // Proton keys runtime state off the app id; pin a stable placeholder.
         cmd.env("SteamAppId", "0");
-        // Never a game id, not even an empty one: under GE-Proton11-9 the
-        // variable being set at all hangs `wineboot -u` for good (measured,
-        // 11-7 is fine). Removed rather than left unset, because Steam puts
-        // its own into this process when it starts the launcher.
+        // No `SteamGameId`, not even empty: GE-Proton11-9 hangs `wineboot -u`
+        // while it is set (11-7 is fine). Removed, since Steam sets its own
+        // when it starts the launcher.
         cmd.env_remove("SteamGameId");
-        // Pointers at somebody else's Wine. Proton appends to these rather
-        // than replacing them, so a stray `WINEDLLPATH` in the user's shell
-        // makes the build load another Wine's DLLs against its own unix side
-        // (`unimplemented function win32u...`, aborting). Nothing a user sets
-        // for their own wine means anything to a Proton build. The tweaks in
-        // `self.env` below are applied after this and still win.
-        for var in FOREIGN_WINE_VARS {
+        // Proton appends to these, so a stray `WINEDLLPATH` loads another
+        // Wine's DLLs (`unimplemented function win32u...`). `self.env` is
+        // applied after and still wins.
+        for var in FOREIGN_WINE_VARS.iter().chain(&FOREIGN_PYTHON_VARS) {
             cmd.env_remove(var);
         }
-        // The names the DXVK (3.1) and VKD3D-Proton in GE-Proton11-7 read.
-        // The older `DXVK_STATE_CACHE_PATH` went with DXVK's state cache and
-        // is not read by that build at all.
+        // The names DXVK 3.1 and VKD3D-Proton in GE-Proton11-7 read.
         if let Some(cache) = &self.shader_cache {
             cmd.env("DXVK_SHADER_CACHE_PATH", cache);
             cmd.env("VKD3D_SHADER_CACHE_PATH", cache);
+            cmd.env("__GL_SHADER_DISK_CACHE_PATH", cache.join(NVIDIA_CACHE));
+            // Otherwise the driver trims to a size cap, and a trimmed pipeline
+            // stutters next time; the per-product Clear button is the limit.
+            cmd.env("__GL_SHADER_DISK_CACHE_SKIP_CLEANUP", "1");
+            cmd.env("MESA_SHADER_CACHE_DIR", cache.join(MESA_CACHE));
         }
         for (key, value) in &self.env {
             cmd.env(key, value);
@@ -206,13 +201,12 @@ impl ProtonRunner {
         cmd
     }
 
-    /// Run a program in the prefix and wait for it, failing on a non-zero exit.
-    /// Proton's runtime directory, `files` or `dist`, whichever this build
-    /// ships. The wine binaries and `wineserver` live under its `bin`.
+    /// Proton's runtime directory, `files` or `dist`, holding `bin/wineserver`.
     pub fn dist(&self) -> &Path {
         &self.dist
     }
 
+    /// Run a program in the prefix and wait for it, failing on a non-zero exit.
     pub fn run<I, S>(&self, program: impl AsRef<OsStr>, args: I) -> Result<(), PrefixError>
     where
         I: IntoIterator<Item = S>,
@@ -220,28 +214,45 @@ impl ProtonRunner {
     {
         self.prepare()?;
         let program = program.as_ref().to_os_string();
-        let output = self
-            .command("run", &program, args)
-            .stdin(Stdio::null())
+        let mut command = self.command("run", &program, args);
+        command.stdin(Stdio::null());
+        tracing::info!("running in the prefix: {command:?}");
+        let started = std::time::Instant::now();
+        let output = command
             .output()
             .map_err(|e| PrefixError::Spawn { program: self.entry_point.clone(), source: e })?;
 
         if output.status.success() {
+            tracing::info!(
+                "{} finished in {:.1}s",
+                program.to_string_lossy(),
+                started.elapsed().as_secs_f64()
+            );
             return Ok(());
         }
-        Err(PrefixError::Command {
-            program: program.to_string_lossy().into_owned(),
-            code: output.status.code(),
-            stderr: tail(&output.stderr),
-        })
+        let full = String::from_utf8_lossy(&output.stderr);
+        // Five lines: an error message that still fits on screen.
+        let stderr = crate::text::tail_lines(&full, 5);
+        tracing::error!(
+            "{} exited with {:?} after {:.1}s; stderr tail: {}",
+            program.to_string_lossy(),
+            output.status.code(),
+            started.elapsed().as_secs_f64(),
+            stderr.trim(),
+        );
+        let program = program.to_string_lossy().into_owned();
+        // Wine's own program calling into Wine's own DLLs: in one build every
+        // call is there, so a missing one means two builds' files in one
+        // folder (GlitchTip #33, a GE-Proton11-7 holding an older win32u).
+        // Not for a Windows program, which can call what Wine never implemented.
+        if program == "wineboot" && full.contains("to unimplemented function") {
+            return Err(PrefixError::MixedBuild { version: self.version.clone(), build: self.build().to_path_buf() });
+        }
+        Err(PrefixError::Command { program, code: output.status.code(), stderr })
     }
 
-    /// Create the prefix if it doesn't exist, or update an existing one.
-    ///
-    /// `wineboot -u` is idempotent: on a fresh compat-data directory Proton
-    /// builds the prefix from scratch, and on an existing one it refreshes the
-    /// managed DLLs a Proton version change may have invalidated. Returns
-    /// whether the prefix had to be created.
+    /// Create the prefix, or refresh an existing one's DLLs after a Proton
+    /// change (`wineboot -u` does both). Returns whether it was created.
     pub fn wineboot_update(&self) -> Result<bool, PrefixError> {
         let created = !is_initialized(&self.prefix());
         self.run("wineboot", ["-u"])?;
@@ -252,12 +263,9 @@ impl ProtonRunner {
         Ok(created)
     }
 
-    /// Shut the prefix's `wineserver` down and wait for it to exit.
-    ///
-    /// Invoked directly out of Proton's runtime rather than through the
-    /// `proton` script, which has no verb for it. A prefix with a live
-    /// wineserver holds locks on the registry and on `.build.info`'s directory,
-    /// so this is the gate every mutation runs behind.
+    /// Shut the prefix's `wineserver` down and wait for it to exit. Run from
+    /// Proton's runtime directly: the `proton` script has no verb for it. A
+    /// live wineserver holds the registry, so every mutation waits for this.
     pub fn wineserver_kill(&self) -> Result<(), PrefixError> {
         let wineserver = self.dist.join("bin").join("wineserver");
         if !wineserver.is_file() {
@@ -266,17 +274,22 @@ impl ProtonRunner {
 
         let output = Command::new(&wineserver)
             .arg("-k")
-            // -w waits for the server to actually go away; without it the next
-            // command can race a prefix that is still tearing down.
+            // Wait for the server to go, or the next command races the teardown.
             .arg("-w")
             .env("WINEPREFIX", self.prefix())
             .stdin(Stdio::null())
             .output()
             .map_err(|e| PrefixError::Spawn { program: wineserver.clone(), source: e })?;
 
-        // A prefix with no running server exits non-zero; that is the desired
-        // end state, not a failure, so the status is deliberately dropped.
-        drop(output);
+        // Still `Ok`, the next pre-flight scans the prefix itself, but a
+        // refusal is worth a line in a bug report.
+        if !server_gone(output.status, &output.stderr) {
+            tracing::warn!(
+                "wineserver -k -w exited with {:?}: {}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
         Ok(())
     }
 
@@ -286,23 +299,28 @@ impl ProtonRunner {
             return Err(PrefixError::MissingRuntime(self.entry_point.clone()));
         }
         for dir in [&self.compat_data, &self.steam_client] {
-            std::fs::create_dir_all(dir)
-                .map_err(|e| PrefixError::Io { path: dir.clone(), source: e })?;
+            std::fs::create_dir_all(dir).map_err(io(dir))?;
         }
         Ok(())
     }
 }
 
 /// Variables that point a Wine at another Wine's files, dropped from every
-/// Proton run. `WINEPREFIX` and the `WINEDLLOVERRIDES`/`WINEESYNC` family are
-/// deliberately not here: Proton sets the first itself and users tune the rest.
+/// Proton run. Not `WINEPREFIX` (Proton sets it) nor `WINEDLLOVERRIDES` and
+/// `WINEESYNC` (users tune those).
 const FOREIGN_WINE_VARS: [&str; 3] = ["WINEDLLPATH", "WINELOADER", "WINESERVER"];
 
-/// Every library's games folder, the default one first.
-///
-/// A container sees only what it is shown, and its wineserver serves the
-/// whole prefix: a game on another drive, started on the host while the
-/// client runs in the container, is still opened through it.
+/// `proton` is a Python script: a conda or venv shell makes it import another
+/// Python's standard library and die. `LD_*` stay: overlays and capture tools
+/// come in through them.
+const FOREIGN_PYTHON_VARS: [&str; 3] = ["PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP"];
+
+/// The GL/Vulkan drivers' own caches, inside a product's shader cache.
+const NVIDIA_CACHE: &str = "nvidia";
+const MESA_CACHE: &str = "mesa";
+
+/// Every library's games folder, the default one first. A container's
+/// wineserver serves the whole prefix, so it must see games on every drive.
 fn games_mounts(layout: &Layout) -> Vec<PathBuf> {
     let mut mounts = vec![layout.games_root()];
     for library in layout.libraries().all() {
@@ -338,13 +356,6 @@ fn join_paths(paths: &[PathBuf]) -> OsString {
     out
 }
 
-/// Last few lines of a child's stderr, for an error message that fits on screen.
-fn tail(stderr: &[u8]) -> String {
-    let text = String::from_utf8_lossy(stderr);
-    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-    lines[lines.len().saturating_sub(5)..].join("\n")
-}
-
 /// What the Windows-visible game path currently is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkState {
@@ -352,31 +363,36 @@ pub enum LinkState {
     Correct,
     /// Nothing at the link path.
     Missing,
-    /// A symlink pointing at the right place, where the right place is not
-    /// there yet: a library with no game downloaded into it, or a `games/`
-    /// that was wiped. The link itself is correct and Wine resolves it the
-    /// moment the directory appears, so there is nothing to repair.
+    /// A correct symlink whose target does not exist yet (nothing downloaded,
+    /// or `games/` wiped). Wine resolves it once the directory appears.
     Pending(PathBuf),
     /// A symlink pointing somewhere else entirely.
     Mislinked(PathBuf),
     /// A real, empty directory, typically created by an installer that ran
     /// before the link existed. Safe to replace.
     OccupiedEmpty,
-    /// A real directory with contents, or a file. Never touched automatically:
-    /// this is someone's game install sitting in the disposable prefix.
+    /// A real directory with contents, or a file: someone's install inside
+    /// the prefix. Never touched automatically.
     Occupied,
 }
 
 impl LinkState {
-    /// Whether the prefix can be launched from as-is.
-    ///
-    /// [`Self::Pending`] counts: the link is right, and the directory it names
-    /// appears with the first download. Setup is finished either way, and
-    /// holding it open until a game is installed would make a first run loop.
+    /// Whether the prefix can be launched from as-is. [`Self::Pending`]
+    /// counts, or a first run would loop in setup until a game is installed.
     pub fn is_usable(&self) -> bool {
         matches!(self, Self::Correct | Self::Pending(_))
     }
 
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Correct => "ok".to_owned(),
+            Self::Missing => "missing".to_owned(),
+            Self::Pending(t) => format!("ok -> {} (not downloaded yet)", t.display()),
+            Self::Mislinked(t) => format!("points at {}", t.display()),
+            Self::OccupiedEmpty => "empty directory in the way".to_owned(),
+            Self::Occupied => "a real directory with files in it".to_owned(),
+        }
+    }
 }
 
 /// Classify what sits at `link` relative to the intended `target`.
@@ -394,8 +410,7 @@ pub fn inspect_link(link: &Path, target: &Path) -> LinkState {
     let Ok(dest) = std::fs::read_link(link) else {
         return LinkState::Pending(PathBuf::new());
     };
-    // Compare resolved paths where possible so `games/` reached through a
-    // symlinked home still counts as correct.
+    // Resolved paths, so `games/` through a symlinked home still counts.
     let same = dest == target
         || matches!(
             (dest.canonicalize(), target.canonicalize()),
@@ -411,34 +426,25 @@ pub fn inspect_link(link: &Path, target: &Path) -> LinkState {
 
 /// Create or repair the symlink, returning the state found beforehand.
 ///
-/// The **target is not created**. A symlink into a not-yet-downloaded install
-/// is the normal pre-install state and Wine resolves it the moment the
-/// directory appears, so conjuring the directory here buys nothing and costs
-/// a real one: an empty `World of Warcraft/` in every library the moment a
-/// prefix is built. That folder is indistinguishable from a broken install, it
-/// occupies the name an install found elsewhere would be linked or adopted
-/// into, and a product whose library holds one reads as `Install` rather than
-/// `Play`. The downloader creates the directory it writes into.
+/// The target is **not created**: an empty `World of Warcraft/` looks like a
+/// broken install, takes the name an adopted install would use, and makes
+/// the product read as Install. The downloader creates it.
 pub fn ensure_link(link: &Path, target: &Path) -> Result<LinkState, PrefixError> {
     let before = inspect_link(link, target);
 
     if let Some(parent) = link.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| PrefixError::Io { path: parent.to_path_buf(), source: e })?;
+        std::fs::create_dir_all(parent).map_err(io(parent))?;
     }
 
     match &before {
         LinkState::Correct | LinkState::Pending(_) => return Ok(before),
         LinkState::Occupied => return Err(PrefixError::LinkOccupied(link.to_path_buf())),
-        LinkState::Mislinked(_) => std::fs::remove_file(link)
-            .map_err(|e| PrefixError::Io { path: link.to_path_buf(), source: e })?,
-        LinkState::OccupiedEmpty => std::fs::remove_dir(link)
-            .map_err(|e| PrefixError::Io { path: link.to_path_buf(), source: e })?,
+        LinkState::Mislinked(_) => std::fs::remove_file(link).map_err(io(link))?,
+        LinkState::OccupiedEmpty => std::fs::remove_dir(link).map_err(io(link))?,
         LinkState::Missing => {}
     }
 
-    std::os::unix::fs::symlink(target, link)
-        .map_err(|e| PrefixError::Io { path: link.to_path_buf(), source: e })?;
+    std::os::unix::fs::symlink(target, link).map_err(io(link))?;
     Ok(before)
 }
 
@@ -450,12 +456,8 @@ pub struct PrefixStatus {
     /// Wine has written its registry hives, the prefix is usable.
     pub initialized: bool,
     /// The Proton build that last created or upgraded this prefix, as Proton
-    /// itself recorded it. `None` before the prefix exists.
-    ///
-    /// Worth carrying next to `initialized`: the prefix is shared by every
-    /// product, and which build made it is what says whether a pin is a
-    /// routine upgrade or a downgrade of everything, see
-    /// [`crate::proton::prefix_fit`].
+    /// recorded it. Decides whether a pin is an upgrade or a downgrade of
+    /// every product's prefix; see [`crate::proton::prefix_fit`].
     pub built_by: Option<String>,
     pub link: LinkState,
 }
@@ -484,20 +486,31 @@ impl PrefixStatus {
     }
 }
 
-/// Create the prefix if needed and put the symlink in place.
+/// Whether `wineserver -k -w` left the prefix without a server.
 ///
-/// Ordering matters: the prefix has to exist before anything can be linked into
-/// `drive_c`, and Wine must be finished writing before the link is created, or
-/// `wineboot` can replace the link with a real directory of its own.
+/// Measured on GE-Proton11-7: a server it stopped exits 0, no server at all
+/// exits 1 and says nothing, and a refusal also exits 1 but says why on
+/// stderr (`wineserver: / is not owned by you`).
+fn server_gone(status: std::process::ExitStatus, stderr: &[u8]) -> bool {
+    status.success() || (status.code() == Some(1) && stderr.iter().all(u8::is_ascii_whitespace))
+}
+
+/// Create the prefix if needed, then the symlink: linked earlier, `wineboot`
+/// can replace the link with a real directory.
 pub fn provision(runner: &ProtonRunner, layout: &Layout) -> Result<PrefixStatus, PrefixError> {
-    // A prefix about to be built from nothing can still have a server from the
-    // one that stood there before, possibly another Proton build's: a deleted
-    // directory does not stop its processes, and the new one can inherit the
-    // old one's socket. The scan only matches processes whose environment
-    // names this prefix, so nobody else's Wine is touched. Best effort, and
-    // skipped on an existing prefix, where a running client is the user's.
+    // A deleted prefix's wineserver keeps running, and a new prefix in its
+    // place can inherit its socket. The scan only matches processes naming
+    // this prefix. Skipped for an existing prefix: its client is the user's.
     if !is_initialized(&runner.prefix()) {
-        let _ = crate::preflight::shutdown(runner, layout, crate::preflight::DEFAULT_GRACE);
+        if let Err(e) = crate::preflight::shutdown(runner, layout, crate::preflight::DEFAULT_GRACE) {
+            tracing::warn!("could not stop what the old prefix left running: {}", crate::error::chain(&e));
+        }
+        // Judge by the outcome: wineboot beside a leftover server hangs.
+        let left = crate::preflight::scan(layout);
+        if !left.is_empty() {
+            let names = left.into_iter().map(|p| format!("{} (pid {})", p.name, p.pid));
+            return Err(PrefixError::Busy(names.collect()));
+        }
     }
     runner.wineboot_update()?;
     runner.wineserver_kill()?;
@@ -513,18 +526,13 @@ pub fn provision(runner: &ProtonRunner, layout: &Layout) -> Result<PrefixStatus,
 /// * for the default library, the `C:\Program Files (x86)` symlink, the path
 ///   already-adopted installs have recorded.
 ///
-/// A [`library::State::Missing`] library is skipped entirely: `ensure_link`
-/// creates its target, so relinking an unmounted drive would conjure an empty
-/// games directory, and an empty install makes the client offer a repair.
+/// A [`crate::library::State::Missing`] library is skipped: relinking an unmounted
+/// drive would create an empty games directory under the mount point.
 pub fn link_libraries(layout: &Layout) -> Result<(), PrefixError> {
     for library in layout.libraries().all() {
-        // A library that has never been set up is set up here, which is what
-        // makes a first run work: the first library comes out of the config
-        // migration unclaimed, and setup is the moment it becomes real. Only
-        // ever from `New`, which means there is no marker to adopt, so the
-        // id stays the one the config holds, and the `claimed` flag the clone
-        // gains is redundant rather than lost: a marker that matches reads as
-        // `Ready` whatever the flag says.
+        // A first run's library comes out of the config migration unclaimed;
+        // setup claims it. Only from `New`: there is no marker to adopt, so
+        // the config's id stands.
         let mut library = library.clone();
         if library.state() == crate::library::State::New {
             library.claim().map_err(|e| match e {
@@ -566,8 +574,14 @@ pub enum PrefixError {
     #[error("`{program}` failed{}{}", match code { Some(c) => format!(" (exit {c})"), None => " (killed by signal)".to_owned() }, if stderr.is_empty() { String::new() } else { format!(":\n{stderr}") })]
     Command { program: String, code: Option<i32>, stderr: String },
 
+    #[error("{version} at {build} holds files from two Proton versions: Wine called functions its own files do not have")]
+    MixedBuild { version: String, build: PathBuf },
+
     #[error("Proton ran but left no usable prefix at {0}")]
     NotInitialized(PathBuf),
+
+    #[error("the old prefix still has processes running, so a new one cannot be built: {}", .0.join(", "))]
+    Busy(Vec<String>),
 
     #[error("{0} is a real directory with files in it, not a symlink — move or remove it first")]
     LinkOccupied(PathBuf),
@@ -580,10 +594,28 @@ pub enum PrefixError {
     },
 }
 
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> PrefixError + '_ {
+    move |source| PrefixError::Io { path: path.to_path_buf(), source }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::proton::{ProtonFlavor, ProtonSource};
+
+    #[test]
+    fn only_a_silent_exit_1_from_wineserver_means_no_server() {
+        use std::os::unix::process::ExitStatusExt;
+        let exit = |code: i32| std::process::ExitStatus::from_raw(code << 8);
+
+        assert!(server_gone(exit(0), b""));
+        assert!(server_gone(exit(1), b""));
+        assert!(server_gone(exit(1), b"\n"));
+        assert!(!server_gone(exit(1), b"wineserver: / is not owned by you\n"));
+        assert!(!server_gone(exit(2), b""));
+        assert!(!server_gone(std::process::ExitStatus::from_raw(9), b""), "killed by a signal");
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("lightforge-prefix-{name}"));
@@ -601,6 +633,37 @@ mod tests {
             built_at: None,
         };
         ProtonRunner::new(&release, &Layout::with_root(root.join("Blizzard")), root.join("Steam"))
+    }
+
+    /// A `proton` that prints what a mixed build printed for GlitchTip #33,
+    /// and fails the way it did.
+    fn mixed_build(name: &str) -> ProtonRunner {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = scratch(name);
+        let script = root.join("GE-Proton11-7").join("proton");
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(
+            &script,
+            "#!/bin/sh\necho 'ntsync: up and running.' >&2\n\
+             echo 'wine: Call from 00006FFFFF4EE164 to unimplemented function \
+             win32u.NtGdiDdDDIQueryFSEBlock, aborting' >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        runner(&root)
+    }
+
+    #[test]
+    fn wineboot_hitting_a_missing_wine_function_names_the_mixed_build() {
+        let error = mixed_build("mixed-wineboot").run("wineboot", ["-u"]).unwrap_err();
+        assert!(matches!(error, PrefixError::MixedBuild { ref version, .. } if version == "GE-Proton11-7"), "{error:?}");
+    }
+
+    #[test]
+    fn a_windows_program_hitting_a_missing_wine_function_is_not_blamed_on_the_build() {
+        let error = mixed_build("mixed-installer").run("Battle.net-Setup.exe", Vec::<&str>::new()).unwrap_err();
+        assert!(matches!(error, PrefixError::Command { .. }), "{error:?}");
     }
 
     fn env_of(cmd: &Command, key: &str) -> Option<String> {
@@ -676,14 +739,30 @@ mod tests {
 
     #[test]
     fn shader_cache_is_only_set_when_a_product_asks_for_one() {
-        let root = Path::new("/scratch");
-        let plain = runner(root).command("run", "wineboot", ["-u"]);
-        let pinned = runner(root).with_shader_cache("/cache/dxvk/wow").command("run", "wineboot", ["-u"]);
-        for key in ["DXVK_SHADER_CACHE_PATH", "VKD3D_SHADER_CACHE_PATH"] {
+        let root = scratch("shader-cache");
+        let cache = root.join("cache/dxvk/wow");
+        let plain = runner(&root).command("run", "wineboot", ["-u"]);
+        let pinned = runner(&root).with_shader_cache(&cache).command("run", "wineboot", ["-u"]);
+        let expected = [
+            ("DXVK_SHADER_CACHE_PATH", cache.clone()),
+            ("VKD3D_SHADER_CACHE_PATH", cache.clone()),
+            ("__GL_SHADER_DISK_CACHE_PATH", cache.join("nvidia")),
+            ("MESA_SHADER_CACHE_DIR", cache.join("mesa")),
+        ];
+        for (key, dir) in expected {
             assert!(env_of(&plain, key).is_none(), "{key}");
-            assert_eq!(env_of(&pinned, key).as_deref(), Some("/cache/dxvk/wow"), "{key}");
+            assert_eq!(env_of(&pinned, key).map(PathBuf::from), Some(dir), "{key}");
         }
         assert!(env_of(&pinned, "DXVK_STATE_CACHE_PATH").is_none());
+    }
+
+    #[test]
+    fn driver_caches_exist_before_the_launch() {
+        let root = scratch("driver-caches");
+        let cache = root.join("cache/dxvk/wow");
+        let _ = runner(&root).with_shader_cache(&cache);
+        assert!(cache.join("nvidia").is_dir());
+        assert!(cache.join("mesa").is_dir());
     }
 
     #[test]
@@ -755,6 +834,21 @@ mod tests {
     }
 
     #[test]
+    fn a_program_runs_in_its_own_folder() {
+        // The client writes `Logs/cpu.log` relative to it; issue #3 found one
+        // in a user's home directory.
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("World of Warcraft/_classic_era_");
+        std::fs::create_dir_all(&game).unwrap();
+
+        let cmd = runner(root.path()).command("run", game.join("WowClassic.exe"), Vec::<String>::new());
+        assert_eq!(cmd.get_current_dir(), Some(game.as_path()));
+
+        let bare = runner(root.path()).command("run", "wineboot", ["-u"]);
+        assert_eq!(bare.get_current_dir(), None, "a bare name has no folder to run in");
+    }
+
+    #[test]
     fn proton_is_never_handed_a_game_id() {
         // Set at all, even empty, it hangs a GE-Proton11-9 prefix creation.
         let cmd = runner(Path::new("/scratch")).command("run", "wineboot", ["-u"]);
@@ -772,6 +866,17 @@ mod tests {
         }
         let overrides = cmd.get_envs().any(|(k, _)| k == OsStr::new("WINEDLLOVERRIDES"));
         assert!(!overrides, "user tuning is left alone, not listed");
+    }
+
+    #[test]
+    fn a_shells_python_is_not_handed_to_the_proton_script() {
+        let cmd = runner(Path::new("/scratch")).command("run", "wineboot", ["-u"]);
+        for var in ["PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP"] {
+            let seen: Vec<_> = cmd.get_envs().filter(|(k, _)| *k == OsStr::new(var)).collect();
+            assert_eq!(seen, [(OsStr::new(var), None)], "{var} removed");
+        }
+        let preload = cmd.get_envs().any(|(k, _)| k == OsStr::new("LD_PRELOAD") || k == OsStr::new("LD_LIBRARY_PATH"));
+        assert!(!preload, "overlays and capture tools still reach the game");
     }
 
     #[test]
@@ -855,9 +960,8 @@ mod tests {
         assert!(full.join("Data").is_dir());
     }
 
-    /// The drive is what makes the in-game shop render, so it is worth a test
-    /// of its own rather than being assumed from `provision`: which cannot be
-    /// tested here, since it runs Proton.
+    /// The drive is what makes the in-game shop render; `provision` runs
+    /// Proton, so it is tested here on its own.
     #[test]
     fn the_wow_drive_is_a_dosdevices_link_to_the_install() {
         let dir = scratch("wow-drive");
@@ -872,9 +976,8 @@ mod tests {
         assert_eq!(link.parent().unwrap().file_name().unwrap(), "dosdevices");
         assert_eq!(std::fs::read_link(&link).unwrap(), install);
 
-        // Idempotent: provisioning runs on every launch. `Pending` rather than
-        // `Correct` because nothing has been downloaded into the library yet,
-        // and linking deliberately does not create the install directory.
+        // Idempotent: provisioning runs on every launch. `Pending`: nothing
+        // is downloaded yet, and linking does not create the install directory.
         assert!(!install.exists());
         assert_eq!(
             ensure_link(&layout.wow_drive(&main), &install).unwrap(),
@@ -888,11 +991,9 @@ mod tests {
         assert_eq!(std::fs::read_link(layout.games_drive(&main)).unwrap(), main.games());
     }
 
-    /// The reason [`link_libraries`] exists: a drive that is not mounted must
-    /// not have anything created under it. `ensure_link` creates its target,
-    /// so a relink of an absent library would leave an empty games directory
-    /// on whatever filesystem holds the mount point, and an empty install is
-    /// what makes the client offer a repair.
+    /// A drive that is not mounted gets nothing created under it, or the
+    /// mount point's filesystem gains an empty games directory and the client
+    /// offers a repair.
     #[test]
     fn a_missing_library_is_not_linked_or_created() {
         use crate::library::{Libraries, Library};

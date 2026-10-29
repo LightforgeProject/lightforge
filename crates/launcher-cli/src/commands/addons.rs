@@ -1,15 +1,15 @@
 //! Addons and settings backups.
 
+use super::truncate;
 use crate::*;
 
-pub(crate) async fn addon_adopt(ctx: Ctx, product: String, path: Option<PathBuf>, ledger: Option<PathBuf>, catalog: Option<String>) -> Result<()> {
+pub(crate) async fn addon_adopt(ctx: Ctx, code: ProductCode, path: Option<PathBuf>, ledger: Option<PathBuf>, catalog: Option<String>) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::addons::catalog::Catalog;
     use lightforge_core::addons::manage;
     use lightforge_core::addons::{self};
     use lightforge_core::net::Http;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let dir = path.unwrap_or_else(|| layout.addons_dir(&code));
     let options = manage::Options {
@@ -46,7 +46,7 @@ pub(crate) async fn addon_adopt(ctx: Ctx, product: String, path: Option<PathBuf>
     Ok(())
 }
 
-pub(crate) async fn addon_fingerprints(ctx: Ctx, product: String, path: Option<PathBuf>, catalog: Option<String>) -> Result<()> {
+pub(crate) async fn addon_fingerprints(ctx: Ctx, code: ProductCode, path: Option<PathBuf>, catalog: Option<String>) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::addons::catalog::Catalog;
     use lightforge_core::addons::install::Ledger;
@@ -54,7 +54,6 @@ pub(crate) async fn addon_fingerprints(ctx: Ctx, product: String, path: Option<P
     use lightforge_core::addons::{self, fingerprint};
     use lightforge_core::net::Http;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let dir = path.unwrap_or_else(|| layout.addons_dir(&code));
     let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &dir, &code))
@@ -62,7 +61,7 @@ pub(crate) async fn addon_fingerprints(ctx: Ctx, product: String, path: Option<P
 
     // What the catalog says each folder of each installed build
     // should hash to, gathered per addon so the comparison below is
-    // a lookup rather than a guess.
+    // a lookup, not a guess.
     let mut expected: std::collections::BTreeMap<String, u32> = Default::default();
     if let Some(origin) = addon_origin(catalog.as_deref(), &dirs) {
         let client = Catalog::new(origin);
@@ -85,7 +84,7 @@ pub(crate) async fn addon_fingerprints(ctx: Ctx, product: String, path: Option<P
     println!("{:<32} {:>12} {:>12}", "folder", "computed", "published");
     let mut checked = 0;
     let mut agreed = 0;
-    for addon in addons::scan(&dir).unwrap_or_default() {
+    for addon in addons::scan(&dir, &addons::Client::default()).unwrap_or_default() {
         let computed = fingerprint::of_folder(&dir.join(&addon.folder));
         let published = expected.get(&addon.folder).copied();
         let verdict = match (computed, published) {
@@ -116,17 +115,28 @@ pub(crate) async fn addon_fingerprints(ctx: Ctx, product: String, path: Option<P
     Ok(())
 }
 
-pub(crate) fn addons(ctx: Ctx, product: String, path: Option<PathBuf>, token: Option<String>) -> Result<()> {
+pub(crate) fn addons(ctx: Ctx, code: ProductCode, path: Option<PathBuf>, token: Option<String>) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::addons;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dir = path.unwrap_or_else(|| layout.addons_dir(&code));
-    let installed = addons::scan(&dir)
+    let version = BuildInfo::load(layout.build_info(&code))
+        .ok()
+        .and_then(|info| info.get(&code, lightforge_core::buildinfo::COL_VERSION).ok().map(str::to_owned));
+    let client = addons::Client::of(&code, version.as_deref());
+    let installed = addons::scan(&dir, &client)
         .with_context(|| format!("reading {}", dir.display()))?;
 
     println!("addons dir      {}", dir.display());
-    println!("installed       {}\n", installed.len());
+    println!("installed       {}", installed.len());
+    if let Some(interface) = client.interface {
+        let stale = installed.iter().filter(|a| a.out_of_date).count();
+        println!("out of date     {stale}, for interface {interface}");
+    }
+    for (folder, dep) in addons::missing_dependencies(&installed) {
+        println!("missing         {dep}, which {folder} needs");
+    }
+    println!();
 
     for addon in &installed {
         let ids: Vec<String> = addon
@@ -135,10 +145,11 @@ pub(crate) fn addons(ctx: Ctx, product: String, path: Option<PathBuf>, token: Op
             .map(|(provider, id)| format!("{}:{id}", provider.as_str()))
             .collect();
         println!(
-            "{:<34} {:<18} {}",
+            "{:<34} {:<18} {}{}",
             addon.folder,
             addon.version.as_deref().unwrap_or("-"),
-            ids.join(" ")
+            ids.join(" "),
+            if addon.out_of_date { "  (out of date)" } else { "" },
         );
     }
 
@@ -173,11 +184,10 @@ pub(crate) fn addons(ctx: Ctx, product: String, path: Option<PathBuf>, token: Op
     Ok(())
 }
 
-pub(crate) async fn addon_search(query: String, product: String, limit: usize, catalog: Option<String>) -> Result<()> {
+pub(crate) async fn addon_search(query: String, code: ProductCode, limit: usize, catalog: Option<String>) -> Result<()> {
     use lightforge_core::addons::{self, browse, catalog::Catalog};
     use lightforge_core::net::Http;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let catalog = addon_origin(catalog.as_deref(), &dirs).map(Catalog::new);
     let http = Http::new()?;
@@ -212,12 +222,11 @@ pub(crate) async fn addon_search(query: String, product: String, limit: usize, c
     Ok(())
 }
 
-pub(crate) async fn addon_install(ctx: Ctx, id: String, provider: String, product: String, catalog: Option<String>) -> Result<()> {
+pub(crate) async fn addon_install(ctx: Ctx, id: String, provider: String, code: ProductCode, catalog: Option<String>) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::addons::{self, catalog::Catalog, catalog::Request, manage};
     use lightforge_core::net::Http;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let catalog = addon_origin(catalog.as_deref(), &dirs).map(Catalog::new);
     let options = manage::Options {
@@ -246,12 +255,11 @@ pub(crate) async fn addon_install(ctx: Ctx, id: String, provider: String, produc
     Ok(())
 }
 
-pub(crate) async fn addon_import(ctx: Ctx, token: String, product: String, catalog: Option<String>, pinned: bool, dry_run: bool) -> Result<()> {
+pub(crate) async fn addon_import(ctx: Ctx, token: String, code: ProductCode, catalog: Option<String>, dry_run: bool) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::addons::{self, catalog::Catalog, manage};
     use lightforge_core::net::Http;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let collection = addons::Collection::parse(&read_token(&token)?)?;
 
@@ -278,7 +286,7 @@ pub(crate) async fn addon_import(ctx: Ctx, token: String, product: String, catal
         flavor: addons::flavor_of(&code).to_owned(),
         addons_dir: layout.addons_dir(&code),
         ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code),
-        pinned,
+        pinned: false,
         reinstall: false,
         channel: addon_channel(&dirs),
         backup: Some(settings_backup(&layout, &dirs, &code)),
@@ -323,12 +331,11 @@ pub(crate) async fn addon_import(ctx: Ctx, token: String, product: String, catal
     Ok(())
 }
 
-pub(crate) async fn addon_update(ctx: Ctx, product: String, catalog: Option<String>) -> Result<()> {
+pub(crate) async fn addon_update(ctx: Ctx, code: ProductCode, catalog: Option<String>) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::addons::{self, catalog::Catalog, manage};
     use lightforge_core::net::Http;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let catalog = addon_origin(catalog.as_deref(), &dirs).map(Catalog::new);
     let options = manage::Options {
@@ -350,9 +357,8 @@ pub(crate) async fn addon_update(ctx: Ctx, product: String, catalog: Option<Stri
     Ok(())
 }
 
-pub(crate) fn backup_list(ctx: Ctx, product: String) -> Result<()> {
+pub(crate) fn backup_list(ctx: Ctx, code: ProductCode) -> Result<()> {
     let Ctx { layout, .. } = ctx;
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let plan = settings_backup(&layout, &dirs, &code);
     let backups = plan.list().context("reading backups")?;
@@ -369,13 +375,15 @@ pub(crate) fn backup_list(ctx: Ctx, product: String) -> Result<()> {
             b.size as f64 / 1048576.0,
             b.name(),
         );
+        if !b.accounts.is_empty() {
+            println!("    accounts: {}", b.accounts.join(", "));
+        }
     }
     Ok(())
 }
 
-pub(crate) fn backup_create(ctx: Ctx, product: String) -> Result<()> {
+pub(crate) fn backup_create(ctx: Ctx, code: ProductCode) -> Result<()> {
     let Ctx { layout, .. } = ctx;
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let plan = settings_backup(&layout, &dirs, &code);
     match plan.create(backup::Reason::Manual).context("backing up")? {
@@ -386,9 +394,8 @@ pub(crate) fn backup_create(ctx: Ctx, product: String) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn backup_restore(ctx: Ctx, which: String, product: String) -> Result<()> {
+pub(crate) fn backup_restore(ctx: Ctx, which: String, code: ProductCode, account: Option<String>) -> Result<()> {
     let Ctx { layout, .. } = ctx;
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let running = lightforge_core::preflight::games_running(&layout);
     if !running.is_empty() {
@@ -401,19 +408,24 @@ pub(crate) fn backup_restore(ctx: Ctx, which: String, product: String) -> Result
         Err(_) => backups.iter().find(|b| b.name() == which),
     }
     .with_context(|| format!("no backup {which}; see `lightforge backup-list`"))?;
-    let safety = plan.restore(chosen).context("restoring")?;
-    println!("restored {} ({})", chosen.name(), chosen.when());
+    let safety = match &account {
+        Some(name) => plan.restore_account(chosen, name).context("restoring")?,
+        None => plan.restore(chosen).context("restoring")?,
+    };
+    match &account {
+        Some(name) => println!("restored {name} from {} ({})", chosen.name(), chosen.when()),
+        None => println!("restored {} ({})", chosen.name(), chosen.when()),
+    }
     if let Some(safety) = safety {
         println!("the replaced settings are in {}", safety.name());
     }
     Ok(())
 }
 
-pub(crate) fn addon_remove(ctx: Ctx, id: String, provider: String, product: String) -> Result<()> {
+pub(crate) fn addon_remove(ctx: Ctx, id: String, provider: String, code: ProductCode) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::addons::{self, manage};
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let options = manage::Options {
         flavor: addons::flavor_of(&code).to_owned(),
@@ -462,4 +474,85 @@ pub(crate) fn addon_token(token: String) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A token given inline, or `@path` to read it from a file, export strings
+/// are long enough that pasting one into a shell is its own hazard.
+fn read_token(token: &str) -> Result<String> {
+    match token.strip_prefix('@') {
+        Some(path) => std::fs::read_to_string(path)
+            .with_context(|| format!("reading {path}"))
+            .map(|s| s.trim().to_owned()),
+        None => Ok(token.trim().to_owned()),
+    }
+}
+
+/// Where this game's settings backups go, and how many it keeps.
+fn settings_backup(layout: &Layout, dirs: &AppDirs, code: &ProductCode) -> backup::Plan {
+    let keep = Config::load_or_default(&dirs.config_file())
+        .map_or(backup::DEFAULT_KEEP, |config| config.backup_keep);
+    backup::Plan::for_product(layout, dirs, code, keep)
+}
+
+/// The configured default addon channel, or stable when there is no config.
+///
+/// The CLI has no settings UI, so it reads the same `addon_channel` the GUI
+/// writes instead of inventing a second default.
+fn addon_channel(dirs: &AppDirs) -> lightforge_core::addons::Channel {
+    Config::load_or_default(&dirs.config_file())
+        .map(|config| config.addon_channel)
+        .unwrap_or_default()
+}
+
+/// Where the addon catalog lives: the flag, else config, else the public
+/// endpoint. A path without a scheme is a fixture directory.
+fn addon_origin(
+    flag: Option<&str>,
+    dirs: &AppDirs,
+) -> Option<lightforge_core::addons::catalog::Origin> {
+    use lightforge_core::addons::catalog::Origin;
+    use lightforge_core::config::Config;
+
+    // A `--catalog` flag wins; otherwise the config decides, and the config
+    // falls back to the built-in proxy, not to nothing.
+    if let Some(source) = flag {
+        return Some(match source.contains("://") {
+            true => Origin::Http(source.to_owned()),
+            false => Origin::Dir(PathBuf::from(source)),
+        });
+    }
+    Some(
+        Config::load_or_default(&dirs.config_file())
+            .map(|c| c.catalog_origin())
+            .unwrap_or_else(|_| Origin::Http(
+                lightforge_core::config::DEFAULT_ADDON_CATALOG.to_owned(),
+            )),
+    )
+}
+
+fn print_addon_event(event: &lightforge_core::addons::manage::Event) {
+    use lightforge_core::addons::manage::Event;
+    match event {
+        Event::Resolving { count } => println!("resolving       {count} addons"),
+        Event::Resolved { ok, unavailable } => {
+            println!("resolved        {ok} available, {unavailable} not\n")
+        }
+        Event::Downloading { name } => println!("  fetching {name}"),
+        Event::Installed { name, folders } => {
+            println!("ok  {:<44} {}", truncate(name, 44), folders.join(", "))
+        }
+        Event::UpToDate { name } => println!("==  {:<44} up to date", truncate(name, 44)),
+        Event::Unavailable { name, reason } => {
+            println!("--  {:<44} {reason}", truncate(name, 44))
+        }
+    }
+}
+
+fn print_addon_report(report: &lightforge_core::addons::manage::Report) {
+    println!(
+        "\ninstalled       {}\nup to date      {}\nunavailable     {}",
+        report.installed.len(),
+        report.up_to_date.len(),
+        report.unavailable.len()
+    );
 }

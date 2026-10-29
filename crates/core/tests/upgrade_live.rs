@@ -1,17 +1,14 @@
 //! Updating against the real release files on GitHub.
 //!
 //! **Ignored by default.** It downloads a published release (about 10 MB)
-//! and reads a PKGBUILD from `main`. Run it deliberately, after a release:
+//! and reads a PKGBUILD from `main`. Run it after a release:
 //!
 //! ```text
 //! cargo test -p lightforge-core --test upgrade_live -- --ignored --nocapture
 //! ```
 //!
-//! The unit tests prove the routes against files they wrote. This proves the
-//! names they look for are the names a release really publishes, and that
-//! its tarball installs. Everything lands in a temporary folder:
-//! `XDG_DATA_HOME` points there too, so the menu entry does not touch the
-//! real one.
+//! Proves a real release has the names the routes look for, and its tarball
+//! installs, all in a temporary folder (`XDG_DATA_HOME` included).
 
 use lightforge_core::net::Http;
 use lightforge_core::upgrade::{self, tarball};

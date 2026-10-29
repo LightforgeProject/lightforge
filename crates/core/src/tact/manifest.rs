@@ -1,8 +1,6 @@
 //! Install and download manifests: *which* files a build wants here.
 //!
-//! Encoding says how a content key is stored and root says which file id it
-//! belongs to, but neither says whether this machine should hold it at all.
-//! That is what these two manifests decide, and they decide it by tag:
+//! Whether this machine should hold a file at all is decided here, by tag:
 //!
 //! - **install** (`IN`), the ~266 loose files that must exist on disk as real
 //!   files for the client to start: `Wow.exe`, `wow_loader.dll`, CEF and its
@@ -13,11 +11,8 @@
 //! Both end in a tag section: a name, a type, and one bit per entry.
 //!
 //! **The bit order is MSB-first within each byte**, and getting it backwards
-//! is silent rather than fatal. `tact_parser::install` reads them LSB-first;
-//! against the real 12.1.0 install that hands the `Windows` tag five macOS
-//! `.app` bundles and drops five Windows files, with no error anywhere. The
-//! check that settles it is that MSB-first gives `Windows` zero `.app` paths
-//! and `OSX` all 195 of them.
+//! fails silently: `tact_parser::install` reads LSB-first and hands `Windows`
+//! five macOS `.app` bundles. MSB-first gives `OSX` all 195 `.app` paths.
 //!
 //! Selection is driven by the `Tags` column of `.build.info`, e.g.
 //!
@@ -26,10 +21,9 @@
 //! ```
 //!
 //! Colon-separated groups are alternatives; within a group every tag must
-//! match. Names the manifest does not define (`acct-AUT`, `geoip-AT`: account
-//! and geoip facts, not file tags) are ignored rather than required, since
-//! requiring them would select nothing. Against the real install that rule
-//! yields 1,574,027 files and 123.0 GiB, matching the store Agent built.
+//! match. Names the manifest does not define (`acct-AUT`, `geoip-AT`) are
+//! ignored. On a real install this selects 1,574,027 files, 123.0 GiB, the
+//! store Agent built.
 
 use super::config::CKey;
 use super::storage::EKey;
@@ -39,7 +33,7 @@ use super::storage::EKey;
 pub struct Tag {
     pub name: String,
     /// Category: 1 platform, 2 architecture, 3 locale, 4 region, 5 speech/text.
-    /// Compared only for grouping; the selection rule never interprets it.
+    /// Only compared, never interpreted.
     pub kind: u16,
     mask: Vec<u8>,
 }
@@ -55,11 +49,14 @@ impl std::fmt::Debug for Tag {
 }
 
 impl Tag {
-    /// Whether entry `index` carries this tag.
-    ///
-    /// Bit 0 of a byte is its **high** bit. Out-of-range indices are `false`
-    /// rather than a panic: the mask is padded to a byte boundary, so the
-    /// trailing bits of the last byte address entries that do not exist.
+    /// A tag covering nothing, for tests that only look at names and kinds.
+    #[cfg(test)]
+    pub(crate) fn named(name: &str, kind: u16) -> Self {
+        Self { name: name.to_owned(), kind, mask: Vec::new() }
+    }
+
+    /// Whether entry `index` carries this tag. Bit 0 of a byte is its **high**
+    /// bit. Out of range is `false`: the mask's padding bits address nothing.
     pub fn covers(&self, index: usize) -> bool {
         match self.mask.get(index / 8) {
             Some(byte) => byte & (0x80 >> (index % 8)) != 0,
@@ -84,11 +81,8 @@ pub struct TagSet {
 }
 
 impl TagSet {
-    /// Parse the `Tags` column of `.build.info`.
-    ///
-    /// Groups are colon-separated, names within a group space-separated, and a
-    /// trailing `?` is stripped. An empty column yields a set that selects
-    /// everything, which is the honest reading of "no constraints stated".
+    /// Parse the `Tags` column of `.build.info`: groups split on `:`, names on
+    /// spaces, a trailing `?` stripped. Empty selects everything.
     pub fn parse(column: &str) -> Self {
         let groups = column
             .split(':')
@@ -104,8 +98,7 @@ impl TagSet {
         Self { groups, allow: Vec::new() }
     }
 
-    /// Build a set from one explicit group, for callers that know exactly
-    /// what they want rather than reading it out of an install.
+    /// Build a set from one explicit group.
     pub fn of(names: impl IntoIterator<Item = impl Into<String>>) -> Self {
         let group: Vec<String> = names.into_iter().map(Into::into).collect();
         Self {
@@ -114,12 +107,8 @@ impl TagSet {
         }
     }
 
-    /// Opt in to optional content by tag name, e.g. `HighRes`.
-    ///
-    /// A permission, not a requirement. Requiring the name would select *only*
-    /// the texture pack; allowing it lets those entries through a gate that
-    /// otherwise excludes them, while everything else is selected exactly as
-    /// before.
+    /// Opt in to optional content by tag name, e.g. `HighRes`. A permission,
+    /// not a requirement: requiring it would select only the texture pack.
     pub fn with_optional(mut self, names: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.allow = names.into_iter().map(Into::into).collect();
         self
@@ -138,9 +127,8 @@ impl TagSet {
         self.groups.iter().map(Vec::as_slice)
     }
 
-    /// Names in this set that `tags` does not define, and which selection
-    /// therefore ignores. Worth surfacing: a typo and a geoip fact look
-    /// identical here, and only one of them is harmless.
+    /// Names in this set that `tags` does not define, so selection ignores
+    /// them. Surfaced: a typo looks exactly like a geoip fact.
     pub fn unknown_names<'a>(&'a self, tags: &[Tag]) -> Vec<&'a str> {
         let mut unknown: Vec<&str> = self
             .groups
@@ -154,11 +142,7 @@ impl TagSet {
         unknown
     }
 
-    /// Bind this expression to one manifest's tag table.
-    ///
-    /// `entries` is how many entries that manifest holds, which decides
-    /// whether a tag can be optional content at all; see the gate rule
-    /// below.
+    /// Bind this expression to one manifest's tag table of `entries` entries.
     pub fn against<'a>(&self, tags: &'a [Tag], entries: usize) -> Selection<'a> {
         let groups = self
             .groups
@@ -171,20 +155,12 @@ impl TagSet {
             })
             .collect();
 
-        // A category is constrained when the expression names any one of its
-        // values: naming `enUS` narrows locale even though every other locale
-        // tag goes unnamed. A category it names nothing in constrains nothing,
-        // so every value of it would otherwise pass, which is how a 37 GiB
-        // texture pack ends up in a plan nobody asked for. Those become gates:
-        // tags that must *not* cover an entry, unless opted in by name.
+        // Naming one value of a category (`enUS`) constrains it. Tags of a
+        // category named nowhere become gates: they must *not* cover an
+        // entry unless opted in, or a 37 GiB texture pack slips in.
         //
-        // Except for a tag that covers the *whole* manifest. Such a tag
-        // separates nothing, so gating on it removes everything, which is
-        // never what "this is optional content" can have meant. Warcraft I
-        // Remastered is the case that found this: its manifest tags all 746
-        // entries `Debug` *and* `Release`, and WoW's expression names neither,
-        // so the plan came out empty rather than complete. A category that
-        // carries no information cannot withhold anything either.
+        // Except a tag covering the whole manifest, which separates nothing:
+        // Warcraft I Remastered tags all 746 entries `Debug` and `Release`.
         let named = |name: &str| self.groups.iter().flatten().any(|n| n == name);
         let covers_everything = |tag: &Tag| entries > 0 && (0..entries).all(|i| tag.covers(i));
         let gates = tags
@@ -219,19 +195,15 @@ impl TagSet {
     }
 }
 
-/// A tag expression bound to one manifest's tag table.
-///
-/// Two rules, and an entry must pass both: it satisfies one of the
-/// alternatives, and it carries nothing from a category the expression never
-/// mentions.
+/// A tag expression bound to one manifest's tag table. An entry must satisfy
+/// one alternative and carry no gate.
 pub struct Selection<'a> {
     /// Tag positions per alternative group.
     groups: Vec<Vec<usize>>,
     /// Tag positions that exclude an entry outright.
     gates: Vec<usize>,
     tags: &'a [Tag],
-    /// An empty expression states no constraints, and the honest reading of
-    /// that is "everything", gates included.
+    /// An empty expression selects everything, gates included.
     unconstrained: bool,
 }
 
@@ -248,8 +220,7 @@ impl Selection<'_> {
             .any(|group| group.iter().all(|&t| self.tags[t].covers(index)))
     }
 
-    /// The tags acting as gates, by name, the optional content being held
-    /// back.
+    /// The tags acting as gates, by name.
     pub fn gated(&self) -> Vec<&str> {
         self.gates.iter().map(|&i| self.tags[i].name.as_str()).collect()
     }
@@ -266,18 +237,9 @@ pub struct InstallEntry {
 }
 
 impl InstallEntry {
-    /// The path as a relative POSIX path, for joining onto the flavor dir.
-    ///
-    /// Case is left exactly as the manifest spells it, the manifest is
-    /// internally inconsistent (`Utils\cef.pak` beside `UTILS\LOCALES\EN-US.PAK`)
-    /// and normalising it would be inventing a convention Blizzard does not
-    /// have. Under Wine the filesystem is case-insensitive by configuration,
-    /// not by us.
-    ///
-    /// `None` for a path that climbs out with `..`. These files are executables
-    /// written wherever the manifest says, so one that names a place outside
-    /// the install is refused rather than followed. Empty and `.` segments,
-    /// a leading separator among them, mean nothing and are dropped.
+    /// The path as a relative POSIX path, case as the manifest spells it.
+    /// `None` for a path that climbs out with `..`: these are executables.
+    /// Empty and `.` segments, a leading separator among them, are dropped.
     pub fn relative_path(&self) -> Option<std::path::PathBuf> {
         let parts: Vec<&str> =
             self.path.split(['\\', '/']).filter(|p| !p.is_empty() && *p != ".").collect();
@@ -286,7 +248,7 @@ impl InstallEntry {
     }
 }
 
-/// The install manifest: files that live on disk rather than in the store.
+/// The install manifest: files that live on disk, not in the store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallManifest {
     tags: Vec<Tag>,
@@ -312,7 +274,8 @@ impl InstallManifest {
 
         let tags = r.tags(tag_count, entry_count)?;
 
-        let mut entries = Vec::with_capacity(entry_count);
+        // Smallest entry: an empty path's terminator, a key and a size.
+        let mut entries = Vec::with_capacity(entry_count.min(r.remaining() / (1 + 16 + 4)));
         for _ in 0..entry_count {
             let path = r.cstring()?;
             let ckey: CKey = r.take(16)?.try_into().expect("16 bytes");
@@ -396,12 +359,12 @@ impl DownloadManifest {
             0
         };
 
-        let mut entries = Vec::with_capacity(entry_count);
+        // Smallest entry: a key, a 40-bit size and a priority.
+        let mut entries = Vec::with_capacity(entry_count.min(r.remaining() / (16 + 5 + 1)));
         for _ in 0..entry_count {
             let ekey: EKey = r.take(16)?.try_into().expect("16 bytes");
             let size = r.u40()?;
-            // Saturating, because a base that pushes a priority past i8 is a
-            // malformed manifest rather than a reason to panic in release.
+            // Saturating: a malformed base must not panic.
             let priority = (r.u8()? as i8).saturating_sub(base_priority);
             if has_checksum {
                 r.take(4)?;
@@ -434,20 +397,15 @@ impl DownloadManifest {
         self.entries.is_empty()
     }
 
-    /// The manifest positions `tags` selects, in manifest order.
-    ///
-    /// [`Self::select`] sorts its result, which loses the index a tag's mask
-    /// is addressed by; attribution needs the positions themselves.
+    /// The manifest positions `tags` selects, in manifest order, which is what
+    /// a tag's mask is addressed by.
     pub fn selected_indices(&self, tags: &TagSet) -> Vec<usize> {
         let selection = tags.against(&self.tags, self.entries.len());
         (0..self.entries.len()).filter(|i| selection.selects(*i)).collect()
     }
 
-    /// The entries `tags` selects, sorted by priority then by key.
-    ///
-    /// Priority order is the point of this manifest: it is what lets a client
-    /// be playable before the download finishes. Ties break on the key so the
-    /// result is deterministic across runs, which matters for resume.
+    /// The entries `tags` selects, by priority then key: deterministic, which
+    /// resume depends on.
     pub fn select(&self, tags: &TagSet) -> Vec<DownloadEntry> {
         let selection = tags.against(&self.tags, self.entries.len());
         let mut selected: Vec<DownloadEntry> = self
@@ -478,14 +436,8 @@ impl DownloadManifest {
         tags.optional_names(&self.tags, self.entries.len())
     }
 
-    /// The entries present only because `name` was opted in to: selected
-    /// with it, not selected without it, with everything else `base` asks for
-    /// (its own opt-ins included) held fixed.
-    ///
-    /// What switching the option off would leave unneeded, by the same rule an
-    /// install uses: a file the option tags is never fetched without it, and a
-    /// file `base` does not select, another locale's, is not this install's
-    /// to begin with and stays out of the list.
+    /// The entries present only because `name` was opted in to, with the rest
+    /// of `base` held fixed: what switching the option off leaves unneeded.
     pub fn only_with(&self, base: &TagSet, name: &str) -> Vec<DownloadEntry> {
         let with = base
             .clone()
@@ -503,9 +455,8 @@ impl DownloadManifest {
     }
 }
 
-/// Bounds-checked sequential reader. Every manifest field goes through it, so
-/// a truncated or misread manifest is an error naming the shortfall rather
-/// than a panic on a slice.
+/// Bounds-checked sequential reader: a truncated manifest is an error naming
+/// the shortfall, not a panic.
 struct Reader<'a> {
     bytes: &'a [u8],
     at: usize,
@@ -529,6 +480,10 @@ impl<'a> Reader<'a> {
         let slice = &self.bytes[self.at..end];
         self.at = end;
         Ok(slice)
+    }
+
+    fn remaining(&self) -> usize {
+        self.bytes.len().saturating_sub(self.at)
     }
 
     fn u8(&mut self) -> Result<u8, ManifestError> {
@@ -783,15 +738,9 @@ mod tests {
 
     #[test]
     fn a_category_that_separates_nothing_cannot_withhold_anything() {
-        // Warcraft I Remastered, reduced: its download manifest tags *every*
-        // entry `Debug` and *every* entry `Release`, and a WoW-shaped tag
-        // expression names neither. Gating on an unnamed category then
-        // removed all 746 files and the plan came out empty, a complete
-        // install reported as nothing to do.
-        //
-        // The rule that fixes it is the one that keeps `HighRes` gated in the
-        // test below: a tag covering the whole manifest separates nothing, so
-        // it cannot be the optional half of anything.
+        // Warcraft I Remastered, reduced: every entry is tagged `Debug` and
+        // `Release`, and a WoW-shaped expression names neither. Gating them
+        // emptied the plan of all 746 files.
         let bytes = download(
             &[
                 ("Windows", 2, &[0, 1, 2]),
@@ -816,11 +765,9 @@ mod tests {
 
     #[test]
     fn optional_content_is_excluded_unless_it_is_asked_for_by_name() {
-        // The 2026-09 defect: `HighRes` is a category of its own, and a
-        // `.build.info` Tags column never mentions it, Battle.net only lists
-        // the tags you opted into. Constraining nothing on that category let
-        // every entry in it through, which on the Forever beta was a 37 GiB
-        // texture pack the client neither had nor wanted.
+        // The 2026-09 defect: `HighRes` is its own category, never in a Tags
+        // column, and leaving it unconstrained put a 37 GiB texture pack into
+        // the Forever beta's plan.
         let bytes = download(
             &[
                 ("Windows", 1, &[0, 1, 2]),
@@ -835,7 +782,7 @@ mod tests {
         assert_eq!(manifest.select(&tags).len(), 2);
         assert_eq!(manifest.selected_size(&tags), 300);
 
-        // And it is on offer rather than hidden: the user can find it.
+        // And it is on offer, not hidden: the user can find it.
         assert_eq!(manifest.optional_names(&tags), ["HighRes"]);
     }
 
@@ -966,6 +913,18 @@ mod tests {
         bytes[5..9].copy_from_slice(&9000u32.to_be_bytes());
         assert!(matches!(
             DownloadManifest::parse(&bytes),
+            Err(ManifestError::Truncated { .. })
+        ));
+    }
+
+    #[test]
+    fn a_huge_entry_count_is_truncation_not_an_allocation() {
+        assert!(matches!(
+            InstallManifest::parse(b"IN\x01\x10\x00\x00\xff\xff\xff\xff"),
+            Err(ManifestError::Truncated { .. } | ManifestError::UnterminatedString { .. })
+        ));
+        assert!(matches!(
+            DownloadManifest::parse(b"DL\x01\x10\x00\xff\xff\xff\xff\x00\x00"),
             Err(ManifestError::Truncated { .. })
         ));
     }

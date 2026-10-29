@@ -1,6 +1,17 @@
-//! What Lightforge sees: paths, config, catalogue, status.
+//! What Lightforge sees: paths, config, the system, catalogue, status.
 
 use crate::*;
+
+pub(crate) fn doctor(ctx: Ctx, json: bool) -> Result<()> {
+    let Ctx { layout, config } = ctx;
+    let dirs = AppDirs::discover().context("resolving XDG directories")?;
+    let checks = lightforge_core::doctor::run(&config, &layout, &dirs.proton_dir());
+    match json {
+        true => println!("{}", serde_json::to_string_pretty(&checks)?),
+        false => print!("{}", lightforge_core::doctor::render(&checks)),
+    }
+    Ok(())
+}
 
 pub(crate) fn paths(ctx: Ctx) -> Result<()> {
     let Ctx { layout, .. } = ctx;
@@ -13,6 +24,7 @@ pub(crate) fn paths(ctx: Ctx) -> Result<()> {
     println!("config file     {}", dirs.config_file().display());
     println!("asset cache     {}", dirs.asset_cache_dir().display());
     println!("proton dir      {}", dirs.proton_dir().display());
+    println!("log dir         {}", dirs.log_dir().display());
 
     for library in layout.libraries().all() {
         let state = match library.state() {
@@ -83,11 +95,10 @@ pub(crate) async fn products(region: String, codes: Vec<String>, all: bool, conc
     Ok(())
 }
 
-pub(crate) async fn assets(product: String, source: Option<String>) -> Result<()> {
+pub(crate) async fn assets(code: ProductCode, source: Option<String>) -> Result<()> {
     use lightforge_core::assets::{Origin, Pipeline, Store};
     use lightforge_core::net::Http;
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let config = Config::load_or_default(&dirs.config_file())
         .with_context(|| format!("reading {}", dirs.config_file().display()))?;
@@ -103,9 +114,8 @@ pub(crate) async fn assets(product: String, source: Option<String>) -> Result<()
 
     let pipeline = Pipeline::new(origin, store);
 
-    // The cache-only path the GUI paints its first frame from. Shown
-    // before the network runs, because "the dashboard opens unthemed"
-    // is almost always this returning None.
+    // The cache-only path the GUI's first frame uses; `None` here is why
+    // the dashboard opens unthemed.
     let started = std::time::Instant::now();
     match pipeline.cached(&code) {
         Some(branding) => println!(
@@ -160,13 +170,12 @@ pub(crate) async fn assets(product: String, source: Option<String>) -> Result<()
     Ok(())
 }
 
-pub(crate) async fn status(ctx: Ctx, product: String, region: String, offline: bool) -> Result<()> {
+pub(crate) async fn status(ctx: Ctx, code: ProductCode, region: String, offline: bool) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::net::Http;
     use lightforge_core::state::{decide, Local};
     use lightforge_core::tact::version::{self, Region};
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let region: Region = region.parse().context("parsing --region")?;
 
     let local = Local::inspect(&layout, &code);
@@ -181,9 +190,7 @@ pub(crate) async fn status(ctx: Ctx, product: String, region: String, offline: b
     println!("store files     {}", local.store_files);
     println!("installed       {}", local.is_installed());
 
-    // `None` here is the offline case the resolver is required to
-    // survive: a complete install stays playable when the service
-    // cannot be reached.
+    // `None`: offline, and a complete install stays playable.
     let remote = if offline {
         None
     } else {
@@ -208,12 +215,11 @@ pub(crate) async fn status(ctx: Ctx, product: String, region: String, offline: b
     Ok(())
 }
 
-pub(crate) async fn update_check(ctx: Ctx, path: Option<PathBuf>, product: String, region: String) -> Result<()> {
+pub(crate) async fn update_check(ctx: Ctx, path: Option<PathBuf>, code: ProductCode, region: String) -> Result<()> {
     let Ctx { layout, .. } = ctx;
     use lightforge_core::net::Http;
     use lightforge_core::tact::version::{self, Region, Status};
 
-    let code: ProductCode = product.parse().expect("product codes are infallible");
     let region: Region = region.parse().context("parsing --region")?;
     let install = path.unwrap_or_else(|| layout.wow_install(&code));
 

@@ -1,0 +1,53 @@
+[graph]
+targets = ["x86_64-unknown-linux-gnu"]
+all-features = true
+
+[advisories]
+yanked = "deny"
+# ttf-parser (iced's font stack) and zvariant/zbus_names (ashpd, iced_winit)
+# only arrive transitively; a notice about them is nothing this repo can act on.
+unmaintained = "workspace"
+ignore = [
+    # zip 2.x. All three are about `ZipArchive::extract` and
+    # `ZipStreamReader::extract` restoring symlinks and Unix modes. Addons are
+    # unpacked entry by entry in addons/install.rs: `enclosed_name` paths only,
+    # written with `File::create`, no symlinks and no permissions applied.
+    { id = "RUSTSEC-2026-0367", reason = "extract() is never called, archive modes are never applied" },
+    { id = "RUSTSEC-2026-0368", reason = "extract() is never called, no symlink is ever created from an archive" },
+    { id = "RUSTSEC-2026-0369", reason = "extract() is never called, archive modes are never applied" },
+]
+
+[licenses]
+# Everything here can be combined into a GPL-3.0-or-later binary. self_cell
+# (Apache-2.0 OR GPL-2.0-only) and r-efi (... OR LGPL-2.1-or-later) resolve
+# to their permissive option, so neither GPL-2.0-only nor LGPL is listed.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "GPL-3.0-or-later",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+# 30-odd crates come in two versions through iced, wgpu and the RustCrypto
+# 0.10 -> 0.11 split; denying them would be a skip list nobody maintains.
+multiple-versions = "warn"
+skip = [
+    { crate = "image@0.24", reason = "the GUI's own decoder: only 0.24's JPEG decoder can scale a DCT on decode; iced keeps 0.25 codec-free for its types" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

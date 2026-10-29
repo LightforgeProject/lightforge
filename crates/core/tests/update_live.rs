@@ -1,18 +1,13 @@
 //! The update check against the real GitHub API.
 //!
-//! **Ignored by default.** It makes one unauthenticated request to
-//! `api.github.com`, which is rate-limited to 60/hour per IP and shared with
-//! the Proton-GE check, so it is not part of `cargo test`. Run it deliberately:
+//! **Ignored by default**: one request against GitHub's 60/hour budget.
 //!
 //! ```text
 //! cargo test -p lightforge-core --test update_live -- --ignored --nocapture
 //! ```
 //!
-//! What it is for: the unit tests decide ordering against releases this file
-//! invented. This one proves the other half, that the endpoint answers, that
-//! the JSON still has the fields `Release` names, and that a real tag like
-//! `v1.0.0-beta.2` parses after the `v` comes off. Those are the parts that
-//! break without anyone touching this repository.
+//! Proves the endpoint answers, the JSON has `Release`'s fields, and a real
+//! tag like `v1.0.0-beta.2` parses.
 
 use lightforge_core::net::{ETagCache, Http};
 use lightforge_core::update;

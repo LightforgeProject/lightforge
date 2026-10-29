@@ -8,6 +8,8 @@
 //! else stays synchronous and directly testable. `core` never depends on iced
 //! or clap.
 
+#![cfg_attr(test, allow(clippy::cast_possible_truncation))]
+
 pub mod addons;
 pub mod advice;
 pub mod assets;
@@ -18,9 +20,15 @@ pub mod clientlocale;
 pub mod config;
 pub mod debug;
 pub mod discover;
+pub mod doctor;
 pub mod error;
 pub mod families;
+pub(crate) mod fsutil;
+#[cfg(fuzzing)]
+pub mod fuzzing;
 pub mod library;
+pub mod logging;
+pub mod migrate;
 pub mod net;
 pub mod paths;
 pub mod prefix;
@@ -36,6 +44,7 @@ pub mod steam;
 pub mod steam_shortcut;
 pub mod storage;
 pub mod tact;
+pub mod text;
 pub mod transfers;
 pub mod tweaks;
 pub mod update;

@@ -1,13 +1,9 @@
 //! The local CASC store: bucket indices plus the `data.NNN` archives they
 //! point into.
 //!
-//! This is the read side of [`crate::tact`]. `casc-storage` is deliberately
-//! not used for any of it. Its `read` returns an empty `Vec` for every entry
-//! in a real install, the BLTE *streaming* reader it calls yields nothing
-//! where the one-shot decoder returns correct data, and its index support is
-//! read-only anyway, so [`super::idx`] already replaces the other half. What
-//! is left after removing both is small enough to own outright: find the
-//! newest index per bucket, seek into an archive, decode one BLTE payload.
+//! The read side of [`crate::tact`]. Not `casc-storage`: its `read` returns
+//! an empty `Vec` for every entry of a real install, because the BLTE
+//! streaming reader it calls yields nothing.
 //!
 //! Layout underneath a WoW install:
 //!
@@ -24,26 +20,19 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use ngdp_crypto::KeyService;
-
 use super::idx::{self, Entry, Index, IdxError, CASC_ENTRY_HEADER};
+use crate::text::hex;
 
 /// Full 16-byte encoding key. Indices store only the first 9 bytes.
 pub type EKey = [u8; 16];
 
-/// A local CASC store opened for reading.
-///
-/// Archive handles are cached as they are used, which is why reads take
-/// `&mut self`: a bulk verify touches the same handful of archives thousands
-/// of times, and reopening each file per entry dominates the cost.
-// `KeyService` is not `Debug`, so the derive is hand-written to keep `Storage`
-// printable in error paths without dumping decryption keys into a log either.
+/// A local CASC store opened for reading. Reads take `&mut self` to cache
+/// archive handles: reopening per entry dominates a bulk verify.
 pub struct Storage {
     data_dir: PathBuf,
     /// Newest generation per bucket, keyed by bucket number.
     indices: HashMap<u8, Index>,
     archives: HashMap<u16, File>,
-    keys: KeyService,
 }
 
 impl std::fmt::Debug for Storage {
@@ -57,12 +46,8 @@ impl std::fmt::Debug for Storage {
 }
 
 impl Storage {
-    /// Open the store under a WoW install root, or under a `Data` directory,
-    /// or a `Data/data` directory directly.
-    ///
-    /// All three spellings are accepted because callers reasonably hold any of
-    /// them: the layout module hands out install roots, while a debugging
-    /// session usually has the data directory itself.
+    /// Open the store under an install root, a `Data` directory, or
+    /// `Data/data` itself.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
         let data_dir = resolve_data_dir(path.as_ref());
         if !data_dir.is_dir() {
@@ -78,13 +63,7 @@ impl Storage {
             return Err(StorageError::NoIndices(data_dir));
         }
 
-        // Encrypted blocks are normal, Blizzard ships unreleased content in
-        // the same archives, so a missing key file is not an error here. The
-        // read that needs a key is where it becomes one.
-        let mut keys = KeyService::new();
-        let _ = keys.load_from_standard_dirs();
-
-        Ok(Self { data_dir, indices, archives: HashMap::new(), keys })
+        Ok(Self { data_dir, indices, archives: HashMap::new() })
     }
 
     pub fn data_dir(&self) -> &Path {
@@ -122,6 +101,16 @@ impl Storage {
         self.read_entry(&entry)
     }
 
+    /// [`Storage::read`], refusing bytes that do not hash to `ckey`. For
+    /// anything a decision is made from: a wrong file still decodes cleanly.
+    pub fn read_verified(&mut self, ekey: &EKey, ckey: &[u8; 16]) -> Result<Vec<u8>, StorageError> {
+        let bytes = self.read(ekey)?;
+        if *md5::compute(&bytes) != *ckey {
+            return Err(StorageError::ContentMismatch { ekey: *ekey, ckey: *ckey });
+        }
+        Ok(bytes)
+    }
+
     /// Read and decode the file an index entry points at.
     pub fn read_entry(&mut self, entry: &Entry) -> Result<Vec<u8>, StorageError> {
         if entry.is_archive_marker() {
@@ -134,14 +123,10 @@ impl Storage {
             offset: entry.offset,
         })?;
 
-        // The one-shot decoder, never the streaming one: the streaming reader
-        // in blte 0.4 returns zero bytes for payloads this decodes correctly.
-        blte::decompress_blte(payload.to_vec(), Some(&self.keys)).map_err(|source| {
-            StorageError::Decode {
-                archive_id: entry.archive_id,
-                offset: entry.offset,
-                source: Box::new(source),
-            }
+        super::blte::decode(payload).map_err(|source| StorageError::Decode {
+            archive_id: entry.archive_id,
+            offset: entry.offset,
+            source,
         })
     }
 
@@ -152,22 +137,29 @@ impl Storage {
             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
             std::collections::hash_map::Entry::Vacant(e) => {
                 let path = data_dir.join(archive_name(entry.archive_id));
-                let handle = File::open(&path).map_err(|source| StorageError::Io { path, source })?;
+                let handle = File::open(&path).map_err(io(&path))?;
                 e.insert(handle)
             }
         };
 
         let path = || data_dir.join(archive_name(entry.archive_id));
-        file.seek(SeekFrom::Start(u64::from(entry.offset)))
-            .map_err(|source| StorageError::Io { path: path(), source })?;
+        // A corrupt .idx can claim up to 4 GiB; check before allocating it.
+        let len = file.metadata().map_err(io(&path()))?.len();
+        if u64::from(entry.offset) + u64::from(entry.size) > len {
+            return Err(StorageError::OutOfBounds {
+                archive_id: entry.archive_id,
+                offset: entry.offset,
+                size: entry.size,
+                len,
+            });
+        }
+        file.seek(SeekFrom::Start(u64::from(entry.offset))).map_err(io(&path()))?;
         let mut raw = vec![0u8; entry.size as usize];
-        file.read_exact(&mut raw)
-            .map_err(|source| StorageError::Io { path: path(), source })?;
+        file.read_exact(&mut raw).map_err(io(&path()))?;
         Ok(raw)
     }
 
-    /// Close the cached handle on an archive, so deleting the file gives its
-    /// space back now rather than when this store is dropped.
+    /// Close the cached handle on an archive, so deleting it frees the space now.
     pub fn close_archive(&mut self, archive_id: u16) {
         self.archives.remove(&archive_id);
     }
@@ -203,12 +195,8 @@ pub struct Stats {
 /// The BLTE payload inside an archive slice, with or without the CASC entry
 /// header in front of it.
 ///
-/// Almost every entry points at a 30-byte CASC header followed by the payload.
-/// A few point straight at the payload instead: a real install has 57 pairs of
-/// entries that share a key, where the second of the pair has both its offset
-/// advanced by 30 and its size reduced by 30, the same file, described
-/// without its header. Assuming the header is always present makes those
-/// aliases look like a corrupt archive.
+/// A real install has 57 headerless aliases: a second entry for the same key,
+/// 30 bytes further on and 30 bytes shorter.
 pub(crate) fn blte_payload(raw: &[u8]) -> Option<&[u8]> {
     const MAGIC: &[u8; 4] = b"BLTE";
     if raw.len() >= CASC_ENTRY_HEADER + 4 && &raw[CASC_ENTRY_HEADER..CASC_ENTRY_HEADER + 4] == MAGIC {
@@ -261,12 +249,18 @@ pub enum StorageError {
     #[error("data.{archive_id:03} has no BLTE payload at offset {offset}")]
     NotBlte { archive_id: u16, offset: u32 },
 
+    #[error("the file stored as {} does not decode to its content key {}", hex(.ekey), hex(.ckey))]
+    ContentMismatch { ekey: EKey, ckey: [u8; 16] },
+
+    #[error("data.{archive_id:03} is {len} bytes, too short for {size} bytes at offset {offset}")]
+    OutOfBounds { archive_id: u16, offset: u32, size: u32, len: u64 },
+
     #[error("could not decode the file in data.{archive_id:03} at offset {offset}")]
     Decode {
         archive_id: u16,
         offset: u32,
         #[source]
-        source: Box<blte::Error>,
+        source: super::blte::BlteError,
     },
 
     #[error(transparent)]
@@ -280,9 +274,10 @@ pub enum StorageError {
     },
 }
 
-fn hex(key: &EKey) -> String {
-    key.iter().map(|b| format!("{b:02x}")).collect()
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> StorageError + '_ {
+    move |source| StorageError::Io { path: path.to_path_buf(), source }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -357,6 +352,26 @@ mod tests {
     }
 
     #[test]
+    fn a_file_that_decodes_to_the_wrong_content_is_refused() {
+        let dir = scratch("verified");
+        let data = dir.join("Data").join("data");
+        let payload = b"the encoding manifest, or so it says".to_vec();
+        let ekey: EKey = [0x5a; 16];
+        let mut writer = crate::tact::writer::StoreWriter::create(&data).unwrap();
+        writer
+            .write(&ekey, &blte::compress_data_single(payload.clone(), blte::CompressionMode::None, None).unwrap())
+            .unwrap();
+        writer.finish().unwrap();
+
+        let mut storage = Storage::open(&dir).unwrap();
+        assert_eq!(storage.read_verified(&ekey, &md5::compute(&payload)).unwrap(), payload);
+        assert!(matches!(
+            storage.read_verified(&ekey, &[0; 16]),
+            Err(StorageError::ContentMismatch { .. })
+        ));
+    }
+
+    #[test]
     fn a_missing_key_and_a_marker_are_distinct_errors() {
         let dir = scratch("errors");
         let data = dir.join("Data").join("data");
@@ -372,12 +387,30 @@ mod tests {
             storage.read(&[0x42; 16]),
             Err(StorageError::NotFound(_))
         ));
-        // Reading a marker is a caller mistake, not a corrupt install, and the
-        // message has to say which. This is the case that made a naive
-        // "decode every entry" sweep look like 1968 failures.
+        // Reading a marker is a caller mistake, and the message says so: a
+        // naive sweep once reported 1968 failures on a healthy install.
         assert!(matches!(
             storage.read_entry(&marker),
             Err(StorageError::IsArchiveMarker { archive_id: 7 })
+        ));
+    }
+
+    #[test]
+    fn an_entry_past_the_end_of_its_archive_is_refused_before_reading() {
+        let dir = scratch("bounds");
+        let data = dir.join("Data").join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join(archive_name(2)), [0u8; 100]).unwrap();
+
+        let entry = Entry { key: [0x11; 9], archive_id: 2, offset: 64, size: u32::MAX };
+        let mut index = Index::new(entry.bucket());
+        index.insert(entry);
+        index.save_new_generation(&data).unwrap();
+
+        let mut storage = Storage::open(&dir).unwrap();
+        assert!(matches!(
+            storage.read_raw(&entry),
+            Err(StorageError::OutOfBounds { archive_id: 2, len: 100, .. })
         ));
     }
 
@@ -400,5 +433,32 @@ mod tests {
         assert_eq!(archive_name(0), "data.000");
         assert_eq!(archive_name(27), "data.027");
         assert_eq!(archive_name(123), "data.123");
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(32))]
+        #[test]
+        fn what_the_writer_stores_reads_back_byte_for_byte(
+            blobs in proptest::collection::vec((proptest::collection::vec(0u8.., 0..4096), proptest::bool::ANY), 1..24)
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let data = dir.path().join("Data").join("data");
+            let mut writer = crate::tact::writer::StoreWriter::create(&data).unwrap();
+            let mut written = Vec::new();
+            for (payload, zlib) in blobs {
+                let mode = if zlib { blte::CompressionMode::ZLib } else { blte::CompressionMode::None };
+                let encoded = blte::compress_data_single(payload.clone(), mode, None).unwrap();
+                // A single-chunk file's encoding key is the MD5 of all of it.
+                let ekey: EKey = md5::compute(&encoded).0;
+                writer.write(&ekey, &encoded).unwrap();
+                written.push((ekey, payload));
+            }
+            writer.finish().unwrap();
+
+            let mut storage = Storage::open(dir.path()).unwrap();
+            for (ekey, payload) in written {
+                proptest::prop_assert_eq!(storage.read(&ekey).unwrap(), payload);
+            }
+        }
     }
 }

@@ -1,12 +1,7 @@
 //! The encoding manifest: content key → encoding key.
 //!
-//! This is the hop that turns "the file the game refers to" into "the file
-//! local storage is addressed by". Everything except the encoding manifest
-//! itself has to pass through it.
-//!
-//! Written here rather than taken from `tact-parser` because that crate reads
-//! the two page tables back to back and only then the pages. The real layout
-//! interleaves them, each table is immediately followed by *its own* pages:
+//! Not `tact-parser`, which reads both page tables before the pages. Each
+//! table is followed by its own pages:
 //!
 //! ```text
 //! header               22 bytes
@@ -17,12 +12,8 @@
 //! ekey pages           ekey_page_count x page_size
 //! ```
 //!
-//! Reading the tables consecutively lands the page cursor 564 KB early, mid
-//! entry. The parse does not fail, it walks garbage, finds a zero byte a few
-//! entries into each page, and moves on, so the result is a manifest that
-//! looks plausible and is missing 95% of its contents. On a real 12.1.0
-//! install it yields 138,096 entries where there are 2,874,085, and the root
-//! manifest's own key is not among them.
+//! The other order parses without error and drops 95%: 138,096 entries of
+//! 2,874,085 on 12.1.0, the root manifest's key among the missing.
 //!
 //! Entry layout inside a ckey page, repeating until a zero `key_count`:
 //!
@@ -47,21 +38,14 @@ const PAGE_TABLE_ENTRY: usize = 32;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Encoded {
     pub ckey: CKey,
-    /// The first encoding key listed. A content key occasionally has more than
-    /// one, the same bytes encoded differently, and any of them decodes to
-    /// the same file, so the first is taken.
+    /// The first encoding key listed; any of several decodes to the same file.
     pub ekey: EKey,
-    /// Decoded size in bytes. The index only knows the compressed size, so
-    /// this is the number to show a user or check an extraction against.
+    /// Decoded size in bytes; the index only knows the compressed one.
     pub size: u64,
 }
 
-/// A parsed encoding manifest.
-///
-/// Held as one sorted `Vec` rather than a hash map: entries arrive in content
-/// key order already, lookups are binary searches, and on a current retail
-/// build this is 2.9 M entries, where a `HashMap`'s per-entry overhead is
-/// tens of megabytes of pure waste.
+/// A parsed encoding manifest: one sorted `Vec` (2.9 M entries on retail),
+/// searched by binary search.
 #[derive(Debug, Clone, Default)]
 pub struct Encoding {
     entries: Vec<Encoded>,
@@ -79,8 +63,7 @@ impl Encoding {
             return Err(EncodingError::Truncated { need: pages_end, got: bytes.len() });
         }
 
-        // Every page is full of entries, so this is a close upper bound and
-        // saves repeatedly reallocating a multi-hundred-megabyte vector.
+        // Pages are full, so this is a close upper bound.
         let approx = header.ckey_page_count * header.ckey_page_size / 38;
         let mut entries = Vec::with_capacity(approx);
 
@@ -93,10 +76,7 @@ impl Encoding {
             return Err(EncodingError::Empty);
         }
 
-        // Pages are ordered by first key and entries within a page are sorted,
-        // so the concatenation should already be sorted. Verify rather than
-        // assume: an unsorted vector would make every binary search silently
-        // wrong instead of loudly broken.
+        // Should already be sorted; an unsorted one breaks every search silently.
         if !entries.windows(2).all(|w| w[0].ckey <= w[1].ckey) {
             entries.sort_unstable_by_key(|e| e.ckey);
         }
@@ -106,8 +86,7 @@ impl Encoding {
 
     pub fn load(path: impl AsRef<Path>) -> Result<Self, EncodingError> {
         let path = path.as_ref();
-        let bytes = std::fs::read(path)
-            .map_err(|source| EncodingError::Io { path: path.to_path_buf(), source })?;
+        let bytes = std::fs::read(path).map_err(io(path))?;
         Self::parse(&bytes)
     }
 
@@ -138,12 +117,7 @@ impl Encoding {
         self.get(ckey).map(|e| e.size)
     }
 
-    /// Encoding key -> content key.
-    ///
-    /// A linear scan: the manifest is sorted by content key, so the reverse
-    /// direction has no index. Callers that need many of these should build
-    /// their own map once rather than calling this in a loop over millions of
-    /// entries.
+    /// Encoding key -> content key, by linear scan. For many keys, build a map.
     pub fn ckey_for_ekey(&self, ekey: &EKey) -> Option<CKey> {
         self.entries.iter().find(|e| &e.ekey == ekey).map(|e| e.ckey)
     }
@@ -162,8 +136,7 @@ fn parse_page(page: &[u8], out: &mut Vec<Encoded>) -> Result<(), EncodingError> 
         let size = u40_be(&page[at + 1..at + 6]);
         let entry_len = 6 + 16 + key_count * 16;
         if at + entry_len > page.len() {
-            // A page whose last entry overruns it is corrupt, not merely full:
-            // the writer would have started a new page instead.
+            // An entry overrunning its page is corruption.
             return Err(EncodingError::EntryOverrunsPage { at, key_count });
         }
 
@@ -249,13 +222,16 @@ pub enum EncodingError {
     },
 }
 
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> EncodingError + '_ {
+    move |source| EncodingError::Io { path: path.to_path_buf(), source }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tact::config::parse_hash;
 
-    /// Build a manifest with the real layout, so the test fails if the page
-    /// interleaving is ever "simplified" back to the broken form.
+    /// Build a manifest with the real, interleaved layout.
     fn manifest(entries: &[(CKey, EKey, u64)], page_size: usize, espec: &[u8]) -> Vec<u8> {
         let mut page = Vec::new();
         for (ckey, ekey, size) in entries {
@@ -314,9 +290,8 @@ mod tests {
 
     #[test]
     fn the_ckey_pages_follow_their_own_table_not_both_tables() {
-        // The regression this module exists for. With the broken layout the
-        // page cursor lands inside the ekey page table, and the parse quietly
-        // yields far too few entries rather than failing.
+        // With the broken layout the cursor lands in the ekey table and the
+        // parse quietly yields too few entries.
         let entries: Vec<_> = (1..=40u8).map(|n| (key(n), key(n ^ 0x80), n as u64 * 16)).collect();
         let enc = Encoding::parse(&manifest(&entries, 4096, b"z\0")).unwrap();
 
@@ -368,7 +343,7 @@ mod tests {
     #[test]
     fn the_real_root_key_shape_survives_a_lookup() {
         // Values lifted from a real 12.1.0 install, so the test carries the
-        // actual bytes rather than a synthetic pattern.
+        // actual bytes, not a synthetic pattern.
         let ckey = parse_hash("669be7c403ea35a20f73ea7effcaa544").unwrap();
         let ekey = parse_hash("d175f4afe795101d0cf3660228b3283b").unwrap();
         let enc = Encoding::parse(&manifest(&[(ckey, ekey, 44_876)], 4096, b"z\0")).unwrap();

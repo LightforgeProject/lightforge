@@ -1,20 +1,10 @@
 //! Tukui, through their v1 API. No key required.
 //!
-//! This provider carries weight out of proportion to its size: **ElvUI is not
-//! on CurseForge at all**, and Tukui is the only place it is published. An
-//! addon manager without it cannot install the most widely used UI replacement
-//! in the game.
+//! The only source of **ElvUI**, which is not on CurseForge. From the live API:
 //!
-//! Two details, both read off the live API:
-//!
-//! - **Download URLs are tokenised**: `/v1/download/elvui/<opaque>` changes
-//!   per request. They must be fetched fresh at install time and must never be
-//!   cached or stored in the ledger.
-//! - One package covers every game version (its `patch` list names all of
-//!   them), so there is no per-flavor selection to make here.
-//! - The response **declares its folders** (`directories`), so the folder list
-//!   is known before the zip is opened. We still trust the archive over the
-//!   declaration when recording what to delete later.
+//! - **Download URLs are tokenised** per request: fetch fresh, never store.
+//! - One package covers every game version.
+//! - The response declares its folders; the archive still wins.
 
 use serde::Deserialize;
 
@@ -38,19 +28,14 @@ struct Addon {
     web_url: Option<String>,
 }
 
-/// Resolve against the full addon list.
-///
-/// Tukui publishes few enough addons that one list request answers every id in
-/// a batch, which is cheaper than a request per addon and avoids hammering a
-/// small volunteer-run service.
+/// Resolve against the full addon list: one request answers every id.
 pub async fn resolve(http: &Http, requests: &[Request]) -> ProviderResult {
     let addons: Vec<Addon> = http.get_json(ADDONS_URL).await?;
 
     Ok(requests
         .iter()
         .map(|request| {
-            // Tukui ids can be negative (ElvUI is -2), so the slug is the
-            // stable, human-writable key; either is accepted.
+            // Ids can be negative (ElvUI is -2); the slug works too.
             let found = addons.iter().find(|a| {
                 a.slug.eq_ignore_ascii_case(&request.id) || a.id.to_string() == request.id
             });
@@ -109,8 +94,7 @@ mod tests {
 
     #[test]
     fn the_extra_fields_tukui_sends_are_ignored_rather_than_fatal() {
-        // The live response carries a dozen fields we do not model (`patch`,
-        // galleries, donate links). Parsing must not depend on them.
+        // The live response carries a dozen fields we do not model.
         let addons: Vec<Addon> = serde_json::from_str(ELVUI).unwrap();
         assert_eq!(addons[0].version, "15.26");
     }

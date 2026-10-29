@@ -36,7 +36,12 @@ pub async fn create_backup(layout: Layout, code: ProductCode) -> Result<String, 
 
 /// Put one backup back. Refused while a game runs: the client writes
 /// SavedVariables when it exits and would overwrite the restore.
-pub async fn restore_backup(layout: Layout, code: ProductCode, archive: PathBuf) -> Result<String, String> {
+pub async fn restore_backup(
+    layout: Layout,
+    code: ProductCode,
+    archive: PathBuf,
+    account: Option<String>,
+) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         if !lightforge_core::preflight::games_running(&layout).is_empty() {
             return Err("Close the game first, it would overwrite the restore when it exits.".to_owned());
@@ -48,8 +53,16 @@ pub async fn restore_backup(layout: Layout, code: ProductCode, archive: PathBuf)
             .iter()
             .find(|b| b.path == archive)
             .ok_or("That backup is no longer there.")?;
-        plan.restore(chosen).map_err(|e| chain(&e))?;
-        Ok(format!("Restored the backup from {}.", chosen.when()))
+        match &account {
+            Some(name) => {
+                plan.restore_account(chosen, name).map_err(|e| chain(&e))?;
+                Ok(format!("Restored {name} from the backup of {}.", chosen.when()))
+            }
+            None => {
+                plan.restore(chosen).map_err(|e| chain(&e))?;
+                Ok(format!("Restored the backup from {}.", chosen.when()))
+            }
+        }
     })
     .await
     .map_err(|e| e.to_string())?

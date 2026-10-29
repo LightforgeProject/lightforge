@@ -1,31 +1,17 @@
 //! The archive index cache: where an encoding key actually lives.
 //!
-//! Nothing in the download path can proceed without these. An encoding key
-//! names bytes, but not their address; the address is in the index published
-//! beside each archive. For 12.1.0 that is **1406 indices totalling 119 MiB**,
-//! mean 87 KiB, plus the file index listing the loose keys.
+//! An encoding key's address is in the index beside its archive: for 12.1.0,
+//! **1406 indices, 119 MiB**, plus the file index. The combined
+//! `archive-group` answers **403**; Agent builds it locally.
 //!
-//! There is no shortcut. The CDN config names an `archive-group`: a single
-//! combined index that would answer every lookup in one fetch, but the CDN
-//! answers **403** for it. Agent builds it locally from the per-archive
-//! indices, which is why a real install has one in `Data/indices` beside the
-//! others. Measured, not assumed.
+//! Cached in `Data/indices/<hash>.index`, where Agent keeps them, so Agent
+//! reuses them.
 //!
-//! The cache is `Data/indices/<hash>.index`, exactly where Agent keeps them,
-//! so an install Lightforge downloads looks like one Agent downloaded, and a
-//! later Agent run reuses the work rather than refetching it.
-//!
-//! An index is not named by the hash of its own bytes, and the CDN config's
-//! `archives-index-size` list turns out not to be positionally aligned with
-//! its `archives` list, so there is no declared size to check an archive index
-//! against either; see [`super::config::CdnConfig::archives_index_size`].
-//! What remains is the index's own geometry, checked at parse time, and it is
-//! a strong check: block count, TOC and footer must account for every byte.
-//! The file index is the exception, since `file-index-size` is a single value
-//! with no ordering to lose.
+//! No usable declared size ([`super::config::CdnConfig::archives_index_size`]),
+//! so each index is checked by its geometry at parse time. The file index
+//! has a single `file-index-size`.
 
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use futures_util::stream::{self, StreamExt};
@@ -47,8 +33,7 @@ pub enum Fetched {
     Cached,
     /// Fetched and written.
     Downloaded { bytes: u64 },
-    /// Every endpoint failed. The prelude continues: one unreachable archive
-    /// costs its files, not the whole download.
+    /// Every endpoint failed; the run continues without that archive's files.
     Failed { detail: String },
 }
 
@@ -92,10 +77,7 @@ impl IndexCache {
         self.dir.join(format!("{hash}.index"))
     }
 
-    /// Whether `hash` is already cached at the size its config declares.
-    ///
-    /// Without a declared size this can only ask whether the file exists; the
-    /// geometry check at parse time is what catches a bad one then.
+    /// Whether `hash` is cached at its declared size, or at all without one.
     pub fn is_cached(&self, hash: &str, expect_size: Option<u64>) -> bool {
         match std::fs::metadata(self.path_of(hash)) {
             Ok(meta) => expect_size.is_none_or(|want| meta.len() == want),
@@ -103,21 +85,22 @@ impl IndexCache {
         }
     }
 
+    /// Whether a copy of `hash` is cached and every checksum in it holds:
+    /// a damaged copy of the right size is fetched again.
+    pub fn holds(&self, hash: &str, expect_size: Option<u64>) -> bool {
+        self.is_cached(hash, expect_size)
+            && std::fs::read(self.path_of(hash)).is_ok_and(|bytes| super::archive::verify(&bytes, hash).is_ok())
+    }
+
     pub fn load_archive(&self, hash: &str) -> Result<ArchiveIndex, IndexError> {
         let path = self.path_of(hash);
-        let bytes = std::fs::read(&path).map_err(|source| IndexError::Io { path: path.clone(), source })?;
+        let bytes = std::fs::read(&path).map_err(io(&path))?;
         ArchiveIndex::parse(&bytes, hash).map_err(|source| IndexError::Parse { path, source })
     }
 
-    /// Fetch every index in `wanted` that is not already cached.
-    ///
-    /// `wanted` pairs each hash with the size its CDN config declares, as
-    /// [`super::config::CdnConfig::archive_indices`] produces it. `progress`
-    /// is called once per index, in completion order.
-    ///
-    /// A failure does not abort the run: the report lists what could not be
-    /// fetched so the caller can decide, since one unreachable archive costs
-    /// its own files rather than the whole download.
+    /// Fetch every index in `wanted` (from
+    /// [`super::config::CdnConfig::archive_indices`]) not already cached.
+    /// `progress` is called per index. Failures are listed, not fatal.
     pub async fn ensure(
         &self,
         http: &Http,
@@ -126,8 +109,7 @@ impl IndexCache {
         concurrency: usize,
         mut progress: impl FnMut(Step),
     ) -> Result<Report, IndexError> {
-        std::fs::create_dir_all(&self.dir)
-            .map_err(|source| IndexError::Io { path: self.dir.clone(), source })?;
+        std::fs::create_dir_all(&self.dir).map_err(io(&self.dir))?;
 
         let total = wanted.len();
         let mut report = Report::default();
@@ -135,7 +117,7 @@ impl IndexCache {
 
         let mut stream = stream::iter(wanted.iter().copied())
             .map(|(hash, size)| async move {
-                if self.is_cached(hash, size) {
+                if self.holds(hash, size) {
                     return (hash, Fetched::Cached);
                 }
                 match client.fetch_index(http, hash, size).await {
@@ -164,33 +146,16 @@ impl IndexCache {
         Ok(report)
     }
 
-    /// Write an index, via a temporary file in the same directory.
-    ///
-    /// A half-written index that happens to be the declared size would pass
-    /// every later check, so the rename has to be the only way one appears.
-    fn store(&self, hash: &str, bytes: &[u8]) -> Result<(), IndexError> {
+    /// Write an index atomically: a torn one of the right size would pass checks.
+    pub(crate) fn store(&self, hash: &str, bytes: &[u8]) -> Result<(), IndexError> {
         let path = self.path_of(hash);
-        let mut temp = tempfile::NamedTempFile::new_in(&self.dir)
-            .map_err(|source| IndexError::Io { path: self.dir.clone(), source })?;
-        temp.write_all(bytes)
-            .and_then(|()| temp.as_file().sync_all())
-            .map_err(|source| IndexError::Io { path: path.clone(), source })?;
-        temp.persist(&path)
-            .map_err(|e| IndexError::Io { path: path.clone(), source: e.error })?;
-
-        // 0644, as Agent's own cached indices are, tempfile's 0600 would
-        // leave a file the client cannot read.
-        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o644))
-            .map_err(|source| IndexError::Io { path, source })?;
-        Ok(())
+        // 0644, as Agent's own cached indices are.
+        crate::fsutil::write_atomic_with_mode(&path, bytes, 0o644).map_err(io(&path))
     }
 }
 
-/// Where each encoding key lives, built from a set of archive indices.
-///
-/// Holding all 1406 parsed indices at once would cost far more than the keys
-/// actually wanted, so the lookup is built by streaming each index past a set
-/// of wanted keys and keeping only the hits.
+/// Where each wanted encoding key lives, built by streaming each archive
+/// index past the wanted set.
 #[derive(Debug, Clone, Default)]
 pub struct Locations {
     /// ekey -> (archive index into `archives`, offset, size)
@@ -201,14 +166,13 @@ pub struct Locations {
 impl Locations {
     /// Fold one archive's index in, keeping only keys `wanted` contains.
     ///
-    /// Returns how many of that index's entries were kept. A key found in two
-    /// archives keeps the first, duplicates across archives are normal, since
-    /// an archive is never rewritten once published.
+    /// Returns how many were kept. A key in two archives keeps the first.
     pub fn absorb(
         &mut self,
         index: &ArchiveIndex,
         wanted: &std::collections::HashSet<super::storage::EKey>,
     ) -> usize {
+        #[allow(clippy::cast_possible_truncation, reason = "archive ids number in the thousands")]
         let archive = match self.archives.iter().position(|a| a == index.archive()) {
             Some(i) => i as u32,
             None => {
@@ -283,6 +247,11 @@ pub enum IndexError {
     Cdn(#[from] CdnError),
 }
 
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> IndexError + '_ {
+    move |source| IndexError::Io { path: path.to_path_buf(), source }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,6 +294,7 @@ mod tests {
         footer.extend_from_slice(&(entries.len() as u32).to_le_bytes());
         footer.extend_from_slice(&[0u8; 8]);
         out.extend_from_slice(&footer);
+        super::super::archive::seal(&mut out);
         out
     }
 
@@ -339,6 +309,21 @@ mod tests {
         // A truncated mirror is exactly what the declared size is there to catch.
         assert!(!cache.is_cached("abcd", Some(11)));
         assert!(!cache.is_cached("missing", None));
+    }
+
+    #[test]
+    fn a_damaged_cached_index_of_the_right_size_is_not_held() {
+        let dir = scratch("damaged");
+        let cache = IndexCache::new(&dir);
+        let mut bytes = index_bytes(&[(key(1), 100, 30)]);
+        let name = super::super::archive::seal(&mut bytes);
+        cache.store(&name, &bytes).unwrap();
+        assert!(cache.holds(&name, Some(bytes.len() as u64)));
+
+        bytes[20] ^= 0xff;
+        cache.store(&name, &bytes).unwrap();
+        assert!(cache.is_cached(&name, Some(bytes.len() as u64)), "the size alone still matches");
+        assert!(!cache.holds(&name, Some(bytes.len() as u64)));
     }
 
     #[test]

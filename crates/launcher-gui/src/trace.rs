@@ -1,12 +1,7 @@
 //! Startup timing, printed only when `LIGHTFORGE_TRACE` is set.
 //!
-//! How fast the dashboard *feels* is a sequence of moments, the window
-//! appearing, the cache answering, the network answering, the first frame that
-//! actually has art in it, and which of those is slow is not something a user
-//! can report from the outside. This stamps each one with milliseconds since
-//! process start.
-//!
-//! Off by default and free when off: one atomic read per call.
+//! Stamps each startup moment with milliseconds since process start. Off by
+//! default: one atomic read per call.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -30,6 +25,7 @@ pub fn begin() {
     mark("process start");
 }
 
+#[allow(clippy::cast_possible_truncation, reason = "microseconds since start")]
 fn micros() -> u64 {
     START.get().map(|s| s.elapsed().as_micros() as u64).unwrap_or(0)
 }
@@ -55,9 +51,8 @@ pub fn once(slot: &'static std::sync::atomic::AtomicBool, what: impl std::fmt::D
     }
 }
 
-/// Stamp one controller event, raw or as it reached the ring, under
-/// `LIGHTFORGE_TRACE=pad`: which device a press came from is the question
-/// when one press moves the ring twice.
+/// Stamp one controller event under `LIGHTFORGE_TRACE=pad`, for a press that
+/// moves the ring twice.
 pub fn pad(what: impl std::fmt::Display) {
     if PAD.get().copied().unwrap_or(false) {
         mark(what);
@@ -71,10 +66,7 @@ pub fn frames() -> bool {
 
 /// Stamp one rebuild of the view tree.
 ///
-/// **Not** one frame. iced only calls `view` when application state changed;
-/// a resize relayouts the existing tree and redraws it without ever asking
-/// for a new one. So silence here during a resize is expected and says
-/// nothing about how fast the window is repainting.
+/// **Not** one frame: a resize redraws without calling `view`.
 pub fn view_built(build: std::time::Duration) {
     if !FRAMES.get().copied().unwrap_or(false) {
         return;

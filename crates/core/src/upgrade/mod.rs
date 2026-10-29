@@ -1,9 +1,8 @@
 //! Getting a newer Lightforge onto this machine, once [`crate::update`] has
 //! found one.
 //!
-//! Who may replace the binary depends on who put it there, and that is read
-//! from where it lives: the deb, the rpm, the `-bin` package and the tarball
-//! all ship the same binary, so nothing could be decided at build time.
+//! Who may replace the binary depends on who put it there, read from where it
+//! lives: every package ships the same binary.
 //!
 //! - The installer's copy in `~/.local/bin` is the user's own, and Lightforge
 //!   replaces it itself ([`tarball`]).
@@ -62,10 +61,7 @@ pub enum Origin {
 }
 
 impl Origin {
-    /// This process's own.
-    ///
-    /// Read once, at start: after a package manager replaces the binary, the
-    /// running one's path reads `… (deleted)`.
+    /// This process's own, read at start: once replaced, the path reads `(deleted)`.
     pub fn detect() -> Self {
         let Ok(exe) = std::env::current_exe() else { return Self::Unknown };
         let home = directories::BaseDirs::new().map(|d| d.home_dir().to_path_buf()).unwrap_or_default();
@@ -243,18 +239,17 @@ fn listed<'a>(sums: &'a str, suffix: &str) -> Option<(&'a str, &'a str)> {
 }
 
 fn sha256_of(path: &Path) -> Result<String, UpgradeError> {
-    let mut file = std::fs::File::open(path).map_err(|source| UpgradeError::io(path, source))?;
+    let mut file = std::fs::File::open(path).map_err(io(path))?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher).map_err(|source| UpgradeError::io(path, source))?;
-    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+    std::io::copy(&mut file, &mut hasher).map_err(io(path))?;
+    Ok(crate::text::hex(&hasher.finalize()))
 }
 
 /// The PKGBUILD for `package`, as it stands on `main`, once it is the one for
 /// `version`.
 ///
-/// `main` gets the new PKGBUILD a little after the release is published, and
-/// its checksums a commit after that. Until both are there, building it would
-/// build the old version again or one nothing checks, so it waits instead.
+/// `main` gets the PKGBUILD after the release, and its checksums a commit
+/// later; until then this waits.
 pub async fn fetch_pkgbuild(http: &Http, package: &str, version: &str) -> Result<String, UpgradeError> {
     let text = http.get_text(&format!("{PKGBUILDS}/{package}/PKGBUILD")).await?;
     let pkgver = text.lines().find_map(|line| line.strip_prefix("pkgver=")).map(str::trim);
@@ -295,10 +290,8 @@ pub enum UpgradeError {
     },
 }
 
-impl UpgradeError {
-    fn io(path: &Path, source: std::io::Error) -> Self {
-        Self::Io { path: path.to_path_buf(), source }
-    }
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> UpgradeError + '_ {
+    move |source| UpgradeError::Io { path: path.to_path_buf(), source }
 }
 
 #[cfg(test)]

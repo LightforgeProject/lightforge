@@ -18,6 +18,7 @@ use lightforge_core::assets::{Manifest, Pipeline};
 use lightforge_core::config::Config;
 use lightforge_core::net::Http;
 use lightforge_core::families::Families;
+use lightforge_core::{library, migrate};
 use lightforge_core::paths::{AppDirs, Layout};
 use lightforge_core::preflight::{DownloadGuard, GameProcess, Preflight, PreflightError};
 use lightforge_core::product::ProductCode;
@@ -35,6 +36,7 @@ mod transfer;
 mod store;
 mod launch;
 mod backups;
+mod doctor;
 pub(crate) mod upgrade;
 
 pub(crate) use branding::*;
@@ -43,6 +45,7 @@ pub(crate) use transfer::*;
 pub(crate) use store::*;
 pub(crate) use launch::*;
 pub(crate) use backups::*;
+pub(crate) use doctor::*;
 pub(crate) use upgrade::{Prepared, Stamp};
 
 
@@ -50,7 +53,7 @@ pub(crate) use upgrade::{Prepared, Stamp};
 /// it when that is known.
 ///
 /// Built with [`Problem::of`] while the error still has its type, because
-/// that is the only point at which [`advise`](lightforge_core::advice::advise)
+/// that is the only point at which [`lightforge_core::advice::advise`]
 /// can tell a full drive from a dropped connection. A plain `String` converts
 /// into one with no advice, so a path that has not been taught any yet still
 /// reports exactly what it did before.
@@ -62,7 +65,9 @@ pub struct Problem {
 
 impl Problem {
     pub fn of(error: &(dyn std::error::Error + 'static)) -> Self {
-        Self { message: chain(error), advice: advise(error) }
+        let message = chain(error);
+        tracing::error!("{message}");
+        Self { message, advice: advise(error) }
     }
 }
 
@@ -86,7 +91,6 @@ impl std::fmt::Display for Problem {
     }
 }
 
-/// The Proton build a product launches under, with its per-product caches.
 /// Which workload a runner is being built for.
 ///
 /// They pin separately: `SPEC.md` asks for a Proton build chosen for
@@ -114,7 +118,7 @@ impl Runs {
 
 /// The build a launch would use, and how it sits against the prefix.
 ///
-/// Read before a launch rather than during it: the prefix is shared, Proton
+/// Read before a launch instead of during it: the prefix is shared, Proton
 /// only migrates it forward, and an older build opening a prefix a newer one
 /// rewrote is the one way this arrangement breaks. The caller decides what to
 /// do about it. Nothing here refuses a launch.
@@ -139,6 +143,7 @@ pub fn prefix_fit(
     (Some(build.version.clone()), fit)
 }
 
+/// The Proton build a product launches under, with its per-product caches.
 fn runner_for(
     layout: &Layout,
     code: &ProductCode,
@@ -156,10 +161,7 @@ fn runner_for(
 
     let target =
         std::fs::read_link(layout.wow_symlink()).unwrap_or_else(|_| layout.wow_install(code));
-    // Made here rather than trusting DXVK and VKD3D to create it. Failing
-    // only costs the cache, so the launch goes on either way.
     let shaders = dirs.shader_cache_dir(code);
-    let _ = std::fs::create_dir_all(&shaders);
     let mut runner =
         ProtonRunner::new(build, layout, ProtonRunner::steam_client_path(steam.as_ref(), &dirs))
             .with_compat_mount(&target)
@@ -200,7 +202,7 @@ fn client_runner(
 
 /// The shared profile Battle.net and its games launch under.
 ///
-/// Not per-product on purpose; see `Config::battle_net_tweaks`.
+/// Not per product; see `Config::battle_net_tweaks`.
 fn config_tweaks() -> Tweaks {
     AppDirs::discover()
         .ok()

@@ -4,31 +4,23 @@ use super::*;
 
 /// What a running transfer publishes for the UI to read.
 ///
-/// A `watch` channel deliberately keeps only the newest value: the download
-/// calls its progress callback once per stored file, 1.5 million times on
-/// retail, and the UI samples at its own rate. Nothing queues, so the
-/// transfer can never be slowed by a busy window.
+/// Through a `watch` channel, newest value only: the callback runs 1.5
+/// million times on retail.
 #[derive(Debug, Clone, Default)]
 pub struct TransferState {
     pub stage: String,
     pub progress: Progress,
     /// Bytes this run's plan has to fetch; `None` until the plan is made.
     ///
-    /// The plan excludes everything already in the store, so this is the
-    /// size of the job, not of the product: an update to a 90 GB install
-    /// that changes 10 GB plans 10 GB.
+    /// The size of the job, not the product.
     pub remaining: Option<u64>,
-    /// Optional content this build offers, as the manifest named it. Carried
-    /// back so the settings panel has something real to offer rather than a
-    /// hardcoded guess.
+    /// Optional content this build offers, as the manifest named it.
     pub optional: Vec<String>,
 }
 
 /// Download `code` into its install directory, publishing progress to `tx`.
 ///
-/// Returns the run's summary. A paused transfer is not an error: `pause` trips
-/// the same cancel token the guard uses, and the next run resumes from what
-/// the store already holds.
+/// A paused transfer is not an error; the next run resumes from the store.
 // Eight arguments, all of them a distinct input to one transfer; a struct
 // here would only move the same list one level out.
 #[allow(clippy::too_many_arguments)]
@@ -39,19 +31,15 @@ pub async fn download(
     locale: String,
     limit_bytes_per_second: u64,
     optional_tags: Vec<String>,
+    pre_download: bool,
     cancel: Cancel,
     tx: tokio::sync::watch::Sender<TransferState>,
 ) -> Result<Summary, Problem> {
     let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+    let stalls = tx.subscribe();
 
-    // The download runs on its own thread with its own runtime, and the result
-    // comes back over a channel.
-    //
-    // This is not ceremony: the fetch loop holds borrowed work items across
-    // await points, so its future is not provably `Send`, and `Task::perform`
-    // requires `Send`. `block_on` imposes no such bound. The CLI has always run
-    // the whole fetch as a single task regardless of its runtime's threads, so
-    // nothing about throughput changes here.
+    // Its own thread and runtime: the fetch future is not `Send`, which
+    // `Task::perform` requires.
     std::thread::Builder::new()
         .name("lightforge-download".to_owned())
         .spawn(move || {
@@ -64,18 +52,12 @@ pub async fn download(
             };
 
             let result = runtime.block_on(async move {
-                // Deliberately not the app's shared client: this runtime is
-                // built here and torn down with the thread, and a reqwest
-                // client's connections belong to the runtime that opened them.
+                let watchdog = tokio::spawn(report_stalls(stalls));
+                let result = async move {
+                // Its own client: connections belong to the runtime that opened them.
                 let http = Http::new().map_err(|e| Problem::of(&e))?;
                 let dest = layout.wow_install(&code);
-                // The library's own path, not the default one. `.product.db`
-                // records where Battle.net should look, and a product on an
-                // added drive lives under that drive's letter; writing
-                // `C:\Program Files (x86)\World of Warcraft` for it points
-                // Battle.net at the default library, where this install is
-                // not, and it answers that the folder holds no WoW files.
-                // `uninstall` already resolves it this way.
+                // The library's own Windows path, for `.product.db`.
                 let windows_path = layout
                     .library(&code)
                     .map(|library| library.windows_wow_path())
@@ -83,34 +65,27 @@ pub async fn download(
                 let options = InstallOptions {
                     region,
                     locale,
-                    flavor: code.install_dir().into_owned(),
+                    // Empty for a new install: its product config decides.
+                    flavor: layout.known_flavor(&code).unwrap_or_default().to_owned(),
                     optional_tags: optional_tags.clone(),
-                    // Tighter than the CLI's 4 GiB. A checkpoint is a few
-                    // milliseconds of index writing, and it bounds what is
-                    // lost if the app is killed rather than closed, the CLI
-                    // is a foreground process someone is watching, a launcher
-                    // is not.
+                    // Tighter than the CLI's 4 GiB: nobody watches a launcher.
                     checkpoint_bytes: 512 * 1024 * 1024,
                     limit_bytes_per_second,
-                    // So Battle.net lists the product as installed rather than
+                    // So Battle.net lists the product as installed instead of
                     // offering to install what is already there.
                     agent_dir: Some(layout.agent_dir()),
                     windows_path: Some(windows_path),
+                    stage: pre_download,
                     ..InstallOptions::default()
                 };
 
-                // Coalesce here rather than in core: stages are rare and always
+                // Coalesce here, not in core: stages are rare and always
                 // worth publishing, progress is not.
                 let mut last = Instant::now() - Duration::from_secs(1);
                 let mut stage = String::from("preparing");
                 let mut remaining = None;
                 let mut optional: Vec<String> = Vec::new();
-                // The last figures the downloader actually reported. A stage
-                // event carries no progress of its own, and publishing a
-                // default one in its place is what emptied the bar and dropped
-                // the rate to zero the moment the bytes were in: the tail of
-                // every run, extracting, .build.info, .product.db, is
-                // nothing but stage events.
+                // A stage event carries no progress, so the last figures stay.
                 let mut latest = Progress::default();
 
                 let on_event = move |event: Event| {
@@ -145,12 +120,49 @@ pub async fn download(
                 install::run(&http, &dest, &code, &options, &cancel, on_event)
                     .await
                     .map_err(|e| Problem::of(&e))
+                }
+                .await;
+                watchdog.abort();
+                result
             });
             let _ = done_tx.send(result);
         })
         .map_err(|e| Problem::of(&e))?;
 
     done_rx.await.map_err(|_| "the download thread stopped unexpectedly".to_owned())?
+}
+
+/// Write to the log when a running transfer stops moving.
+///
+/// A stuck download raises no error. After a minute without progress, then
+/// every five minutes.
+async fn report_stalls(mut state: tokio::sync::watch::Receiver<TransferState>) {
+    const TICK: Duration = Duration::from_secs(15);
+    let key = |s: &TransferState| (s.stage.clone(), s.progress.bytes_stored, s.progress.requests_done);
+    let mut last = key(&state.borrow_and_update());
+    let mut still = Duration::ZERO;
+    loop {
+        tokio::time::sleep(TICK).await;
+        let now = key(&state.borrow_and_update());
+        if now != last {
+            last = now;
+            still = Duration::ZERO;
+            continue;
+        }
+        still += TICK;
+        if still == Duration::from_secs(60) || (still.as_secs() > 60 && still.as_secs().is_multiple_of(300)) {
+            let progress = state.borrow().progress;
+            tracing::warn!(
+                "transfer stalled for {}s at \"{}\": {}/{} B, {}/{} requests",
+                still.as_secs(),
+                last.0,
+                progress.bytes_stored,
+                progress.bytes_total,
+                progress.requests_done,
+                progress.requests_total,
+            );
+        }
+    }
 }
 
 /// One short line describing a non-progress event, for the status readout.
@@ -182,6 +194,7 @@ pub(crate) fn describe(event: &Event) -> String {
         Event::InstallFile { path, .. } => format!("extracting {}", path.display()),
         Event::Extracted { files, .. } => format!("extracted {files} install files"),
         Event::BuildInfo { version, .. } => format!("finished — {version}"),
+        Event::Staged { version } => format!("pre-downloaded {version}"),
         Event::ProductDb { .. } => "writing .product.db".to_owned(),
         Event::Registered { .. } => "registered with Battle.net".to_owned(),
         Event::Incomplete { reasons } => format!("incomplete: {}", reasons.join(", ")),
@@ -194,55 +207,46 @@ pub(crate) fn gib(bytes: u64) -> f64 {
 
 /// `Downloads` behind a lock, so pre-flight can pause a transfer the UI owns.
 ///
-/// A launch must not let Agent and our downloader write the same CASC
-/// files.
 #[derive(Debug, Clone, Default)]
 pub struct SharedDownloads(pub Arc<Mutex<Downloads>>);
 
 impl SharedDownloads {
+    /// Poison is ignored: every method is a single insert or remove.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Downloads> {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub fn register(&self, code: ProductCode, cancel: Cancel) {
-        if let Ok(mut guard) = self.0.lock() {
-            guard.register(code, cancel);
-        }
+        self.lock().register(code, cancel);
     }
 
     pub fn finished(&self, code: &ProductCode) {
-        if let Ok(mut guard) = self.0.lock() {
-            guard.finished(code);
-        }
+        self.lock().finished(code);
     }
 
     /// Products a launch paused and owes a restart.
     pub fn pending(&self) -> Vec<ProductCode> {
-        self.0
-            .lock()
-            .map(|g| g.pending().cloned().collect())
-            .unwrap_or_default()
+        self.lock().pending().cloned().collect()
     }
 }
 
 impl DownloadGuard for SharedDownloads {
     fn pause(&mut self, code: &ProductCode) -> Result<bool, PreflightError> {
-        let mut guard = self.0.lock().expect("downloads lock");
-        guard.pause(code)
+        self.lock().pause(code)
     }
 
     fn resume(&mut self, code: &ProductCode) -> Result<bool, PreflightError> {
         // The GUI restarts the transfer itself, since resuming means building
         // a fresh plan against what the store now holds.
-        let mut guard = self.0.lock().expect("downloads lock");
-        guard.resume(code)
+        self.lock().resume(code)
     }
 }
 
 /// Remove what a cancelled download wrote, and nothing else.
 ///
-/// If nothing else is installed, the whole store goes with the flavour
-/// directory. Otherwise only entries this build wants and no remaining
-/// product wants are dropped, which covers everything the cancelled run
-/// fetched, since the plan skips what the store already had. The build comes
-/// from the version service (a cancelled install has no `.build.info` row);
-/// without the network the files stay.
+/// The whole store when nothing else is installed; otherwise entries only
+/// this build wants. The build comes from the version service, so offline
+/// the files stay.
 pub async fn discard_download(
     http: Option<Http>,
     layout: Layout,
@@ -304,4 +308,25 @@ pub async fn discard_download(
     .map_err(|e| chain(&e))??;
 
     Ok(removed + freed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_poisoned_lock_still_pauses_the_download() {
+        let mut downloads = SharedDownloads::default();
+        let poisoner = downloads.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.0.lock().unwrap();
+            panic!("poison the downloads lock");
+        })
+        .join();
+        assert!(downloads.0.is_poisoned());
+
+        downloads.register(ProductCode::Classic, Cancel::new());
+        assert!(downloads.pause(&ProductCode::Classic).unwrap());
+        assert_eq!(downloads.pending(), [ProductCode::Classic]);
+    }
 }

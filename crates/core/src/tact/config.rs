@@ -1,20 +1,15 @@
 //! Build and CDN configuration files.
 //!
-//! These are the only part of a CASC install that is *not* inside CASC: plain
-//! `key = value` text, stored by content hash under `Data/config` in a
-//! two-level fan-out, and reachable with nothing but the build key that
-//! `.build.info` already records.
+//! The one part of an install not inside CASC: `key = value` text under
+//! `Data/config`, by content hash, reachable from `.build.info`'s build key.
 //!
 //! ```text
 //! Data/config/97/12/9712ae9c84cc54111e9e3ddf9a6b8019
 //!             ^^ ^^ first two byte-pairs of the hash
 //! ```
 //!
-//! That makes the build config the entry point to everything else. It names
-//! the encoding manifest by *both* its content key and its encoding key, and
-//! the encoding key is directly readable from local storage, which is what
-//! breaks the chicken-and-egg problem of needing the encoding manifest in
-//! order to look anything up.
+//! The build config names the encoding manifest by both keys; the encoding
+//! key reads it straight from storage, without an encoding lookup.
 
 use std::path::{Path, PathBuf};
 
@@ -23,10 +18,8 @@ use super::storage::EKey;
 /// A 16-byte content key: the MD5 of a file's decoded bytes.
 pub type CKey = [u8; 16];
 
-/// A manifest named by both of its keys.
-///
-/// `ekey` is what local storage is addressed by; `ckey` is what the root
-/// manifest and the rest of the pipeline refer to the same file as.
+/// A manifest named by both of its keys: `ekey` addresses storage, `ckey` is
+/// how the rest of the pipeline names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyPair {
     pub ckey: CKey,
@@ -56,9 +49,7 @@ impl BuildConfig {
             .map_err(|e| ConfigError::Malformed(e.to_string()))?;
 
         let pair = |key: &str| -> Option<KeyPair> {
-            // A line is either `key = <ckey>` or `key = <ckey> <ekey>`. The
-            // sibling `key-size = a b` line is deliberately ignored: it
-            // describes decoded and encoded sizes, not hashes.
+            // `key = <ckey>` or `key = <ckey> <ekey>`; `key-size` lines are sizes.
             let value = config.values.get(key)?;
             let mut hashes = value.split_whitespace().filter_map(|h| parse_hash(h).ok());
             Some(KeyPair { ckey: hashes.next()?, ekey: hashes.next() })
@@ -78,7 +69,7 @@ impl BuildConfig {
     /// Read the build config named by `hash` out of a config directory.
     pub fn load(config_dir: impl AsRef<Path>, hash: &str) -> Result<Self, ConfigError> {
         let path = config_path(config_dir.as_ref(), hash)?;
-        let text = std::fs::read_to_string(&path).map_err(|source| ConfigError::Io { path, source })?;
+        let text = std::fs::read_to_string(&path).map_err(io(&path))?;
         Self::parse(&text)
     }
 }
@@ -87,27 +78,20 @@ impl BuildConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CdnConfig {
     pub archives: Vec<String>,
-    /// The `archives-index-size` list, **not positionally aligned with
-    /// `archives`**, so it cannot check an index. Measured on three real CDN
-    /// configs: each size list is a permutation of the true sizes, and pairing
-    /// by position matches 2-4%, about chance. Indices are checked by their own
-    /// geometry at parse time instead.
+    /// The `archives-index-size` list, **not aligned with `archives`**:
+    /// pairing by position matched 2-4% on three real configs. Indices are
+    /// checked by their geometry instead.
     pub archives_index_size: Vec<u64>,
-    /// Present in the config but **not fetchable**: the CDN answers 403.
-    /// Agent builds it locally from the per-archive indices, which is why a
-    /// real install has one in `Data/indices` beside the others.
+    /// Present in the config but **not fetchable** (403). Agent builds it
+    /// locally from the per-archive indices.
     pub archive_group: Option<String>,
     pub file_index: Option<String>,
     pub file_index_size: Option<u64>,
 }
 
 impl CdnConfig {
-    /// Each archive index to fetch, with no size to check it against.
-    ///
-    /// The size is always `None`: see [`CdnConfig::archives_index_size`] for
-    /// why the published list cannot be paired with the archive list. The
-    /// shape keeps a size in the signature so the day Blizzard publishes an
-    /// aligned list, or a per-index hash, nothing above here changes.
+    /// Each archive index to fetch. The size is always `None`, see
+    /// [`CdnConfig::archives_index_size`].
     pub fn archive_indices(&self) -> Vec<(&str, Option<u64>)> {
         self.archives.iter().map(|a| (a.as_str(), None)).collect()
     }
@@ -145,15 +129,12 @@ impl CdnConfig {
 
     pub fn load(config_dir: impl AsRef<Path>, hash: &str) -> Result<Self, ConfigError> {
         let path = config_path(config_dir.as_ref(), hash)?;
-        let text = std::fs::read_to_string(&path).map_err(|source| ConfigError::Io { path, source })?;
+        let text = std::fs::read_to_string(&path).map_err(io(&path))?;
         Self::parse(&text)
     }
 }
 
-/// `<dir>/<h0h1>/<h2h3>/<hash>`: the fan-out CASC stores configs under.
-///
-/// The same shape is used by the CDN, so this doubles as the URL path for a
-/// config fetch once the network side lands.
+/// `<dir>/<h0h1>/<h2h3>/<hash>`: the fan-out CASC and the CDN store configs under.
 pub fn config_path(dir: &Path, hash: &str) -> Result<PathBuf, ConfigError> {
     if hash.len() < 4 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(ConfigError::BadHash(hash.to_owned()));
@@ -161,33 +142,17 @@ pub fn config_path(dir: &Path, hash: &str) -> Result<PathBuf, ConfigError> {
     Ok(dir.join(&hash[0..2]).join(&hash[2..4]).join(hash))
 }
 
-/// Put a config's own bytes into a store's `Data/config`, where the client
-/// looks for them.
-///
-/// The client needs the build config and the CDN config before it can do
-/// anything, and it fetches them over the network when they are not in the
-/// store. Measured on `wow_classic_beta`, that is about 1.7 seconds added to
-/// the first launch of every new build, for two files the download already
-/// held in memory and had already checked against their own hashes.
-///
-/// Named by content hash, so writing one twice is writing the same bytes, and
-/// an existing file is left alone rather than rewritten under a client that
-/// may have it open.
+/// Put a config's bytes into `Data/config`, where the client looks first
+/// (missing, it fetches them: 1.7 s on `wow_classic_beta`). An existing file
+/// is left alone: same hash, same bytes, maybe open.
 pub fn store(data_dir: &Path, hash: &str, bytes: &[u8]) -> Result<PathBuf, ConfigError> {
     let path = config_path(&data_dir.join("config"), hash)?;
     if path.is_file() {
         return Ok(path);
     }
-    let io = |source| ConfigError::Io { path: path.clone(), source };
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(io)?;
-    }
-    // Through a temporary file in the same directory: the client reads this
-    // directory while it runs, and a half-written config is worse than an
-    // absent one, which it knows how to fetch.
-    let temp = path.with_extension("lightforge-tmp");
-    std::fs::write(&temp, bytes).map_err(io)?;
-    std::fs::rename(&temp, &path).map_err(io)?;
+    // Atomic: the client reads this directory while it runs, and a
+    // half-written config is worse than an absent one, which it knows how to fetch.
+    crate::fsutil::write_atomic(&path, bytes).map_err(io(&path))?;
     Ok(path)
 }
 
@@ -202,11 +167,6 @@ pub fn parse_hash(hex: &str) -> Result<[u8; 16], ConfigError> {
             .map_err(|_| ConfigError::BadHash(hex.to_owned()))?;
     }
     Ok(out)
-}
-
-/// Render 16 bytes back to lower-case hex.
-pub fn to_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -228,9 +188,15 @@ pub enum ConfigError {
     },
 }
 
+fn io(path: &Path) -> impl FnOnce(std::io::Error) -> ConfigError + '_ {
+    move |source| ConfigError::Io { path: path.to_path_buf(), source }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::text::hex;
 
     /// Trimmed verbatim from a real 12.1.0 retail install, keeping the shapes
     /// that matter: a one-hash `root`, two-hash `encoding`, and the `-size`
@@ -258,14 +224,14 @@ build-product = WoW
 
         // Encoding is the one entry that must carry an ekey: it is read from
         // local storage before any ckey can be resolved.
-        assert_eq!(to_hex(&build.encoding.ckey), "bdb644bbe038d17b9ad370d8a855f305");
+        assert_eq!(hex(&build.encoding.ckey), "bdb644bbe038d17b9ad370d8a855f305");
         assert_eq!(
-            build.encoding.ekey.map(|e| to_hex(&e)).as_deref(),
+            build.encoding.ekey.map(|e| hex(&e)).as_deref(),
             Some("e144ce500f663d0ef512720d96553f20")
         );
 
         // Root lists a content key only, so it has to go through encoding.
-        assert_eq!(to_hex(&build.root.ckey), "669be7c403ea35a20f73ea7effcaa544");
+        assert_eq!(hex(&build.root.ckey), "669be7c403ea35a20f73ea7effcaa544");
         assert_eq!(build.root.ekey, None);
 
         assert!(build.install.unwrap().ekey.is_some());
@@ -275,11 +241,9 @@ build-product = WoW
 
     #[test]
     fn size_lines_are_not_mistaken_for_hashes() {
-        // `encoding-size = 199496988 187471520` sits directly beneath
-        // `encoding`, and both are two-value lines. Reading the wrong one
-        // yields a plausible-looking pair of numbers and a broken lookup.
+        // `encoding-size` is also a two-value line, right beneath `encoding`.
         let build = BuildConfig::parse(REAL_BUILD).unwrap();
-        assert_ne!(to_hex(&build.encoding.ckey), "199496988");
+        assert_ne!(hex(&build.encoding.ckey), "199496988");
         assert_eq!(build.encoding.ckey.len(), 16);
     }
 
@@ -311,8 +275,7 @@ build-product = WoW
             .collect();
         assert_eq!(siblings.len(), 1, "{siblings:?}");
 
-        // Named by content hash, so a second pass is the same bytes. The file
-        // is left alone rather than rewritten under a client that has it open.
+        // A second pass leaves the file alone.
         let before = std::fs::metadata(&path).unwrap().modified().unwrap();
         assert_eq!(store(&data, hash, b"root = abc\n").unwrap(), path);
         assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), before);
@@ -335,8 +298,8 @@ build-product = WoW
 
     #[test]
     fn hashes_round_trip_through_hex() {
-        let hex = "9712ae9c84cc54111e9e3ddf9a6b8019";
-        assert_eq!(to_hex(&parse_hash(hex).unwrap()), hex);
+        let hash = "9712ae9c84cc54111e9e3ddf9a6b8019";
+        assert_eq!(hex(&parse_hash(hash).unwrap()), hash);
         assert!(parse_hash("tooshort").is_err());
     }
 

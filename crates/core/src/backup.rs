@@ -1,19 +1,12 @@
 //! Snapshots of a game's `WTF/Account` folder.
 //!
-//! Everything a player has set up inside the client lives there: every
-//! addon's SavedVariables, key bindings, macros, the account-synced cvars. An
-//! addon update that migrates its saved data, or a client patch that rewrites
-//! it, can lose that in one login, and none of it is anywhere else.
+//! SavedVariables, bindings, macros: an addon migration or a client patch can
+//! lose them in one login.
 //!
 //! One backup is one `.tar.zst` in the app data directory, outside the game
-//! library, so uninstalling a game or losing its drive does not take the
-//! backups with it. The archive carries its own description as its first
-//! member, so a backup is a single file: it is written to a temp file and
-//! renamed into place, and there is no index that could disagree with it.
-//!
-//! A backup is skipped when nothing changed since the newest one on the same
-//! build. The unattended addon pass runs on every start, and without that
-//! check it would rotate the real history out with identical copies.
+//! library, describing itself in its first member: no index. A backup is
+//! skipped when nothing changed on the same build, or the addon pass on every
+//! start would rotate history out with copies.
 
 use std::fs;
 use std::io::{self, Read};
@@ -35,12 +28,14 @@ const META: &str = "lightforge-backup.toml";
 /// Where the folder's contents sit inside the archive.
 const ROOT: &str = "Account";
 const EXTENSION: &str = ".tar.zst";
-/// zstd's own default: well past the point where a higher level stops paying
-/// for itself on Lua text, and fast enough not to be noticed before a launch.
+/// zstd's default; higher levels buy little on Lua text.
 const LEVEL: i32 = 3;
 /// Beside `Account` in `WTF`, so both renames stay on one filesystem.
 const STAGING: &str = ".lightforge-restore";
 const REPLACED: &str = ".lightforge-replaced";
+/// Beside the game accounts in `Account`: what the Battle.net account keeps
+/// for all of them. Never one account's to restore.
+const SHARED: &str = "SavedVariables";
 
 /// Why a backup was taken, shown beside it so a player can tell which one
 /// predates the thing that went wrong.
@@ -81,27 +76,26 @@ impl Reason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Backup {
     pub path: PathBuf,
-    /// Milliseconds since the epoch. Finer than the clock a person reads, so
-    /// two backups a second apart still sort in the order they were taken.
+    /// Milliseconds since the epoch, so close backups still sort.
     pub created: u64,
     pub reason: Reason,
     /// The client build installed when it was taken.
     pub build: Option<String>,
     /// Compressed size in bytes.
     pub size: u64,
+    /// The game accounts it holds, e.g. `478511984#1`. Empty for a backup
+    /// taken before they were recorded: it restores whole.
+    pub accounts: Vec<String>,
     fingerprint: String,
 }
 
 impl Backup {
     /// When it was taken, in local time: `2026-10-14 22:52`.
     pub fn when(&self) -> String {
-        let secs = (self.created / 1000) as libc::time_t;
-        // SAFETY: `localtime_r` is the reentrant form; it reads `secs` and
-        // writes only into `tm`, which outlives the call.
-        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-        if unsafe { libc::localtime_r(&secs, &mut tm) }.is_null() {
+        let secs = (self.created / 1000) as i64;
+        let Some(tm) = crate::text::local_time(secs) else {
             return secs.to_string();
-        }
+        };
         format!(
             "{:04}-{:02}-{:02} {:02}:{:02}",
             tm.tm_year + 1900,
@@ -125,6 +119,8 @@ struct Meta {
     reason: Reason,
     build: Option<String>,
     fingerprint: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    accounts: Vec<String>,
 }
 
 /// Where one game's settings are and where its backups go.
@@ -151,14 +147,12 @@ impl Plan {
         }
     }
 
-    /// Every readable backup, newest first. Files that are not one are left
-    /// alone rather than reported: the directory is ours, but a stray file in
-    /// it should not hide the backups beside it.
+    /// Every readable backup, newest first; stray files are ignored.
     pub fn list(&self) -> Result<Vec<Backup>, BackupError> {
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(source) => return Err(BackupError::io(&self.dir, source)),
+            Err(source) => return Err(io(&self.dir)(source)),
         };
         let mut backups: Vec<Backup> = entries
             .filter_map(Result::ok)
@@ -193,39 +187,55 @@ impl Plan {
 
     /// Replace `Account` with what `backup` holds. The client must be closed.
     ///
-    /// The archive is unpacked before anything is touched, so a damaged one
-    /// fails with the current folder intact. The current state is then backed
-    /// up, and the swap is two renames on one filesystem. Returns that safety
-    /// backup, or `None` when it was already identical to an existing one.
+    /// Unpacked first, so a damaged archive leaves the folder intact; the
+    /// current state is backed up, then two renames. Returns that safety
+    /// backup, or `None` when one identical existed.
     pub fn restore(&self, backup: &Backup) -> Result<Option<Backup>, BackupError> {
+        self.replace(backup, None)
+    }
+
+    /// [`Plan::restore`] for one game account: its folder only, the other
+    /// accounts and the `SavedVariables` they share left as they are. The
+    /// safety backup still covers everything.
+    pub fn restore_account(&self, backup: &Backup, account: &str) -> Result<Option<Backup>, BackupError> {
+        if !backup.accounts.iter().any(|a| a == account) {
+            return Err(BackupError::NoAccount { archive: backup.path.clone(), account: account.to_owned() });
+        }
+        self.replace(backup, Some(account))
+    }
+
+    fn replace(&self, backup: &Backup, account: Option<&str>) -> Result<Option<Backup>, BackupError> {
         let wtf = self.account_dir.parent().unwrap_or(Path::new("."));
         let staging = wtf.join(STAGING);
         let replaced = wtf.join(REPLACED);
-        // Leftovers from a restore that was interrupted. Neither is ever the
-        // live folder: that one is only ever called `Account`.
+        // Leftovers of an interrupted restore, never the live `Account`.
         remove_if_present(&staging)?;
         remove_if_present(&replaced)?;
 
         unpack(&backup.path, &staging)?;
-        let fresh = staging.join(ROOT);
+        let (fresh, target) = match account {
+            None => (staging.join(ROOT), self.account_dir.clone()),
+            Some(name) => (staging.join(ROOT).join(name), self.account_dir.join(name)),
+        };
         // A backup of an empty folder has no members under it.
-        fs::create_dir_all(&fresh).map_err(|e| BackupError::io(&fresh, e))?;
+        fs::create_dir_all(&fresh).map_err(io(&fresh))?;
 
         let safety = self.snapshot(Reason::BeforeRestore)?;
 
-        let had_current = self.account_dir.exists();
+        if account.is_some() {
+            fs::create_dir_all(&self.account_dir).map_err(io(&self.account_dir))?;
+        }
+        let had_current = target.exists();
         if had_current {
-            fs::rename(&self.account_dir, &replaced)
-                .map_err(|e| BackupError::io(&self.account_dir, e))?;
+            fs::rename(&target, &replaced).map_err(io(&target))?;
         }
-        if let Err(e) = fs::rename(&fresh, &self.account_dir) {
+        if let Err(e) = fs::rename(&fresh, &target) {
             if had_current {
-                let _ = fs::rename(&replaced, &self.account_dir);
+                let _ = fs::rename(&replaced, &target);
             }
-            return Err(BackupError::io(&self.account_dir, e));
+            return Err(io(&target)(e));
         }
-        // The restore has happened; failing to tidy up after it is not worth
-        // reporting as a failed restore, and the next one clears both.
+        // Restored; tidying is the next restore's job if this fails.
         let _ = fs::remove_dir_all(&replaced);
         let _ = fs::remove_dir_all(&staging);
         Ok(safety)
@@ -233,14 +243,12 @@ impl Plan {
 
     /// Delete one backup, the player's own decision.
     ///
-    /// Only a file this game's backup directory lists is removed: `backup`
-    /// is matched against [`Plan::list`] rather than trusted, so a stale or
-    /// foreign path is refused instead of deleted.
+    /// Only a file [`Plan::list`] returns; anything else is refused.
     pub fn delete(&self, backup: &Backup) -> Result<(), BackupError> {
         if !self.list()?.iter().any(|b| b.path == backup.path) {
             return Err(BackupError::NotABackup(backup.path.clone()));
         }
-        fs::remove_file(&backup.path).map_err(|e| BackupError::io(&backup.path, e))
+        fs::remove_file(&backup.path).map_err(io(&backup.path))
     }
 
     /// Write a backup without pruning, so a restore cannot rotate out the
@@ -253,10 +261,7 @@ impl Plan {
         let files = walk(&self.account_dir)?;
         let fingerprint = fingerprint(&files);
 
-        // Any backup on this build, not only the newest: after a restore the
-        // newest is the safety copy of what was replaced, and the restored
-        // folder is the older one. Matching only the newest wrote it again,
-        // and rotation then took out a real backup to make room.
+        // Any backup on this build: after a restore the newest is the safety copy.
         let unchanged = self
             .list()?
             .into_iter()
@@ -265,22 +270,33 @@ impl Plan {
             return Ok(None);
         }
 
-        let meta = Meta { created: now(), reason, build: self.build.clone(), fingerprint };
+        let meta = Meta { created: now(), reason, build: self.build.clone(), fingerprint, accounts: self.accounts() };
         let path = self.write(&files, &meta)?;
         read_backup(&path).map(Some)
     }
 
+    /// The game account folders in `Account`, by name.
+    fn accounts(&self) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(&self.account_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|t| t.is_dir()))
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != SHARED)
+            .collect();
+        names.sort();
+        names
+    }
+
     fn write(&self, files: &[File], meta: &Meta) -> Result<PathBuf, BackupError> {
         let dir = &self.dir;
-        fs::create_dir_all(dir).map_err(|e| BackupError::io(dir, e))?;
+        fs::create_dir_all(dir).map_err(io(dir))?;
         // Created 0600 and left that way: these are one player's settings.
         let tmp = tempfile::Builder::new()
             .prefix(".partial-")
-            .tempfile_in(dir)
-            .map_err(|e| BackupError::io(dir, e))?;
-        let io = |e| BackupError::io(tmp.path(), e);
-
-        let encoder = zstd::Encoder::new(tmp.as_file(), LEVEL).map_err(io)?;
+            .tempfile_in(dir).map_err(io(dir))?;
+        let encoder = zstd::Encoder::new(tmp.as_file(), LEVEL).map_err(io(tmp.path()))?;
         let mut tar = tar::Builder::new(encoder);
 
         let text = toml::to_string(meta).expect("backup metadata serializes");
@@ -289,21 +305,21 @@ impl Plan {
         header.set_mode(0o644);
         header.set_mtime(meta.created / 1000);
         header.set_cksum();
-        tar.append_data(&mut header, META, text.as_bytes()).map_err(io)?;
+        tar.append_data(&mut header, META, text.as_bytes()).map_err(io(tmp.path()))?;
 
         for file in files {
             let source = self.account_dir.join(&file.rel);
             tar.append_path_with_name(&source, Path::new(ROOT).join(&file.rel))
-                .map_err(|e| BackupError::io(&source, e))?;
+                .map_err(io(&source))?;
         }
-        tar.into_inner().map_err(io)?.finish().map_err(io)?;
-        tmp.as_file().sync_all().map_err(io)?;
+        tar.into_inner().map_err(io(tmp.path()))?.finish().map_err(io(tmp.path()))?;
+        tmp.as_file().sync_all().map_err(io(tmp.path()))?;
 
         // The fingerprint keeps two backups taken in one millisecond from
         // landing on one name; the rename would silently replace the first.
         let short = &meta.fingerprint[..8];
         let path = dir.join(format!("{}-{}-{short}{EXTENSION}", meta.created, meta.reason.slug()));
-        tmp.persist(&path).map_err(|e| BackupError::io(&path, e.error))?;
+        tmp.persist(&path).map_err(|e| io(&path)(e.error))?;
         // Durability of the rename, as `BuildInfo::save` does it.
         if let Ok(handle) = fs::File::open(dir) {
             let _ = handle.sync_all();
@@ -314,7 +330,7 @@ impl Plan {
     /// Keep the newest `keep`, and clear anything a crash left half written.
     fn prune(&self) -> Result<(), BackupError> {
         for old in self.list()?.iter().skip(self.keep.max(1)) {
-            fs::remove_file(&old.path).map_err(|e| BackupError::io(&old.path, e))?;
+            fs::remove_file(&old.path).map_err(io(&old.path))?;
         }
         if let Ok(entries) = fs::read_dir(&self.dir) {
             for entry in entries.filter_map(Result::ok) {
@@ -340,18 +356,16 @@ struct File {
     mtime: u128,
 }
 
-/// Every regular file under `root`, sorted. Symlinks are not followed and not
-/// kept: the client never writes one there, and following one could archive
-/// something far outside the game.
+/// Every regular file under `root`, sorted. Symlinks are skipped.
 fn walk(root: &Path) -> Result<Vec<File>, BackupError> {
     let mut files = Vec::new();
     let mut pending = vec![PathBuf::new()];
     while let Some(rel) = pending.pop() {
         let dir = root.join(&rel);
-        for entry in fs::read_dir(&dir).map_err(|e| BackupError::io(&dir, e))? {
-            let entry = entry.map_err(|e| BackupError::io(&dir, e))?;
+        for entry in fs::read_dir(&dir).map_err(io(&dir))? {
+            let entry = entry.map_err(io(&dir))?;
             let path = entry.path();
-            let meta = fs::symlink_metadata(&path).map_err(|e| BackupError::io(&path, e))?;
+            let meta = fs::symlink_metadata(&path).map_err(io(&path))?;
             let rel = rel.join(entry.file_name());
             if meta.is_dir() {
                 pending.push(rel);
@@ -371,14 +385,9 @@ fn walk(root: &Path) -> Result<Vec<File>, BackupError> {
     Ok(files)
 }
 
-/// What the folder looks like, without reading it: names, sizes and
-/// modification times. The client rewrites a SavedVariables file whenever it
-/// saves one, so a change that leaves all three alone is not a change that
-/// happened. Restoring keeps modification times to the second, and that is
-/// the resolution kept here, so a restored folder fingerprints the same as
-/// the backup it came from. The cost is that two writes of one file within a
-/// second, at the same size, look like one; the client writes SavedVariables
-/// once, on exit, so that is not a case a real session produces.
+/// The folder by names, sizes and mtimes to the second, the resolution a
+/// restore keeps, so a restored folder matches its backup. The client writes
+/// SavedVariables once, on exit.
 fn fingerprint(files: &[File]) -> String {
     let mut hash = Sha256::new();
     for file in files {
@@ -387,15 +396,15 @@ fn fingerprint(files: &[File]) -> String {
         hash.update(file.len.to_le_bytes());
         hash.update(file.mtime.to_le_bytes());
     }
-    hash.finalize().iter().take(16).map(|b| format!("{b:02x}")).collect()
+    crate::text::hex(&hash.finalize()[..16])
 }
 
 fn read_backup(path: &Path) -> Result<Backup, BackupError> {
     let not_ours = || BackupError::NotABackup(path.to_path_buf());
-    let file = fs::File::open(path).map_err(|e| BackupError::io(path, e))?;
-    let size = file.metadata().map_err(|e| BackupError::io(path, e))?.len();
+    let file = fs::File::open(path).map_err(io(path))?;
+    let size = file.metadata().map_err(io(path))?.len();
 
-    let mut archive = tar::Archive::new(zstd::Decoder::new(file).map_err(|e| BackupError::io(path, e))?);
+    let mut archive = tar::Archive::new(zstd::Decoder::new(file).map_err(io(path))?);
     let mut entries = archive.entries().map_err(|_| not_ours())?;
     let mut first = entries.next().ok_or_else(not_ours)?.map_err(|_| not_ours())?;
     if first.path().ok().as_deref() != Some(Path::new(META)) {
@@ -411,22 +420,22 @@ fn read_backup(path: &Path) -> Result<Backup, BackupError> {
         reason: meta.reason,
         build: meta.build,
         size,
+        // Joined onto `Account` by a restore: folder names only.
+        accounts: meta.accounts.into_iter().filter(|a| !a.is_empty() && a != ".." && !a.contains('/')).collect(),
         fingerprint: meta.fingerprint,
     })
 }
 
-/// Extract under `dest`, refusing anything that is not a plain file or folder
-/// inside `Account`. Our own archives never hold anything else, so one that
-/// does was not written by us and is not trusted.
+/// Extract under `dest`, refusing anything but plain files and folders inside
+/// `Account`.
 fn unpack(archive_path: &Path, dest: &Path) -> Result<(), BackupError> {
-    let io = |e| BackupError::io(archive_path, e);
-    let file = fs::File::open(archive_path).map_err(io)?;
-    let mut archive = tar::Archive::new(zstd::Decoder::new(file).map_err(io)?);
-    fs::create_dir_all(dest).map_err(|e| BackupError::io(dest, e))?;
+    let file = fs::File::open(archive_path).map_err(io(archive_path))?;
+    let mut archive = tar::Archive::new(zstd::Decoder::new(file).map_err(io(archive_path))?);
+    fs::create_dir_all(dest).map_err(io(dest))?;
 
-    for entry in archive.entries().map_err(io)? {
-        let mut entry = entry.map_err(io)?;
-        let path = entry.path().map_err(io)?.into_owned();
+    for entry in archive.entries().map_err(io(archive_path))? {
+        let mut entry = entry.map_err(io(archive_path))?;
+        let path = entry.path().map_err(io(archive_path))?.into_owned();
         if path == Path::new(META) {
             continue;
         }
@@ -436,14 +445,14 @@ fn unpack(archive_path: &Path, dest: &Path) -> Result<(), BackupError> {
         if !inside || !(kind.is_file() || kind.is_dir()) {
             return Err(BackupError::UnsafeEntry { archive: archive_path.to_path_buf(), entry: path });
         }
-        entry.unpack_in(dest).map_err(|e| BackupError::io(dest, e))?;
+        entry.unpack_in(dest).map_err(io(dest))?;
     }
     Ok(())
 }
 
 fn remove_if_present(path: &Path) -> Result<(), BackupError> {
     match fs::remove_dir_all(path) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(BackupError::io(path, e)),
+        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(io(path)(e)),
         _ => Ok(()),
     }
 }
@@ -468,12 +477,13 @@ pub enum BackupError {
 
     #[error("{archive} holds {entry}, which a backup never contains")]
     UnsafeEntry { archive: PathBuf, entry: PathBuf },
+
+    #[error("{archive} holds no account {account}")]
+    NoAccount { archive: PathBuf, account: String },
 }
 
-impl BackupError {
-    fn io(path: impl Into<PathBuf>, source: io::Error) -> Self {
-        Self::Io { path: path.into(), source }
-    }
+fn io(path: &Path) -> impl FnOnce(io::Error) -> BackupError + '_ {
+    move |source| BackupError::Io { path: path.to_path_buf(), source }
 }
 
 #[cfg(test)]
@@ -576,6 +586,33 @@ mod tests {
         // And the restore is itself undoable.
         plan.restore(&safety).unwrap();
         assert_eq!(fs::read_to_string(&saved).unwrap(), "X = 2, migrated");
+    }
+
+    #[test]
+    fn one_account_is_restored_without_touching_the_others_or_what_they_share() {
+        let root = tempfile::tempdir().unwrap();
+        let plan = plan(root.path());
+        // The shape of a real `Account`: one folder per game account, and the
+        // Battle.net account's own `SavedVariables` beside them.
+        let first = plan.account_dir.join("478511984#1/SavedVariables/Details.lua");
+        let second = plan.account_dir.join("478511984#2/SavedVariables/Details.lua");
+        let shared = plan.account_dir.join("SavedVariables/Blizzard_SavedSets.lua");
+        for path in [&first, &second, &shared] {
+            write(path, "before");
+        }
+        let backup = plan.create(Reason::Manual).unwrap().unwrap();
+        assert_eq!(backup.accounts, ["478511984#1", "478511984#2"]);
+
+        for path in [&first, &second, &shared] {
+            write(path, "after");
+        }
+        let safety = plan.restore_account(&backup, "478511984#1").unwrap();
+
+        assert_eq!(fs::read_to_string(&first).unwrap(), "before");
+        assert_eq!(fs::read_to_string(&second).unwrap(), "after");
+        assert_eq!(fs::read_to_string(&shared).unwrap(), "after");
+        assert!(safety.is_some_and(|s| s.reason == Reason::BeforeRestore));
+        assert!(matches!(plan.restore_account(&backup, "nobody#9"), Err(BackupError::NoAccount { .. })));
     }
 
     #[test]

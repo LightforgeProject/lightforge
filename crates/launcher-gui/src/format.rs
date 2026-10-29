@@ -2,10 +2,8 @@
 
 use crate::*;
 
-/// The caption under a pre-installed game's button, from Battle.net's own
-/// `Available October 19, 2026`. Said as the servers, not the game: the game
-/// starts fine before then, it is the login that is refused. A string that
-/// does not have that shape is shown as Blizzard wrote it.
+/// The caption under a pre-installed game's button, from Battle.net's
+/// `Available October 19, 2026`: about the servers (it is login that waits).
 pub(crate) fn servers_open(release_date: &str) -> String {
     let Some(date) = release_date.strip_prefix("Available ") else {
         return release_date.to_owned();
@@ -38,11 +36,8 @@ pub(crate) fn usage_row<'a>(
 
 /// The optional downloads Lightforge offers to switch on.
 ///
-/// This lists what is *shown*, not what is gated: every optional tag a build
-/// carries stays off unless opted in, named here or not, so a tag Blizzard
-/// adds tomorrow is still excluded, hardcoding the gate is what once put a
-/// 37 GiB texture pack in every plan. `Alternate` and `Talebound` exist in
-/// the manifests but are not something to offer a player a switch for.
+/// What is *shown*, not what is gated: every optional tag stays off unless
+/// opted in. `Alternate` and `Talebound` get no switch.
 pub(crate) const OFFERED_OPTIONAL: &[&str] = &[HIGH_RES];
 
 /// The high-resolution texture pack's manifest tag.
@@ -64,14 +59,8 @@ pub(crate) fn optional_label(tag: &str) -> String {
     }
 }
 
-/// Secondary text at a given size.
-/// `~/Games/Blizzard` rather than `/home/ann/Games/Blizzard`.
-///
-/// Only the home prefix, and only when it is one: a library on
-/// `/run/media/ann/ssd` is left exactly as it is, because every part of that
-/// path tells the user which drive they are looking at. Unlike
-/// `core::debug::scrub`, the account name is not hidden; this is the user's
-/// own screen and their own path.
+/// `~/Games/Blizzard`, not `/home/ann/Games/Blizzard`. Only the home
+/// prefix: `/run/media/ann/ssd` names the drive.
 pub(crate) fn home_relative(path: &Path) -> String {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return path.display().to_string();
@@ -84,9 +73,7 @@ pub(crate) fn home_relative(path: &Path) -> String {
 
 /// Whether a key press is the chord that reveals the hints.
 ///
-/// All three modifiers, deliberately: Control and Shift alone are one slip
-/// away from shortcuts people use, and the prose behind this is not something
-/// a user should meet by fumbling a paste.
+/// All three modifiers, so no slip triggers it.
 pub(crate) fn hints_chord(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> bool {
     matches!(key.as_ref(), iced::keyboard::Key::Character(HINTS_CHORD))
         && modifiers.control()
@@ -96,30 +83,20 @@ pub(crate) fn hints_chord(key: &iced::keyboard::Key, modifiers: iced::keyboard::
 
 /// Height of the game band's own row.
 ///
-/// Pinned rather than left to the tiles: the band fills its cross axis, and a
-/// widget that does that is handed the height of its siblings, the buttons,
-/// which are shorter than a tile. The padding is [`theme::SM`] rather than
-/// `XS` now that the row is the band's alone, so the tiles sit in it instead
-/// of filling it edge to edge: [`theme::LG`] of air, split above and below.
+/// Pinned: filling the cross axis would take the shorter buttons' height.
 pub(crate) fn strip_height() -> f32 {
     theme::tile() + theme::LG
 }
 
-/// Whether Steam started this launcher, which it says by setting
-/// `SteamGameId` for everything it launches, a non-Steam shortcut included.
-/// Only then is there a Steam to ask for its keyboard: anywhere else
-/// [`STEAM_KEYBOARD`] is just a URL, and opening it starts Steam. Measured
-/// 2026-10-17, A on a text field in a launcher started from the desktop
-/// brought up the real Steam client with every library on the machine.
+/// Whether Steam started this launcher (`SteamGameId` is set). Otherwise
+/// [`STEAM_KEYBOARD`] starts the Steam client (measured 2026-10-17).
 pub(crate) fn launched_by_steam() -> bool {
     std::env::var_os("SteamGameId").is_some_and(|id| !id.is_empty())
 }
 
 /// The handful of facts worth filtering a pile of issues by.
 ///
-/// Every one of them is already in the rendered bundle the card shows, so this
-/// sends nothing new, it only puts them where GlitchTip can group on them,
-/// which reading a text blob per issue does not allow.
+/// All already in the bundle; tags let GlitchTip group on them.
 pub(crate) fn report_tags(info: &DebugInfo) -> Vec<(String, String)> {
     let mut tags = vec![
         ("lightforge".to_owned(), info.app_version.clone()),
@@ -148,10 +125,7 @@ pub(crate) fn report_tags(info: &DebugInfo) -> Vec<(String, String)> {
 /// tile needs, `room` what the band has for tiles, and the answer is indices
 /// into `widths`: shown first, hidden second, both in the order given.
 ///
-/// Nothing is hidden while everything fits. Once something must be, the
-/// overflow button costs room too, and the selected line is never what
-/// disappears: it is the game the page is showing, so a band that dropped it
-/// would stop saying where you are.
+/// Nothing is hidden while everything fits; the selected line never is.
 pub(crate) fn divide_strip(widths: &[f32], selected: usize, room: f32) -> (Vec<usize>, Vec<usize>) {
     let gap = theme::SM;
     let span = |ids: &[usize]| -> f32 {
@@ -175,9 +149,7 @@ pub(crate) fn divide_strip(widths: &[f32], selected: usize, room: f32) -> (Vec<u
         shown = next;
     }
 
-    // The selected line takes the place of the last tile that fit, and of the
-    // one before that if it still does not fit. A band showing only the
-    // selected line is the floor: something is always lit.
+    // The selected line replaces the last tiles that fit.
     if !shown.contains(&selected) {
         shown.pop();
         while !shown.is_empty() {
@@ -197,8 +169,7 @@ pub(crate) fn divide_strip(widths: &[f32], selected: usize, room: f32) -> (Vec<u
 
 /// `2026-10-04T20:10:34.237Z` -> `4 Oct`.
 ///
-/// Day and month only: the year is almost always this one, and a column wide
-/// enough for a full timestamp is a column that costs the addon's name.
+/// Day and month only, to save the column.
 pub(crate) fn short_day(timestamp: &str) -> String {
     pub(crate) const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -215,11 +186,28 @@ pub(crate) fn short_day(timestamp: &str) -> String {
     }
 }
 
+/// An offered build as a version: `BigWigs-v427.8.zip` -> `v427.8`.
+///
+/// CurseForge names files, not versions; the addon's own name in front and
+/// the extension are what is dropped. Anything else shows as itself.
+pub(crate) fn release_version(file_name: &str, title: &str) -> String {
+    let stem = file_name.strip_suffix(".zip").unwrap_or(file_name);
+    let squashed: String = title.chars().filter(|c| !c.is_whitespace()).collect();
+    let version = match stem.get(..squashed.len()) {
+        Some(head) if head.eq_ignore_ascii_case(&squashed) => {
+            stem[squashed.len()..].trim_start_matches(['-', '_', ' '])
+        }
+        _ => stem,
+    };
+    match version.is_empty() {
+        true => stem.to_owned(),
+        false => version.to_owned(),
+    }
+}
+
 /// The day out of an RFC 3339 timestamp, which is all a build list needs.
 ///
-/// Not parsed into a date type: the string is the provider's, the only part
-/// anyone reads is the day, and a malformed one should show as itself rather
-/// than disappear behind an error.
+/// Not parsed: a malformed one shows as itself.
 pub(crate) fn day_of(timestamp: &str) -> String {
     timestamp.split('T').next().unwrap_or(timestamp).to_owned()
 }
@@ -271,17 +259,11 @@ pub(crate) fn progress_of(action: &ActionState) -> Option<state::Progress> {
 
 /// A download count, short enough to sit in a caption beside the author.
 ///
-/// One decimal, dropped when it would read ".0", so popular addons are "98.4M"
-/// and "142M" rather than nine digits the eye has to count. Short scale,
-/// matching every other addon manager; small counts are left exact, because
-/// "847" is already shorter than any abbreviation of it.
+/// "98.4M", "142M", "847": one decimal unless it would read ".0".
 pub(crate) fn downloads_of(n: u64) -> String {
     let scaled = |n: u64, unit: f64, suffix: &str| {
         let value = n as f64 / unit;
-        // The rounded value decides how many decimals to print, or 99,950,000
-        // renders as "100.0M", a decimal place that is only ever ".0". The
-        // raw value is what gets printed, because rounding twice turns
-        // 999,499,999 into "1000M".
+        // Rounded to choose the decimals, raw when printed: no "100.0M" or "1000M".
         let rounded = (value * 10.0).round() / 10.0;
         match rounded.fract() < 0.05 || rounded >= 100.0 {
             true => format!("{value:.0}{suffix}"),
@@ -308,8 +290,7 @@ pub(crate) fn bytes_of(done: u64, total: u64) -> String {
 
 /// Describe a config that would not load, keeping a copy of it aside.
 ///
-/// The whole error chain, not just the top: "could not parse config.toml" is
-/// useless without the line and column underneath it.
+/// The whole error chain, down to the line and column.
 pub(crate) fn broken_config(error: &lightforge_core::config::ConfigError, path: &Path) -> String {
     let mut message = error.to_string();
     let mut source = std::error::Error::source(error);

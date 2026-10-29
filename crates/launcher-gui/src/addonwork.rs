@@ -27,13 +27,14 @@ pub struct Row {
     /// Set when Lightforge installed it, only these can be updated or removed.
     pub managed: Option<Managed>,
     /// Folders belonging to a managed addon other than its first are shown as
-    /// children rather than as separate addons.
+    /// children, not as separate addons.
     pub child_of: Option<String>,
+    /// The game client would call it out of date; see `addons::Client`.
+    pub out_of_date: bool,
+    /// Required addons that are not installed, by folder name.
+    pub missing: Vec<String>,
 }
 
-/// `Default` is for tests and for growing the struct, the same reason
-/// [`Record`] has one: a field added here should not mean editing every
-/// literal that never cared about it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Managed {
     pub provider: String,
@@ -52,23 +53,15 @@ pub struct Managed {
     /// The day this build was installed, `YYYY-MM-DD`. `None` for anything
     /// installed before Lightforge started recording it.
     pub installed_at: Option<String>,
-    /// Links the ledger recorded at install time: the project page, the
-    /// author's page and the source repository, each absent for a provider
-    /// that does not publish it or an addon installed before they were kept.
+    /// Links the ledger recorded at install time, each optional.
     pub website_url: Option<String>,
     pub author_url: Option<String>,
     pub source_url: Option<String>,
 }
 
 impl Managed {
-    /// Where "Support the author" should go, or `None` when there is nowhere.
-    ///
-    /// The repository first and the author's provider page second, because
-    /// that is the order of usefulness rather than the order of specificity:
-    /// a repository usually carries a Sponsor button, where a provider's
-    /// author page is a list of their projects. No catalogue publishes a
-    /// donation link as such, the CurseForge schema has no such field, so
-    /// this is the closest honest thing to one.
+    /// Where "Support the author" goes: the repository (a Sponsor button,
+    /// usually) before the author's page. No catalogue has a donation field.
     pub fn support_url(&self) -> Option<&str> {
         self.source_url.as_deref().or(self.author_url.as_deref())
     }
@@ -80,38 +73,35 @@ pub struct Listing {
     pub rows: Vec<Row>,
     /// Ledger entries whose folders are actually on disk.
     pub managed: usize,
-    /// Ledger entries whose folders are gone. Reconciled away on every scan
-    /// of a readable directory, so this is only ever non-zero for a library
-    /// we cannot reach, where claiming to manage something that is not there
-    /// is how "0 installed · 3 managed" happens.
+    /// Ledger entries whose folders are gone: non-zero only for a library
+    /// that cannot be read.
     pub stale: usize,
     pub dir: PathBuf,
     /// Why the ledger could not be read, when it could not.
     pub problem: Option<String>,
+    /// Folders two providers' records both claim, with the providers.
+    pub shared: Vec<(String, Vec<String>)>,
 }
 
 /// Scan a product's addons and fold in what the ledger knows.
 pub async fn list(layout: Layout, code: ProductCode) -> Listing {
     tokio::task::spawn_blocking(move || {
         let dir = layout.addons_dir(&code);
-        let installed = addons::scan(&dir).unwrap_or_default();
+        let version = lightforge_core::buildinfo::BuildInfo::load(layout.build_info(&code))
+            .ok()
+            .and_then(|info| info.get(&code, lightforge_core::buildinfo::COL_VERSION).ok().map(str::to_owned));
+        let installed = addons::scan(&dir, &addons::Client::of(&code, version.as_deref())).unwrap_or_default();
         let path = AppDirs::discover()
             .ok()
             .map(|dirs| manage::ledger_path(dirs.data_dir(), &dir, &code));
-        // An unreadable ledger is said, not shown as "nothing managed":
-        // install, update and remove all refuse it, and a page that looks
-        // fine while every button fails is the worse of the two.
+        // An unreadable ledger is said, not shown as "nothing managed".
         let (mut ledger, problem) = match path.as_ref().map(|path| Ledger::load(path)) {
             Some(Ok(ledger)) => (ledger, None),
             Some(Err(e)) => (Ledger::default(), Some(chain(&e))),
             None => (Ledger::default(), None),
         };
 
-        // An addon whose folders are all gone is not installed, whatever the
-        // ledger says, and offering to update it is a promise we cannot keep.
-        // Only ever reconciled against a directory we could read.
-        // Never against a ledger that did not load: saving the stand-in
-        // would replace the user's file, the one record of what is ours.
+        // Reconciled only against a readable directory and a loaded ledger.
         if dir.is_dir() && problem.is_none() {
             let dropped = ledger.prune_missing(&dir);
             if !dropped.is_empty() {
@@ -139,6 +129,7 @@ pub async fn list(layout: Layout, code: ProductCode) -> Listing {
             rows: rows_from(&installed, &ledger),
             dir,
             problem,
+            shared: ledger.shared_folders(),
         }
     })
     .await
@@ -147,14 +138,10 @@ pub async fn list(layout: Layout, code: ProductCode) -> Listing {
 
 /// Turn a scan plus a ledger into display rows.
 ///
-/// The ledger owns the grouping: a package's first folder is the addon, and its
-/// other folders are children of it. Without that, BigWigs renders as eleven
-/// separate addons with eleven Remove buttons, each of which would delete the
-/// other ten.
+/// The ledger groups: a package's first folder is the addon, the rest its
+/// children, not eleven BigWigs rows.
 pub fn rows_from(installed: &[Installed], ledger: &Ledger) -> Vec<Row> {
-    // The record itself, plus which folder heads the package it came in,
-    // empty for the package's own first folder. Carrying the record rather
-    // than a widening tuple keeps a new per-addon setting to one line below.
+    // The record, and the folder heading its package (empty for the head).
     type Owner<'a> = (&'a Record, &'a str);
     let mut owner: std::collections::BTreeMap<&str, Owner<'_>> = Default::default();
     for record in &ledger.addons {
@@ -167,11 +154,14 @@ pub fn rows_from(installed: &[Installed], ledger: &Ledger) -> Vec<Row> {
         }
     }
 
+    let missing = addons::missing_dependencies(installed);
     installed
         .iter()
         .map(|addon: &Installed| {
             let known = owner.get(addon.folder.as_str());
             Row {
+                out_of_date: addon.out_of_date,
+                missing: missing.iter().filter(|(folder, _)| *folder == addon.folder).map(|(_, dep)| dep.clone()).collect(),
                 folder: addon.folder.clone(),
                 title: addon.title.clone().unwrap_or_else(|| addon.folder.clone()),
                 version: addon.version.clone().unwrap_or_else(|| "—".to_owned()),
@@ -201,6 +191,14 @@ pub fn rows_from(installed: &[Installed], ledger: &Ledger) -> Vec<Row> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_missing_dependency_lands_on_the_row_that_needs_it() {
+        let core = Installed { dependencies: vec!["BigWigs".to_owned()], ..installed("BigWigs_Core", "v427.8") };
+        let rows = rows_from(&[core, installed("Details", "1.0")], &Ledger::default());
+        assert_eq!(rows[0].missing, ["BigWigs"]);
+        assert!(rows[1].missing.is_empty());
+    }
+
     fn installed(folder: &str, version: &str) -> Installed {
         Installed {
             folder: folder.to_owned(),
@@ -210,6 +208,8 @@ mod tests {
             author: None,
             ids: Default::default(),
             interfaces: Vec::new(),
+            dependencies: Vec::new(),
+            out_of_date: false,
         }
     }
 
@@ -232,7 +232,7 @@ mod tests {
         // With no repository the author's provider page is better than nothing.
         assert_eq!(with(None, Some("https://x/author")).support_url(), Some("https://x/author"));
         // And an addon installed before the ledger kept these offers neither,
-        // which is the menu one line shorter rather than a link to nowhere.
+        // which is the menu one line shorter, not a link to nowhere.
         assert_eq!(with(None, None).support_url(), None);
     }
 
@@ -360,7 +360,7 @@ mod tests {
         let rows = rows_from(&[installed("BigWigs", "1.0")], &ledger);
         // `None` and `Some(false)` mean different things to the row, one
         // follows the app's default, the other overrides it, so the row has
-        // to carry the choice itself rather than a resolved boolean.
+        // to carry the choice itself, not a resolved boolean.
         assert_eq!(rows[0].managed.as_ref().unwrap().auto_update, Some(false));
         assert!(manage::auto_update_requests(&ledger, Channel::Stable, true).is_empty());
     }
@@ -475,9 +475,6 @@ pub async fn import(
     code: ProductCode,
     token: String,
     channel: Channel,
-    // Install the exact files the token names and hold them there, rather
-    // than taking the newest of each.
-    pinned: bool,
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Report, Problem> {
     let collection = Collection::parse(&token).map_err(|e| Problem::of(&e))?;
@@ -485,7 +482,9 @@ pub async fn import(
     if requests.is_empty() {
         return Err("that token names no addons Lightforge can install".into());
     }
-    run(http, layout, code, requests, Mode { pinned, ..Mode::default() }, channel, tx).await
+    // The newest of each on its channel, never the token's own files: an
+    // import pinned to them never updated, with nothing on screen saying why.
+    run(http, layout, code, requests, Mode::default(), channel, tx).await
 }
 
 /// Update everything the ledger tracks.
@@ -497,8 +496,7 @@ pub async fn update(
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Report, Problem> {
     let dirs = AppDirs::discover().map_err(|e| Problem::of(&e))?;
-    let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
-        .map_err(|e| Problem::of(&e))?;
+    let ledger = installed_ledger(&dirs, &layout, &code)?;
     let requests = manage::update_requests(&ledger, channel);
 
     if requests.is_empty() {
@@ -507,10 +505,21 @@ pub async fn update(
     run(http, layout, code, requests, Mode::default(), channel, tx).await
 }
 
+/// The ledger as far as it still describes what is on disk.
+///
+/// Records whose folders are gone are left out, in memory only, or an update
+/// fetches them again.
+fn installed_ledger(dirs: &AppDirs, layout: &Layout, code: &ProductCode) -> Result<Ledger, Problem> {
+    let dir = layout.addons_dir(code);
+    let mut ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &dir, code))
+        .map_err(|e| Problem::of(&e))?;
+    ledger.prune_missing(&dir);
+    Ok(ledger)
+}
+
 /// Update the addons that update themselves, with nobody watching.
 ///
-/// Returns `None` when there is nothing to do, so the caller can tell "no work"
-/// from "worked, and here is what happened" without inspecting a report.
+/// `None` when there is nothing to do.
 pub async fn auto_update(
     http: Option<Http>,
     layout: Layout,
@@ -520,8 +529,7 @@ pub async fn auto_update(
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<Option<Report>, Problem> {
     let dirs = AppDirs::discover().map_err(|e| Problem::of(&e))?;
-    let ledger = Ledger::load(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code))
-        .map_err(|e| Problem::of(&e))?;
+    let ledger = installed_ledger(&dirs, &layout, &code)?;
     let requests = manage::auto_update_requests(&ledger, channel, default_auto);
 
     if requests.is_empty() {
@@ -543,8 +551,6 @@ pub async fn auto_update(
 
 /// How one run differs from an ordinary install.
 ///
-/// A struct rather than two positional `bool`s: `run(.., false, true, ..)` at
-/// the call site says nothing about which is which.
 #[derive(Debug, Clone, Copy, Default)]
 struct Mode {
     /// Honour the version ids the requests name, instead of taking the newest.
@@ -602,9 +608,7 @@ async fn run(
 
 /// Search every provider that can answer.
 ///
-/// An empty query is the Browse tab before anybody has typed: it asks for the
-/// most-downloaded addons instead, which goes through the same message and the
-/// same late-reply check because it fills the same list.
+/// An empty query asks for the most-downloaded addons instead.
 pub async fn search(
     http: Option<Http>,
     layout: Layout,
@@ -685,10 +689,7 @@ pub async fn adopt(
 
 /// Every build the catalogue offers for one addon, newest first.
 ///
-/// Only CurseForge publishes a file list, so this is the one provider a
-/// version picker can offer choices for. An empty list is the honest answer
-/// for the others rather than an error: they have one build, and that build
-/// is what is already installed.
+/// Only CurseForge publishes a file list; others give an empty one.
 pub async fn versions(
     http: Option<Http>,
     code: ProductCode,
@@ -710,11 +711,7 @@ pub async fn versions(
 /// Everything the detail view shows about one addon: the project, its
 /// description and the changelog of its newest build.
 ///
-/// Fetched as one unit because the view has nothing to show until all three
-/// are in, and three separate spinners on one card is worse than one. The two
-/// rich-text halves are each `Option`, though, a missing changelog is
-/// ordinary (plenty of authors never write one) and must not cost the rest of
-/// the card.
+/// One fetch, one spinner; a missing changelog is ordinary.
 #[derive(Debug, Clone)]
 pub struct Detail {
     pub project: lightforge_core::addons::catalog::Project,
@@ -747,9 +744,7 @@ pub async fn detail(
 
     let description = catalog.description(&http, &id).await.ok();
 
-    // The changelog needs a file id, so the newest build has to be looked up
-    // first. One build, not the twenty a version picker asks for: this is
-    // "what changed in the version I would get".
+    // The changelog needs the newest build's file id.
     let (changelog, changelog_build) = match catalog
         .files(&http, &id, addons::flavor_of(&code), 1)
         .await
@@ -768,15 +763,12 @@ pub async fn detail(
 
 /// How many builds back a picker offers.
 ///
-/// The proxy caps it at fifty. Twenty is a year of releases for an addon
-/// that ships monthly and a fortnight for one that ships nightly, and past
-/// that nobody is choosing a version, they are archaeology.
+/// The proxy caps it at fifty.
 const VERSION_CHOICES: usize = 20;
 
 /// Install one exact build and hold the addon at it.
 ///
-/// Both halves matter: naming the file is what makes a downgrade possible,
-/// and pinning is what stops the next pass undoing it a minute later.
+/// Pinned, or the next pass undoes the downgrade.
 pub async fn install_version(
     http: Option<Http>,
     layout: Layout,
@@ -802,9 +794,7 @@ pub async fn install_version(
 
 /// Fetch one addon again and replace the folders it wrote.
 ///
-/// A pin is read from the ledger here rather than passed in: repairing a
-/// pinned addon has to put back the version it is held at, and the ledger is
-/// the only thing that knows that for certain.
+/// A pinned addon gets its pinned version back, read from the ledger.
 pub async fn reinstall_one(
     http: Option<Http>,
     layout: Layout,
@@ -838,9 +828,7 @@ pub async fn reinstall_one(
 
 /// A token naming everything Lightforge installed for this product.
 ///
-/// Built from the ledger rather than from the folders on disk: an addon
-/// Lightforge did not install has no provider or id to name, so it cannot be
-/// written into a token anyone could import.
+/// From the ledger: an addon Lightforge did not install has no id to name.
 pub fn export(layout: &Layout, code: &ProductCode) -> Result<String, String> {
     // Reads the ledger and resolves nothing, so the channel is never consulted.
     let options =

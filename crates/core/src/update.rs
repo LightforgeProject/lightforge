@@ -1,20 +1,8 @@
 //! Is there a newer Lightforge?
 //!
-//! One question, asked once per start against GitHub's release list, answered
-//! with a sentence and a link. Nothing here downloads or installs anything;
-//! getting the new version onto the machine is [`crate::upgrade`]'s, and only
-//! when the user asks for it.
-//!
-//! Two things make this less trivial than it reads.
-//!
-//! `releases/latest` is not usable: GitHub defines it as the newest release
-//! that is **not** a prerelease, so during a beta it answers 404 or names an
-//! older stable build. The full list is what this reads.
-//!
-//! And the comparison has to be real SemVer. `1.0.0-beta.10` is newer than
-//! `1.0.0-beta.2`, which no string compare gets right, and `1.0.0` is newer
-//! than both. [`semver`] knows the precedence rules; this file only decides
-//! which releases are eligible to be compared at all.
+//! Asked once per start; installing is [`crate::upgrade`]'s. The full release
+//! list, not `releases/latest` (which skips prereleases), compared by
+//! [`semver`] precedence (`1.0.0-beta.10` > `1.0.0-beta.2`).
 
 use serde::{Deserialize, Serialize};
 
@@ -31,8 +19,7 @@ pub const RELEASES_PAGE: &str = "https://github.com/LightforgeProject/lightforge
 pub struct Release {
     /// Tag as published, e.g. `v1.0.0-beta.2`.
     pub tag_name: String,
-    /// GitHub's own flag, which is set by whoever published the release and
-    /// is not necessarily what the version string says.
+    /// GitHub's flag, which can disagree with the version string.
     #[serde(default)]
     pub prerelease: bool,
     #[serde(default)]
@@ -44,7 +31,7 @@ pub struct Release {
 pub struct Available {
     /// The version running, as the binary was built with it.
     pub current: String,
-    /// The version found, spelled as SemVer rather than as the tag.
+    /// The version found, spelled as SemVer, not as the tag.
     pub latest: String,
     /// That release's own page, or the releases page when it has none.
     pub url: String,
@@ -52,9 +39,7 @@ pub struct Available {
 
 /// Fetch the release list, revalidating with `cache`.
 ///
-/// Unauthenticated GitHub calls are capped at 60/hour per IP and this shares
-/// that budget with the Proton-GE check, so the ETag matters: a `304` costs
-/// nothing and returns the copy on disk.
+/// Shares GitHub's 60/hour budget with the Proton check; a `304` is free.
 pub async fn fetch(http: &Http, cache: &ETagCache) -> Result<Vec<Release>, UpdateError> {
     match http.get_json_cached(RELEASES_URL, cache).await? {
         Some(releases) => Ok(releases),
@@ -69,16 +54,9 @@ fn version_of(tag: &str) -> Option<semver::Version> {
 
 /// The newest release worth telling someone running `current` about.
 ///
-/// Eligibility follows what they are already on. A prerelease build is told
-/// about anything newer, prerelease or not: running one is how someone opts
-/// into them, and a beta tester who is never told about the next beta is a
-/// beta tester who stops testing. A stable build hears only about stable
-/// releases, so shipping `1.1.0-beta.1` does not nudge everyone on `1.0.0`
-/// towards it.
-///
-/// Returns `None` when already current, when nothing parses, and when
-/// `current` itself is not a version, which is what a development build
-/// between releases looks like.
+/// A prerelease build hears about anything newer; a stable build only about
+/// stable releases. `None` when current, or when `current` is no version (a
+/// development build).
 pub fn newer_than(current: &str, releases: &[Release]) -> Option<Available> {
     let here = version_of(current)?;
     let wants_prereleases = !here.pre.is_empty();
@@ -86,16 +64,11 @@ pub fn newer_than(current: &str, releases: &[Release]) -> Option<Available> {
     releases
         .iter()
         .filter_map(|release| version_of(&release.tag_name).map(|version| (version, release)))
-        // Both opinions have to agree before a release counts as stable: the
-        // version string is the authority on precedence, but a release the
-        // publisher marked as a prerelease is one whatever its tag says.
+        // Stable only if both the tag and GitHub's flag say so.
         .filter(|(version, release)| {
             wants_prereleases || (version.pre.is_empty() && !release.prerelease)
         })
-        // `cmp_precedence`, not `cmp`: the crate's `Ord` has to agree with its
-        // `Eq`, which compares build metadata, so `1.0.0+2` sorts above
-        // `1.0.0` there. SemVer precedence ignores metadata, and a rebuild of
-        // the version already running is not an update.
+        // `cmp_precedence`: `Ord` counts build metadata (`1.0.0+2` > `1.0.0`).
         .filter(|(version, _)| version.cmp_precedence(&here) == std::cmp::Ordering::Greater)
         .max_by(|(a, _), (b, _)| a.cmp_precedence(b))
         .map(|(version, release)| Available {

@@ -1,12 +1,8 @@
 //! Staging folders: write somewhere nobody reads, then rename into place.
 //!
-//! A staging folder is made inside the directory its contents will end up
-//! in (or beside it), never in `/tmp`, so the final step is a rename on one
-//! filesystem rather than a copy that can fail halfway. It is a `TempDir`, so
-//! it is removed on every path out of the install, including an error.
-//!
-//! A crash still leaves one behind. The next install in the same place
-//! clears any that are old enough that no live install can own them.
+//! Made in or beside the destination, never `/tmp`, so the last step is a
+//! rename. A `TempDir`, removed on every path out; a crash's leftovers are
+//! cleared once stale.
 
 use std::io;
 use std::path::Path;
@@ -14,13 +10,10 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 
-/// What every staging folder's name starts with. A leading dot, so a file
-/// manager hides it and nothing that lists builds or addons mistakes it for
-/// one.
+/// What every staging folder's name starts with; the dot hides it.
 pub(crate) const PREFIX: &str = ".lightforge-staging-";
 
-/// A staging folder this old was left by a run that died, not by one still
-/// going: no unpack takes an hour.
+/// A staging folder this old was left by a dead run.
 const STALE: Duration = Duration::from_secs(60 * 60);
 
 /// A fresh staging folder in `dir`, after clearing stale ones there.
@@ -29,9 +22,7 @@ pub(crate) fn create_in(dir: &Path) -> io::Result<TempDir> {
     tempfile::Builder::new().prefix(PREFIX).tempdir_in(dir)
 }
 
-/// Remove staging folders a crashed run left in `dir`. Best effort: a
-/// leftover costs disk space, never correctness, so failing here is not a
-/// failed install.
+/// Remove staging folders a crashed run left in `dir`, best effort.
 fn sweep_stale(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.filter_map(Result::ok) {

@@ -1,15 +1,8 @@
 //! What the user can do about an error.
 //!
-//! An error message says what went wrong, which is the half a bug report
-//! needs. Someone looking at `i/o error at …: No space left on device` needs
-//! the other half: what to do next. [`advise`] reads that off the error while
-//! it is still a type, by walking its causes and recognising the handful of
-//! situations a person can actually fix: a full or read-only drive, a missing
-//! connection, a damaged store, a game still running, a broken Proton build.
-//! Anything else gets no advice, rather than a guess.
-//!
-//! It runs at the same boundary as [`crate::error::chain`], just before the
-//! error becomes a string.
+//! [`advise`] walks an error's causes while it is still a type and recognises
+//! what a person can fix: a full or read-only drive, no connection, a damaged
+//! store, a running game, a broken Proton build. Anything else gets nothing.
 
 use std::error::Error;
 use std::io::ErrorKind;
@@ -21,8 +14,7 @@ use crate::net::NetError;
 pub struct Advice {
     /// A sentence, addressed to the user, saying what to do.
     pub todo: String,
-    /// What a front end can do on the user's behalf. The CLI prints the
-    /// sentence and ignores this.
+    /// What a front end can do on the user's behalf; the CLI ignores it.
     pub fix: Option<Fix>,
 }
 
@@ -37,6 +29,9 @@ pub enum Fix {
     StorageSettings,
     /// A command for the user to copy and run themselves.
     CopyCommand(String),
+    /// Download this Proton build into Lightforge's own folder, which wins
+    /// over a copy of the same name elsewhere, and set up again.
+    FreshProton(String),
 }
 
 impl Advice {
@@ -52,9 +47,7 @@ impl Advice {
 /// What to do about `error`, if it is something the user can do anything
 /// about.
 ///
-/// The outermost recognised cause wins: a `.idx` that failed to parse because
-/// the drive went away is a drive problem, but the drive is only visible
-/// further down, so the walk goes all the way before giving up.
+/// The outermost recognised cause wins; the walk goes all the way down.
 pub fn advise(error: &(dyn Error + 'static)) -> Option<Advice> {
     let mut next = Some(error);
     while let Some(error) = next {
@@ -93,7 +86,9 @@ fn recognise(error: &(dyn Error + 'static)) -> Option<Advice> {
     }
     if let Some(e) = error.downcast_ref::<tact::cdn::CdnError>() {
         return match e {
-            tact::cdn::CdnError::HashMismatch { .. } | tact::cdn::CdnError::WrongSize { .. } => {
+            tact::cdn::CdnError::HashMismatch { .. }
+            | tact::cdn::CdnError::WrongSize { .. }
+            | tact::cdn::CdnError::BadIndex { .. } => {
                 Some(Advice::say(
                     "A download server sent a damaged file, and nothing was stored. Try again; \
                      if it keeps happening, the server is out of date and it usually passes \
@@ -114,7 +109,7 @@ fn recognise(error: &(dyn Error + 'static)) -> Option<Advice> {
     if let Some(e) = error.downcast_ref::<crate::preflight::PreflightError>() {
         use crate::preflight::PreflightError as P;
         return match e {
-            P::GameRunning(_) => Some(running()),
+            P::GameRunning(_) | P::OtherBuild(_) => Some(running()),
             P::StillRunning(_) => Some(Advice::say(
                 "A Wine process would not stop. Log out and back in, or restart the computer, \
                  then try again.",
@@ -124,6 +119,12 @@ fn recognise(error: &(dyn Error + 'static)) -> Option<Advice> {
             }
             _ => None,
         };
+    }
+    if let Some(tact::writer::WriteError::StoreBusy(_)) = error.downcast_ref() {
+        return Some(Advice::say(
+            "Another Lightforge window or command is changing this game's files. Wait for it \
+             to finish, then try again.",
+        ));
     }
     if let Some(crate::storage::StorageError::PrefixBusy) = error.downcast_ref() {
         return Some(running());
@@ -158,11 +159,25 @@ fn recognise(error: &(dyn Error + 'static)) -> Option<Advice> {
             _ => None,
         };
     }
+    if let Some(crate::prefix::PrefixError::Busy(_)) = error.downcast_ref() {
+        return Some(Advice::say(
+            "A Wine process would not stop. Log out and back in, or restart the computer, \
+             then try again.",
+        ));
+    }
     if let Some(crate::prefix::PrefixError::MissingRuntime(_)) = error.downcast_ref() {
         return Some(Advice::with(
             "This Proton build is incomplete. Remove it and install it again, or pick another \
              version.",
             Fix::ProtonSettings,
+        ));
+    }
+    if let Some(crate::prefix::PrefixError::MixedBuild { version, .. }) = error.downcast_ref() {
+        return Some(Advice::with(
+            "This Proton folder has files from an older version mixed in, often from unpacking \
+             one over another. Install a fresh copy: Lightforge keeps its own and leaves this \
+             folder alone.",
+            Fix::FreshProton(version.clone()),
         ));
     }
     if let Some(e) = error.downcast_ref::<crate::runtime::RuntimeError>() {
@@ -182,10 +197,9 @@ fn recognise(error: &(dyn Error + 'static)) -> Option<Advice> {
 
 /// The error a `#[error(transparent)]` variant wraps.
 ///
-/// `thiserror` forwards a transparent variant's `source` to the inner error's
-/// own `source`, so walking `source` alone skips the inner error entirely:
-/// `ProtonError::Net(NetError::Status { .. })` reads as an error with no cause
-/// at all. Every wrapper on a path the launcher reports from is listed here.
+/// A transparent variant's `source` is the inner error's own, so walking
+/// `source` skips the inner error: `ProtonError::Net(NetError::Status { .. })`
+/// has no cause. Every reported wrapper is listed.
 fn transparent<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a (dyn Error + 'static)> {
     use crate::tact;
 
@@ -216,6 +230,7 @@ fn transparent<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a (dyn Error + 
     use tact::install::InstallError;
     use tact::reclaim::ReclaimError;
     use tact::storage::StorageError;
+    use tact::uninstall::UninstallError;
     use tact::verify::VerifyError;
     use tact::version::VersionError;
     use tact::writer::WriteError;
@@ -235,9 +250,10 @@ fn transparent<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a (dyn Error + 
         VersionError => [VersionError::Net],
         WriteError => [WriteError::Idx],
         StorageError => [StorageError::Idx],
-        VerifyError => [VerifyError::Index, VerifyError::Storage],
+        VerifyError => [VerifyError::Index, VerifyError::Storage, VerifyError::Write],
         CompactError => [CompactError::Storage, CompactError::Write, CompactError::Verify],
         ReclaimError => [ReclaimError::Storage, ReclaimError::Verify, ReclaimError::Compact],
+        UninstallError => [UninstallError::Write],
         ManageError => [ManageError::Catalog, ManageError::Net],
         CatalogError => [CatalogError::Net],
     }
@@ -315,7 +331,7 @@ mod tests {
     use crate::tact;
 
     fn io_error(kind: ErrorKind) -> crate::error::CoreError {
-        crate::error::CoreError::io("/games", std::io::Error::from(kind))
+        crate::error::CoreError::Io { path: "/games".into(), source: std::io::Error::from(kind) }
     }
 
     #[test]
@@ -357,6 +373,29 @@ mod tests {
             },
         ));
         assert_eq!(advise(&error).unwrap().fix, Some(Fix::StorageSettings));
+    }
+
+    #[test]
+    fn a_busy_store_says_who_has_it_however_it_is_wrapped() {
+        let busy = || tact::writer::WriteError::StoreBusy("/games/Data/data".into());
+        for error in [
+            Box::new(tact::compact::CompactError::Write(busy())) as Box<dyn Error>,
+            Box::new(tact::verify::VerifyError::Write(busy())),
+            Box::new(tact::uninstall::UninstallError::Write(busy())),
+            Box::new(tact::install::InstallError::Writer(busy())),
+        ] {
+            assert!(advise(error.as_ref()).unwrap().todo.starts_with("Another Lightforge"), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_mixed_proton_folder_offers_a_fresh_copy_of_the_same_build() {
+        let error = crate::prefix::PrefixError::MixedBuild {
+            version: "GE-Proton11-7".to_owned(),
+            build: "/steam/compatibilitytools.d/GE-Proton11-7-x86_64".into(),
+        };
+        let advice = advise(&error).unwrap();
+        assert_eq!(advice.fix, Some(Fix::FreshProton("GE-Proton11-7".to_owned())));
     }
 
     #[test]

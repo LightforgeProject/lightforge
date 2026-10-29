@@ -41,6 +41,9 @@ pub(crate) enum Message {
     OpenReleases,
     /// "Update" on the update notice: the route this copy was installed by.
     UpgradeStart,
+    /// "Update now" in Settings: the notice again, already updating where
+    /// Lightforge can update itself.
+    UpdateNow,
     /// The update's work is done, as far as Lightforge can take it.
     UpgradeReady(Result<crate::tasks::Prepared, Problem>),
     /// While a terminal runs the update: has the binary been replaced yet?
@@ -66,6 +69,8 @@ pub(crate) enum Message {
     AddProduct(ProductCode),
     /// Stop tracking one, taking it out of the header.
     RemoveProduct(ProductCode),
+    /// Queue the selected product's pre-download.
+    PreDownload,
     /// Pause one product's transfer from the manager.
     PauseDownload(ProductCode),
     /// Resume or re-queue one product's transfer from the manager.
@@ -100,10 +105,10 @@ pub(crate) enum Message {
     /// An arrow key, Enter or Escape, or the same from a gamepad: sorted
     /// into the three below once the two cannot be doubling each other.
     Nav(NavFrom, pad::Input),
-    /// The window gained or lost the desktop's focus. A gamepad is read
-    /// whatever window is in front, so this is what keeps it from steering
-    /// the launcher behind a running game.
+    /// The window gained or lost focus; a gamepad must not steer it from behind a game.
     WindowFocused(bool),
+    /// A second launch asked for this window; see [`crate::instance`].
+    Raise,
     /// The window changed size, under gamescope only; see [`fit`].
     WindowResized,
     /// The window's height in points, and the [`Lightforge::ui_scale_gen`]
@@ -137,17 +142,35 @@ pub(crate) enum Message {
     CachedTheme(ProductCode, Box<tasks::Themed>),
     Primary,
     Tick,
-    Downloaded(ProductCode, Result<Complete, Problem>),
+    Downloaded(ProductCode, Result<Box<Complete>, Problem>),
     CloseRequested(iced::window::Id),
+    /// A launch ended without a game of its own to watch: the client was
+    /// opened, the hand-off came to nothing, or it failed.
     Launched(Result<String, Problem>),
-    /// Every couple of seconds of a launch: is a game up yet?
-    GameWatch,
-    GameSeen(bool),
-    /// STOP was pressed: ask first.
+    /// A direct launch got as far as it can tell: the game is up, or it
+    /// ended before it was ever seen.
+    GameStarted(Result<tasks::Started, Problem>),
+    /// A session's game exited.
+    GameExited(ProductCode, Result<String, Problem>),
+    /// STOP was pressed on the selected game: ask first.
     AskStopGame,
     StopGameDismiss,
     StopGameConfirm,
-    GameStopped(Result<String, Problem>),
+    GameStopped(ProductCode, Result<String, Problem>),
+    /// Every few seconds: is the Battle.net client up?
+    ClientWatch,
+    ClientSeen(bool),
+    /// The menu beside a running Battle.net's button.
+    ToggleClientMenu,
+    /// Bring a running client's window up, without restarting it.
+    ShowBattleNet,
+    BattleNetShown(Result<String, Problem>),
+    /// Quit was chosen: asks what is running before deciding to ask the user.
+    AskQuitBattleNet,
+    QuitBattleNetChecked(Vec<String>),
+    QuitBattleNetDismiss,
+    QuitBattleNetConfirm,
+    BattleNetQuit(Result<String, Problem>),
     /// A hand-off ran to the point where there is something to say: the
     /// game is up, the client needs a person, or nothing started.
     HandoffStarted(Result<tasks::Handoff, Problem>),
@@ -155,6 +178,10 @@ pub(crate) enum Message {
     ManageSubscription,
     OpenFiles,
     CopyDebug,
+    /// Run [`lightforge_core::doctor`] for the Diagnostics block.
+    RunDiagnostics,
+    DiagnosticsDone(Vec<lightforge_core::doctor::Check>),
+    CopyDiagnostics,
     /// What the renderer picked and what it is running on, answered once at
     /// startup so a report never has to wait for it.
     SystemInfo(Box<iced::system::Information>),
@@ -181,7 +208,7 @@ pub(crate) enum Message {
     ReportSent(bool),
     ReportCancel,
     /// Open Settings at a particular section, for a link that means a
-    /// specific page rather than "settings somewhere".
+    /// specific page, not "settings somewhere".
     ShowSettingsTab(SettingsTab),
     /// The Settings page scrolled, by any means.
     SettingsScrolled(scrollable::Viewport),
@@ -191,8 +218,26 @@ pub(crate) enum Message {
     Tweak(Scope, Tweak, bool),
     /// The environment-variable editor was typed in.
     EnvEdit(Scope, iced::widget::text_editor::Action),
+    /// Typing in the env editor paused; the number says after which edit.
+    EnvSettled(u64),
+    /// The library picked in Game Settings to move the game to, by id.
+    MoveTargetPicked(String),
+    /// Move the game in Game Settings to the picked library.
+    MoveGame,
+    CancelMove,
+    /// The game is in the new library and recorded there; the old copy is next.
+    GameCopied(ProductCode, Result<lightforge_core::migrate::Moved, String>),
+    /// The old copy is gone, with the bytes it freed.
+    GameMoved(ProductCode, Result<u64, String>),
+    /// Remove was pressed on a copy left in another library, by its id; it
+    /// waits for its confirmation.
+    AskRemoveLeftover(String),
+    CancelRemoveLeftover,
+    RemoveLeftover,
     /// Throw away this product's shader cache, e.g. after a Proton swap.
     ClearShaderCache,
+    /// `true` when there was a cache to delete.
+    ShaderCacheCleared(Result<bool, String>),
     /// Opt in or out of one optional download, by manifest tag name. On starts
     /// the download; off asks whether to delete what it fetched.
     OptionalContent(String, bool),
@@ -230,8 +275,8 @@ pub(crate) enum Message {
     /// A click that no widget consumed, close whatever is open, the way
     /// every other context menu on the desktop behaves.
     Dismiss,
-    /// A click *inside* an open panel. Does nothing, and that is the point:
-    /// it stops the click reaching [`Message::Dismiss`] underneath.
+    /// A click *inside* an open panel. It only stops the click reaching
+    /// [`Message::Dismiss`] underneath.
     MenuClick,
     /// Ask the version service what is current, and read what the build
     /// offers.
@@ -256,9 +301,7 @@ pub(crate) enum Message {
     Wizard(wizard::Msg),
     /// Take back a declined Battle.net and install it after all.
     InstallBattleNet,
-    /// Put the 32-bit library command on the clipboard. Lightforge never runs
-    /// it: installing system packages needs root, and the distributions where
-    /// help is most needed cannot be served by a command at all.
+    /// Put the 32-bit library command on the clipboard; Lightforge never runs it.
     CopyRuntimeCommand(String),
     /// Re-read the machine after the user has installed the libraries, so the
     /// row clears without restarting the app.
@@ -267,14 +310,14 @@ pub(crate) enum Message {
     PinDefaultProton(ProtonChoice),
     /// The build Battle.net and Agent launch under.
     PinBattleNetProton(ProtonChoice),
-    /// One product's own pin. Carries the code, because the Proton page
-    /// lists every installed game rather than whichever one the Play page
-    /// happens to be showing.
+    /// One product's own pin; the Proton page lists every game.
     PinProductProton(ProductCode, ProtonChoice),
     /// The download cap field changed.
     DownloadLimitChanged(String),
     /// The pause-while-playing switch was flipped.
     PauseWhilePlaying(bool),
+    /// The setup language, from Settings: what new games download in.
+    GameLanguage(String),
     /// Whether the launcher gets out of the way once a game is up.
     MinimizeOnLaunch(bool),
     /// Whether a Battle.net hand-off puts the client in the tray.
@@ -295,6 +338,8 @@ pub(crate) enum Message {
     ProtonInstallerTab(ProtonCategory),
     /// Install one release, by tag.
     InstallProton(String),
+    /// Install a fresh copy of a build setup failed on, then set up again.
+    FreshProton(String),
     /// Ask Steam to install one of Valve's Protons, by app id.
     InstallSteamProton(u32),
     /// That build finished, or did not.
@@ -412,7 +457,8 @@ pub(crate) enum Message {
     AskDeleteBackup(PathBuf),
     /// Back out of whichever confirmation a backup row is showing.
     CancelRestore,
-    ConfirmRestore,
+    /// Restore the asked-about backup: every account, or the one named.
+    ConfirmRestore(Option<String>),
     ConfirmDeleteBackup,
     BackupFinished(Result<String, String>),
     /// Open the detail view for one addon: provider, id, name.
@@ -423,8 +469,6 @@ pub(crate) enum Message {
     AddonDetailTab(DetailTab),
     /// Close the detail view.
     CloseAddonDetail,
-    /// Whether the next import pins to the versions the token names.
-    ImportPinned(bool),
     /// Put Battle.net on this game's tile, so its Install button is reachable.
     InstallViaBattleNet,
     /// The client's catalogue has been read.
@@ -439,6 +483,8 @@ pub(crate) enum Message {
     AutoUpdateFinished(Result<Option<Box<lightforge_core::addons::Report>>, Problem>),
     SettingsTab(SettingsTab),
     SearchChanged(String),
+    /// Search Browse for an addon by name: a missing dependency.
+    FindAddon(String),
     RunSearch,
     SearchDone(Box<addonwork::SearchOutcome>),
     InstallAddon(String, String),
@@ -446,7 +492,6 @@ pub(crate) enum Message {
     AddonUpdatesChecked(ProductCode, Result<Vec<lightforge_core::addons::manage::UpdateStatus>, String>),
 }
 
-/// Which of the two report dialogs is open.
 /// Where a press that moves the ring came from; see [`Message::Nav`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NavFrom {
@@ -461,11 +506,8 @@ pub(crate) const NAV_DOUBLED: Duration = Duration::from_millis(150);
 
 /// Which profile a launch-settings control edits.
 ///
-/// The same switches appear twice, on a product's own page, and in
-/// Settings › Battle.net for the shared profile that Battle.net and every
-/// game it launches run under. Routed by an explicit scope rather than by
-/// whichever screen happens to be open: the second is the kind of implicit
-/// rule that works until a panel becomes reachable from somewhere new.
+/// A product's own page, or the shared Battle.net profile; explicit, not
+/// read off the open screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Scope {
     /// The product the launcher is showing.
@@ -480,15 +522,15 @@ pub(crate) enum Tweak {
     GamePerformance,
     MangoHud,
     Wayland,
+    NvidiaGpu,
+    Nvapi,
 }
 
 /// A Proton build in a picker, or the "follow the default" entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProtonChoice(pub(crate) Option<String>, pub(crate) Unpinned);
 
-/// What a picker's "no pin of my own" entry falls through to, which is not the
-/// same on every row, and the entry has to say which, or it reads as a build
-/// the user never chose.
+/// What a picker's "no pin of my own" entry falls through to, which it names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Unpinned {
     /// The app default: nothing sits above it, so unpinned is the newest build
@@ -536,9 +578,7 @@ impl std::fmt::Display for Choice {
 
 /// One entry in the branch dropdown: a build of the selected line.
 ///
-/// Carries whether the product is configured so the list can offer branches
-/// the user has never set up, picking one is how you add it, which beats
-/// hand-editing `config.toml` to try a PTR.
+/// Includes branches not set up yet: picking one adds it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BranchChoice {
     pub(crate) code: ProductCode,
@@ -546,7 +586,7 @@ pub(crate) struct BranchChoice {
     /// The catalog's name for this product, used when adding it to config.
     pub(crate) label: String,
     /// Battle.net's name for this version where it has one of its own,
-    /// `Stress Test` rather than `Live`; see `Families::version_name`.
+    /// `Stress Test`, not `Live`; see `Families::version_name`.
     pub(crate) name: Option<String>,
     pub(crate) configured: bool,
 }
@@ -556,9 +596,7 @@ impl std::fmt::Display for BranchChoice {
         let name = self.name.as_deref().unwrap_or(self.branch.label());
         match self.configured {
             true => f.write_str(name),
-            // Said plainly in the list rather than greyed out: iced's
-            // pick_list cannot style one entry differently, and a silently
-            // different-looking row explains nothing anyway.
+            // In words: pick_list cannot style one entry.
             false => write!(f, "{name} — add"),
         }
     }
@@ -576,8 +614,7 @@ impl std::fmt::Display for ChannelChoice {
 
 /// One addon's channel: its own, or whatever the default happens to be.
 ///
-/// "Default" is a real option rather than a blank, because following the
-/// default and choosing stable look identical until the default changes.
+/// "Default" is a real option: it differs from stable once the default changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RowChannel(pub(crate) Option<Channel>);
 

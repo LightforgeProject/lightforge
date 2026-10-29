@@ -43,9 +43,7 @@ impl Lightforge {
             .map(Element::from),
         );
 
-        // Through `page` like every other page, which is what gives it the
-        // same margins and title; built on its own it sat flush against the
-        // window's edges.
+        // Through `page`, for the margins and title.
         self.page(
             "Lightforge Updates",
             Some(format!("You are running {version}.")),
