@@ -54,7 +54,7 @@ sudo dnf install ./lightforge-1.0.0.beta.7-1.x86_64.rpm
 The same file installs on openSUSE with `sudo zypper install`. Like the
 `.deb`, it needs glibc 2.36 or newer.
 
-## Arch, CachyOS, EndeavourOS
+## Arch, CachyOS, EndeavourOS, Omarchy
 
 **Not on the AUR yet.** AUR registrations are closed, so I have no account to
 upload from. The PKGBUILDs are finished and in the repository, so for now:

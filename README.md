@@ -63,7 +63,7 @@ Download the `.rpm`, then:
 sudo zypper install ./lightforge-*.x86_64.rpm
 ```
 
-### Arch Linux, CachyOS, EndeavourOS, Manjaro
+### Arch Linux, CachyOS, EndeavourOS, Manjaro, Omarchy
 
 There's a PKGBUILD in the repository (AUR registrations are closed, so it isn't
 on the AUR yet):
@@ -114,6 +114,7 @@ package Battle.net's installer needs, and how to remove Lightforge again.
 | --- | :---: | --- |
 | CachyOS | 🟢 | PKGBUILD, Lightforge was developed on CachyOS |
 | Arch Linux | 🟢 | PKGBUILD, Tested on hardware |
+| Omarchy | 🟢 | PKGBUILD, works |
 | EndeavourOS | 🟠 | Not tested yet but PKGBUILD should work |
 | Manjaro | 🟠 | Same as EndeavourOS |
 | Fedora | 🟢 | COPR repo / RPM install, Tested on hardware |
