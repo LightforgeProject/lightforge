@@ -68,7 +68,7 @@ sha2 = "0.10"
 # someone's explicit consent; `release-health` sends a session envelope per
 # launch that GlitchTip has no use for.
 sentry = { version = "0.49", default-features = false, features = ["backtrace", "contexts"] }
-sysinfo = { version = "0.36", default-features = false, features = ["system"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 # For the screenshot a report carries: GlitchTip drops envelope attachments,
 # so the image travels inside the event as a data URI.
 base64 = "0.22"
