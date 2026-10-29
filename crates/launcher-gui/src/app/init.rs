@@ -154,6 +154,7 @@ impl Lightforge {
             moving: None,
             cancel_dialog: None,
             update_notice: None,
+            newer_release: None,
             origin: lightforge_core::upgrade::Origin::detect(),
             exe: std::env::current_exe().ok(),
             upgrade: None,

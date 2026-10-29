@@ -390,6 +390,9 @@ struct Lightforge {
     /// A newer Lightforge on GitHub, found at start-up. Shown once per
     /// release; see `core::update`, and `core::upgrade` for installing it.
     update_notice: Option<lightforge_core::update::Available>,
+    /// The newer Lightforge this session knows of, dismissed or not: what
+    /// "Update now" in Settings installs.
+    newer_release: Option<lightforge_core::update::Available>,
     /// How this copy was installed, which decides what the notice offers.
     /// Read at start, like `exe`: a package manager replacing the binary
     /// leaves this process's own path reading `(deleted)`.

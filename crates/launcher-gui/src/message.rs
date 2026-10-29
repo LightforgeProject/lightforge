@@ -41,6 +41,9 @@ pub(crate) enum Message {
     OpenReleases,
     /// "Update" on the update notice: the route this copy was installed by.
     UpgradeStart,
+    /// "Update now" in Settings: the notice again, already updating where
+    /// Lightforge can update itself.
+    UpdateNow,
     /// The update's work is done, as far as Lightforge can take it.
     UpgradeReady(Result<crate::tasks::Prepared, Problem>),
     /// While a terminal runs the update: has the binary been replaced yet?

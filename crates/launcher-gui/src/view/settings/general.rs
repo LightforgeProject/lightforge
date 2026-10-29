@@ -253,26 +253,28 @@ impl Lightforge {
 
     /// The version, where its configuration lives, and the system checks.
     pub(crate) fn about_section(&self) -> Element<'_, Message> {
-        let (status, asking) = match &self.launcher_check {
-            LauncherCheck::Idle => (String::new(), false),
-            LauncherCheck::Asking => ("Asking GitHub.".to_owned(), true),
-            LauncherCheck::Newest => ("This is the newest version.".to_owned(), false),
-            LauncherCheck::Failed(why) => (format!("Could not check: {why}"), false),
+        let (status, asking) = match (&self.launcher_check, &self.newer_release) {
+            (LauncherCheck::Asking, _) => ("Asking GitHub.".to_owned(), true),
+            (LauncherCheck::Failed(why), _) => (format!("Could not check: {why}"), false),
+            (_, Some(newer)) => (format!("Version {} is available.", newer.latest), false),
+            (LauncherCheck::Newest, None) => ("This is the newest version.".to_owned(), false),
+            (LauncherCheck::Idle, None) => (String::new(), false),
         };
-        let mut rows = vec![
-            setting(
-                "Version",
-                status,
-                None,
-                row![
-                    text(env!("CARGO_PKG_VERSION")).size(theme::BODY).font(theme::MONO),
-                    secondary(if asking { "Checking" } else { "Check for updates" }, Message::CheckLauncherNow)
-                        .enabled(!asking),
-                ]
-                .spacing(theme::MD)
-                .align_y(Alignment::Center),
-            ),
-        ];
+        let controls = row![text(env!("CARGO_PKG_VERSION")).size(theme::BODY).font(theme::MONO)]
+            .push(self.newer_release.as_ref().map(|newer| {
+                let label = match self.origin.route(&newer.latest) {
+                    lightforge_core::upgrade::Route::Instructions { .. } => "How to update",
+                    _ => "Update now",
+                };
+                action_button(label, theme::ACCENT, Message::UpdateNow).enabled(!self.upgrading())
+            }))
+            .push(
+                secondary(if asking { "Checking" } else { "Check for updates" }, Message::CheckLauncherNow)
+                    .enabled(!asking),
+            )
+            .spacing(theme::MD)
+            .align_y(Alignment::Center);
+        let mut rows = vec![setting("Version", status, None, controls)];
         if let Some(dirs) = &self.dirs {
             rows.push(setting(
                 "Settings file",

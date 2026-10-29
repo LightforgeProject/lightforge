@@ -1225,6 +1225,43 @@ fn the_check_button_shows_a_release_that_was_dismissed_before() {
 }
 
 #[test]
+fn a_dismissed_release_stays_one_press_away_in_settings() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    let found = lightforge_core::update::Available {
+        current: "1.0.0-beta.7".to_owned(),
+        latest: "1.0.0-beta.8".to_owned(),
+        url: lightforge_core::update::RELEASES_PAGE.to_owned(),
+    };
+    // Dismissed in an earlier session: no notice at start-up.
+    app.config.update_seen = Some(found.latest.clone());
+    let _ = app.update(Message::UpdateChecked(Some(found)));
+    assert!(app.update_notice.is_none() && app.newer_release.is_some());
+    let _ = app.about_section();
+
+    // Installed by the installer: Lightforge updates itself.
+    app.origin = lightforge_core::upgrade::Origin::Installer { bin_dir: "/home/u/.local/bin".into() };
+    let _ = app.update(Message::UpdateNow);
+    assert!(app.update_notice.is_some(), "the notice is back to show the progress");
+    assert!(app.upgrading(), "and the update has started");
+}
+
+#[test]
+fn update_now_on_a_checkout_shows_the_commands_instead() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.origin = lightforge_core::upgrade::Origin::Checkout { repo: "/src/lightforge".into() };
+    app.newer_release = Some(lightforge_core::update::Available {
+        current: "1.0.0-beta.7".to_owned(),
+        latest: "1.0.0-beta.8".to_owned(),
+        url: lightforge_core::update::RELEASES_PAGE.to_owned(),
+    });
+
+    let _ = app.update(Message::UpdateNow);
+    assert!(app.update_notice.is_some() && !app.upgrading());
+}
+
+#[test]
 fn the_check_button_says_what_it_found() {
     let (mut app, _) = Lightforge::new();
     app.dirs = None;
