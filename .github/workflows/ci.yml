@@ -47,7 +47,7 @@ jobs:
       # that changed nothing. Bumped deliberately, as its own commit.
       # Its own job so it keeps its own cache; sharing one with the @stable
       # build would invalidate every artifact on both sides.
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           components: clippy
 
@@ -67,7 +67,7 @@ jobs:
 
       # Cargo.toml promises 1.90; this is what keeps that promise true.
       # The floor is wgpu-hal's ordered-float, reached through iced.
-      - uses: dtolnay/rust-toolchain@1.90.0
+      - uses: dtolnay/rust-toolchain@1.120.0
 
       - uses: Swatinem/rust-cache@v2
 
