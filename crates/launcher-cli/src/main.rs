@@ -46,6 +46,7 @@ async fn main() -> std::process::ExitCode {
                 match advice.fix {
                     Some(Fix::CopyCommand(command)) => eprintln!("      {command}"),
                     Some(Fix::DeepScan) => eprintln!("      lightforge verify --deep --repair"),
+                    Some(Fix::FreshProton(version)) => eprintln!("      lightforge proton-install {version}"),
                     _ => {}
                 }
             }

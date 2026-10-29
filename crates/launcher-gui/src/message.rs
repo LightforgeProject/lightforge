@@ -336,6 +336,8 @@ pub(crate) enum Message {
     ProtonInstallerTab(ProtonCategory),
     /// Install one release, by tag.
     InstallProton(String),
+    /// Install a fresh copy of a build setup failed on, then set up again.
+    FreshProton(String),
     /// Ask Steam to install one of Valve's Protons, by app id.
     InstallSteamProton(u32),
     /// That build finished, or did not.

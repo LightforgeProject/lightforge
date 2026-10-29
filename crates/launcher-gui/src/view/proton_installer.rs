@@ -139,16 +139,24 @@ impl Lightforge {
                 .into();
         };
 
-        let installed: Vec<&str> = self
-            .setup
-            .as_ref()
-            .map(|s| s.installed.iter().map(|b| b.version.as_str()).collect())
-            .unwrap_or_default();
+        let installed: &[proton::ProtonRelease] =
+            self.setup.as_ref().map(|s| s.installed.as_slice()).unwrap_or_default();
 
         for tag in tags {
-            let action: Element<Message> = match installed.contains(&tag.as_str()) {
-                true => installed_button(),
-                false => secondary("Install", Message::InstallProton(tag.clone()))
+            let action: Element<Message> = match installed.iter().find(|b| &b.version == tag) {
+                Some(build) if build.source == proton::ProtonSource::Managed => installed_button(),
+                // Another tool's copy, which Lightforge cannot vouch for (one
+                // held two versions' files, GlitchTip #33). Its own copy wins
+                // over it and leaves it as it is.
+                Some(_) => row![
+                    muted("installed by another tool".to_owned(), theme::CAPTION),
+                    secondary("Install own copy", Message::InstallProton(tag.clone()))
+                        .enabled(!self.setup_running),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center)
+                .into(),
+                None => secondary("Install", Message::InstallProton(tag.clone()))
                     .enabled(!self.setup_running),
             };
             rows = rows.push(version_row(mono(tag.clone()), action));

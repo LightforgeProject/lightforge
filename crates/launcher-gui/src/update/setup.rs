@@ -283,32 +283,35 @@ impl Lightforge {
                 Task::none()
             }
 
-            Message::InstallProton(version) => {
+            Message::InstallProton(version) => self.install_proton(version),
+
+            Message::FreshProton(version) => {
                 if self.setup_running {
                     return Ok(Task::none());
                 }
-                let (tx, rx) = tokio::sync::watch::channel(provision::Progress::default());
-                self.setup_rx = Some(rx);
-                self.setup_sample = provision::Progress::default();
-                self.setup_running = true;
-                self.error = None;
-                // Stays on the Proton page. `install_build`, not `provision::run`,
-                // which would go on to build the prefix and install Battle.net.
-                Task::perform(provision::install_build(version, tx), Message::ProtonInstalled)
+                // Into Lightforge's own folder, whose copy wins over one of
+                // the same name; the broken folder is left as it is.
+                self.setup_after_proton = true;
+                self.install_proton(version)
             }
 
             Message::ProtonInstalled(result) => {
                 self.setup_running = false;
                 self.setup_rx = None;
+                let setup_again = std::mem::take(&mut self.setup_after_proton);
                 match result {
                     Ok(()) => {
                         self.proton_notice = Some("installed".to_owned());
                         // What is installed just changed, so re-probe rather
                         // than editing the list we happen to be holding.
-                        Task::perform(
+                        let status = Task::perform(
                             provision::status(self.layout.clone(), self.config.clone()),
                             |status| Message::SetupStatus(status.map(Box::new)),
-                        )
+                        );
+                        match setup_again {
+                            true => Task::batch([status, Task::done(Message::RunSetup)]),
+                            false => status,
+                        }
                     }
                     Err(e) => {
                         self.error = Some(e);
@@ -355,5 +358,22 @@ impl Lightforge {
             }
             other => return Err(other),
         })
+    }
+
+    /// Download one Proton release into Lightforge's own folder.
+    ///
+    /// Stays on the page it was asked from: `install_build`, not
+    /// `provision::run`, which would go on to build the prefix and install
+    /// Battle.net.
+    fn install_proton(&mut self, version: String) -> Task<Message> {
+        if self.setup_running {
+            return Task::none();
+        }
+        let (tx, rx) = tokio::sync::watch::channel(provision::Progress::default());
+        self.setup_rx = Some(rx);
+        self.setup_sample = provision::Progress::default();
+        self.setup_running = true;
+        self.error = None;
+        Task::perform(provision::install_build(version, tx), Message::ProtonInstalled)
     }
 }

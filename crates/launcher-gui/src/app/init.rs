@@ -137,6 +137,7 @@ impl Lightforge {
             setup_rx: None,
             setup_sample: provision::Progress::default(),
             setup_running: false,
+            setup_after_proton: false,
             limit_input,
             bnet_limit_input: String::new(),
             proton_notice: None,

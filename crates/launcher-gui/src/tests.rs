@@ -1653,3 +1653,22 @@ fn battle_net_is_not_quit_while_a_launch_may_be_starting_it() {
     let _ = app.update(Message::QuitBattleNetChecked(Vec::new()));
     assert!(!app.quitting_client);
 }
+
+#[test]
+fn a_fresh_proton_copy_sets_up_again_only_when_asked_for_by_the_fix() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+
+    let _ = app.update(Message::FreshProton("GE-Proton11-7".to_owned()));
+    assert!(app.setup_running && app.setup_after_proton);
+    let _ = app.update(Message::ProtonInstalled(Ok(())));
+    assert!(!app.setup_running && !app.setup_after_proton);
+
+    // An install from the Proton window leaves setup alone, and a failed one
+    // does not leave a setup owed to the next install.
+    let _ = app.update(Message::FreshProton("GE-Proton11-7".to_owned()));
+    let _ = app.update(Message::ProtonInstalled(Err("no network connection".into())));
+    assert!(!app.setup_after_proton);
+    let _ = app.update(Message::InstallProton("GE-Proton11-7".to_owned()));
+    assert!(app.setup_running && !app.setup_after_proton);
+}

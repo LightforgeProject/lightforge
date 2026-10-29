@@ -25,6 +25,8 @@ const DIST_DIRS: &[&str] = &["files", "dist"];
 /// [`ProtonRunner::command`] without Wine.
 #[derive(Debug, Clone)]
 pub struct ProtonRunner {
+    /// The build's own name for itself, `GE-Proton11-7`.
+    version: String,
     entry_point: PathBuf,
     dist: PathBuf,
     compat_data: PathBuf,
@@ -48,6 +50,7 @@ impl ProtonRunner {
     /// out when it is unset.
     pub fn new(release: &ProtonRelease, layout: &Layout, steam_client: impl Into<PathBuf>) -> Self {
         Self {
+            version: release.version.clone(),
             entry_point: release.entry_point(),
             dist: dist_dir(&release.path),
             compat_data: layout.compat_data(),
@@ -227,8 +230,9 @@ impl ProtonRunner {
             );
             return Ok(());
         }
+        let full = String::from_utf8_lossy(&output.stderr);
         // Five lines: an error message that still fits on screen.
-        let stderr = crate::text::tail_lines(&String::from_utf8_lossy(&output.stderr), 5);
+        let stderr = crate::text::tail_lines(&full, 5);
         tracing::error!(
             "{} exited with {:?} after {:.1}s; stderr tail: {}",
             program.to_string_lossy(),
@@ -236,11 +240,15 @@ impl ProtonRunner {
             started.elapsed().as_secs_f64(),
             stderr.trim(),
         );
-        Err(PrefixError::Command {
-            program: program.to_string_lossy().into_owned(),
-            code: output.status.code(),
-            stderr,
-        })
+        let program = program.to_string_lossy().into_owned();
+        // Wine's own program calling into Wine's own DLLs: in one build every
+        // call is there, so a missing one means two builds' files in one
+        // folder (GlitchTip #33, a GE-Proton11-7 holding an older win32u).
+        // Not for a Windows program, which can call what Wine never implemented.
+        if program == "wineboot" && full.contains("to unimplemented function") {
+            return Err(PrefixError::MixedBuild { version: self.version.clone(), build: self.build().to_path_buf() });
+        }
+        Err(PrefixError::Command { program, code: output.status.code(), stderr })
     }
 
     /// Create the prefix, or refresh an existing one's DLLs after a Proton
@@ -566,6 +574,9 @@ pub enum PrefixError {
     #[error("`{program}` failed{}{}", match code { Some(c) => format!(" (exit {c})"), None => " (killed by signal)".to_owned() }, if stderr.is_empty() { String::new() } else { format!(":\n{stderr}") })]
     Command { program: String, code: Option<i32>, stderr: String },
 
+    #[error("{version} at {build} holds files from two Proton versions: Wine called functions its own files do not have")]
+    MixedBuild { version: String, build: PathBuf },
+
     #[error("Proton ran but left no usable prefix at {0}")]
     NotInitialized(PathBuf),
 
@@ -622,6 +633,37 @@ mod tests {
             built_at: None,
         };
         ProtonRunner::new(&release, &Layout::with_root(root.join("Blizzard")), root.join("Steam"))
+    }
+
+    /// A `proton` that prints what a mixed build printed for GlitchTip #33,
+    /// and fails the way it did.
+    fn mixed_build(name: &str) -> ProtonRunner {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = scratch(name);
+        let script = root.join("GE-Proton11-7").join("proton");
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(
+            &script,
+            "#!/bin/sh\necho 'ntsync: up and running.' >&2\n\
+             echo 'wine: Call from 00006FFFFF4EE164 to unimplemented function \
+             win32u.NtGdiDdDDIQueryFSEBlock, aborting' >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        runner(&root)
+    }
+
+    #[test]
+    fn wineboot_hitting_a_missing_wine_function_names_the_mixed_build() {
+        let error = mixed_build("mixed-wineboot").run("wineboot", ["-u"]).unwrap_err();
+        assert!(matches!(error, PrefixError::MixedBuild { ref version, .. } if version == "GE-Proton11-7"), "{error:?}");
+    }
+
+    #[test]
+    fn a_windows_program_hitting_a_missing_wine_function_is_not_blamed_on_the_build() {
+        let error = mixed_build("mixed-installer").run("Battle.net-Setup.exe", Vec::<&str>::new()).unwrap_err();
+        assert!(matches!(error, PrefixError::Command { .. }), "{error:?}");
     }
 
     fn env_of(cmd: &Command, key: &str) -> Option<String> {

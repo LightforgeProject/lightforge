@@ -29,6 +29,9 @@ pub enum Fix {
     StorageSettings,
     /// A command for the user to copy and run themselves.
     CopyCommand(String),
+    /// Download this Proton build into Lightforge's own folder, which wins
+    /// over a copy of the same name elsewhere, and set up again.
+    FreshProton(String),
 }
 
 impl Advice {
@@ -167,6 +170,14 @@ fn recognise(error: &(dyn Error + 'static)) -> Option<Advice> {
             "This Proton build is incomplete. Remove it and install it again, or pick another \
              version.",
             Fix::ProtonSettings,
+        ));
+    }
+    if let Some(crate::prefix::PrefixError::MixedBuild { version, .. }) = error.downcast_ref() {
+        return Some(Advice::with(
+            "This Proton folder has files from an older version mixed in, often from unpacking \
+             one over another. Install a fresh copy: Lightforge keeps its own and leaves this \
+             folder alone.",
+            Fix::FreshProton(version.clone()),
         ));
     }
     if let Some(e) = error.downcast_ref::<crate::runtime::RuntimeError>() {
@@ -375,6 +386,16 @@ mod tests {
         ] {
             assert!(advise(error.as_ref()).unwrap().todo.starts_with("Another Lightforge"), "{error}");
         }
+    }
+
+    #[test]
+    fn a_mixed_proton_folder_offers_a_fresh_copy_of_the_same_build() {
+        let error = crate::prefix::PrefixError::MixedBuild {
+            version: "GE-Proton11-7".to_owned(),
+            build: "/steam/compatibilitytools.d/GE-Proton11-7-x86_64".into(),
+        };
+        let advice = advise(&error).unwrap();
+        assert_eq!(advice.fix, Some(Fix::FreshProton("GE-Proton11-7".to_owned())));
     }
 
     #[test]

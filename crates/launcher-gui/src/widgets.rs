@@ -430,6 +430,7 @@ pub(crate) fn problem(problem: &Problem) -> Element<'_, Message> {
         Fix::ProtonSettings => ("Open Proton settings", Message::ShowSettingsTab(SettingsTab::Proton)),
         Fix::StorageSettings => ("Open Storage settings", Message::ShowSettingsTab(SettingsTab::Storage)),
         Fix::CopyCommand(command) => ("Copy the command", Message::CopyRuntimeCommand(command.clone())),
+        Fix::FreshProton(version) => ("Install a fresh copy", Message::FreshProton(version.clone())),
     });
     if let Some((label, message)) = fix {
         body = body.push(secondary(label, message).keyed(format!("problem fix {label}"), true));

@@ -360,6 +360,9 @@ struct Lightforge {
     setup_rx: Option<tokio::sync::watch::Receiver<provision::Progress>>,
     setup_sample: provision::Progress,
     setup_running: bool,
+    /// Setup runs again once the Proton install under way is done: the
+    /// install replaces a build setup failed on.
+    setup_after_proton: bool,
     /// Editable copy of the download cap, in MB/s. Empty means unlimited.
     limit_input: String,
     /// Editable copy of Battle.net's *own* cap, in MB/s. Empty means none.
