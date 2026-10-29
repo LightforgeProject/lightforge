@@ -114,6 +114,7 @@ impl Lightforge {
         };
         let card = card
             .or_else(|| self.stop_dialog.as_ref().map(|d| self.stop_card(d)))
+            .or_else(|| self.quit_client_dialog.as_ref().map(|d| self.quit_client_card(d)))
             .or_else(|| self.version_dialog.as_ref().map(|d| self.version_card_info(d)))
             .or_else(|| self.modify_dialog.as_ref().map(|d| self.modify_card(d)))
             .or_else(|| self.proton_installer.map(|tab| self.proton_installer_card(tab)));

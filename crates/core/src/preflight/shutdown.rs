@@ -6,7 +6,7 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System};
 
 use super::games::games_running;
 use super::gate::Timing;
-use super::scan::{belongs_to, collect, owned_prefixes, refresh, scan, PrefixProcess};
+use super::scan::{belongs_to, collect, owned_prefixes, refresh, scan, PrefixProcess, ProcKind};
 use super::{io, PreflightError, POLL};
 use crate::paths::Layout;
 use crate::prefix::ProtonRunner;
@@ -94,27 +94,8 @@ pub(super) fn shutdown_timed(
         return Ok(outcomes);
     }
 
-    let stubborn = signal_all(&mut system, layout, &pids_of(&remaining), Signal::Term, grace);
-    stamp(timings, "SIGTERM");
-    let (ignored_term, exited): (Vec<_>, Vec<_>) =
-        remaining.into_iter().partition(|p| stubborn.contains(&p.pid));
-    outcomes.extend(exited.into_iter().map(|process| Outcome {
-        process,
-        disposition: Disposition::Terminated,
-    }));
-
-    if !ignored_term.is_empty() {
-        let survivors = signal_all(&mut system, layout, &pids_of(&ignored_term), Signal::Kill, grace);
-        stamp(timings, "SIGKILL");
-        outcomes.extend(ignored_term.into_iter().map(|process| {
-            let disposition = if survivors.contains(&process.pid) {
-                Disposition::Survived
-            } else {
-                Disposition::Killed
-            };
-            Outcome { process, disposition }
-        }));
-    }
+    outcomes.extend(terminate(&mut system, layout, remaining, grace));
+    stamp(timings, "signals");
 
     outcomes.sort_by_key(|o| o.process.pid);
     for outcome in outcomes.iter().filter(|o| o.disposition != Disposition::Wineserver) {
@@ -126,6 +107,62 @@ pub(super) fn shutdown_timed(
         );
     }
     Ok(outcomes)
+}
+
+/// Close the Battle.net client, its Agent and their helpers, and leave any
+/// game running: on Windows a game outlives the client that started it.
+///
+/// With no game up this is [`shutdown`], whose `wineserver -k` lets the client
+/// write its config on the way out. With one, only the client's own processes
+/// are signalled, as [`super::stop_game`] does for a game.
+pub fn quit_client(
+    runner: &ProtonRunner,
+    layout: &Layout,
+    grace: Duration,
+) -> Result<Vec<Outcome>, PreflightError> {
+    if games_running(layout).is_empty() {
+        return shutdown(runner, layout, grace);
+    }
+    let mut system = System::new();
+    refresh(&mut system);
+    let client: Vec<PrefixProcess> =
+        collect(&system, layout).into_iter().filter(|p| p.kind != ProcKind::WineServer).collect();
+    tracing::info!(
+        "closing Battle.net beside a running game: {}",
+        client.iter().map(|p| format!("{} ({})", p.name, p.pid)).collect::<Vec<_>>().join(", "),
+    );
+    let mut outcomes = terminate(&mut system, layout, client, grace);
+    outcomes.sort_by_key(|o| o.process.pid);
+    Ok(outcomes)
+}
+
+/// `SIGTERM`, then `SIGKILL` for whatever ignored it.
+fn terminate(
+    system: &mut System,
+    layout: &Layout,
+    processes: Vec<PrefixProcess>,
+    grace: Duration,
+) -> Vec<Outcome> {
+    let stubborn = signal_all(system, layout, &pids_of(&processes), Signal::Term, grace);
+    let (ignored_term, exited): (Vec<_>, Vec<_>) =
+        processes.into_iter().partition(|p| stubborn.contains(&p.pid));
+    let mut outcomes: Vec<Outcome> = exited
+        .into_iter()
+        .map(|process| Outcome { process, disposition: Disposition::Terminated })
+        .collect();
+
+    if !ignored_term.is_empty() {
+        let survivors = signal_all(system, layout, &pids_of(&ignored_term), Signal::Kill, grace);
+        outcomes.extend(ignored_term.into_iter().map(|process| {
+            let disposition = if survivors.contains(&process.pid) {
+                Disposition::Survived
+            } else {
+                Disposition::Killed
+            };
+            Outcome { process, disposition }
+        }));
+    }
+    outcomes
 }
 
 fn pids_of(processes: &[PrefixProcess]) -> Vec<u32> {

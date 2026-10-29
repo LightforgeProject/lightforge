@@ -43,7 +43,7 @@ pub use games::{
 };
 pub use gate::{DownloadGuard, NoDownloads, Preflight, Report, Timing};
 pub use scan::{scan, PrefixProcess, ProcKind};
-pub use shutdown::{shutdown, Disposition, Outcome};
+pub use shutdown::{quit_client, shutdown, Disposition, Outcome};
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

@@ -153,6 +153,7 @@ impl Lightforge {
     pub(crate) fn dialog_dismissal(&self) -> Option<Message> {
         Some(match () {
             _ if self.stop_dialog.is_some() => Message::StopGameDismiss,
+            _ if self.quit_client_dialog.is_some() => Message::QuitBattleNetDismiss,
             _ if self.version_dialog.is_some() => Message::CloseGameVersion,
             _ if self.modify_dialog.is_some() => Message::ModifyCancel,
             _ if self.install_dialog.is_some() => Message::InstallCancel,
@@ -295,6 +296,7 @@ impl Lightforge {
             || self.browse_open
             || self.strip_open
             || self.app_menu_open
+            || self.client_menu_open
             || self.addon_menu_open.is_some()
             || self.tile_menu.is_some()
     }
@@ -309,6 +311,7 @@ impl Lightforge {
         self.browse_open = false;
         self.strip_open = false;
         self.app_menu_open = false;
+        self.client_menu_open = false;
         self.addon_menu_open = None;
         self.tile_menu = None;
     }

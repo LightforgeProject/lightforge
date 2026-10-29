@@ -6,6 +6,7 @@ impl Lightforge {
     pub(crate) fn update_launch(&mut self, message: Message) -> Result<Task<Message>, Message> {
         self.update_play(message)
             .or_else(|m| self.update_battle_net_launch(m))
+            .or_else(|m| self.update_client(m))
             .or_else(|m| self.update_install_dialog(m))
     }
 
@@ -210,6 +211,81 @@ impl Lightforge {
                     self.error = Some(e.into());
                 }
                 Task::none()
+            }
+            other => return Err(other),
+        })
+    }
+
+    /// The Battle.net client itself while it runs: seeing it, showing it,
+    /// quitting it.
+    fn update_client(&mut self, message: Message) -> Result<Task<Message>, Message> {
+        Ok(match message {
+            Message::ClientWatch => self.check_client(),
+
+            Message::ClientSeen(up) => {
+                self.client_up = up;
+                if !up {
+                    self.client_menu_open = false;
+                }
+                Task::none()
+            }
+
+            Message::ToggleClientMenu => {
+                self.client_menu_open = !self.client_menu_open;
+                Task::none()
+            }
+
+            Message::ShowBattleNet => {
+                self.client_menu_open = false;
+                // No pre-flight: it would close the client this is meant to
+                // show. A second invocation hands it the request over IPC.
+                Task::perform(
+                    tasks::open_battle_net(
+                        self.layout.clone(),
+                        self.selected.code.clone(),
+                        self.config.prefix_user.clone(),
+                    ),
+                    Message::BattleNetShown,
+                )
+            }
+
+            Message::BattleNetShown(result) => {
+                if let Err(e) = result {
+                    self.error = Some(e);
+                }
+                self.check_client()
+            }
+
+            Message::AskQuitBattleNet => {
+                self.client_menu_open = false;
+                Task::perform(tasks::running_games(self.layout.clone()), Message::QuitBattleNetChecked)
+            }
+
+            Message::QuitBattleNetChecked(games) => match games.is_empty() {
+                true => self.quit_client(),
+                false => {
+                    self.quit_client_dialog = Some(QuitClientDialog { games });
+                    Task::none()
+                }
+            },
+
+            Message::QuitBattleNetDismiss => {
+                self.quit_client_dialog = None;
+                Task::none()
+            }
+
+            Message::QuitBattleNetConfirm => {
+                self.quit_client_dialog = None;
+                self.quit_client()
+            }
+
+            Message::BattleNetQuit(result) => {
+                self.quitting_client = false;
+                match result {
+                    Ok(note) => self.status = note,
+                    Err(e) => self.error = Some(e),
+                }
+                self.check_client()
             }
             other => return Err(other),
         })

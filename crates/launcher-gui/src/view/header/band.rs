@@ -239,16 +239,26 @@ impl Lightforge {
     /// The hand-off into Battle.net, at the right-hand end of the game card.
     ///
     /// The mark comes from the prefix ([`Layout::battle_net_icon`]); before
-    /// Battle.net is installed, the word alone.
+    /// Battle.net is installed, the word alone. While the client runs, the
+    /// mark carries a green dot and a chevron opens Show and Quit.
     pub(crate) fn battle_net_button(&self) -> Element<'_, Message> {
         let mut face = row![].spacing(theme::SM).align_y(Alignment::Center);
         if let Some(icon) = &self.bnet_icon {
-            face = face.push(
-                image(icon.clone())
-                    .content_fit(ContentFit::Contain)
-                    .width(Length::Fixed(BNET_GLYPH))
-                    .height(Length::Fixed(BNET_GLYPH)),
-            );
+            let mark = image(icon.clone())
+                .content_fit(ContentFit::Contain)
+                .width(Length::Fixed(BNET_GLYPH))
+                .height(Length::Fixed(BNET_GLYPH));
+            face = face.push(match self.client_up {
+                true => Element::from(stack![
+                    mark,
+                    container(running_dot())
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .align_right(Length::Fill)
+                        .align_bottom(Length::Fill),
+                ]),
+                false => mark.into(),
+            });
         }
         // Same optical correction as the band's label, the word has no
         // descenders either, and it sits beside a mark that fills its box.
@@ -256,18 +266,76 @@ impl Lightforge {
             text("Battle.net").size(theme::LABEL).font(theme::BOLD),
         ));
 
-        tooltip(
-            button(face)
-                .padding([theme::SM, theme::MD])
-                .style(theme::ghost)
-                .on_press_maybe((!self.busy).then_some(Message::OpenBattleNet)),
-            container(
-                text("Open Battle.net for other Blizzard titles".to_owned()).size(theme::LABEL),
-            )
-            .padding([theme::XS, theme::SM])
-            .style(theme::floating),
-            tooltip::Position::Bottom,
+        let press = self.battle_net_press();
+        let main = self.ring(
+            focus::Target::BattleNet,
+            press.clone(),
+            tooltip(
+                button(face)
+                    .padding([theme::SM, theme::MD])
+                    .style(theme::ghost)
+                    .on_press_maybe(press),
+                container(
+                    text(match self.client_up {
+                        true => "Battle.net is running",
+                        false => "Open Battle.net for other Blizzard titles",
+                    })
+                    .size(theme::LABEL),
+                )
+                .padding([theme::XS, theme::SM])
+                .style(theme::floating),
+                tooltip::Position::Bottom,
+            ),
+        );
+        if !self.client_up {
+            return main;
+        }
+
+        let chevron = button(
+            image(chevron_icon())
+                .width(Length::Fixed(APP_MENU_CHEVRON))
+                .height(Length::Fixed(APP_MENU_CHEVRON)),
         )
+        .padding([theme::SM, theme::SM])
+        .style(match self.client_menu_open {
+            true => theme::selected,
+            false => theme::ghost,
+        })
+        .on_press(Message::ToggleClientMenu);
+        popover::popover(
+            row![
+                main,
+                self.ring(focus::Target::Key("battle.net menu".to_owned()), Some(Message::ToggleClientMenu), chevron),
+            ]
+            .align_y(Alignment::Center),
+            self.client_menu_open.then(|| self.client_menu()),
+        )
+        .below()
         .into()
     }
+
+    /// What the Battle.net button does now: bring a running client up, or
+    /// start one through pre-flight.
+    fn battle_net_press(&self) -> Option<Message> {
+        match (self.busy || self.quitting_client, self.client_up) {
+            (true, _) => None,
+            (false, true) => Some(Message::ShowBattleNet),
+            (false, false) => Some(Message::OpenBattleNet),
+        }
+    }
 }
+
+/// The mark's corner while the client runs.
+fn running_dot<'a>() -> Element<'a, Message> {
+    container(Space::new())
+        .width(Length::Fixed(RUNNING_DOT))
+        .height(Length::Fixed(RUNNING_DOT))
+        .style(|_| container::Style {
+            background: Some(theme::OK.into()),
+            border: iced::border::rounded(RUNNING_DOT / 2.0),
+            ..container::Style::default()
+        })
+        .into()
+}
+
+const RUNNING_DOT: f32 = 8.0;

@@ -439,6 +439,43 @@ pub async fn stop_game(layout: Layout, game: GameProcess) -> Result<String, Prob
     }
 }
 
+/// Whether the Battle.net client is up in the prefix.
+pub async fn client_running(layout: Layout) -> bool {
+    tokio::task::spawn_blocking(move || lightforge_core::preflight::client_running(&layout))
+        .await
+        .unwrap_or(false)
+}
+
+/// The games running in the prefix, by name, whoever started them.
+pub async fn running_games(layout: Layout) -> Vec<String> {
+    tokio::task::spawn_blocking(move || {
+        lightforge_core::preflight::games_running(&layout).into_iter().map(|g| g.name).collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Close Battle.net and its Agent, leaving any game running.
+pub async fn quit_battle_net(layout: Layout, code: ProductCode) -> Result<String, Problem> {
+    use lightforge_core::preflight::{self, Disposition};
+
+    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
+        let runner = client_runner(&layout, &code)?;
+        let outcomes = preflight::quit_client(&runner, &layout, STOP_GRACE).map_err(|e| Problem::of(&e))?;
+        let stuck: Vec<String> = outcomes
+            .iter()
+            .filter(|o| o.disposition == Disposition::Survived)
+            .map(|o| format!("{} (pid {})", o.process.name, o.process.pid))
+            .collect();
+        match stuck.is_empty() {
+            true => Ok("Battle.net closed".to_owned()),
+            false => Err(format!("Battle.net would not close: {}", stuck.join(", ")).into()),
+        }
+    })
+    .await
+    .map_err(|e| Problem::of(&e))?
+}
+
 /// Battle.net's own download limit, in MB/s, or `None` when it has none.
 pub async fn battle_net_limit(layout: Layout, user: String) -> Option<u64> {
     tokio::task::spawn_blocking(move || {

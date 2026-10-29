@@ -154,6 +154,20 @@ pub(crate) enum Message {
     StopGameDismiss,
     StopGameConfirm,
     GameStopped(ProductCode, Result<String, Problem>),
+    /// Every few seconds: is the Battle.net client up?
+    ClientWatch,
+    ClientSeen(bool),
+    /// The menu beside a running Battle.net's button.
+    ToggleClientMenu,
+    /// Bring a running client's window up, without restarting it.
+    ShowBattleNet,
+    BattleNetShown(Result<String, Problem>),
+    /// Quit was chosen: asks what is running before deciding to ask the user.
+    AskQuitBattleNet,
+    QuitBattleNetChecked(Vec<String>),
+    QuitBattleNetDismiss,
+    QuitBattleNetConfirm,
+    BattleNetQuit(Result<String, Problem>),
     /// A hand-off ran to the point where there is something to say: the
     /// game is up, the client needs a person, or nothing started.
     HandoffStarted(Result<tasks::Handoff, Problem>),

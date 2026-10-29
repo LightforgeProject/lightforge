@@ -111,6 +111,23 @@ fn a_game_served_by_another_build_refuses_a_launch_beside_it() {
 }
 
 #[test]
+fn quitting_the_client_beside_a_game_leaves_the_game_running() {
+    let layout = Layout::with_root("/games/quit-beside-a-game");
+    let mut game = stand_in(&layout, r"C:\Program Files (x86)\Overwatch\Overwatch.exe");
+    let mut client = stand_in(&layout, BNET);
+    let mut agent = stand_in(&layout, AGENT);
+    std::thread::sleep(Duration::from_millis(300));
+
+    let outcomes = quit_client(&runner(&layout), &layout, Duration::from_secs(2)).unwrap();
+    assert_eq!(outcomes.len(), 2, "{outcomes:?}");
+    assert!(outcomes.iter().all(|o| o.disposition == Disposition::Terminated));
+    assert!(client.try_wait().unwrap().is_some() && agent.try_wait().unwrap().is_some());
+    assert!(game.try_wait().unwrap().is_none(), "the game is still up");
+    let _ = game.kill();
+    let _ = game.wait();
+}
+
+#[test]
 fn a_process_that_ignores_sigterm_is_killed_and_a_stranger_is_left_alone() {
     use std::process::{Command, Stdio};
 

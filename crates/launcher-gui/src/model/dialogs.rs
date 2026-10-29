@@ -213,6 +213,13 @@ pub(crate) struct StopDialog {
     pub(crate) label: String,
 }
 
+/// The question asked before Battle.net is closed under a running game.
+#[derive(Debug, Clone)]
+pub(crate) struct QuitClientDialog {
+    /// What is running, by executable name.
+    pub(crate) games: Vec<String>,
+}
+
 /// The Game Settings popup, for the game that was selected when it opened.
 #[derive(Debug, Clone)]
 pub(crate) struct GameSettings {

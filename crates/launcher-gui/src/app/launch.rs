@@ -47,6 +47,25 @@ impl Lightforge {
         )
     }
 
+    /// Ask the process table whether the Battle.net client is up.
+    pub(crate) fn check_client(&self) -> Task<Message> {
+        Task::perform(tasks::client_running(self.layout.clone()), Message::ClientSeen)
+    }
+
+    /// Close Battle.net, unless a launch is under way: it may be the one
+    /// starting the client.
+    pub(crate) fn quit_client(&mut self) -> Task<Message> {
+        if self.busy || self.quitting_client {
+            return Task::none();
+        }
+        self.quitting_client = true;
+        self.status = "closing Battle.net…".to_owned();
+        Task::perform(
+            tasks::quit_battle_net(self.layout.clone(), self.selected.code.clone()),
+            Message::BattleNetQuit,
+        )
+    }
+
     /// What a finished launch or game owes: transfers paused for play go back
     /// in the queue once nothing of ours runs, and what the session may have
     /// changed is read again.
@@ -67,6 +86,7 @@ impl Lightforge {
         // The session may have filled the catalogue cache; 25 ms to re-read.
         Task::batch([
             self.pump(),
+            self.check_client(),
             self.reload(self.selected.code.clone()),
             Task::perform(
                 tasks::game_families(

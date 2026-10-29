@@ -280,6 +280,14 @@ struct Lightforge {
     /// Battle.net's own mark ([`Layout::battle_net_icon`]), decoded once: a
     /// handle built in `view` is a new texture every frame.
     bnet_icon: Option<image::Handle>,
+    /// Whether the Battle.net client is up in the prefix, checked every few
+    /// seconds: under Wine its tray icon is often nowhere to be seen.
+    client_up: bool,
+    /// Whether the menu beside a running Battle.net's button is open.
+    client_menu_open: bool,
+    /// Battle.net is being closed.
+    quitting_client: bool,
+    quit_client_dialog: Option<QuitClientDialog>,
     /// Whether the cog menu beside the primary button is open.
     gear_open: bool,
     /// Live progress of a store scan, and whether one is running.

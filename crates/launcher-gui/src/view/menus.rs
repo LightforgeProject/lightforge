@@ -314,6 +314,34 @@ impl Lightforge {
         popover::popover(face, menu).align_left().into()
     }
 
+    /// The menu beside a running Battle.net: bring it up, or quit it.
+    pub(crate) fn client_menu(&self) -> Element<'_, Message> {
+        let free = !self.busy && !self.quitting_client;
+        let item = |label: &'static str, message: Message| {
+            self.ring(
+                focus::Target::Menu(label),
+                free.then(|| message.clone()),
+                button(text(label).size(theme::LABEL))
+                    .style(theme::ghost)
+                    .padding(theme::tap([theme::SM, theme::MD]))
+                    .width(Length::Fill)
+                    .on_press_maybe(free.then_some(message)),
+            )
+        };
+        let menu = container(
+            column![
+                item("Show Battle.net", Message::ShowBattleNet),
+                item("Quit Battle.net", Message::AskQuitBattleNet),
+            ]
+            .spacing(theme::XS),
+        )
+        .padding(theme::XS)
+        .width(Length::Fixed(200.0))
+        .style(theme::floating);
+
+        focus::layer(mouse_area(menu).on_press(Message::MenuClick))
+    }
+
     /// The cog menu: what you do *about* a game, not to play it.
     pub(crate) fn gear_menu(&self) -> Element<'_, Message> {
         let item = |label: &'static str, message: Message, enabled: bool| {

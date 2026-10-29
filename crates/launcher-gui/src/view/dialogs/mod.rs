@@ -96,6 +96,44 @@ impl Lightforge {
         .into()
     }
 
+    /// The question before Battle.net is closed under a running game, which
+    /// may need it (Overwatch does).
+    pub(crate) fn quit_client_card<'a>(&'a self, dialog: &'a QuitClientDialog) -> Element<'a, Message> {
+        let choice = |label: &'static str| {
+            button(text(label).size(theme::LABEL).width(Length::Fill).center())
+                .width(Length::Fixed(170.0))
+                .padding(theme::tap([theme::SM, theme::MD]))
+        };
+        let actions = row![
+            Space::new().width(Length::Fill),
+            tappable("keep battle.net", Some(Message::QuitBattleNetDismiss), choice("Keep it open").style(theme::outlined)),
+            tappable(
+                "quit battle.net",
+                Some(Message::QuitBattleNetConfirm),
+                choice("Quit Battle.net").style(theme::filled(theme::ERROR)),
+            ),
+        ]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center);
+
+        let running = match dialog.games.as_slice() {
+            [one] => format!("{one} is still running and may need it."),
+            many => format!("{} are still running and may need it.", many.join(", ")),
+        };
+        container(
+            column![
+                text("Quit Battle.net?").size(theme::HEADING + 2.0),
+                muted(running, theme::BODY),
+                actions,
+            ]
+            .spacing(theme::LG),
+        )
+        .width(Length::Fixed(520.0))
+        .padding(theme::LG)
+        .style(theme::dialog)
+        .into()
+    }
+
     /// The question before a running game is stopped.
     pub(crate) fn stop_card<'a>(&'a self, dialog: &'a StopDialog) -> Element<'a, Message> {
         let choice = |label: &'static str| {

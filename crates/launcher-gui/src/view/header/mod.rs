@@ -212,11 +212,7 @@ impl Lightforge {
                 // Not when Battle.net was declined.
                 .extend((!self.config.battle_net_declined).then(|| {
                     Element::from(
-                        container(self.ring(
-                            focus::Target::BattleNet,
-                            (!self.busy).then_some(Message::OpenBattleNet),
-                            self.battle_net_button(),
-                        ))
+                        container(self.battle_net_button())
                             .height(Length::Fill)
                             .align_y(Alignment::Center),
                     )

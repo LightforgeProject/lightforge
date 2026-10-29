@@ -125,6 +125,9 @@ pub(crate) struct RegistryWatch {
 /// How often the registry's timestamp is checked while it is watched.
 pub(crate) const REGISTRY_POLL: Duration = Duration::from_secs(2);
 
+/// How often the process table is asked whether Battle.net is up.
+pub(crate) const CLIENT_POLL: Duration = Duration::from_secs(5);
+
 /// Every how many polls the process table is scanned for the client.
 pub(crate) const REGISTRY_CLIENT_EVERY: u32 = 5;
 

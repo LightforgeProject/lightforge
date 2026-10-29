@@ -89,8 +89,13 @@ impl Lightforge {
             false => Subscription::none(),
         };
         let upgrade = self.upgrade_watch();
+        // A scan is about 60 ms, cheap at this pace.
+        let client = match self.config.battle_net_declined {
+            true => Subscription::none(),
+            false => iced::time::every(CLIENT_POLL).map(|_| Message::ClientWatch),
+        };
 
-        Subscription::batch([resizes, registry, upgrade])
+        Subscription::batch([resizes, registry, upgrade, client])
     }
 
     /// The clock the progress bars and the splash animate off.

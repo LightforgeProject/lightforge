@@ -1569,3 +1569,50 @@ fn incomplete() -> Complete {
         executable: None,
     }
 }
+
+#[test]
+fn battle_net_running_offers_show_and_quit_and_closes_the_menu_when_it_goes() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.wizard = None;
+    app.splash = None;
+    app.update_notice = None;
+    app.patch_notes = None;
+    app.screen = Screen::Dashboard;
+
+    let _ = app.update(Message::ClientSeen(true));
+    let _ = app.update(Message::ToggleClientMenu);
+    assert!(app.client_menu_open && app.panel_open());
+    // Drawn with its dot, chevron and menu.
+    let _ = app.view();
+
+    let _ = app.update(Message::ClientSeen(false));
+    assert!(!app.client_up && !app.client_menu_open);
+}
+
+#[test]
+fn quitting_battle_net_asks_first_only_when_a_game_runs() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+
+    let _ = app.update(Message::QuitBattleNetChecked(vec!["Overwatch.exe".to_owned()]));
+    assert!(app.quit_client_dialog.is_some() && !app.quitting_client);
+    assert!(matches!(app.dialog_dismissal(), Some(Message::QuitBattleNetDismiss)));
+    let _ = app.update(Message::QuitBattleNetDismiss);
+    assert!(app.quit_client_dialog.is_none() && !app.quitting_client);
+
+    let _ = app.update(Message::QuitBattleNetChecked(Vec::new()));
+    assert!(app.quit_client_dialog.is_none() && app.quitting_client);
+    let _ = app.update(Message::BattleNetQuit(Ok("Battle.net closed".to_owned())));
+    assert!(!app.quitting_client);
+}
+
+#[test]
+fn battle_net_is_not_quit_while_a_launch_may_be_starting_it() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.busy = true;
+
+    let _ = app.update(Message::QuitBattleNetChecked(Vec::new()));
+    assert!(!app.quitting_client);
+}
