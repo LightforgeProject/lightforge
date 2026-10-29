@@ -19,7 +19,7 @@ lightforge-core = { path = "crates/core" }
 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-directories = "5"
+directories = "6"
 flate2 = "1"
 # Proton-CachyOS ships .tar.xz. Builds the reference liblzma from vendored
 # source, so no system library is needed at run time.
