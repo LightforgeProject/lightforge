@@ -1672,3 +1672,21 @@ fn a_fresh_proton_copy_sets_up_again_only_when_asked_for_by_the_fix() {
     let _ = app.update(Message::InstallProton("GE-Proton11-7".to_owned()));
     assert!(app.setup_running && !app.setup_after_proton);
 }
+
+#[test]
+fn a_new_game_language_leaves_a_game_mid_download_in_its_own() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.queue.clear();
+    app.config.locale = "enUS".to_owned();
+    let code = app.selected.code.clone();
+    if let Some(product) = app.config.product_mut(&code) {
+        product.profile.locale = None;
+    }
+    running(&mut app, &code);
+
+    let _ = app.update(Message::GameLanguage("deDE".to_owned()));
+    assert_eq!(app.config.locale, "deDE");
+    assert_eq!(app.config.locale_for(&code), "enUS", "its files are enUS: switching is Modify Install's");
+    let _ = app.downloads_section();
+}

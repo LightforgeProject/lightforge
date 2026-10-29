@@ -316,6 +316,8 @@ pub(crate) enum Message {
     DownloadLimitChanged(String),
     /// The pause-while-playing switch was flipped.
     PauseWhilePlaying(bool),
+    /// The setup language, from Settings: what new games download in.
+    GameLanguage(String),
     /// Whether the launcher gets out of the way once a game is up.
     MinimizeOnLaunch(bool),
     /// Whether a Battle.net hand-off puts the client in the tray.

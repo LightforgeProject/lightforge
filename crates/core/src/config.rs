@@ -264,6 +264,20 @@ impl Config {
         )
     }
 
+    /// Change the setup language for games installed from now on. Each game
+    /// `on_disk` names, and that follows the setup language, keeps the one it
+    /// has as its own: switching it means a download, which is Modify
+    /// Install's to start, not this.
+    pub fn set_locale(&mut self, locale: &str, on_disk: impl Fn(&ProductCode) -> bool) {
+        let old = crate::tact::install::current_locale(&self.locale).to_owned();
+        for product in self.products.iter_mut().filter(|p| p.profile.locale.is_none()) {
+            if on_disk(&product.code) {
+                product.profile.locale = Some(old.clone());
+            }
+        }
+        self.locale = locale.to_owned();
+    }
+
     /// Add a product, rejecting a duplicate code.
     #[cfg(test)]
     pub fn add_product(&mut self, product: Product) -> Result<(), crate::product::ProductError> {
@@ -491,6 +505,18 @@ mod tests {
         assert_eq!(Config::load_or_default(&path).unwrap(), config);
         let names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().flatten().map(|e| e.file_name()).collect();
         assert_eq!(names, ["config.toml"]);
+    }
+
+    #[test]
+    fn a_new_setup_language_leaves_installed_games_in_theirs() {
+        let mut config = Config::with_default_products();
+        config.locale = "enUS".to_owned();
+        config.product_mut(&ProductCode::ClassicEra).unwrap().profile.locale = Some("frFR".to_owned());
+
+        config.set_locale("deDE", |code| matches!(code, ProductCode::Retail | ProductCode::ClassicEra));
+        assert_eq!(config.locale_for(&ProductCode::Retail), "enUS", "installed: keeps its language");
+        assert_eq!(config.locale_for(&ProductCode::ClassicEra), "frFR", "its own choice stands");
+        assert_eq!(config.locale_for(&ProductCode::Forever), "deDE", "not installed: follows");
     }
 
     // Older configs lack it; a missing key defaults.

@@ -83,6 +83,28 @@ impl Lightforge {
                 self.pump()
             }
 
+            Message::GameLanguage(locale) => {
+                use lightforge_core::tact::install::{current_locale, locale_name};
+
+                if current_locale(&locale) == current_locale(&self.config.locale) {
+                    return Ok(Task::none());
+                }
+                // On disk, or on its way there: a paused first install has
+                // files in the old language but no `.build.info` row yet.
+                let (layout, queue) = (&self.layout, &self.queue);
+                let on_disk = |code: &ProductCode| {
+                    queue.iter().any(|d| &d.code == code)
+                        || lightforge_core::buildinfo::BuildInfo::load(layout.build_info(code))
+                            .ok()
+                            .and_then(|info| info.get(code, lightforge_core::buildinfo::COL_BUILD_KEY).ok().map(|key| !key.is_empty()))
+                            .unwrap_or(false)
+                };
+                self.config.set_locale(&locale, on_disk);
+                self.save_config();
+                self.status = format!("new games download in {}", locale_name(&locale));
+                Task::none()
+            }
+
             Message::PauseWhilePlaying(on) => {
                 self.config.pause_downloads_while_playing = on;
                 self.save_config();

@@ -220,7 +220,26 @@ impl Lightforge {
             .into()
         };
 
+        let locales: Vec<LocaleChoice> = lightforge_core::tact::install::LOCALES
+            .iter()
+            .map(|(code, _)| LocaleChoice(code.to_string()))
+            .collect();
+
         setting_group([
+            setting(
+                "Game language",
+                "What new games download in. An installed game keeps its own: Modify Install in its cog menu changes it.",
+                self.hint("Battle.net keeps the language it was installed in; it has a setting of its own."),
+                self.picker(
+                    "game language".to_owned(),
+                    locales,
+                    Some(LocaleChoice(lightforge_core::tact::install::current_locale(&self.config.locale).to_owned())),
+                    "",
+                    |choice| Message::GameLanguage(choice.0),
+                    Length::Fixed(260.0),
+                    theme::BODY,
+                ),
+            ),
             setting(
                 "Download speed limit",
                 "For game downloads. Proton builds and addons are not capped.",
