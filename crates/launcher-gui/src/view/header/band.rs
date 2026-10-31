@@ -47,7 +47,8 @@ impl Lightforge {
             .unwrap_or_else(|| line.label().to_owned())
     }
 
-    /// The mark a line's tile wears, if the manifest gives it one.
+    /// The mark a line wears on its tile and in the game lists, if the
+    /// manifest gives it one.
     ///
     /// Hand-offs included. The head's mark, then any branch's (Forever's art
     /// stays on `wow_classic_beta`).

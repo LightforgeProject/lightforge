@@ -34,7 +34,7 @@ impl Lightforge {
                     .keyed(format!("game {}", entry.code.as_str()), true),
             };
             // The band's mark; the column is held without one, so labels align.
-            let mark: Element<Message> = match self.icons.get(&entry.code) {
+            let mark: Element<Message> = match self.tile_art(&entry.line) {
                 Some(mark) => image(mark.handle.clone())
                     .content_fit(ContentFit::Contain)
                     .width(Length::Fixed(BROWSE_MARK))
