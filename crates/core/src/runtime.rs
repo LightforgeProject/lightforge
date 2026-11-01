@@ -357,13 +357,15 @@ pub fn remedy_for(os: &OsRelease) -> Remedy {
             None,
         )
     } else if os.is("arch") {
-        // UNVERIFIED. Arch's `wine` is built against multilib and pulls its
-        // lib32-* dependencies, so no separate 32-bit package exists.
+        // UNVERIFIED on a clean install. Arch's `wine` has been pure WoW64
+        // since June 2025 and pulls no lib32 package at all; Proton's 32-bit
+        // Wine still loads the host's. These are on a CachyOS desktop where
+        // Battle.net works, gnutls being the one SteamOS lacked.
         (
-            Some("sudo pacman -S wine".to_owned()),
+            Some("sudo pacman -S lib32-gnutls lib32-freetype2 lib32-vulkan-icd-loader".to_owned()),
             Some(
-                "`wine` lives in the multilib repository — if pacman cannot \
-                 find it, uncomment the `[multilib]` section in \
+                "lib32 packages live in the multilib repository — if pacman \
+                 cannot find them, uncomment the `[multilib]` section in \
                  /etc/pacman.conf first"
                     .to_owned(),
             ),
@@ -483,7 +485,7 @@ mod remedy_tests {
     /// Every command asks for a 32-bit *Wine*, not a list of libraries: those
     /// pass our checks and still fail the installer.
     #[test]
-    fn every_command_installs_a_32_bit_wine() {
+    fn every_command_installs_32_bit_libraries() {
         for id in ["debian", "ubuntu", "arch", "fedora", "opensuse-tumbleweed"] {
             let os = OsRelease {
                 id: id.into(),
@@ -497,15 +499,13 @@ mod remedy_tests {
             };
             let remedy = remedy_for(&os);
             let command = remedy.command.unwrap_or_default();
-            assert!(command.contains("wine"), "{id} installs no wine: {command}");
-            // Arch's `wine` is multilib: no suffix, and the note names the repository.
+            // Arch's `wine` is 64-bit only, so there it is the lib32 set.
+            let installs = ["wine", "lib32-gnutls"].iter().any(|m| command.contains(m));
+            assert!(installs, "{id} installs neither wine nor gnutls: {command}");
             let names_arch = ["i386", "i686", "32bit", "lib32"]
                 .iter()
                 .any(|m| command.contains(m));
-            assert!(
-                names_arch || remedy.note.is_some_and(|n| n.contains("multilib")),
-                "{id} neither names a 32-bit build nor explains why it need not: {command}"
-            );
+            assert!(names_arch, "{id} names no 32-bit build: {command}");
         }
     }
 

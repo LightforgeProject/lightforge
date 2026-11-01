@@ -424,6 +424,8 @@ pub(crate) enum Message {
     /// Show the product's AddOns folder in the file manager.
     OpenAddonsDir,
     AddonRemoved(Result<Vec<String>, String>),
+    /// A link from outside Lightforge; only `http(s)` is opened. Lightforge's
+    /// own links, `steam://` among them, are [`Message::OpenLink`].
     OpenUrl(String),
     /// Drop one "could not install" row. It is a report, not a record:
     /// nothing was installed, so there is nothing to remove but the line.

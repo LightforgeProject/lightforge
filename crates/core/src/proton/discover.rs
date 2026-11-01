@@ -54,6 +54,11 @@ pub fn discover_all(
 /// sign-in and a game launch.
 pub const TESTED: &str = "GE-Proton11-7";
 
+/// Newer than [`TESTED`] and known to break setup, so having one installed is
+/// no reason to stay off [`TESTED`]. GE-Proton11-9: `Battle.net-Setup.exe`
+/// dies on start, `c00000fd`, exit 253.
+const KNOWN_BAD: [&str; 1] = ["GE-Proton11-9"];
+
 /// Choose the build to launch with. A pin is honoured exactly, never swapped
 /// for another build. Without one, [`TESTED`] when installed, else the newest
 /// supported build by its `version` file date (tags do not sort as strings).
@@ -72,8 +77,8 @@ pub fn select<'a>(builds: &'a [ProtonRelease], pin: Option<&str>) -> Option<&'a 
 /// Whether to fetch [`TESTED`] for a machine set up before it was the
 /// default (GE-Proton11-5 could not start Warcraft III's web UI; 11-7 can).
 /// Only ever a step forward: not under a pin, not when it is installed, not
-/// before setup, not when a newer build is installed, and not when the prefix
-/// was made by a newer build.
+/// before setup, not when a newer build is installed (one in [`KNOWN_BAD`]
+/// does not count), and not when the prefix was made by a newer build.
 pub fn wants_tested(
     installed: &[ProtonRelease],
     pin: Option<&str>,
@@ -87,7 +92,7 @@ pub fn wants_tested(
         return false;
     }
     let tested = ge_version(TESTED);
-    if supported.any(|b| ge_version(&b.version) > tested) {
+    if supported.any(|b| ge_version(&b.version) > tested && !KNOWN_BAD.contains(&b.version.as_str())) {
         return false;
     }
     !prefix_fit(TESTED, prefix_built_by).is_downgrade()

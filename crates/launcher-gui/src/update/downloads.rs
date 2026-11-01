@@ -264,9 +264,11 @@ impl Lightforge {
                         if let Some(at) = entry {
                             self.queue.remove(at);
                         }
-                        if showing {
-                            self.error = Some(e);
-                        }
+                        // Its row is gone with it, so this is the only trace.
+                        self.error = Some(match showing {
+                            true => e,
+                            false => Problem { message: format!("{}: {}", self.label_of(&code), e.message), ..e },
+                        });
                         self.pump()
                     }
                 }

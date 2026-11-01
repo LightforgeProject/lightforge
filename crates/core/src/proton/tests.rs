@@ -242,6 +242,7 @@ fn the_tested_build_is_fetched_only_as_a_step_forward() {
     assert!(!wants_tested(&have(&["GE-Proton11-5", TESTED]), None, None), "already there");
     assert!(!wants_tested(&[], None, None), "setup installs the first build");
     assert!(!wants_tested(&have(&["GE-Proton11-11"]), None, None), "a newer build is kept");
+    assert!(wants_tested(&have(&["GE-Proton11-9"]), None, Some("GE-Proton11-5")), "a known-bad one is not");
     assert!(!wants_tested(&old, None, Some("GE-Proton11-9")), "would downgrade the prefix");
     let valve = [build("proton-11.0-2-x86_64", None, ProtonFlavor::Valve)];
     assert!(!wants_tested(&valve, None, None), "nothing supported installed");

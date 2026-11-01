@@ -783,6 +783,32 @@ fn the_release_notes_open_once_after_an_update_and_never_uninvited() {
 }
 
 #[test]
+fn a_failed_download_of_another_game_still_says_so() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.queue.clear();
+    let other = match app.selected.code {
+        ProductCode::Retail => ProductCode::ClassicEra,
+        _ => ProductCode::Retail,
+    };
+    app.queue.push(Download {
+        code: other.clone(),
+        label: String::new(),
+        stage: Stage::Running { rx: tokio::sync::watch::channel(TransferState::default()).1, cancel: Cancel::new() },
+        sample: TransferState::default(),
+        rate: Rate::default(),
+        job: Job::default(),
+        pre_download: false,
+    });
+
+    let _ = app.update(Message::Downloaded(other.clone(), Err("connection reset".into())));
+
+    let shown = &app.error.as_ref().expect("the failure is shown").message;
+    assert_eq!(*shown, format!("{}: connection reset", app.label_of(&other)));
+    assert!(app.queue.is_empty());
+}
+
+#[test]
 fn a_resume_during_the_wind_down_is_not_swallowed() {
     let (mut app, _) = Lightforge::new();
     // Nothing read from or written to the real queue file.
@@ -1713,4 +1739,14 @@ fn a_new_game_language_leaves_a_game_mid_download_in_its_own() {
     assert_eq!(app.config.locale, "deDE");
     assert_eq!(app.config.locale_for(&code), "enUS", "its files are enUS: switching is Modify Install's");
     let _ = app.downloads_section();
+}
+
+#[test]
+fn a_link_that_is_not_a_web_page_is_not_opened() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+
+    let _ = app.update(Message::OpenUrl("file:///home/someone/evil.desktop".to_owned()));
+
+    assert!(app.error.as_ref().unwrap().message.starts_with("not opening file://"));
 }

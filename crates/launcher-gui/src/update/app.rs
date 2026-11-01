@@ -257,8 +257,17 @@ impl Lightforge {
                 Task::none()
             }
 
+            // From addon pages and descriptions: `xdg-open` would hand a
+            // `file://` or `smb://` link to whatever handles it.
             Message::OpenUrl(url) => {
-                if let Err(e) = tasks::open_url(&url) {
+                let web = ["https://", "http://"]
+                    .iter()
+                    .any(|scheme| url.get(..scheme.len()).is_some_and(|start| start.eq_ignore_ascii_case(scheme)));
+                let opened = match web {
+                    true => tasks::open_url(&url),
+                    false => Err(format!("not opening {url}: only web links are opened")),
+                };
+                if let Err(e) = opened {
                     self.error = Some(e.into());
                 }
                 Task::none()
