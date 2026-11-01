@@ -9,6 +9,7 @@ packaging/
 ├── pro.tuxcore.Lightforge.desktop        the menu entry
 ├── pro.tuxcore.Lightforge.metainfo.xml   AppStream, for software centres
 ├── icons/hicolor/…                       16px → 512px, plus the SVG
+├── appimage/AppRun                       the AppImage's entry: GUI, or `cli …`
 ├── installer/
 │   ├── lightforge-installer.desktop      the double-click installer
 │   └── install.sh                        what it runs, fetched from main
@@ -19,6 +20,14 @@ packaging/
 ```
 
 ## The installer
+
+`Lightforge-x86_64.AppImage` carries no version in its name, so the copy a
+user keeps updates in place under the same name and
+`releases/latest/download/Lightforge-x86_64.AppImage` is a stable link.
+`make appimage` puts the two binaries, the menu entry, the icons and the
+AppStream file in an AppDir, packs it with `mksquashfs` inside the build
+container and puts the static type-2 runtime in front, pinned by hash in the
+Makefile. That is all appimagetool does too. No libraries are bundled.
 
 `lightforge-installer.desktop` is a release asset for people who will never
 open a terminal, Steam Deck owners first. Double-clicked, it opens a terminal
@@ -48,7 +57,7 @@ the others do not, the taskbar shows a placeholder instead of the icon.
 
 ```bash
 make release    # the binaries, in a Debian 12 container (see ../Containerfile)
-make packages   # tarball + .deb + .rpm + installer + SHA256SUMS, into target/dist/
+make packages   # tarball + AppImage + .deb + .rpm + installer + SHA256SUMS, into target/dist/
 ```
 
 `make packages` doesn't run `make release` itself, because that would rebuild
@@ -139,7 +148,7 @@ current even when a push came from somewhere else.
 ```bash
 make check-cli-doc        # docs/CLI.md matches the binary
 make release              # binaries + the glibc floor check
-make packages             # tarball, .deb, .rpm, SHA256SUMS
+make packages             # tarball, AppImage, .deb, .rpm, SHA256SUMS
 
 git tag -a v1.0.0-beta.5 -m 'Lightforge 1.0.0-beta.5'
 git push origin v1.0.0-beta.5

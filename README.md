@@ -92,6 +92,15 @@ sudo rpm-ostree install lightforge
 sudo systemctl reboot
 ```
 
+### AppImage
+
+Download `Lightforge-x86_64.AppImage`, make it executable and start it. It
+updates itself in place. Details in [INSTALL.md](INSTALL.md#appimage).
+
+```bash
+chmod +x Lightforge-x86_64.AppImage && ./Lightforge-x86_64.AppImage
+```
+
 ##
 
 ### From source

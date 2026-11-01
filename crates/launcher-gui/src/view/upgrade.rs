@@ -106,7 +106,7 @@ impl Lightforge {
         let say = |line: &str| -> Element<'a, Message> { muted(line.to_owned(), theme::LABEL).into() };
         match route {
             Route::InPlace => (
-                vec![say("Lightforge downloads it, checks it and replaces its own files, as the installer would.")],
+                vec![say("Lightforge downloads it, checks it and replaces its own files.")],
                 Some(("Update now", Message::UpgradeStart)),
             ),
             Route::Terminal(package) => {

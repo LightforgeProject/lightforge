@@ -22,8 +22,9 @@ FROM ${RUST_IMAGE}
 # `libudev-dev` is for gilrs, which finds it through `pkg-config`. Everything
 # else a desktop app usually needs at build time — Vulkan, Wayland, X11,
 # fontconfig — is genuinely absent on purpose: see the note above.
+# `squashfs-tools` packs the AppImage (`make appimage`).
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends pkg-config libudev-dev \
+    && apt-get install --yes --no-install-recommends pkg-config libudev-dev squashfs-tools \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

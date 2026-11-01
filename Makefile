@@ -21,6 +21,15 @@ DESTDIR    ?=
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 PKGVER  := $(subst -,~,$(VERSION))
 TARBALL := lightforge-$(VERSION)-x86_64-linux.tar.gz
+# No version in the name: the self-update replaces the file in place, and
+# `releases/latest/download/` then always has it.
+APPIMAGE := Lightforge-x86_64.AppImage
+
+# The AppImage's static type-2 runtime, pinned: it needs no libfuse2 on the
+# host, which Ubuntu 22.04+ and Fedora Atomic do not ship.
+APPIMAGE_RUNTIME_URL    := https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+APPIMAGE_RUNTIME_SHA256 := 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+APPIMAGE_RUNTIME        := target/appimage/runtime-20251108-x86_64
 
 # The highest glibc a release may ask for, and what the deb and rpm declare.
 # Ubuntu 22.04 is 2.35; the Debian 12 container is 2.36, so this also catches
@@ -31,7 +40,7 @@ GLIBC_MAX ?= 2.35
 BINARIES := lightforge lightforge-gui
 
 .PHONY: release image check-glibc clean-release cli-doc check-cli-doc \
-	packages deb rpm tarball installer checksums github-names check-binaries \
+	packages deb rpm tarball appimage installer checksums github-names check-binaries \
 	check-spec clean-packages install uninstall
 
 ## Build release binaries against an old glibc, and verify they are portable.
@@ -128,7 +137,7 @@ uninstall:
 ## rebuilding 27 MB of GUI three times to produce three files from the same
 ## two binaries is a minute nobody needs to spend. Run `make release` first —
 ## each target checks the binaries are there.
-packages: check-spec tarball deb rpm installer checksums
+packages: check-spec tarball appimage deb rpm installer checksums
 	@echo
 	@echo "Release artifacts in $(DIST):"
 	@ls -lh $(DIST) | awk 'NR>1 {print "  " $$9 "  " $$5}'
@@ -150,6 +159,38 @@ tarball: check-binaries
 	       target/tarball/lightforge-$(VERSION)/
 	@tar -czf $(DIST)/$(TARBALL) -C target/tarball lightforge-$(VERSION)
 	@echo "ok   $(DIST)/$(TARBALL)"
+
+## The AppImage: the runtime with a squashfs of the AppDir appended, which is
+## all appimagetool does too. Packed in the build container, so the host needs
+## no squashfs-tools. Nothing is bundled besides the two binaries; see AppRun.
+appimage: check-binaries image $(APPIMAGE_RUNTIME)
+	@mkdir -p $(DIST)
+	@rm -rf target/appimage/AppDir target/appimage/squashfs
+	@install -Dm755 packaging/appimage/AppRun target/appimage/AppDir/AppRun
+	@install -Dm755 -t target/appimage/AppDir/usr/bin $(addprefix $(OUT)/,$(BINARIES))
+	@mkdir -p target/appimage/AppDir/usr/share
+	@cp -r packaging/icons target/appimage/AppDir/usr/share/
+	@install -Dm644 packaging/pro.tuxcore.Lightforge.metainfo.xml \
+	   target/appimage/AppDir/usr/share/metainfo/pro.tuxcore.Lightforge.metainfo.xml
+	@# TryExec would hide an entry Gear Lever or AppImageLauncher integrates.
+	@sed '/^TryExec=/d' packaging/pro.tuxcore.Lightforge.desktop \
+	   > target/appimage/AppDir/pro.tuxcore.Lightforge.desktop
+	@install -Dm644 target/appimage/AppDir/pro.tuxcore.Lightforge.desktop \
+	   target/appimage/AppDir/usr/share/applications/pro.tuxcore.Lightforge.desktop
+	@cp packaging/icons/hicolor/256x256/apps/pro.tuxcore.Lightforge.png target/appimage/AppDir/
+	@ln -s pro.tuxcore.Lightforge.png target/appimage/AppDir/.DirIcon
+	$(CONTAINER) run --rm --volume "$(CURDIR):/src:Z" --workdir /src $(IMAGE) \
+	  mksquashfs target/appimage/AppDir target/appimage/squashfs \
+	  -root-owned -noappend -comp zstd -quiet
+	@cat $(APPIMAGE_RUNTIME) target/appimage/squashfs > $(DIST)/$(APPIMAGE)
+	@chmod 755 $(DIST)/$(APPIMAGE)
+	@echo "ok   $(DIST)/$(APPIMAGE)"
+
+$(APPIMAGE_RUNTIME):
+	@mkdir -p $(@D)
+	curl -fsSL -o $@.part $(APPIMAGE_RUNTIME_URL)
+	@echo "$(APPIMAGE_RUNTIME_SHA256)  $@.part" | sha256sum -c --quiet
+	@mv $@.part $@
 
 ## The double-click installer, published beside the packages so the release
 ## page has one file a Steam Deck user can take. It carries no version: it
@@ -199,7 +240,7 @@ github-names:
 
 ## The sums the AUR PKGBUILDs and the release page quote.
 checksums: github-names
-	@cd $(DIST) && rm -f SHA256SUMS && sha256sum lightforge* > SHA256SUMS
+	@cd $(DIST) && rm -f SHA256SUMS && sha256sum lightforge* $(APPIMAGE) > SHA256SUMS
 	@cat $(DIST)/SHA256SUMS
 
 ## Fail with a useful sentence rather than a missing-file error from tar,
@@ -224,7 +265,7 @@ check-spec:
 	@echo "ok   spec is $(VERSION)"
 
 clean-packages:
-	rm -rf $(DIST) target/tarball target/debian target/container/generate-rpm
+	rm -rf $(DIST) target/tarball target/debian target/container/generate-rpm target/appimage/AppDir target/appimage/squashfs
 
 clean-release:
 	rm -rf target/container

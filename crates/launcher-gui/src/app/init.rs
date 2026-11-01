@@ -165,7 +165,8 @@ impl Lightforge {
             update_notice: None,
             newer_release: None,
             origin: lightforge_core::upgrade::Origin::detect(),
-            exe: std::env::current_exe().ok(),
+            // What a restart starts: the AppImage, not its mount.
+            exe: lightforge_core::upgrade::lasting_exe().ok(),
             upgrade: None,
             launcher_check: LauncherCheck::default(),
             diagnostics: Diagnostics::default(),

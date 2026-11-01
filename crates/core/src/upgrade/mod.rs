@@ -5,7 +5,7 @@
 //! lives: every package ships the same binary.
 //!
 //! - The installer's copy in `~/.local/bin` is the user's own, and Lightforge
-//!   replaces it itself ([`tarball`]).
+//!   replaces it itself ([`tarball`]). So is an AppImage ([`appimage`]).
 //! - A package manager's copy is replaced by that package manager, run in a
 //!   terminal where it asks for the password itself ([`terminal`]).
 //!   Lightforge only fetches and checks what it will install.
@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 
 use crate::net::{Http, NetError};
 
+pub mod appimage;
 pub mod tarball;
 pub mod terminal;
 
@@ -46,6 +47,8 @@ pub enum Origin {
     /// `install.sh`, the double-click installer, or the tarball by hand into
     /// the same place: `~/.local/bin`.
     Installer { bin_dir: PathBuf },
+    /// The AppImage, wherever the user keeps it.
+    AppImage { path: PathBuf },
     /// One of the PKGBUILDs, `lightforge` or `lightforge-bin`.
     Pacman { package: String },
     /// The `.deb` from the release page.
@@ -68,6 +71,9 @@ pub enum Origin {
 impl Origin {
     /// This process's own, read at start: once replaced, the path reads `(deleted)`.
     pub fn detect() -> Self {
+        if let Some(path) = appimage::running() {
+            return Self::AppImage { path };
+        }
         let Ok(exe) = std::env::current_exe() else { return Self::Unknown };
         // `current_exe` comes resolved, so these have to be too: on older
         // Fedora Atomic `/home` is a link to `/var/home`.
@@ -128,7 +134,7 @@ impl Origin {
             note: note.to_owned(),
         };
         match self {
-            Self::Installer { .. } => Route::InPlace,
+            Self::Installer { .. } | Self::AppImage { .. } => Route::InPlace,
             Self::Pacman { package } => Route::Terminal(Package::Pacman { package: package.clone() }),
             Self::Deb => Route::Terminal(Package::Deb),
             Self::Rpm { atomic: false } => Route::Terminal(Package::Rpm),
@@ -202,9 +208,13 @@ pub enum Package {
     Rpm,
 }
 
-/// `current_exe`, or for a Nix install a profile's link to it: a store path
-/// is deleted by garbage collection after an update.
+/// What starts this Lightforge again later: `current_exe`, the AppImage
+/// rather than the mount inside it, or for a Nix install a profile's link,
+/// since a store path is deleted by garbage collection after an update.
 pub fn lasting_exe() -> std::io::Result<PathBuf> {
+    if let Some(appimage) = appimage::running() {
+        return Ok(appimage);
+    }
     let exe = std::env::current_exe()?;
     if !exe.starts_with(NIX_STORE) {
         return Ok(exe);

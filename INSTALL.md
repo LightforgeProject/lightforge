@@ -1,8 +1,8 @@
 # Installing Lightforge
 
 There's a package for Debian/Ubuntu, a COPR repository and a package for
-Fedora, a PKGBUILD for Arch, and an installer for SteamOS, Bazzite and
-everything else. You can also build it yourself: it's a Rust program with
+Fedora, a PKGBUILD for Arch, an installer for SteamOS, Bazzite and
+everything else, and an AppImage. You can also build it yourself: it's a Rust program with
 very few dependencies, so that takes three commands and a few minutes.
 
 Everything below installs the same two binaries, the menu entry and the icons.
@@ -97,6 +97,31 @@ needs, so leave `steamos-readonly` alone. The first-run setup asks whether the
 device is a Steam Deck or Steam Machine or a desktop PC running SteamOS.
 Retail World of Warcraft is well over 100 GB, so on a Deck add your SD card as
 a drive during setup.
+
+## AppImage
+
+One file, no install: download `Lightforge-x86_64.AppImage` from the
+[releases page](https://github.com/LightforgeProject/lightforge/releases),
+put it wherever you like, make it executable and start it:
+
+```bash
+chmod +x Lightforge-x86_64.AppImage
+./Lightforge-x86_64.AppImage
+```
+
+A browser download is never executable, which is why the `chmod`. In a file
+manager the same switch is under Properties, Permissions. The AppImage updates
+itself in place when a new version is out, so keep it in a folder you can
+write to, and don't rename it.
+
+Lightforge doesn't add itself to your application menu from an AppImage. Gear
+Lever or AppImageLauncher do that, or use Add to Steam in Settings.
+
+The command-line tool is inside too: `./Lightforge-x86_64.AppImage cli doctor`.
+
+It needs FUSE, which every current desktop distribution and SteamOS have. If
+it says otherwise, `./Lightforge-x86_64.AppImage --appimage-extract-and-run`
+starts it without.
 
 ## Build it yourself
 
@@ -235,6 +260,8 @@ When a new version is out, Lightforge shows an update notice:
 
 - **Installer**: the notice updates Lightforge for you. Running the installer
   again works too.
+- **AppImage**: the notice downloads the new AppImage and puts it in place of
+  the old one; restart Lightforge to use it.
 - **`.deb` or `.rpm` you downloaded**: the notice fetches and checks the new
   package and opens a terminal where your package manager installs it and
   asks for your password. Or install the new file over the old one yourself.
