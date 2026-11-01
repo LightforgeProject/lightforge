@@ -12,9 +12,10 @@
 # from this machine imported `GLIBC_2.44`, which SteamOS (~2.37) and Bazzite
 # (~2.40) are both older than — so the release ran on neither.
 #
-# Debian 12 "bookworm" is glibc 2.36. That covers SteamOS, Bazzite, Ubuntu
-# 22.04 and every current distro, and a binary built against an older glibc
-# runs against newer ones — the compatibility only ever points forward.
+# Debian 12 "bookworm" is glibc 2.36, though the binaries only use symbols up
+# to 2.35 (`make check-glibc` holds them there), so Ubuntu 22.04 runs them
+# too. A binary built against an older glibc runs against newer ones — the
+# compatibility only ever points forward.
 ARG RUST_IMAGE=docker.io/library/rust:bookworm
 FROM ${RUST_IMAGE}
 

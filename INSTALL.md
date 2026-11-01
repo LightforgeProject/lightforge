@@ -19,14 +19,8 @@ is `1.0.0~beta.7`:
 sudo apt install ./lightforge_1.0.0.beta.7-1_amd64.deb
 ```
 
-It needs glibc 2.36 or newer: Debian 12, Ubuntu 22.10 or anything later.
+It needs glibc 2.35 or newer: Ubuntu 22.04, Debian 12 or anything later.
 `apt` installs nothing else with it; see [what you need](#to-run) below.
-
-Ubuntu 22.04 LTS has glibc 2.35, and `apt` will refuse the package. The
-binaries themselves only need 2.34 and 2.35, so the
-[installer](#steamos-bazzite-and-other-systems) below works there. The `.deb`
-asks for 2.36 because that's the version of the build container, and the only
-one I can promise for every future build.
 
 ## Fedora
 
@@ -52,7 +46,7 @@ sudo dnf install ./lightforge-1.0.0.beta.7-1.x86_64.rpm
 ```
 
 The same file installs on openSUSE with `sudo zypper install`. Like the
-`.deb`, it needs glibc 2.36 or newer.
+`.deb`, it needs glibc 2.35 or newer.
 
 ## Arch, CachyOS, EndeavourOS, Omarchy
 
@@ -71,7 +65,7 @@ on the AUR as `lightforge` and `lightforge-bin` once I can get an account.
 
 ## SteamOS, Bazzite and other systems
 
-The installer works on any distribution with glibc 2.36 or newer, needs no
+The installer works on any distribution with glibc 2.35 or newer, needs no
 root, and only touches your home folder. Run it again any time to update.
 
 **Double-click:** download `lightforge-installer.desktop` from the
@@ -212,8 +206,8 @@ newer than SteamOS and Bazzite have, so it didn't start on either.
 make release
 ```
 
-builds inside a Debian 12 container (glibc 2.36) and **fails if the result
-needs anything newer**. The binaries end up in `target/container/release/`,
+builds inside a Debian 12 container and **fails if the result needs a glibc
+newer than 2.35**. The binaries end up in `target/container/release/`,
 stripped, and run on Arch, Fedora, Ubuntu, Bazzite and the Steam Deck.
 
 You need `podman` (or `make release CONTAINER=docker`).

@@ -1,7 +1,7 @@
 # Maintainer: Kenny <onlyusemycontroler@gmail.com>
 #
-# The prebuilt binaries from the release page — built in a Debian 12 container
-# against glibc 2.36, so they run on anything newer. For a source build, see
+# The prebuilt binaries from the release page: built in a Debian 12 container
+# and checked to need no glibc newer than 2.35, so they run on anything newer. For a source build, see
 # `lightforge`.
 
 pkgname=lightforge-bin

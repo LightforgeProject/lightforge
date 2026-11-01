@@ -136,7 +136,7 @@ reporter (`☰ › Report a bug`).
 
 | | |
 | --- | --- |
-| **OS** | Any current Linux. glibc 2.36+ for the release binaries. |
+| **OS** | Any current Linux. glibc 2.35+ for the release binaries. |
 | **GPU** | Vulkan if you have it; it falls back to software rendering if you don't. |
 | **32-bit** | Only for Battle.net, whose installer and client are 32-bit. WoW alone doesn't need it. |
 

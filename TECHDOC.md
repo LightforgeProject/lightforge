@@ -488,8 +488,8 @@ runs on other people's:
 make release
 ```
 
-builds inside a Debian 12 container (glibc 2.36) and **fails if the result
-needs a newer glibc**. Without that check, a build that picks up the host's
+builds inside a Debian 12 container and **fails if the result needs a glibc
+newer than 2.35** (`GLIBC_MAX`, Ubuntu 22.04's). Without that check, a build that picks up the host's
 glibc works locally and fails on a Steam Deck. Here, a host build needed
 glibc 2.44, newer than SteamOS (~2.37) and Bazzite (~2.40).
 

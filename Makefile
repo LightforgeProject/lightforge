@@ -22,9 +22,11 @@ VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 PKGVER  := $(subst -,~,$(VERSION))
 TARBALL := lightforge-$(VERSION)-x86_64-linux.tar.gz
 
-# The highest glibc a release may ask for. Debian 12 is 2.36; anything above
-# that means the build escaped the container and picked up the host's libc.
-GLIBC_MAX ?= 2.36
+# The highest glibc a release may ask for, and what the deb and rpm declare.
+# Ubuntu 22.04 is 2.35; the Debian 12 container is 2.36, so this also catches
+# a dependency that starts using a 2.36 symbol, not only a build that escaped
+# the container and picked up the host's libc.
+GLIBC_MAX ?= 2.35
 
 BINARIES := lightforge lightforge-gui
 
