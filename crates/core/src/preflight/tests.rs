@@ -28,17 +28,8 @@ const AGENT: &str = r"C:\ProgramData\Battle.net\Agent\Agent.9775\Agent.exe";
 
 #[test]
 fn a_pass_beside_the_client_leaves_it_running_and_touches_nothing() {
-    use std::process::{Command, Stdio};
-
     let layout = Layout::with_root("/games/Blizzard");
-    // A process that presents itself as the client, the way Wine does.
-    let mut client = Command::new("bash")
-        .args(["-c", r#"exec -a 'C:\Program Files (x86)\Battle.net\Battle.net.exe' sleep 30"#])
-        .env("WINEPREFIX", layout.prefix())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut client = stand_in(&layout, BNET);
     std::thread::sleep(Duration::from_millis(300));
     assert!(client_running(&layout), "the stand-in is recognised as the client");
 
@@ -54,13 +45,16 @@ fn a_pass_beside_the_client_leaves_it_running_and_touches_nothing() {
 }
 
 /// A process in `layout`'s prefix whose `argv[0]` is `name`, the way Wine
-/// presents one. Its binary is `sleep`, whatever it is called.
+/// presents one. Bash, not `sleep`: on NixOS and busybox that is a multi-call
+/// binary, which exits at once under an `argv[0]` it does not know.
 fn stand_in(layout: &Layout, name: &str) -> std::process::Child {
+    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
     Command::new("bash")
-        .args(["-c", &format!("exec -a '{name}' sleep 30")])
+        .arg0(name)
         .env("WINEPREFIX", layout.prefix())
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

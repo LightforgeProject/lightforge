@@ -76,7 +76,8 @@ impl Lightforge {
         let outcome = (|| {
             let steam = lightforge_core::steam::SteamRoot::discover()
                 .ok_or_else(|| chain(&steam_shortcut::ShortcutError::NoSteam))?;
-            let exe = std::env::current_exe().map_err(|e| format!("where Lightforge is: {e}"))?;
+            let exe = lightforge_core::upgrade::lasting_exe()
+                .map_err(|e| format!("where Lightforge is: {e}"))?;
             steam_shortcut::add(&steam, "Lightforge", &exe, &STEAM_ART).map_err(|e| chain(&e))
         })();
         self.steam_shortcut = Some(outcome.map(|added| match added.updated {
