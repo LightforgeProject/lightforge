@@ -107,6 +107,23 @@ impl Lightforge {
                 )
             }
 
+            Message::UnpinAddons => {
+                let Some(options) = addonwork::manage_options(
+                    &self.layout,
+                    &self.selected.code,
+                    self.config.addon_channel,
+                ) else {
+                    return Ok(Task::none());
+                };
+                if let Err(e) = manage::unpin_all(&options) {
+                    self.error = Some(Problem::of(&e));
+                }
+                Task::perform(
+                    addonwork::list(self.layout.clone(), self.selected.code.clone()),
+                    |listing| Message::AddonsListed(Box::new(listing)),
+                )
+            }
+
             Message::AddonAutoUpdateDefault(on) => {
                 self.config.addon_auto_update = on;
                 self.save_config();

@@ -48,6 +48,7 @@ need() {
 refresh_menu() {
     command -v update-desktop-database >/dev/null && update-desktop-database -q "$APPS" || true
     command -v kbuildsycoca6 >/dev/null && kbuildsycoca6 >/dev/null 2>&1 || true
+    command -v kbuildsycoca5 >/dev/null && kbuildsycoca5 >/dev/null 2>&1 || true
 }
 
 uninstall() {
@@ -84,6 +85,9 @@ main() {
         tarball=$1
         say "Installing from $tarball"
     else
+        # Releases are x86_64 builds; on ARM, Lightforge builds from source.
+        [ "$(uname -m)" = x86_64 ] ||
+            fail "releases are built for x86_64 only, this machine is $(uname -m); see INSTALL.md to build from source"
         say "Looking up the newest Lightforge release"
         url=$(latest_tarball_url) || true
         [ -n "${url:-}" ] || fail "could not reach GitHub to find the newest release"

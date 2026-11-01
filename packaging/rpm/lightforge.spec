@@ -24,8 +24,8 @@ License:        GPL-3.0-or-later
 URL:            https://github.com/LightforgeProject/lightforge
 Source0:        %{url}/archive/v%{upstream_version}/%{name}-%{upstream_version}.tar.gz
 
-# Proton is x86_64 only, so a build for anything else would install a
-# launcher with nothing to launch.
+# Releases are x86_64 builds. aarch64 works from source but is not tested
+# on hardware yet, so COPR does not build it.
 ExclusiveArch:  x86_64
 
 # Crates are fetched from crates.io during %%build, against the tagged

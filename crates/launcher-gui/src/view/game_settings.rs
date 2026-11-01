@@ -311,6 +311,15 @@ impl Lightforge {
                 .spacing(theme::SM),
             ),
             setting(
+                "Cache",
+                match settings.cache_cleared {
+                    true => "Cleared. The game rebuilds it on its next start.",
+                    false => "Data the game keeps between sessions. Clearing it fixes many display and addon errors.",
+                },
+                None,
+                secondary("Clear Cache", Message::ClearGameCache).enabled(!settings.cache_cleared && !self.in_play()),
+            ),
+            setting(
                 "Remove from this computer",
                 "Deletes the game's files. Your settings stay in the backups.",
                 None,

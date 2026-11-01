@@ -106,10 +106,22 @@ impl Lightforge {
                 }
             }
             Category::Settings => {
-                // The contact is in the report already, where it belongs;
-                // nothing else in the config is personal.
+                // The contact is in the report already, where it belongs.
+                // Env values can be tokens: a flag like `1` or `+fps` helps
+                // with the bug, anything longer or with a path stays here.
                 let mut config = self.config.clone();
                 config.contact = None;
+                let flag = |value: &str| {
+                    value.len() <= 16
+                        && value.chars().all(|c| c.is_ascii_alphanumeric() || "_.,=:+-".contains(c))
+                };
+                let tweaks = std::iter::once(&mut config.battle_net_tweaks)
+                    .chain(config.products.iter_mut().map(|p| &mut p.profile.tweaks));
+                for value in tweaks.flat_map(|t| t.env.values_mut()) {
+                    if !flag(value) {
+                        *value = "(hidden)".to_owned();
+                    }
+                }
                 let _ = writeln!(out, "\n--- config.toml ---");
                 match config.to_toml() {
                     Ok(toml) => out.push_str(&toml),

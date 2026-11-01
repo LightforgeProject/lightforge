@@ -1750,3 +1750,20 @@ fn a_link_that_is_not_a_web_page_is_not_opened() {
 
     assert!(app.error.as_ref().unwrap().message.starts_with("not opening file://"));
 }
+
+#[test]
+fn a_settings_report_keeps_env_flags_and_hides_the_rest() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.config.battle_net_tweaks.env = [
+        ("DXVK_HUD".to_owned(), "fps".to_owned()),
+        ("API_TOKEN".to_owned(), "ghp_abcdefghijklmnopqrstuvwxyz0123".to_owned()),
+    ]
+    .into();
+
+    let sent = app.report_attachment(report::Category::Settings);
+
+    assert!(sent.contains("DXVK_HUD = \"fps\""), "{sent}");
+    assert!(sent.contains("API_TOKEN = \"(hidden)\""), "{sent}");
+    assert!(!sent.contains("ghp_"));
+}

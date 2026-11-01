@@ -32,9 +32,8 @@ conflicts=('lightforge-bin')
 options=('!lto')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
 # Of GitHub's generated source archive for the tag, which is not
-# byte-identical to anything produced locally. Regenerate with `updpkgsums`.
-# `SKIP` until the tag exists: GitHub generates the source archive, so run
-# `updpkgsums` once v1.0.0-beta.8 is pushed, before uploading.
+# byte-identical to anything produced locally. Regenerate with `updpkgsums`
+# once the tag is pushed, before uploading.
 sha256sums=('b050f3e199907280ee928645e80d726ab2b0a71c99801650421a975df0c6271f')
 _srcdir="$pkgname-${_tag#v}"
 

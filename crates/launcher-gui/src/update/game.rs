@@ -143,6 +143,7 @@ impl Lightforge {
                     move_to: None,
                     leftovers: lightforge_core::migrate::leftovers(&self.layout, &self.selected.code),
                     leftover_confirm: None,
+                    cache_cleared: false,
                 });
                 // Only if the manifest offers it (retail's does not).
                 let code = self.selected.code.clone();
@@ -209,6 +210,28 @@ impl Lightforge {
             Message::EnvSettled(edit) => {
                 if edit == self.env_edits && self.env_unsaved {
                     self.save_config();
+                }
+                Task::none()
+            }
+            Message::ClearGameCache => {
+                let Some(settings) = self.game_settings.as_ref() else {
+                    return Ok(Task::none());
+                };
+                if self.in_play() {
+                    self.error = Some("close the game first".into());
+                    return Ok(Task::none());
+                }
+                let cache = self.layout.product_dir(&settings.code).join("Cache");
+                Task::perform(tasks::clear_game_cache(cache), Message::GameCacheCleared)
+            }
+            Message::GameCacheCleared(result) => {
+                match result {
+                    Ok(()) => {
+                        if let Some(settings) = self.game_settings.as_mut() {
+                            settings.cache_cleared = true;
+                        }
+                    }
+                    Err(e) => self.error = Some(e.into()),
                 }
                 Task::none()
             }

@@ -415,6 +415,16 @@ pub async fn clear_shader_cache(dir: PathBuf) -> Result<bool, String> {
     .map_err(|e| chain(&e))?
 }
 
+/// Delete a game's `Cache` folder; the client writes a new one on start.
+pub async fn clear_game_cache(cache: PathBuf) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || match std::fs::remove_dir_all(&cache) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("could not clear {}: {e}", cache.display())),
+        _ => Ok(()),
+    })
+    .await
+    .map_err(|e| chain(&e))?
+}
+
 #[cfg(test)]
 mod uninstall_tests {
     use super::*;

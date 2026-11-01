@@ -129,6 +129,7 @@ impl Lightforge {
             config_error,
             queue_frozen: false,
             winding_down: None,
+            awake: Awake::Off,
             downloads: SharedDownloads::default(),
             busy: false,
             status: "checking…".to_owned(),

@@ -5,7 +5,7 @@ use crate::*;
 /// The cog on the split Play button.
 ///
 /// Bundled: chrome, and the font has no gear glyph.
-pub(crate) const GEAR_ICON: &[u8] = include_bytes!("../assets/gear.png");
+pub(crate) const GEAR_ICON: &[u8] = include_bytes!("../assets/settings.png");
 
 /// The cog's one handle. A decoded handle mints a fresh id per call, so
 /// building it in `view` made every rebuild a cache miss and a PNG decode.

@@ -327,6 +327,7 @@ struct Lightforge {
     /// A cancelled transfer still checkpointing; nothing else may write the
     /// store until it reports back.
     winding_down: Option<ProductCode>,
+    awake: Awake,
 
     downloads: SharedDownloads,
     busy: bool,
@@ -563,7 +564,7 @@ impl Lightforge {
     fn step(&mut self, message: Message) -> Task<Message> {
         let task = self.handle(message);
         self.persist_queue();
-        task
+        Task::batch([task, self.keep_awake()])
     }
 
     fn subscription(&self) -> Subscription<Message> {

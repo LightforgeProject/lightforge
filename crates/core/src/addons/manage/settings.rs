@@ -91,8 +91,29 @@ pub fn set_pinned(
 ) -> Result<(), ManageError> {
     let mut ledger = Ledger::load(&options.ledger_path)?;
     if let Some(record) = ledger.find_mut(provider, id) {
+        // Logged: a ledger of unexplained pins was #31.
+        match &file_id {
+            Some(file) => tracing::info!("pinned {provider} {id} to file {file}"),
+            None => tracing::info!("unpinned {provider} {id}"),
+        }
         record.pinned = file_id;
         ledger.save(&options.ledger_path)?;
     }
     Ok(())
+}
+
+/// Clear every pin in the ledger, returning how many there were.
+pub fn unpin_all(options: &Options) -> Result<usize, ManageError> {
+    let mut ledger = Ledger::load(&options.ledger_path)?;
+    let mut cleared = 0;
+    for record in &mut ledger.addons {
+        if record.pinned.take().is_some() {
+            cleared += 1;
+        }
+    }
+    if cleared > 0 {
+        ledger.save(&options.ledger_path)?;
+        tracing::info!("unpinned all {cleared} pinned addons");
+    }
+    Ok(cleared)
 }

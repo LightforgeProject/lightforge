@@ -2,6 +2,18 @@
 
 use crate::*;
 
+/// logind's sleep lock, held while anything writes a store; see
+/// [`tasks::keep_awake`]. Dropping the descriptor releases it.
+#[derive(Debug, Default)]
+pub(crate) enum Awake {
+    #[default]
+    Off,
+    Asking,
+    Held(#[allow(dead_code, reason = "kept for its drop, which releases the lock")] Arc<std::os::fd::OwnedFd>),
+    /// Refused once (no logind), not asked again this session.
+    Unavailable,
+}
+
 /// The parts of a finished run the UI actually shows. `install::Summary` is not
 /// `Clone`, and a message has to be.
 #[derive(Debug, Clone)]

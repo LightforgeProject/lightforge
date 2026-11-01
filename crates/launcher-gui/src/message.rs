@@ -150,6 +150,8 @@ pub(crate) enum Message {
     Primary,
     Tick,
     Downloaded(ProductCode, Result<Box<Complete>, Problem>),
+    /// logind's answer to [`tasks::keep_awake`].
+    KeptAwake(Result<Arc<std::os::fd::OwnedFd>, String>),
     CloseRequested(iced::window::Id),
     /// A launch ended without a game of its own to watch: the client was
     /// opened, the hand-off came to nothing, or it failed.
@@ -184,6 +186,9 @@ pub(crate) enum Message {
     BattleNet,
     ManageSubscription,
     OpenFiles,
+    /// Delete the game's `Cache` folder, from Game Settings.
+    ClearGameCache,
+    GameCacheCleared(Result<(), String>),
     CopyDebug,
     /// Run [`lightforge_core::doctor`] for the Diagnostics block.
     RunDiagnostics,
@@ -444,6 +449,8 @@ pub(crate) enum Message {
     AddonAutoUpdate(String, String, Option<bool>),
     /// Hold one addon at a file id, or `None` to let it track its channel.
     AddonPin(String, String, Option<String>),
+    /// Clear every pin in the selected game's ledger.
+    UnpinAddons,
     /// Recognise hand-installed addons and manage them from now on.
     AdoptAddons,
     /// What adoption found.

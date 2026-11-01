@@ -337,6 +337,35 @@ fn a_pinned_addon_is_asked_about_by_nothing() {
 }
 
 #[test]
+fn unpin_all_clears_every_pin_and_counts_them() {
+    use crate::addons::Channel;
+
+    let dir = std::env::temp_dir().join(format!("lf-unpin-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("ledger.json");
+    let mut ledger = Ledger::default();
+    for (id, pinned) in [("1", Some("10")), ("2", None), ("3", Some("30"))] {
+        ledger.record(Record {
+            provider: "curse".into(),
+            id: id.into(),
+            name: id.into(),
+            file_id: pinned.map(str::to_owned),
+            pinned: pinned.map(str::to_owned),
+            folders: vec![id.into()],
+            ..Default::default()
+        });
+    }
+    ledger.save(&path).unwrap();
+
+    let cleared = unpin_all(&options_with(Channel::Stable, &path)).unwrap();
+
+    assert_eq!(cleared, 2);
+    let reloaded = Ledger::load(&path).unwrap();
+    assert!(reloaded.addons.iter().all(|record| record.pinned.is_none()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_pin_describes_a_file_and_is_dropped_once_it_no_longer_does() {
     let resolve = |asked: Option<&str>, holding: bool, held: Option<&str>, got: &str| {
         pin_after_install(

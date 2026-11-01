@@ -6,7 +6,7 @@ comes from the manifest at runtime.
 
 | File | Source | Licence |
 | --- | --- | --- |
-| `gear.png` | — | — |
+| `settings.png` | [Lucide](https://lucide.dev) `settings`, stroked white and rendered to 64x64 | ISC, which GPL-3.0 may redistribute |
 | `chevron-down.png` | [Lucide](https://lucide.dev) `chevron-down`, stroked white and rendered to 64x64 | ISC, which GPL-3.0 may redistribute |
 | `plus.png` | [Lucide](https://lucide.dev) `plus`, same treatment | ISC |
 | `arrow-left.png`, `arrow-right.png` | Lucide `arrow-left` / `arrow-right`, same treatment | ISC |
