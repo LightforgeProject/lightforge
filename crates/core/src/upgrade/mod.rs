@@ -69,8 +69,11 @@ impl Origin {
     /// This process's own, read at start: once replaced, the path reads `(deleted)`.
     pub fn detect() -> Self {
         let Ok(exe) = std::env::current_exe() else { return Self::Unknown };
-        let home = home().unwrap_or_default();
-        let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from);
+        // `current_exe` comes resolved, so these have to be too: on older
+        // Fedora Atomic `/home` is a link to `/var/home`.
+        let resolved = |path: PathBuf| path.canonicalize().unwrap_or(path);
+        let home = home().map(resolved).unwrap_or_default();
+        let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from).map(resolved);
         Self::detect_at(&exe, &home, cargo_home.as_deref(), Path::new("/"))
     }
 

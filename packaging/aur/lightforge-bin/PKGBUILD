@@ -14,7 +14,7 @@ pkgdesc='Install, update and play World of Warcraft on Linux, and a home for all
 arch=('x86_64')
 url='https://github.com/LightforgeProject/lightforge'
 license=('GPL-3.0-or-later')
-depends=('glibc' 'gcc-libs' 'fontconfig' 'systemd-libs')
+depends=('glibc' 'gcc-libs' 'fontconfig' 'systemd-libs' 'python')
 optdepends=(
   'lib32-gnutls: 32-bit runtime for Battle.net (needs multilib)'
   'lib32-freetype2: 32-bit runtime for Battle.net (needs multilib)'

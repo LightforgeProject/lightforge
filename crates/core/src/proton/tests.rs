@@ -338,8 +338,24 @@ fn discovery_lists_builds_in_numeric_order() {
         installed(&dir, version);
     }
     let versions: Vec<String> =
-        discover_all(None, &dir).into_iter().map(|b| b.version).collect();
+        discover_with(None, &dir, &[]).into_iter().map(|b| b.version).collect();
     assert_eq!(versions, ["GE-Proton9-20", "GE-Proton10-34", "GE-Proton11-7"]);
+}
+
+/// Where CachyOS's `proton-cachyos` and the AUR's GE package install, with
+/// no Steam at all.
+#[test]
+fn a_system_wide_build_is_found_and_lightforge_s_own_copy_wins() {
+    let own = scratch("discovery-own");
+    let system = scratch("discovery-system");
+    installed(&own, "GE-Proton11-7");
+    installed(&system, "GE-Proton11-7");
+    installed(&system, "GE-Proton10-34");
+
+    let found = discover_with(None, &own, &[system]);
+
+    let seen: Vec<(&str, ProtonSource)> = found.iter().map(|b| (b.version.as_str(), b.source)).collect();
+    assert_eq!(seen, [("GE-Proton10-34", ProtonSource::SystemCompatTools), ("GE-Proton11-7", ProtonSource::Managed)]);
 }
 
 fn release(tag: &str, prerelease: bool) -> UpstreamRelease {

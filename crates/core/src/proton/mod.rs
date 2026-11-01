@@ -44,7 +44,7 @@ pub const SHOP_BUILD: &str = "GE-Proton11-7";
 pub enum ProtonSource {
     /// Downloaded and unpacked by Lightforge into its own data directory.
     Managed,
-    /// An existing install in the user's Steam `compatibilitytools.d`.
+    /// An existing install in a `compatibilitytools.d`, Steam's or the system's.
     SystemCompatTools,
     /// A Valve Proton installed as a regular Steam app.
     SteamApp,

@@ -17,7 +17,8 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     write_atomic_with_mode(path, bytes, mode)
 }
 
-/// [`write_atomic`] at a fixed mode, for game files Wine and the client read.
+/// [`write_atomic`] at a fixed mode: game files Wine and the client read, and
+/// the config, which is the user's alone.
 pub(crate) fn write_atomic_with_mode(path: &Path, bytes: &[u8], mode: u32) -> io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;

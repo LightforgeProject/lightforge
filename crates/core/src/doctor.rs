@@ -67,6 +67,7 @@ pub fn run(config: &Config, layout: &Layout, proton_dir: &Path) -> Vec<Check> {
     let mut checks = vec![open_files(), ntsync(), vulkan(), loader(), gnutls()];
     checks.extend(libraries(layout));
     checks.push(proton(config, proton_dir));
+    checks.push(python());
     checks.push(prefix(layout));
     if let Some(version) = crate::debug::nvidia_version() {
         checks.extend(nvidia(&version));
@@ -191,12 +192,28 @@ fn loader() -> Check {
         return check("32-bit runtime", Status::Ok, "present", None);
     }
     let remedy = runtime::remedy();
-    let hint = match remedy.command {
-        Some(command) => format!("Battle.net is 32-bit, the games are not; on {}: {command}", remedy.distro),
-        None => "Battle.net is 32-bit, the games are not; install your distribution's 32-bit libraries"
-            .to_owned(),
+    let fix = match (remedy.command, remedy.note) {
+        (Some(command), Some(note)) => format!("on {}: {command} ({note})", remedy.distro),
+        (Some(command), None) => format!("on {}: {command}", remedy.distro),
+        (None, Some(note)) => note,
+        (None, None) => "install your distribution's 32-bit libraries".to_owned(),
     };
+    let hint = format!("Battle.net is 32-bit, the games are not; {fix}");
     check("32-bit runtime", Status::Warn, "no 32-bit loader", Some(hint))
+}
+
+/// `proton` is a Python script. Without an interpreter, starting it fails
+/// as if Proton itself were missing.
+fn python() -> Check {
+    match crate::tweaks::on_path("python3") {
+        Some(_) => check("python3", Status::Ok, "present", None),
+        None => check(
+            "python3",
+            Status::Fail,
+            "missing",
+            Some("Proton's launcher is a Python script; install your distribution's python3".to_owned()),
+        ),
+    }
 }
 
 fn gnutls() -> Check {

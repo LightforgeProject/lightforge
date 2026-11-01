@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{prefix_fit, ProtonRelease, ProtonSource};
 
@@ -15,24 +15,32 @@ pub(super) fn parse_version_file(contents: &str) -> Option<(Option<u64>, String)
 
 /// Builds Lightforge downloaded and manages itself.
 pub fn discover_managed(proton_dir: &Path) -> Vec<ProtonRelease> {
-    let Ok(entries) = std::fs::read_dir(proton_dir) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter_map(|e| ProtonRelease::read_from_dir(&e.path(), ProtonSource::Managed))
-        .collect()
+    builds_in(proton_dir, ProtonSource::Managed)
 }
 
 /// Every Proton build available: Lightforge's own, then everything in the
-/// user's Steam libraries. Own builds win the dedup against the same version.
+/// user's Steam libraries and the system's compatibility tool folders. Own
+/// builds win the dedup against the same version.
 pub fn discover_all(
     steam: Option<&crate::steam::SteamRoot>,
     proton_dir: &Path,
 ) -> Vec<ProtonRelease> {
+    discover_with(steam, proton_dir, &system_compat_dirs())
+}
+
+/// [`discover_all`] with the system's folders given, so a test sees none of
+/// the machine's own.
+pub(super) fn discover_with(
+    steam: Option<&crate::steam::SteamRoot>,
+    proton_dir: &Path,
+    system_dirs: &[PathBuf],
+) -> Vec<ProtonRelease> {
     let mut found = discover_managed(proton_dir);
     if let Some(steam) = steam {
         found.extend(discover_installed(steam));
+    }
+    for dir in system_dirs {
+        found.extend(builds_in(dir, ProtonSource::SystemCompatTools));
     }
     found.sort_by(|a, b| {
         // GE tags numerically (9-20, 10-34, 11-7); equal versions stay
@@ -138,18 +146,32 @@ pub fn discover_installed(steam: &crate::steam::SteamRoot) -> Vec<ProtonRelease>
         ];
 
         for (dir, source) in sources {
-            let Ok(entries) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                if let Some(release) = ProtonRelease::read_from_dir(&entry.path(), source) {
-                    found.push(release);
-                }
-            }
+            found.extend(builds_in(&dir, source));
         }
     }
 
     found.sort_by(|a, b| a.version.cmp(&b.version));
     found.dedup_by(|a, b| a.version == b.version);
     found
+}
+
+/// Where distribution packages put Proton (CachyOS's `proton-cachyos`, the
+/// AUR's `proton-ge-custom-bin`), with or without Steam, and the extra
+/// folders Steam itself is told to read.
+fn system_compat_dirs() -> Vec<PathBuf> {
+    let extra = std::env::var_os("STEAM_EXTRA_COMPAT_TOOLS_PATHS").unwrap_or_default();
+    std::env::split_paths(&extra)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .chain(
+            ["/usr/share/steam/compatibilitytools.d", "/usr/local/share/steam/compatibilitytools.d"]
+                .map(PathBuf::from),
+        )
+        .collect()
+}
+
+fn builds_in(dir: &Path, source: ProtonSource) -> Vec<ProtonRelease> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries.flatten().filter_map(|e| ProtonRelease::read_from_dir(&e.path(), source)).collect()
 }

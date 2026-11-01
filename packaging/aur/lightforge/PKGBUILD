@@ -16,7 +16,7 @@ license=('GPL-3.0-or-later')
 # The launcher opens Vulkan, Wayland and X11 at run time rather than linking
 # them, so there is nothing to depend on but libc and libudev (gamepads) — and
 # it falls back to software rendering by itself when there is no GPU it can use.
-depends=('glibc' 'gcc-libs' 'fontconfig' 'systemd-libs')
+depends=('glibc' 'gcc-libs' 'fontconfig' 'systemd-libs' 'python')
 makedepends=('cargo')
 optdepends=(
   'lib32-gnutls: 32-bit runtime for Battle.net (needs multilib)'

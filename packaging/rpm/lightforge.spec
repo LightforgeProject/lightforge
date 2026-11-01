@@ -41,6 +41,8 @@ BuildRequires:  libappstream-glib
 # Vulkan, Wayland and X11 are opened at run time rather than linked, so the
 # automatic requires see only libc, libgcc_s and libudev.
 Requires:       fontconfig
+# Proton's launcher is a Python script.
+Requires:       python3
 Requires:       hicolor-icon-theme
 # The Battle.net installer is the one 32-bit binary in the whole flow.
 Suggests:       wine.i686

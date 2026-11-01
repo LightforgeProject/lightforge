@@ -674,12 +674,14 @@ pub fn tls_container(
 }
 
 /// Whether `ldconfig -p` lists a 32-bit `lib`. A 64-bit entry is tagged
-/// `(libc6,x86-64)`, a 32-bit one plain `(libc6)`.
+/// `(libc6,x86-64)`, a 32-bit one plain `(libc6)`, or `(libc6, OS ABI: …)`
+/// when the library carries an ABI note.
 fn has_32bit(ldconfig: &str, lib: &str) -> bool {
     ldconfig.lines().any(|line| {
-        line.trim_start()
-            .strip_prefix(lib)
-            .is_some_and(|rest| rest.trim_start().starts_with("(libc6)"))
+        line.trim_start().strip_prefix(lib).is_some_and(|rest| {
+            let tag = rest.trim_start();
+            tag.starts_with("(libc6)") || tag.starts_with("(libc6, ")
+        })
     })
 }
 
@@ -711,6 +713,14 @@ mod container_tests {
         assert!(!has_32bit(LDCONFIG, "libgnutls.so.30"));
         let arch = format!("{LDCONFIG}\tlibgnutls.so.30 (libc6) => /usr/lib32/libgnutls.so.30\n");
         assert!(has_32bit(&arch, "libgnutls.so.30"));
+    }
+
+    #[test]
+    fn a_32_bit_entry_with_an_abi_note_counts() {
+        let abi = "\tlibc.so.6 (libc6,x86-64, OS ABI: Linux 3.2.0) => /lib64/libc.so.6\n";
+        assert!(!has_32bit(abi, "libc.so.6"));
+        let both = format!("{abi}\tlibc.so.6 (libc6, OS ABI: Linux 3.2.0) => /lib/libc.so.6\n");
+        assert!(has_32bit(&both, "libc.so.6"));
     }
 
     #[test]

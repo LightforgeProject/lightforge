@@ -249,7 +249,8 @@ impl Config {
     /// Write `config.toml` atomically: settings save on every change.
     pub fn save(&self, path: &std::path::Path) -> Result<(), ConfigError> {
         let text = self.to_toml()?;
-        crate::fsutil::write_atomic(path, text.as_bytes()).map_err(io(path))
+        // Not world-readable: it holds the bug-report contact and env values.
+        crate::fsutil::write_atomic_with_mode(path, text.as_bytes(), 0o600).map_err(io(path))
     }
 
     pub fn to_toml(&self) -> Result<String, ConfigError> {
@@ -514,6 +515,19 @@ mod tests {
         assert_eq!(Config::load_or_default(&path).unwrap(), config);
         let names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().flatten().map(|e| e.file_name()).collect();
         assert_eq!(names, ["config.toml"]);
+    }
+
+    #[test]
+    fn the_config_is_readable_by_its_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        Config::with_default_products().save(&path).unwrap();
+
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
     }
 
     #[test]
