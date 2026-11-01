@@ -1,6 +1,33 @@
 # Lightforge release notes
 
 
+## 1.0.0-beta.9
+
+Lightforge 1.0.0-beta.9 is a smaller update before WoW Forever launches. Lightforge is now also an AppImage, it gets an interface size setting, and it keeps your computer awake while games download. It also fixes a few things found in a review of the code, among them one way moving a game could lose it.
+
+- Lightforge is now also an AppImage: one file to download, make executable and start, and it updates itself. See INSTALL.md.
+- Added an Interface size setting in Settings, General. The window grows or shrinks with it right away, without a restart, and never gets bigger than your screen.
+- Your computer no longer goes to sleep while a game downloads, moves or gets repaired.
+- When a download finishes or stops while Lightforge is in the background, you get a desktop notification.
+- Added Clear Cache to Game Settings. Clearing the game's Cache folder fixes many display and addon errors; the game builds a new one on its next start.
+- The addon list now says how many addons are pinned and not checked for updates, and has an Unpin all button.
+- Lightforge now uses far less CPU while a game is running. It used to check for the game's exit several times a second.
+- Fixed a case where moving a game to another drive could offer to remove the only copy as a leftover.
+- A download that fails for a game you are not looking at now shows its error with the game's name, instead of disappearing.
+- Fixed the WoW Forever icon missing in the Add game list and in setup.
+- Proton installed system-wide, like CachyOS's proton-cachyos package or the AUR's GE-Proton, is now found, with or without Steam.
+- If GE-Proton11-9 is installed, Lightforge still fetches GE-Proton11-7, the version it is tested with. 11-9 breaks the Battle.net installer.
+- Arch and CachyOS: the 32-bit command Lightforge suggests is fixed. Arch's wine is 64-bit only now, so it suggests lib32-gnutls, lib32-freetype2 and lib32-vulkan-icd-loader instead.
+- The .deb and .rpm now install on Ubuntu 22.04, Mint 21 and other systems with glibc 2.35.
+- Lightforge now builds on NixOS as a Nix flake. Thanks to Toofy for it.
+- python3 is now listed as a dependency in every package, and Diagnostics checks for it. Proton cannot start without it.
+- Diagnostics now shows the full advice for your distribution, including the multilib note on Arch.
+- Settings are now saved readable only by you.
+- Bug reports from Settings no longer send environment variable values that could be private.
+- Addon pages and descriptions can only open web links now.
+- The self-update finds more terminals, and the installer refuses machines it has no build for.
+- The settings cog has a new icon.
+
 ## 1.0.0-beta.8
 
 Lightforge 1.0.0-beta.8 is a bigger update, mostly stability and bug fixes, many of them from your bug reports. Thank you for sending them. It also brings a few new things: running two games at once, quitting Battle.net from Lightforge, and moving a game to another drive.
