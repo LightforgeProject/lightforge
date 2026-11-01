@@ -60,11 +60,11 @@ uninstall() {
     pause 30
 }
 
-# The newest release's tarball, prereleases included: during the beta every
-# release is one, and /releases/latest skips them.
+# The newest release's tarball for this processor, prereleases included:
+# during the beta every release is one, and /releases/latest skips them.
 latest_tarball_url() {
     curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=5" |
-        grep -o '"browser_download_url": *"[^"]*-x86_64-linux\.tar\.gz"' |
+        grep -o "\"browser_download_url\": *\"[^\"]*-$(uname -m)-linux\\.tar\\.gz\"" |
         head -n 1 |
         sed 's/.*"\(https[^"]*\)"$/\1/'
 }
@@ -85,9 +85,10 @@ main() {
         tarball=$1
         say "Installing from $tarball"
     else
-        # Releases are x86_64 builds; on ARM, Lightforge builds from source.
-        [ "$(uname -m)" = x86_64 ] ||
-            fail "releases are built for x86_64 only, this machine is $(uname -m); see INSTALL.md to build from source"
+        case $(uname -m) in
+            x86_64 | aarch64) ;;
+            *) fail "there is no Lightforge release for $(uname -m); see INSTALL.md to build from source" ;;
+        esac
         say "Looking up the newest Lightforge release"
         url=$(latest_tarball_url) || true
         [ -n "${url:-}" ] || fail "could not reach GitHub to find the newest release"

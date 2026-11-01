@@ -29,7 +29,8 @@ pub async fn install(
     let data_dir = directories::BaseDirs::new()
         .map(|d| d.data_dir().to_path_buf())
         .ok_or_else(|| UpgradeError::Io { path: bin_dir.to_path_buf(), source: std::io::ErrorKind::NotFound.into() })?;
-    let archive = fetch_asset(http, version, "-x86_64-linux.tar.gz", scratch, on_progress).await?;
+    let suffix = format!("-{}-linux.tar.gz", std::env::consts::ARCH);
+    let archive = fetch_asset(http, version, &suffix, scratch, on_progress).await?;
     let (bin_dir, held) = (bin_dir.to_path_buf(), archive.clone());
     let installed = tokio::task::spawn_blocking(move || put_in_place(&held, &bin_dir, &data_dir))
         .await

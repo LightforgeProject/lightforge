@@ -20,16 +20,26 @@ DESTDIR    ?=
 # would upgrade to nothing and `1.0.0~beta.1` upgrades to `1.0.0`.
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 PKGVER  := $(subst -,~,$(VERSION))
-TARBALL := lightforge-$(VERSION)-x86_64-linux.tar.gz
-# No version in the name: the self-update replaces the file in place, and
-# `releases/latest/download/` then always has it.
-APPIMAGE := Lightforge-x86_64.AppImage
+
+# Every release is built for both: aarch64 is cross-compiled in the same
+# container. The deb, the rpm and the PKGBUILDs stay x86_64 only.
+ARCHES      := x86_64 aarch64
+OUT_x86_64  := $(OUT)
+OUT_aarch64 := target/container/aarch64-unknown-linux-gnu/release
+IN_IMAGE    := $(CONTAINER) run --rm --volume "$(CURDIR):/src:Z" --workdir /src $(IMAGE)
+# How each build is inspected and run from this machine.
+OBJDUMP_x86_64  := objdump
+OBJDUMP_aarch64 := $(IN_IMAGE) aarch64-linux-gnu-objdump
+RUN_x86_64  :=
+RUN_aarch64 := $(IN_IMAGE) qemu-aarch64
 
 # The AppImage's static type-2 runtime, pinned: it needs no libfuse2 on the
-# host, which Ubuntu 22.04+ and Fedora Atomic do not ship.
-APPIMAGE_RUNTIME_URL    := https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
-APPIMAGE_RUNTIME_SHA256 := 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
-APPIMAGE_RUNTIME        := target/appimage/runtime-20251108-x86_64
+# host, which Ubuntu 22.04+ and Fedora Atomic do not ship. The AppImage has no
+# version in its name: the self-update replaces the file in place, and
+# `releases/latest/download/` then always has it.
+APPIMAGE_RUNTIME_URL            := https://github.com/AppImage/type2-runtime/releases/download/20251108
+APPIMAGE_RUNTIME_SHA256_x86_64  := 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+APPIMAGE_RUNTIME_SHA256_aarch64 := 00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
 
 # The highest glibc a release may ask for, and what the deb and rpm declare.
 # Ubuntu 22.04 is 2.35; the Debian 12 container is 2.36, so this also catches
@@ -45,16 +55,14 @@ BINARIES := lightforge lightforge-gui
 
 ## Build release binaries against an old glibc, and verify they are portable.
 release: image
-	$(CONTAINER) run --rm \
-	  --volume "$(CURDIR):/src:Z" \
-	  --workdir /src \
-	  $(IMAGE) \
-	  cargo build --release --locked
+	$(IN_IMAGE) sh -c 'cargo build --release --locked \
+	  && cargo build --release --locked --target aarch64-unknown-linux-gnu \
+	  && aarch64-linux-gnu-strip $(addprefix $(OUT_aarch64)/,$(BINARIES))'
 	strip $(addprefix $(OUT)/,$(BINARIES))
 	@$(MAKE) --no-print-directory check-glibc
 	@echo
-	@echo "Release binaries in $(OUT):"
-	@ls -lh $(addprefix $(OUT)/,$(BINARIES)) | awk '{print "  " $$9 "  " $$5}'
+	@echo "Release binaries:"
+	@ls -lh $(foreach arch,$(ARCHES),$(addprefix $(OUT_$(arch))/,$(BINARIES))) | awk '{print "  " $$9 "  " $$5}'
 
 image:
 	$(CONTAINER) build --build-arg RUST_IMAGE=$(RUST_IMAGE) --tag $(IMAGE) --file Containerfile .
@@ -63,11 +71,13 @@ image:
 ##
 ## The whole point of the container, asserted rather than assumed — a release
 ## that quietly regains the host's glibc looks fine here and fails on a Deck.
-check-glibc:
+check-glibc: $(addprefix check-glibc-,$(ARCHES))
+
+check-glibc-%:
 	@fail=0; \
-	for bin in $(addprefix $(OUT)/,$(BINARIES)); do \
+	for bin in $(addprefix $(OUT_$*)/,$(BINARIES)); do \
 	  if [ ! -f "$$bin" ]; then echo "missing: $$bin"; fail=1; continue; fi; \
-	  needs=$$(objdump -T "$$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1); \
+	  needs=$$($(OBJDUMP_$*) -T "$$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1); \
 	  highest=$${needs#GLIBC_}; \
 	  top=$$(printf '%s\n%s\n' "$(GLIBC_MAX)" "$$highest" | sort -V | tail -1); \
 	  if [ "$$top" = "$(GLIBC_MAX)" ]; then \
@@ -148,48 +158,53 @@ packages: check-spec tarball appimage deb rpm installer checksums
 ## It carries the desktop entry, the icons and the AppStream file beside the
 ## binaries, so the PKGBUILD installs from this one source and the Arch
 ## package has the same contents as the deb and the rpm.
-tarball: check-binaries
+tarball: $(addprefix tarball-,$(ARCHES))
+
+tarball-%: check-binaries-%
 	@mkdir -p $(DIST)
-	@rm -rf target/tarball/lightforge-$(VERSION)
-	@mkdir -p target/tarball/lightforge-$(VERSION)
-	@cp $(addprefix $(OUT)/,$(BINARIES)) target/tarball/lightforge-$(VERSION)/
+	@rm -rf target/tarball/$*/lightforge-$(VERSION)
+	@mkdir -p target/tarball/$*/lightforge-$(VERSION)
+	@cp $(addprefix $(OUT_$*)/,$(BINARIES)) target/tarball/$*/lightforge-$(VERSION)/
 	@cp -r packaging/icons packaging/pro.tuxcore.Lightforge.desktop \
 	       packaging/pro.tuxcore.Lightforge.metainfo.xml \
 	       LICENSE README.md RELEASES.md TROUBLESHOOTING.md docs/CLI.md \
-	       target/tarball/lightforge-$(VERSION)/
-	@tar -czf $(DIST)/$(TARBALL) -C target/tarball lightforge-$(VERSION)
-	@echo "ok   $(DIST)/$(TARBALL)"
+	       target/tarball/$*/lightforge-$(VERSION)/
+	@tar -czf $(DIST)/lightforge-$(VERSION)-$*-linux.tar.gz -C target/tarball/$* lightforge-$(VERSION)
+	@echo "ok   $(DIST)/lightforge-$(VERSION)-$*-linux.tar.gz"
 
 ## The AppImage: the runtime with a squashfs of the AppDir appended, which is
 ## all appimagetool does too. Packed in the build container, so the host needs
 ## no squashfs-tools. Nothing is bundled besides the two binaries; see AppRun.
-appimage: check-binaries image $(APPIMAGE_RUNTIME)
+appimage: $(addprefix appimage-,$(ARCHES))
+
+appimage-%: check-binaries-% image target/appimage/runtime-20251108-%
 	@mkdir -p $(DIST)
-	@rm -rf target/appimage/AppDir target/appimage/squashfs
-	@install -Dm755 packaging/appimage/AppRun target/appimage/AppDir/AppRun
-	@install -Dm755 -t target/appimage/AppDir/usr/bin $(addprefix $(OUT)/,$(BINARIES))
-	@mkdir -p target/appimage/AppDir/usr/share
-	@cp -r packaging/icons target/appimage/AppDir/usr/share/
+	@rm -rf target/appimage/$*
+	@install -Dm755 packaging/appimage/AppRun target/appimage/$*/AppDir/AppRun
+	@install -Dm755 -t target/appimage/$*/AppDir/usr/bin $(addprefix $(OUT_$*)/,$(BINARIES))
+	@mkdir -p target/appimage/$*/AppDir/usr/share
+	@cp -r packaging/icons target/appimage/$*/AppDir/usr/share/
 	@install -Dm644 packaging/pro.tuxcore.Lightforge.metainfo.xml \
-	   target/appimage/AppDir/usr/share/metainfo/pro.tuxcore.Lightforge.metainfo.xml
+	   target/appimage/$*/AppDir/usr/share/metainfo/pro.tuxcore.Lightforge.metainfo.xml
 	@# TryExec would hide an entry Gear Lever or AppImageLauncher integrates.
 	@sed '/^TryExec=/d' packaging/pro.tuxcore.Lightforge.desktop \
-	   > target/appimage/AppDir/pro.tuxcore.Lightforge.desktop
-	@install -Dm644 target/appimage/AppDir/pro.tuxcore.Lightforge.desktop \
-	   target/appimage/AppDir/usr/share/applications/pro.tuxcore.Lightforge.desktop
-	@cp packaging/icons/hicolor/256x256/apps/pro.tuxcore.Lightforge.png target/appimage/AppDir/
-	@ln -s pro.tuxcore.Lightforge.png target/appimage/AppDir/.DirIcon
-	$(CONTAINER) run --rm --volume "$(CURDIR):/src:Z" --workdir /src $(IMAGE) \
-	  mksquashfs target/appimage/AppDir target/appimage/squashfs \
+	   > target/appimage/$*/AppDir/pro.tuxcore.Lightforge.desktop
+	@install -Dm644 target/appimage/$*/AppDir/pro.tuxcore.Lightforge.desktop \
+	   target/appimage/$*/AppDir/usr/share/applications/pro.tuxcore.Lightforge.desktop
+	@cp packaging/icons/hicolor/256x256/apps/pro.tuxcore.Lightforge.png target/appimage/$*/AppDir/
+	@ln -s pro.tuxcore.Lightforge.png target/appimage/$*/AppDir/.DirIcon
+	$(IN_IMAGE) mksquashfs target/appimage/$*/AppDir target/appimage/$*/squashfs \
 	  -root-owned -noappend -comp zstd -quiet
-	@cat $(APPIMAGE_RUNTIME) target/appimage/squashfs > $(DIST)/$(APPIMAGE)
-	@chmod 755 $(DIST)/$(APPIMAGE)
-	@echo "ok   $(DIST)/$(APPIMAGE)"
+	@cat target/appimage/runtime-20251108-$* target/appimage/$*/squashfs > $(DIST)/Lightforge-$*.AppImage
+	@chmod 755 $(DIST)/Lightforge-$*.AppImage
+	@echo "ok   $(DIST)/Lightforge-$*.AppImage"
 
-$(APPIMAGE_RUNTIME):
+# Kept between runs: pinned, so it never changes.
+.PRECIOUS: target/appimage/runtime-20251108-%
+target/appimage/runtime-20251108-%:
 	@mkdir -p $(@D)
-	curl -fsSL -o $@.part $(APPIMAGE_RUNTIME_URL)
-	@echo "$(APPIMAGE_RUNTIME_SHA256)  $@.part" | sha256sum -c --quiet
+	curl -fsSL -o $@.part $(APPIMAGE_RUNTIME_URL)/runtime-$*
+	@echo "$(APPIMAGE_RUNTIME_SHA256_$*)  $@.part" | sha256sum -c --quiet
 	@mv $@.part $@
 
 ## The double-click installer, published beside the packages so the release
@@ -205,7 +220,7 @@ installer:
 ## `CARGO_TARGET_DIR` is what points the asset paths in the manifest at the
 ## container build; `--no-build` and `--no-strip` because `release` already
 ## did both.
-deb: check-binaries
+deb: check-binaries-x86_64
 	@mkdir -p $(DIST)
 	CARGO_TARGET_DIR=target/container cargo deb \
 	  --package lightforge-gui \
@@ -214,7 +229,7 @@ deb: check-binaries
 	  --output $(DIST)/
 
 ## An .rpm, written natively — no `rpmbuild` on this machine either.
-rpm: check-binaries
+rpm: check-binaries-x86_64
 	@mkdir -p $(DIST)
 	cargo generate-rpm \
 	  --package crates/launcher-gui \
@@ -240,7 +255,7 @@ github-names:
 
 ## The sums the AUR PKGBUILDs and the release page quote.
 checksums: github-names
-	@cd $(DIST) && rm -f SHA256SUMS && sha256sum lightforge* $(APPIMAGE) > SHA256SUMS
+	@cd $(DIST) && rm -f SHA256SUMS && sha256sum lightforge* Lightforge-*.AppImage > SHA256SUMS
 	@cat $(DIST)/SHA256SUMS
 
 ## Fail with a useful sentence rather than a missing-file error from tar,
@@ -248,14 +263,18 @@ checksums: github-names
 ## Cargo.toml, so stale binaries would ship under the new name (beta.2 nearly
 ## did). The timeout is for a GUI built before it answered `--version`,
 ## which would open a window instead and hold the build.
-check-binaries:
-	@for bin in $(addprefix $(OUT)/,$(BINARIES)); do \
+check-binaries: $(addprefix check-binaries-,$(ARCHES))
+
+## The aarch64 build answers through qemu in the container: the same question,
+## and a first sign it starts at all.
+check-binaries-%:
+	@for bin in $(addprefix $(OUT_$*)/,$(BINARIES)); do \
 	  [ -f "$$bin" ] || { echo "missing $$bin — run \`make release\` first"; exit 1; }; \
-	  got=$$(timeout 10 "$$bin" --version 2>/dev/null); \
+	  got=$$(timeout 60 $(RUN_$*) "$$bin" --version 2>/dev/null); \
 	  want="$$(basename "$$bin") $(VERSION)"; \
 	  [ "$$got" = "$$want" ] || { echo "$$bin reports '$$got', expected '$$want' — run \`make release\`"; exit 1; }; \
 	done
-	@echo "ok   binaries are $(VERSION)"
+	@echo "ok   $* binaries are $(VERSION)"
 
 ## The COPR spec carries its version by hand, because COPR builds it from git
 ## and never sees this Makefile. Caught here so a release cannot forget it.
@@ -265,7 +284,7 @@ check-spec:
 	@echo "ok   spec is $(VERSION)"
 
 clean-packages:
-	rm -rf $(DIST) target/tarball target/debian target/container/generate-rpm target/appimage/AppDir target/appimage/squashfs
+	rm -rf $(DIST) target/tarball target/debian target/container/generate-rpm $(addprefix target/appimage/,$(ARCHES))
 
 clean-release:
 	rm -rf target/container

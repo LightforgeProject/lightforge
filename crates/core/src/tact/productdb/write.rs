@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use super::read::decode_install;
 use super::wire::{double_field, message_field, read_varint, string_field, varint_field};
-use super::{agent_tags, io, locale_from_tags, ProductDbError};
+use super::{agent_tags, cpu_from_tags, io, locale_from_tags, ProductDbError};
 use crate::buildinfo::{self, BuildInfo};
 use crate::product::ProductCode;
 
@@ -76,7 +76,10 @@ impl ProductInstall {
     /// `Windows x86_64 EU? acct-AUT? geoip-AT? enUS speech?:… text?`. Selects
     /// the same files as the plain form, but matches Agent's bytes.
     pub fn with_agent_tags(mut self) -> Self {
+        // The processor stays: Battle.net told x86_64 about an ARM install
+        // would "repair" it into the x86 client.
         self.tags = agent_tags(
+            cpu_from_tags(&self.tags),
             &self.region,
             &self.locale,
             &self.account_country,

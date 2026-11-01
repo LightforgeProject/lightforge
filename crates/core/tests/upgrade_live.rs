@@ -35,7 +35,7 @@ async fn the_published_release_installs_and_every_package_is_found() {
     let entry = std::fs::read_to_string(data.join("applications/pro.tuxcore.Lightforge.desktop")).unwrap();
     assert!(entry.contains(&bin.join("lightforge-gui").display().to_string()), "{entry}");
 
-    let appimage = dir.join("Desktop").join(upgrade::appimage::ASSET);
+    let appimage = dir.join("Desktop").join(upgrade::appimage::asset());
     std::fs::create_dir_all(appimage.parent().unwrap()).unwrap();
     std::fs::write(&appimage, b"the old one").unwrap();
     upgrade::appimage::install(&http, VERSION, &appimage, |_, _| {}).await.expect("the AppImage replaces itself");

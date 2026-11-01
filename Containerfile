@@ -23,9 +23,20 @@ FROM ${RUST_IMAGE}
 # else a desktop app usually needs at build time — Vulkan, Wayland, X11,
 # fontconfig — is genuinely absent on purpose: see the note above.
 # `squashfs-tools` packs the AppImage (`make appimage`).
-RUN apt-get update \
+#
+# The aarch64 release is cross-compiled from here too: Debian's cross gcc for
+# `ring`'s C and the link, the arm64 libudev through multiarch, and
+# `qemu-user` to ask the result for its `--version`.
+RUN dpkg --add-architecture arm64 \
+    && apt-get update \
     && apt-get install --yes --no-install-recommends pkg-config libudev-dev squashfs-tools \
+       gcc-aarch64-linux-gnu libc6-dev-arm64-cross libudev-dev:arm64 qemu-user \
     && rm -rf /var/lib/apt/lists/*
+RUN rustup target add aarch64-unknown-linux-gnu
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+    CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
+    PKG_CONFIG_PATH_aarch64_unknown_linux_gnu=/usr/lib/aarch64-linux-gnu/pkgconfig \
+    PKG_CONFIG_ALLOW_CROSS=1
 
 WORKDIR /src
 

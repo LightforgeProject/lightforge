@@ -78,6 +78,17 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.0.0-beta.9" date="2026-11-01">
+      <description>
+        <p>
+          A smaller update before WoW Forever launches. Lightforge is now also
+          an AppImage, has experimental ARM64 builds, gets an interface size
+          setting, keeps the computer awake while games download, and fixes a
+          few things found in a code review.
+        </p>
+      </description>
+      <url>https://github.com/LightforgeProject/lightforge/blob/main/RELEASES.md</url>
+    </release>
     <release version="1.0.0-beta.8" date="2026-10-29">
       <description>
         <p>

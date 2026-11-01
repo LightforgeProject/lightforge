@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/LightforgeProject/lightforge/actions/workflows/ci.yml/badge.svg)](https://github.com/LightforgeProject/lightforge/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-E9AB28?style=flat-square)](LICENSE)
-[![Status: beta](https://img.shields.io/badge/status-1.0.0--beta.8-00B4FF?style=flat-square)](RELEASES.md)
+[![Status: beta](https://img.shields.io/badge/status-1.0.0--beta.9-00B4FF?style=flat-square)](RELEASES.md)
 [![Linux](https://img.shields.io/badge/platform-Linux-8A94A3?style=flat-square)](#install)
 [![Discord](https://img.shields.io/badge/chat-Discord-5865F2?style=flat-square)](https://discord.gg/vtTgmUV9Bq)
 
@@ -95,7 +95,9 @@ sudo systemctl reboot
 ### AppImage
 
 Download `Lightforge-x86_64.AppImage`, make it executable and start it. It
-updates itself in place. Details in [INSTALL.md](INSTALL.md#appimage).
+updates itself in place. Details in [INSTALL.md](INSTALL.md#appimage). ARM64
+has its own AppImage and tarball; it is
+[experimental](INSTALL.md#arm64).
 
 ```bash
 chmod +x Lightforge-x86_64.AppImage && ./Lightforge-x86_64.AppImage

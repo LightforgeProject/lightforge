@@ -7,9 +7,12 @@ use std::path::{Path, PathBuf};
 use super::{fetch_asset, io, UpgradeError};
 use crate::net::Http;
 
-/// The release asset, without a version, so `releases/latest/download/` always
-/// has it and the file keeps the name the user's shortcuts know.
-pub const ASSET: &str = "Lightforge-x86_64.AppImage";
+/// The release asset for this processor, without a version, so
+/// `releases/latest/download/` always has it and the file keeps the name the
+/// user's shortcuts know: `Lightforge-x86_64.AppImage`.
+pub fn asset() -> String {
+    format!("Lightforge-{}.AppImage", std::env::consts::ARCH)
+}
 
 /// The AppImage this process runs from. The runtime sets `$APPIMAGE`;
 /// `current_exe` is inside its mount, which is gone once Lightforge closes.
@@ -27,7 +30,7 @@ pub async fn install(
     let dir = path.parent().unwrap_or(Path::new("/"));
     // In the same folder, so the swap is a rename on one filesystem.
     let staging = crate::staging::create_in(dir).map_err(io(dir))?;
-    let fresh = fetch_asset(http, version, ASSET, staging.path(), on_progress).await?;
+    let fresh = fetch_asset(http, version, &asset(), staging.path(), on_progress).await?;
     replace(&fresh, path)
 }
 
@@ -45,10 +48,10 @@ mod tests {
     fn the_new_appimage_takes_the_old_one_s_place_and_runs() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(ASSET);
+        let path = dir.path().join(asset());
         std::fs::write(&path, b"old").unwrap();
         let staging = crate::staging::create_in(dir.path()).unwrap();
-        let fresh = staging.path().join(ASSET);
+        let fresh = staging.path().join(asset());
         std::fs::write(&fresh, b"new").unwrap();
 
         replace(&fresh, &path).unwrap();
@@ -57,6 +60,6 @@ mod tests {
         assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o755);
         drop(staging);
         let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().flatten().map(|e| e.file_name()).collect();
-        assert_eq!(left, [ASSET]);
+        assert_eq!(left, [std::ffi::OsString::from(asset())]);
     }
 }

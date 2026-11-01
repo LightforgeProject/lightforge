@@ -21,6 +21,11 @@ packaging/
 
 ## The installer
 
+Every release is built for x86_64 and, cross-compiled in the same container,
+for aarch64: a tarball and an AppImage each. The `.deb`, the `.rpm`, the COPR
+spec and the PKGBUILDs are x86_64 only. `make release` builds both, and
+`check-binaries` asks the aarch64 build for its `--version` through qemu.
+
 `Lightforge-x86_64.AppImage` carries no version in its name, so the copy a
 user keeps updates in place under the same name and
 `releases/latest/download/Lightforge-x86_64.AppImage` is a stable link.

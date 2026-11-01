@@ -11,12 +11,12 @@ Everything below installs the same two binaries, the menu entry and the icons.
 
 Download `lightforge_<version>_amd64.deb` from the
 [releases page](https://github.com/LightforgeProject/lightforge/releases).
-The file name says `1.0.0.beta.7` because GitHub doesn't allow a `~` in an
+The file name says `1.0.0.beta.9` because GitHub doesn't allow a `~` in an
 asset name. The version inside the package, which `apt` reads and sorts by,
-is `1.0.0~beta.7`:
+is `1.0.0~beta.9`:
 
 ```bash
-sudo apt install ./lightforge_1.0.0.beta.7-1_amd64.deb
+sudo apt install ./lightforge_1.0.0.beta.9-1_amd64.deb
 ```
 
 It needs glibc 2.35 or newer: Ubuntu 22.04, Debian 12 or anything later.
@@ -42,7 +42,7 @@ Without the repository, download `lightforge-<version>.x86_64.rpm` from the
 and install it by hand. You then download each new release yourself:
 
 ```bash
-sudo dnf install ./lightforge-1.0.0.beta.7-1.x86_64.rpm
+sudo dnf install ./lightforge-1.0.0.beta.9-1.x86_64.rpm
 ```
 
 The same file installs on openSUSE with `sudo zypper install`. Like the
@@ -100,7 +100,8 @@ a drive during setup.
 
 ## AppImage
 
-One file, no install: download `Lightforge-x86_64.AppImage` from the
+One file, no install: download `Lightforge-x86_64.AppImage` (or
+`Lightforge-aarch64.AppImage` on ARM, see [ARM64](#arm64)) from the
 [releases page](https://github.com/LightforgeProject/lightforge/releases),
 put it wherever you like, make it executable and start it:
 
@@ -122,6 +123,22 @@ The command-line tool is inside too: `./Lightforge-x86_64.AppImage cli doctor`.
 It needs FUSE, which every current desktop distribution and SteamOS have. If
 it says otherwise, `./Lightforge-x86_64.AppImage --appimage-extract-and-run`
 starts it without.
+
+## ARM64
+
+Experimental: nobody has run Lightforge on ARM hardware yet. Each release has
+an aarch64 tarball and `Lightforge-aarch64.AppImage`, and the installer above
+picks the aarch64 tarball by itself. There are no ARM `.deb`, `.rpm` or Arch
+packages yet.
+
+On ARM, Lightforge installs Blizzard's native ARM64 client, so the game itself
+runs without emulation. Battle.net exists only for x86, and runs through the
+FEX emulator that GE-Proton's ARM build brings along. Lightforge downloads that
+build by itself.
+
+Asahi Linux on Apple Silicon uses 16K memory pages, and Wine does not run on
+those without Asahi's `muvm`. Expect it to fail there for now. If you try it on
+any ARM machine, tell me how it went, with the output of `lightforge doctor`.
 
 ## Build it yourself
 

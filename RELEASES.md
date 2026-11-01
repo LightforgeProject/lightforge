@@ -3,9 +3,10 @@
 
 ## 1.0.0-beta.9
 
-Lightforge 1.0.0-beta.9 is a smaller update before WoW Forever launches. Lightforge is now also an AppImage, it gets an interface size setting, and it keeps your computer awake while games download. It also fixes a few things found in a review of the code, among them one way moving a game could lose it.
+Lightforge 1.0.0-beta.9 is a smaller update before WoW Forever launches. Lightforge is now also an AppImage, has experimental ARM64 builds and an interface size setting, and keeps your computer awake while games download. It also fixes a few things found in a review of the code, among them one way moving a game could lose it.
 
 - Lightforge is now also an AppImage: one file to download, make executable and start, and it updates itself. See INSTALL.md.
+- Experimental ARM64 builds: an AppImage and a tarball, and the installer picks them on ARM. Lightforge installs Blizzard's native ARM64 client there, and Battle.net runs through the FEX emulator that GE-Proton's ARM build brings. Nobody has run it on ARM hardware yet, so tell me how it goes.
 - Added an Interface size setting in Settings, General. The window grows or shrinks with it right away, without a restart, and never gets bigger than your screen.
 - Your computer no longer goes to sleep while a game downloads, moves or gets repaired.
 - When a download finishes or stops while Lightforge is in the background, you get a desktop notification.
