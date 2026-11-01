@@ -3,11 +3,17 @@ use crate::tact::manifest::Tag;
 
 #[test]
 fn the_tag_column_matches_what_a_real_build_info_carries() {
-    let options = Options { region: Region::Eu, locale: "enUS".into(), ..Options::default() };
+    let options = Options { region: Region::Eu, cpu: Cpu::X86_64, locale: "enUS".into(), ..Options::default() };
     assert_eq!(
         options.tag_column(),
         "Windows x86_64 EU enUS speech:Windows x86_64 EU enUS text"
     );
+}
+
+#[test]
+fn an_arm_machine_asks_for_the_arm_client() {
+    let options = Options { region: Region::Eu, cpu: Cpu::Arm64, locale: "enUS".into(), ..Options::default() };
+    assert_eq!(options.tag_column(), "Windows arm64 EU enUS speech:Windows arm64 EU enUS text");
 }
 
 fn locale_tag(name: &str) -> Tag {

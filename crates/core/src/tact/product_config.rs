@@ -16,6 +16,8 @@ pub struct ProductConfig {
     pub install_dir: Option<String>,
     /// The Windows game binary's file name, e.g. `WoW.exe`.
     pub executable: Option<String>,
+    /// The Windows-on-ARM binary's, e.g. `Wow-ARM64.exe`.
+    pub executable_arm64: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -33,15 +35,19 @@ pub enum ProductConfigError {
 pub fn parse(json: &str) -> Result<ProductConfig, serde_json::Error> {
     let value: serde_json::Value = serde_json::from_str(json)?;
     let text = |pointer: &str| value.pointer(pointer).and_then(serde_json::Value::as_str);
+    let binary = |pointer: &str| {
+        text(pointer)
+            .and_then(|path| path.rsplit(['/', '\\']).next())
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+    };
     Ok(ProductConfig {
         // Joined onto the install root: a single plain folder name or nothing.
         install_dir: text("/all/config/shared_container_default_subfolder")
             .filter(|dir| !dir.is_empty() && *dir != ".." && !dir.contains(['/', '\\']))
             .map(str::to_owned),
-        executable: text("/platform/win/config/binaries/game/relative_path")
-            .and_then(|path| path.rsplit(['/', '\\']).next())
-            .filter(|name| !name.is_empty())
-            .map(str::to_owned),
+        executable: binary("/platform/win/config/binaries/game/relative_path"),
+        executable_arm64: binary("/platform/win/config/binaries/game/relative_path_arm64"),
     })
 }
 
@@ -72,6 +78,12 @@ mod tests {
         let config = parse(WOW).unwrap();
         assert_eq!(config.install_dir.as_deref(), Some("_retail_"));
         assert_eq!(config.executable.as_deref(), Some("WoW.exe"));
+    }
+
+    #[test]
+    fn retail_and_forever_name_an_arm_binary() {
+        assert_eq!(parse(WOW).unwrap().executable_arm64.as_deref(), Some("Wow-ARM64.exe"));
+        assert_eq!(parse(WOWF).unwrap().executable_arm64.as_deref(), Some("Wow-arm64.exe"));
     }
 
     #[test]

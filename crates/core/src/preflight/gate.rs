@@ -180,7 +180,7 @@ impl Preflight {
 /// Whether the prefix's live `wineserver`, if any, is this runner's. Two Wine
 /// builds cannot share one server. One whose binary cannot be read is let be.
 pub(super) fn served_by(runner: &ProtonRunner, layout: &Layout) -> bool {
-    let ours = runner.dist().join("bin").join("wineserver");
+    let ours = runner.wineserver();
     let ours = ours.canonicalize().unwrap_or(ours);
     scan(layout)
         .into_iter()

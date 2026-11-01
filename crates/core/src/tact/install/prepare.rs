@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use super::locale::shipped_locale;
-use super::{io, Event, InstallError, Options};
+use super::{io, Cpu, Event, InstallError, Options};
 use crate::net::Http;
 use crate::product::ProductCode;
 use crate::tact::archive::FileIndex;
@@ -13,7 +13,7 @@ use crate::tact::cdn::Client;
 use crate::tact::config::{BuildConfig, CdnConfig, KeyPair};
 use crate::tact::encoding::Encoding;
 use crate::tact::indices::{IndexCache, Locations};
-use crate::tact::manifest::{DownloadEntry, DownloadManifest, InstallManifest, TagSet};
+use crate::tact::manifest::{DownloadEntry, DownloadManifest, InstallManifest, Tag, TagSet};
 use crate::tact::plan::{reverse_encoding, Options as PlanOptions, Plan};
 use crate::tact::storage::{EKey, Storage};
 use crate::tact::version;
@@ -147,6 +147,7 @@ pub async fn offerings(
     let ekey = pair.ekey.ok_or(InstallError::MissingManifest("download"))?;
     let manifest =
         DownloadManifest::parse(&client.fetch_loose(http, &ekey, &pair.ckey).await?)?;
+    require_cpu(options.cpu, code, manifest.tags())?;
 
     let locale = shipped_locale(&options.locale, manifest.tags());
     let base_tags = TagSet::parse(&options.tag_column_for(&locale));
@@ -192,7 +193,14 @@ pub async fn prepare(
             .inspect_err(|e| tracing::warn!("product config {}: {e}", remote.product_config))
             .ok(),
     };
-    let executable = product.as_ref().and_then(|p| p.executable.clone());
+    let executable = product.as_ref().and_then(|p| match options.cpu {
+        Cpu::X86_64 => p.executable.clone(),
+        Cpu::Arm64 => p.executable_arm64.clone(),
+    });
+    // The fallback name is the x86 binary, which an ARM install leaves out.
+    if options.cpu == Cpu::Arm64 && executable.is_none() {
+        return Err(no_client(options.cpu, code));
+    }
     let flavor = match (options.flavor.is_empty(), product.and_then(|p| p.install_dir)) {
         (false, _) => options.flavor.clone(),
         (true, Some(dir)) => dir,
@@ -239,6 +247,7 @@ pub async fn prepare(
     let download_manifest =
         DownloadManifest::parse(&fetch_manifest(build.download, "download").await?)?;
     let install = InstallManifest::parse(&fetch_manifest(build.install, "install").await?)?;
+    require_cpu(options.cpu, code, download_manifest.tags())?;
     let locale = shipped_locale(&options.locale, download_manifest.tags());
     let tag_column = options.tag_column_for(&locale);
     let tags = TagSet::parse(&tag_column).with_optional(options.optional_tags.clone());
@@ -354,4 +363,40 @@ pub async fn prepare(
         flavor,
         executable,
     })
+}
+
+/// An ARM build has to be on offer: without its tag the selection drops
+/// every architecture's binaries and the install could never start. x86_64
+/// is not checked, so a build that predates the tag still installs.
+fn require_cpu(cpu: Cpu, code: &ProductCode, tags: &[Tag]) -> Result<(), InstallError> {
+    match cpu == Cpu::X86_64 || tags.iter().any(|tag| tag.name == cpu.tag()) {
+        true => Ok(()),
+        false => Err(no_client(cpu, code)),
+    }
+}
+
+fn no_client(cpu: Cpu, code: &ProductCode) -> InstallError {
+    InstallError::NoClientFor { code: code.as_str().to_owned(), cpu: cpu.tag() }
+}
+
+#[cfg(test)]
+mod cpu_tests {
+    use super::*;
+
+    const ARCH: u16 = 2;
+
+    #[test]
+    fn an_arm_install_needs_a_build_that_offers_arm() {
+        let retail = ProductCode::Retail;
+        let x86_only = [Tag::named("Windows", 1), Tag::named("x86_64", ARCH)];
+        let both = [Tag::named("Windows", 1), Tag::named("x86_64", ARCH), Tag::named("arm64", ARCH)];
+
+        assert!(matches!(require_cpu(Cpu::Arm64, &retail, &x86_only), Err(InstallError::NoClientFor { .. })));
+        assert!(require_cpu(Cpu::Arm64, &retail, &both).is_ok());
+    }
+
+    #[test]
+    fn an_x86_install_is_never_refused_for_a_missing_tag() {
+        assert!(require_cpu(Cpu::X86_64, &ProductCode::Retail, &[Tag::named("Windows", 1)]).is_ok());
+    }
 }

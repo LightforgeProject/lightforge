@@ -184,6 +184,9 @@ fn icd_dirs(data_home: Option<&str>, home: Option<&Path>, data_dirs: Option<&str
 }
 
 fn loader() -> Check {
+    if !runtime::needs_32bit_libraries() {
+        return check("32-bit runtime", Status::Ok, "not needed on this processor", None);
+    }
     if runtime::has_32bit_loader() {
         return check("32-bit runtime", Status::Ok, "present", None);
     }
@@ -197,6 +200,9 @@ fn loader() -> Check {
 }
 
 fn gnutls() -> Check {
+    if !runtime::needs_32bit_libraries() {
+        return check("32-bit gnutls", Status::Ok, "not needed on this processor", None);
+    }
     match runtime::has_32bit_tls() {
         Some(true) => check("32-bit gnutls", Status::Ok, "present", None),
         Some(false) => check(

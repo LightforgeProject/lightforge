@@ -256,6 +256,10 @@ pub(crate) enum Command {
         locale: String,
         #[arg(long)]
         flavor: Option<String>,
+        /// Plan another machine's client: `x86_64` or `arm64`. This one's by
+        /// default.
+        #[arg(long)]
+        cpu: Option<String>,
         /// Break the difference down by priority, bucket and source, and
         /// cross-examine the store probe that produced it.
         #[arg(long)]

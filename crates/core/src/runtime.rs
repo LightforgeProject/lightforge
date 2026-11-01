@@ -92,7 +92,7 @@ pub enum RuntimeError {
 /// Cheap enough to call before any download. Passes off x86-64, where it
 /// means nothing.
 pub fn check_loader() -> Result<(), RuntimeError> {
-    if !cfg!(target_arch = "x86_64") {
+    if !needs_32bit_libraries() {
         return Ok(());
     }
     if LOADER_CANDIDATES.iter().any(|p| Path::new(p).exists()) {
@@ -129,6 +129,12 @@ pub fn check_wine(dist: &Path) -> Result<(), RuntimeError> {
         code: output.status.code(),
         stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
     })
+}
+
+/// Whether 32-bit Windows programs need the host's 32-bit libraries. Not on
+/// ARM: there Wine runs them through FEX with the native aarch64 ones.
+pub fn needs_32bit_libraries() -> bool {
+    cfg!(target_arch = "x86_64")
 }
 
 /// Whether a 32-bit runtime is present, for a debug bundle or a settings
@@ -654,7 +660,7 @@ pub fn tls_container(
     proton_root: &Path,
     steam: Option<&crate::steam::SteamRoot>,
 ) -> Result<Option<PathBuf>, RuntimeError> {
-    if has_32bit_tls() != Some(false) {
+    if !needs_32bit_libraries() || has_32bit_tls() != Some(false) {
         return Ok(None);
     }
     let appid = required_runtime(proton_root);

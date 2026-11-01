@@ -33,6 +33,8 @@ use locale::*;
 #[derive(Debug, Clone)]
 pub struct Options {
     pub region: Region,
+    /// Which of Blizzard's client builds to install; the host's by default.
+    pub cpu: Cpu,
     /// Client locale, e.g. `enUS`. Selects which of a build's files are wanted.
     pub locale: String,
     /// Optional content to opt in to, by tag name, e.g. `HighRes`. See
@@ -78,6 +80,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             region: Region::default(),
+            cpu: Cpu::host(),
             locale: "enUS".to_owned(),
             optional_tags: Vec::new(),
             flavor: String::new(),
@@ -110,12 +113,38 @@ impl Options {
     /// see [`shipped_locale`].
     fn tag_column_for(&self, locale: &str) -> String {
         let r = self.region.as_str().to_uppercase();
-        format!("Windows x86_64 {r} {locale} speech:Windows x86_64 {r} {locale} text")
+        let cpu = self.cpu.tag();
+        format!("Windows {cpu} {r} {locale} speech:Windows {cpu} {r} {locale} text")
     }
 
     /// True when any option truncates the plan.
     pub fn limited(&self) -> bool {
         self.limit_archives.is_some() || self.limit_runs.is_some() || self.skip_loose
+    }
+}
+
+/// The processor a client build is for. WoW's product config names both
+/// (`tags_64bit`, `tags_arm64`) and an ARM binary, `Wow-ARM64.exe`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cpu {
+    X86_64,
+    Arm64,
+}
+
+impl Cpu {
+    pub fn host() -> Self {
+        match cfg!(target_arch = "aarch64") {
+            true => Self::Arm64,
+            false => Self::X86_64,
+        }
+    }
+
+    /// The install and download manifests' architecture tag.
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::X86_64 => "x86_64",
+            Self::Arm64 => "arm64",
+        }
     }
 }
 
@@ -270,6 +299,9 @@ pub enum InstallError {
 
     #[error("the build config has no {0} manifest")]
     MissingManifest(&'static str),
+
+    #[error("{code} has no {cpu} client")]
+    NoClientFor { code: String, cpu: &'static str },
 
     /// Downloaded and extracted; only the bookkeeping failed. Its own variant,
     /// so the message says which file in the install root it was.
