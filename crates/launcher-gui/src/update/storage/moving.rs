@@ -58,19 +58,38 @@ impl Lightforge {
                 let Some(moving) = self.moving.as_mut() else {
                     return Ok(Task::none());
                 };
-                if let Err(e) = result {
-                    self.moving = None;
-                    self.error = Some(e.into());
-                    return Ok(self.pump());
-                }
+                let moved = match result {
+                    Ok(moved) => moved,
+                    Err(e) => {
+                        self.moving = None;
+                        self.error = Some(e.into());
+                        return Ok(self.pump());
+                    }
+                };
                 // Recorded before the old copy goes: a crash after this leaves
                 // the game in two places, never in none.
                 moving.releasing = true;
-                let (to, from) = (moving.to.id.clone(), moving.from.clone());
+                let (to, from) = (moving.to.clone(), moving.from.clone());
                 if let Some(product) = self.config.product_mut(&code) {
-                    product.profile.library = Some(to);
+                    product.profile.library = Some(to.id.clone());
                 }
-                self.save_config();
+                // A config still naming the old library would find it empty on
+                // the next start, and offer the new copy as a leftover.
+                if !self.save_config() && !matches!(moved, lightforge_core::migrate::Moved::Renamed) {
+                    if let Some(product) = self.config.product_mut(&code) {
+                        product.profile.library = Some(from.id.clone());
+                    }
+                    self.moving = None;
+                    let why = self.error.take().map(|e| e.message).unwrap_or_default();
+                    self.error = Some(
+                        format!("copied to {}, but the config could not be saved, so the game stays on {}: {why}", to.label, from.label)
+                            .into(),
+                    );
+                    if let Some(settings) = self.game_settings.as_mut().filter(|s| s.code == code) {
+                        settings.leftovers = lightforge_core::migrate::leftovers(&self.layout, &code);
+                    }
+                    return Ok(self.pump());
+                }
                 self.rebuild_layout();
                 Task::perform(
                     tasks::move_release(self.http.clone(), self.layout.clone(), code.clone(), from),

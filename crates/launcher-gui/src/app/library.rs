@@ -279,18 +279,25 @@ impl Lightforge {
     }
 
     /// Persist the config, surfacing a write failure instead of swallowing it.
-    pub(crate) fn save_config(&mut self) {
+    /// False when the file on disk was left as it was.
+    pub(crate) fn save_config(&mut self) -> bool {
         // Never over a file that did not load: it is the user's to fix.
         if self.config_error.is_some() {
-            return;
+            return false;
         }
         let Some(dirs) = self.dirs.as_ref() else {
             self.error = Some("no config directory available".into());
-            return;
+            return false;
         };
         match self.config.save(&dirs.config_file()) {
-            Ok(()) => self.env_unsaved = false,
-            Err(e) => self.error = Some(Problem::of(&e)),
+            Ok(()) => {
+                self.env_unsaved = false;
+                true
+            }
+            Err(e) => {
+                self.error = Some(Problem::of(&e));
+                false
+            }
         }
     }
 }

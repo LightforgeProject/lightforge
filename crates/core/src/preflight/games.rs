@@ -60,6 +60,38 @@ pub fn games_running(layout: &Layout) -> Vec<GameProcess> {
     collect_games(&system, layout)
 }
 
+/// Block until `pid` exits, on a pidfd: polling [`games_running`] instead
+/// cost a whole process scan (30-40 ms of CPU) every 150 ms of a session.
+/// An error means no pidfd could be had, and the caller has to poll.
+pub fn wait_for_exit(pid: u32) -> std::io::Result<()> {
+    use std::io;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    // SAFETY: pidfd_open(2) takes a pid and flags, returning a new fd or -1.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, libc::c_long::from(pid), 0) };
+    if fd < 0 {
+        let e = io::Error::last_os_error();
+        return match e.raw_os_error() {
+            Some(libc::ESRCH) => Ok(()),
+            _ => Err(e),
+        };
+    }
+    #[allow(clippy::cast_possible_truncation, reason = "a file descriptor fits a c_int")]
+    // SAFETY: a fresh descriptor nothing else owns.
+    let pidfd = unsafe { OwnedFd::from_raw_fd(fd as libc::c_int) };
+    let mut poll = libc::pollfd { fd: pidfd.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+    loop {
+        // SAFETY: one valid pollfd, no timeout. Readable once the process is gone.
+        if unsafe { libc::poll(&mut poll, 1, -1) } >= 0 {
+            return Ok(());
+        }
+        let e = io::Error::last_os_error();
+        if e.kind() != io::ErrorKind::Interrupted {
+            return Err(e);
+        }
+    }
+}
+
 fn collect_games(system: &System, layout: &Layout) -> Vec<GameProcess> {
     let prefixes = owned_prefixes(layout);
 

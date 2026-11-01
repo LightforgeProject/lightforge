@@ -414,3 +414,20 @@ fn the_no_downloads_guard_never_claims_a_pause() {
     assert!(!guard.pause(&ProductCode::Retail).unwrap());
     assert!(!guard.resume(&ProductCode::Retail).unwrap());
 }
+
+#[test]
+fn waiting_on_a_game_returns_when_it_exits() {
+    let mut game = std::process::Command::new("sleep").arg("0.2").spawn().unwrap();
+    let started = std::time::Instant::now();
+    wait_for_exit(game.id()).unwrap();
+    assert!(started.elapsed() >= std::time::Duration::from_millis(150));
+    game.wait().unwrap();
+}
+
+#[test]
+fn waiting_on_a_game_already_gone_returns_at_once() {
+    let mut game = std::process::Command::new("true").spawn().unwrap();
+    let pid = game.id();
+    game.wait().unwrap();
+    wait_for_exit(pid).unwrap();
+}

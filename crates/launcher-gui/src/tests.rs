@@ -1565,8 +1565,10 @@ fn moving(code: ProductCode) -> Moving {
 /// between the two leaves the game in two places, never in none.
 #[test]
 fn a_committed_copy_points_the_config_at_the_new_library_first() {
+    let dir = std::env::temp_dir().join(format!("lightforge-moved-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
     let (mut app, _) = Lightforge::new();
-    app.dirs = None;
+    app.dirs = Some(AppDirs::with_dirs(dir.join("config"), dir.join("cache"), dir.join("data")));
     app.track_selected();
     let code = app.selected.code.clone();
     let move_ = moving(code.clone());
@@ -1577,6 +1579,27 @@ fn a_committed_copy_points_the_config_at_the_new_library_first() {
 
     assert_eq!(app.config.product(&code).unwrap().profile.library.as_deref(), Some(to.as_str()));
     assert!(app.moving.as_ref().unwrap().releasing);
+    let saved = Config::load_or_default(&dir.join("config/config.toml")).unwrap();
+    assert_eq!(saved.product(&code).unwrap().profile.library.as_deref(), Some(to.as_str()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Releasing now would delete the copy the config on disk still points at.
+#[test]
+fn a_copy_whose_config_cannot_be_saved_keeps_the_old_one() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.track_selected();
+    let code = app.selected.code.clone();
+    let move_ = moving(code.clone());
+    let from = move_.from.id.clone();
+    app.moving = Some(move_);
+
+    let _ = app.update(Message::GameCopied(code.clone(), Ok(lightforge_core::migrate::Moved::Copied { files: 1, bytes: 1 })));
+
+    assert_eq!(app.config.product(&code).unwrap().profile.library.as_deref(), Some(from.as_str()));
+    assert!(app.moving.is_none());
+    assert!(app.error.as_ref().unwrap().message.contains("stays on A"));
 }
 
 #[test]
