@@ -76,8 +76,9 @@ impl Lightforge {
         }
     }
 
-    /// Put the splash away and show the launcher: the one way out. Nothing is
-    /// resized (see [`main`]); the frame goes on and clicks come back.
+    /// Put the splash away and show the launcher: the one way out. Resized
+    /// only when the screen cannot hold it (see [`fit`]); the frame goes on
+    /// and clicks come back.
     pub(crate) fn finish_splash(&mut self) -> Task<Message> {
         self.splash = None;
         trace::mark("splash done, showing the launcher");
@@ -91,10 +92,7 @@ impl Lightforge {
             };
             frame.chain(iced::window::disable_mouse_passthrough(id))
         });
-        let frame = match console {
-            true => frame.chain(self.window_mode()),
-            false => frame,
-        };
+        let frame = frame.chain(self.window_mode());
         // Nobody navigated to the opening screen, so `arrived` runs here.
         Task::batch([frame, self.arrived()])
     }

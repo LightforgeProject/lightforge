@@ -114,6 +114,13 @@ pub(crate) enum Message {
     /// The window's height in points, and the [`Lightforge::ui_scale_gen`]
     /// it was asked under.
     WindowHeight(u64, f32),
+    /// The monitor's size at the scale in effect, and where the window is
+    /// (X11 only), for [`Lightforge::fit_window`].
+    WindowFit {
+        id: iced::window::Id,
+        monitor: Option<iced::Size>,
+        position: Option<iced::Point>,
+    },
     /// An arrow key: move the selection ring; see [`focus`].
     FocusStep(focus::Step),
     /// Enter: press the control with the ring on it.
@@ -320,6 +327,8 @@ pub(crate) enum Message {
     GameLanguage(String),
     /// Whether the launcher gets out of the way once a game is up.
     MinimizeOnLaunch(bool),
+    /// An interface size was picked in Settings › General.
+    InterfaceSize(InterfaceSizeChoice),
     /// Whether a Battle.net hand-off puts the client in the tray.
     BattleNetMinimized(bool),
     CloseBattleNetOnPlay(bool),
@@ -609,6 +618,16 @@ pub(crate) struct ChannelChoice(pub(crate) Channel);
 impl std::fmt::Display for ChannelChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.0.label())
+    }
+}
+
+/// An interface size in percent, as a `pick_list` option.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InterfaceSizeChoice(pub(crate) u16);
+
+impl std::fmt::Display for InterfaceSizeChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}%", self.0)
     }
 }
 

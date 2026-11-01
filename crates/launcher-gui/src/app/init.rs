@@ -35,6 +35,13 @@ impl Lightforge {
             layout.libraries().all().len(),
         );
         let bnet_icon = layout.battle_net_icon().and_then(|path| art::try_mark(&path));
+        // Opened at the chosen size before the screen is known; `fit_window`
+        // shrinks it once it is, if it has to.
+        let ui_scale = match fit::owned() || config.steamos_use == Some(SteamOsUse::Console) {
+            true => 1.0,
+            false => f32::from(config.interface_size) / 100.0,
+        };
+        fit::open_at(ui_scale);
 
         let choices: Vec<Choice> = config
             .products
@@ -132,7 +139,7 @@ impl Lightforge {
             wizard: None,
             patch_notes: None,
             splash: None,
-            ui_scale: 1.0,
+            ui_scale,
             ui_scale_gen: 0,
             setup_rx: None,
             setup_sample: provision::Progress::default(),

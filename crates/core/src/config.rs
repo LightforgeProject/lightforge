@@ -120,6 +120,10 @@ pub struct Config {
     /// How many `WTF/Account` backups each game keeps.
     #[serde(default = "default_backup_keep")]
     pub backup_keep: usize,
+    /// The launcher's size in percent of what the desktop's scaling gives it.
+    /// The window grows with it, never past what fits the screen.
+    #[serde(default = "default_interface_size")]
+    pub interface_size: u16,
     /// Every product Lightforge manages, official and custom alike.
     pub products: Vec<Product>,
 }
@@ -146,6 +150,10 @@ pub const DEFAULT_LOCALE: &str = "enUS";
 
 fn default_backup_keep() -> usize {
     crate::backup::DEFAULT_KEEP
+}
+
+fn default_interface_size() -> u16 {
+    100
 }
 
 fn default_locale() -> String {
@@ -182,6 +190,7 @@ impl Default for Config {
             check_for_updates: true,
             update_seen: None,
             backup_keep: default_backup_keep(),
+            interface_size: default_interface_size(),
             products: Vec::new(),
         }
     }

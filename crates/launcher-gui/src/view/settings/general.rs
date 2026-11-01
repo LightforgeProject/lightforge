@@ -44,6 +44,41 @@ impl Lightforge {
         ])
     }
 
+    /// The interface size, for a desktop window only: fullscreen has nothing
+    /// to grow, and gamescope scales by the screen's height.
+    fn interface_size_row(&self) -> Option<Element<'_, Message>> {
+        if self.console() || fit::owned() {
+            return None;
+        }
+        let chosen = self.config.interface_size;
+        #[allow(clippy::cast_possible_truncation, reason = "0.5 to 2, see fit::desktop_scale")]
+        let shown = (self.ui_scale * 100.0).round() as u16;
+        let about = match shown < chosen {
+            true => format!("Limited to {shown}% on this screen."),
+            false => "Text, controls and the window, on top of your desktop's scaling.".to_owned(),
+        };
+        let choices: Vec<InterfaceSizeChoice> =
+            fit::INTERFACE_SIZES.into_iter().map(InterfaceSizeChoice).collect();
+        Some(setting(
+            "Interface size",
+            about,
+            self.hint(
+                "The window grows with it, up to nine tenths of the screen, and shrinks \
+                 below 100% when it would not fit at all. On Wayland it grows from its \
+                 top-left corner: a window there cannot move itself.",
+            ),
+            self.picker(
+                "interface size".to_owned(),
+                choices,
+                Some(InterfaceSizeChoice(chosen)),
+                "",
+                Message::InterfaceSize,
+                Length::Fixed(260.0),
+                theme::BODY,
+            ),
+        ))
+    }
+
     /// What the launcher does around a launch: the settings that are about
     /// the app itself, not about a product, a transfer or a prefix.
     pub(crate) fn general_section(&self) -> Element<'_, Message> {
@@ -101,7 +136,7 @@ impl Lightforge {
                     switch("update check", self.config.check_for_updates, Message::CheckLauncherUpdates),
                 ),
             ]),
-            setting_group([
+            setting_group(self.interface_size_row().into_iter().chain([
                 setting(
                     "Controller and touch",
                     "Fullscreen, larger controls and button hints, for a Steam Deck or a TV.",
@@ -114,7 +149,7 @@ impl Lightforge {
                     self.hint("Setup adds it on a Steam Deck."),
                     secondary("Add to Steam", Message::AddToSteam).enabled(true),
                 ),
-            ]),
+            ])),
         ]
         .extend(shortcut)
         .spacing(theme::MD)
