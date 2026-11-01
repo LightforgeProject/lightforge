@@ -14,6 +14,8 @@ use crate::net::Http;
 /// Terminals the common desktops ship, and what each needs before the
 /// command it runs.
 const TERMINALS: &[(&str, &[&str])] = &[
+    // Debian's pick of whatever is installed.
+    ("x-terminal-emulator", &["-e"]),
     ("konsole", &["-e"]),
     ("gnome-terminal", &["--"]),
     ("ptyxis", &["--"]),
@@ -25,6 +27,8 @@ const TERMINALS: &[(&str, &[&str])] = &[
     ("foot", &[]),
     ("wezterm", &["start", "--"]),
     ("ghostty", &["-e"]),
+    // Not tilix or lxterminal: their `-e` takes the command as one string.
+    ("terminator", &["-x"]),
     ("xterm", &["-e"]),
 ];
 

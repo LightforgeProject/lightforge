@@ -242,6 +242,7 @@ fn the_tested_build_is_fetched_only_as_a_step_forward() {
     assert!(!wants_tested(&have(&["GE-Proton11-5", TESTED]), None, None), "already there");
     assert!(!wants_tested(&[], None, None), "setup installs the first build");
     assert!(!wants_tested(&have(&["GE-Proton11-11"]), None, None), "a newer build is kept");
+    assert!(wants_tested(&have(&["GE-Proton11-9"]), None, Some("GE-Proton11-5")), "a known-bad one is not");
     assert!(!wants_tested(&old, None, Some("GE-Proton11-9")), "would downgrade the prefix");
     let valve = [build("proton-11.0-2-x86_64", None, ProtonFlavor::Valve)];
     assert!(!wants_tested(&valve, None, None), "nothing supported installed");
@@ -337,8 +338,24 @@ fn discovery_lists_builds_in_numeric_order() {
         installed(&dir, version);
     }
     let versions: Vec<String> =
-        discover_all(None, &dir).into_iter().map(|b| b.version).collect();
+        discover_with(None, &dir, &[]).into_iter().map(|b| b.version).collect();
     assert_eq!(versions, ["GE-Proton9-20", "GE-Proton10-34", "GE-Proton11-7"]);
+}
+
+/// Where CachyOS's `proton-cachyos` and the AUR's GE package install, with
+/// no Steam at all.
+#[test]
+fn a_system_wide_build_is_found_and_lightforge_s_own_copy_wins() {
+    let own = scratch("discovery-own");
+    let system = scratch("discovery-system");
+    installed(&own, "GE-Proton11-7");
+    installed(&system, "GE-Proton11-7");
+    installed(&system, "GE-Proton10-34");
+
+    let found = discover_with(None, &own, &[system]);
+
+    let seen: Vec<(&str, ProtonSource)> = found.iter().map(|b| (b.version.as_str(), b.source)).collect();
+    assert_eq!(seen, [("GE-Proton10-34", ProtonSource::SystemCompatTools), ("GE-Proton11-7", ProtonSource::Managed)]);
 }
 
 fn release(tag: &str, prerelease: bool) -> UpstreamRelease {

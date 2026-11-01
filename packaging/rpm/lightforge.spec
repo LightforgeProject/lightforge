@@ -3,7 +3,7 @@
 # The one line a release edits is `upstream_version`: `Version` is derived from
 # it, because rpm orders `1.0.0-beta.5` after `1.0.0` and `1.0.0~beta.5`
 # before it. `make check-spec` fails while the two disagree with Cargo.toml.
-%global upstream_version 1.0.0-beta.8
+%global upstream_version 1.0.0-beta.9
 
 # Fedora's CFLAGS carry `-flto=auto`, and `ring` and `zstd-sys` compile C of
 # their own: the objects come out as GCC bitcode and the link fails with a
@@ -24,8 +24,8 @@ License:        GPL-3.0-or-later
 URL:            https://github.com/LightforgeProject/lightforge
 Source0:        %{url}/archive/v%{upstream_version}/%{name}-%{upstream_version}.tar.gz
 
-# Proton is x86_64 only, so a build for anything else would install a
-# launcher with nothing to launch.
+# Releases are x86_64 builds. aarch64 works from source but is not tested
+# on hardware yet, so COPR does not build it.
 ExclusiveArch:  x86_64
 
 # Crates are fetched from crates.io during %%build, against the tagged
@@ -41,6 +41,8 @@ BuildRequires:  libappstream-glib
 # Vulkan, Wayland and X11 are opened at run time rather than linked, so the
 # automatic requires see only libc, libgcc_s and libudev.
 Requires:       fontconfig
+# Proton's launcher is a Python script.
+Requires:       python3
 Requires:       hicolor-icon-theme
 # The Battle.net installer is the one 32-bit binary in the whole flow.
 Suggests:       wine.i686
@@ -93,6 +95,9 @@ cargo test --release --locked --workspace
 %{_datadir}/icons/hicolor/*/apps/pro.tuxcore.Lightforge.*
 
 %changelog
+* Sun Nov 01 2026 Kenny <onlyusemycontroler@gmail.com> - 1.0.0~beta.9-1
+- Lightforge 1.0.0-beta.9; release notes are in RELEASES.md
+
 * Thu Oct 29 2026 Kenny <onlyusemycontroler@gmail.com> - 1.0.0~beta.8-1
 - Lightforge 1.0.0-beta.8; release notes are in RELEASES.md
 

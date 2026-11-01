@@ -76,7 +76,8 @@ impl Lightforge {
         let outcome = (|| {
             let steam = lightforge_core::steam::SteamRoot::discover()
                 .ok_or_else(|| chain(&steam_shortcut::ShortcutError::NoSteam))?;
-            let exe = std::env::current_exe().map_err(|e| format!("where Lightforge is: {e}"))?;
+            let exe = lightforge_core::upgrade::lasting_exe()
+                .map_err(|e| format!("where Lightforge is: {e}"))?;
             steam_shortcut::add(&steam, "Lightforge", &exe, &STEAM_ART).map_err(|e| chain(&e))
         })();
         self.steam_shortcut = Some(outcome.map(|added| match added.updated {
@@ -91,13 +92,29 @@ impl Lightforge {
     /// Fullscreen on a console, a window anywhere else.
     ///
     /// 1280x820 does not fit a 1280x800 screen. The minimum size goes too.
-    pub(crate) fn window_mode(&self) -> Task<Message> {
-        let console = self.console();
-        iced::window::oldest().and_then(move |id| match console {
-            true => iced::window::set_min_size(id, None)
-                .chain(iced::window::set_mode(id, iced::window::Mode::Fullscreen)),
-            false => iced::window::set_mode(id, iced::window::Mode::Windowed)
-                .chain(iced::window::set_min_size(id, Some(WINDOW_MIN))),
+    pub(crate) fn window_mode(&mut self) -> Task<Message> {
+        if self.console() {
+            // Fullscreen has no window to grow; gamescope keeps its own scale.
+            if !fit::owned() {
+                self.ui_scale = 1.0;
+            }
+            return iced::window::oldest().and_then(|id| {
+                iced::window::set_min_size(id, None)
+                    .chain(iced::window::set_mode(id, iced::window::Mode::Fullscreen))
+            });
+        }
+        iced::window::oldest()
+            .and_then(|id| iced::window::set_mode(id, iced::window::Mode::Windowed))
+            .chain(self.fit_window())
+    }
+
+    /// Measure the screen, then give the window the interface size it
+    /// allows; see [`Message::WindowFit`].
+    pub(crate) fn fit_window(&self) -> Task<Message> {
+        iced::window::oldest().and_then(|id| {
+            iced::window::monitor_size(id).then(move |monitor| {
+                iced::window::position(id).map(move |position| Message::WindowFit { id, monitor, position })
+            })
         })
     }
 

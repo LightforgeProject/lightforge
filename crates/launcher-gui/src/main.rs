@@ -161,8 +161,8 @@ fn main() -> iced::Result {
     // Annotated: without the type the closure is inferred for one
     // lifetime, and 0.14's `theme` wants it for any.
     .theme(|_state: &Lightforge| theme::base())
-    // 1 everywhere but gamescope, where winit's own guess is pinned off and
-    // this is the whole scale; see [`fit`].
+    // The interface size on a desktop; under gamescope, where winit's own
+    // guess is pinned off, the whole scale. See [`fit`].
     .scale_factor(|state: &Lightforge| state.ui_scale)
     // `transparent: true` only adds alpha; iced still clears to the theme's
     // background unless told otherwise here.
@@ -177,10 +177,12 @@ fn main() -> iced::Result {
     // position itself, so a window grown later stays off-centre.
     .window(iced::window::Settings {
         size: WINDOW,
-        min_size: Some(WINDOW_MIN),
+        // Set once the splash is gone (`window_mode`): given here it would
+        // not follow the app's scale, and would hold a smaller one open.
+        min_size: None,
         decorations: false,
         transparent: true,
-        position: iced::window::Position::Centered,
+        position: iced::window::Position::SpecificWith(fit::centred),
         // The Wayland `app_id` / X11 `WM_CLASS`: how the compositor finds the
         // desktop entry, and so the icon.
         platform_specific: iced::window::settings::PlatformSpecific {
@@ -325,6 +327,7 @@ struct Lightforge {
     /// A cancelled transfer still checkpointing; nothing else may write the
     /// store until it reports back.
     winding_down: Option<ProductCode>,
+    awake: Awake,
 
     downloads: SharedDownloads,
     busy: bool,
@@ -351,7 +354,8 @@ struct Lightforge {
     /// The small window the app opens in. `None` once it has grown into the
     /// launcher, which happens exactly once per run.
     splash: Option<Splash>,
-    /// The UI scale under gamescope, from the window's height; 1 elsewhere.
+    /// The UI scale: under gamescope from the window's height, in a desktop
+    /// window the interface size as far as the screen allows, else 1.
     ui_scale: f32,
     /// Bumped on every change to `ui_scale`, so a height read under the old
     /// one is recognised and asked for again.
@@ -560,7 +564,7 @@ impl Lightforge {
     fn step(&mut self, message: Message) -> Task<Message> {
         let task = self.handle(message);
         self.persist_queue();
-        task
+        Task::batch([task, self.keep_awake()])
     }
 
     fn subscription(&self) -> Subscription<Message> {

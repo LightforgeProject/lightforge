@@ -320,7 +320,7 @@ async fn install_battle_net(
 pub fn describe_source(build: &ProtonRelease) -> &'static str {
     match build.source {
         proton::ProtonSource::Managed => "managed by Lightforge",
-        proton::ProtonSource::SystemCompatTools => "Steam compatibilitytools.d",
+        proton::ProtonSource::SystemCompatTools => "in compatibilitytools.d",
         proton::ProtonSource::SteamApp => "installed as a Steam app",
     }
 }

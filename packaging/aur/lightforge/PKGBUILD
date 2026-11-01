@@ -3,12 +3,12 @@
 # Builds from the tagged source. For the prebuilt binaries, see `lightforge-bin`.
 
 pkgname=lightforge
-pkgver=1.0.0beta.8
+pkgver=1.0.0beta.9
 pkgrel=1
 # The upstream tag. AUR versions may not contain a hyphen, so `1.0.0-beta.5`
 # becomes `1.0.0beta.5` here — which `vercmp` orders *before* `1.0.0`, so the
 # eventual stable release upgrades cleanly and needs no `epoch`.
-_tag=v1.0.0-beta.8
+_tag=v1.0.0-beta.9
 pkgdesc='Install, update and play World of Warcraft on Linux, and a home for all your other Battle.net games'
 arch=('x86_64')
 url='https://github.com/LightforgeProject/lightforge'
@@ -16,10 +16,12 @@ license=('GPL-3.0-or-later')
 # The launcher opens Vulkan, Wayland and X11 at run time rather than linking
 # them, so there is nothing to depend on but libc and libudev (gamepads) — and
 # it falls back to software rendering by itself when there is no GPU it can use.
-depends=('glibc' 'gcc-libs' 'fontconfig' 'systemd-libs')
+depends=('glibc' 'gcc-libs' 'fontconfig' 'systemd-libs' 'python')
 makedepends=('cargo')
 optdepends=(
-  'wine: 32-bit runtime for the Battle.net installer (needs multilib)'
+  'lib32-gnutls: 32-bit runtime for Battle.net (needs multilib)'
+  'lib32-freetype2: 32-bit runtime for Battle.net (needs multilib)'
+  'lib32-vulkan-icd-loader: 32-bit runtime for Battle.net (needs multilib)'
   'mangohud: the in-game overlay Lightforge can enable per game'
 )
 conflicts=('lightforge-bin')
@@ -30,10 +32,9 @@ conflicts=('lightforge-bin')
 options=('!lto')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
 # Of GitHub's generated source archive for the tag, which is not
-# byte-identical to anything produced locally. Regenerate with `updpkgsums`.
-# `SKIP` until the tag exists: GitHub generates the source archive, so run
-# `updpkgsums` once v1.0.0-beta.8 is pushed, before uploading.
-sha256sums=('b050f3e199907280ee928645e80d726ab2b0a71c99801650421a975df0c6271f')
+# byte-identical to anything produced locally. Regenerate with `updpkgsums`
+# once the tag is pushed, before uploading.
+sha256sums=('SKIP')
 _srcdir="$pkgname-${_tag#v}"
 
 prepare() {

@@ -201,7 +201,8 @@ impl Lightforge {
                             self.queue.remove(at);
                         }
                         note(self, "pre-downloaded, ready for release day".to_owned());
-                        Task::batch([self.pump(), self.reload_if_showing(&code)])
+                        let told = self.notify_unseen(&code, "is pre-downloaded", "Ready for release day".to_owned());
+                        Task::batch([self.pump(), self.reload_if_showing(&code), told])
                     }
                     Ok(done) if done.complete => {
                         if let Some(at) = entry {
@@ -225,14 +226,13 @@ impl Lightforge {
                                 self.error = Some(format!("{}: {e}", file.display()).into());
                             }
                         }
-                        note(
-                            self,
-                            match done.version {
-                                Some(v) => format!("installed {v}"),
-                                None => format!("stored {} files", done.files),
-                            },
-                        );
-                        Task::batch([self.pump(), self.reload_if_showing(&code)])
+                        let installed = match done.version {
+                            Some(v) => format!("installed {v}"),
+                            None => format!("stored {} files", done.files),
+                        };
+                        let told = self.notify_unseen(&code, "is ready to play", installed.clone());
+                        note(self, installed);
+                        Task::batch([self.pump(), self.reload_if_showing(&code), told])
                     }
                     Ok(done) if done.cancelled => {
                         // Paused, so it keeps its place with what it reached.
@@ -257,19 +257,35 @@ impl Lightforge {
                             false => format!(": {}", done.reasons.join("; ")),
                         };
                         tracing::warn!("{} stopped without finishing{why}", code.as_str());
+                        let told = self.notify_unseen(&code, "stopped downloading", done.reasons.join("; "));
                         note(self, format!("stopped{why} — run again to retry"));
-                        Task::batch([self.pump(), self.reload_if_showing(&code)])
+                        Task::batch([self.pump(), self.reload_if_showing(&code), told])
                     }
                     Err(e) => {
                         if let Some(at) = entry {
                             self.queue.remove(at);
                         }
-                        if showing {
-                            self.error = Some(e);
-                        }
-                        self.pump()
+                        let told = self.notify_unseen(&code, "could not be downloaded", e.message.clone());
+                        // Its row is gone with it, so this is the only trace.
+                        self.error = Some(match showing {
+                            true => e,
+                            false => Problem { message: format!("{}: {}", self.label_of(&code), e.message), ..e },
+                        });
+                        Task::batch([self.pump(), told])
                     }
                 }
+            }
+            Message::KeptAwake(result) => {
+                self.awake = match result {
+                    // Finished while logind answered: dropping it lets go.
+                    Ok(_) if self.store_writer().is_none() => Awake::Off,
+                    Ok(lock) => Awake::Held(lock),
+                    Err(e) => {
+                        tracing::warn!("the machine may sleep during downloads: {e}");
+                        Awake::Unavailable
+                    }
+                };
+                Task::none()
             }
             other => return Err(other),
         })

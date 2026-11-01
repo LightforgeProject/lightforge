@@ -333,18 +333,25 @@ pub(crate) async fn cdn_fetch(code: ProductCode, region: String, hash: Option<St
 
 // One parameter per command-line flag.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn plan(dest: PathBuf, code: ProductCode, region: String, locale: String, flavor: String, explain: bool, optional: Vec<String>, limit_archives: Option<usize>, concurrency: usize) -> Result<()> {
+pub(crate) async fn plan(dest: PathBuf, code: ProductCode, region: String, locale: String, flavor: String, cpu: Option<String>, explain: bool, optional: Vec<String>, limit_archives: Option<usize>, concurrency: usize) -> Result<()> {
     use lightforge_core::net::Http;
     use lightforge_core::tact::explain as tact_explain;
     use lightforge_core::tact::storage::Storage;
-    use lightforge_core::tact::install::{self, Event, Options as InstallOptions};
+    use lightforge_core::tact::install::{self, Cpu, Event, Options as InstallOptions};
     use lightforge_core::tact::version::Region;
 
     let region: Region = region.parse().context("parsing --region")?;
+    let cpu = match cpu.as_deref() {
+        None => Cpu::host(),
+        Some("x86_64") => Cpu::X86_64,
+        Some("arm64" | "aarch64") => Cpu::Arm64,
+        Some(other) => anyhow::bail!("unknown --cpu `{other}` (x86_64 or arm64)"),
+    };
     let gib = |b: u64| b as f64 / 1024f64.powi(3);
 
     let options = InstallOptions {
         region,
+        cpu,
         locale,
         flavor,
         concurrency,
@@ -373,6 +380,17 @@ pub(crate) async fn plan(dest: PathBuf, code: ProductCode, region: String, local
     let prepared =
         install::prepare(&http, &dest, &code, &options, &mut on_event).await?;
 
+    match prepared.executable.as_deref() {
+        // The selected install files are what lands in the flavor folder.
+        Some(name) => {
+            let selected = prepared.install.select(&prepared.tags).iter().any(|e| e.path.eq_ignore_ascii_case(name));
+            println!("executable      {name} ({})", match selected {
+                true => "in the install files",
+                false => "NOT in the install files",
+            });
+        }
+        None => println!("executable      not named by the product config"),
+    }
     println!(
         "optional        {}",
         match prepared.optional.is_empty() {

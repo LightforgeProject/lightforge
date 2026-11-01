@@ -48,6 +48,7 @@ need() {
 refresh_menu() {
     command -v update-desktop-database >/dev/null && update-desktop-database -q "$APPS" || true
     command -v kbuildsycoca6 >/dev/null && kbuildsycoca6 >/dev/null 2>&1 || true
+    command -v kbuildsycoca5 >/dev/null && kbuildsycoca5 >/dev/null 2>&1 || true
 }
 
 uninstall() {
@@ -59,11 +60,11 @@ uninstall() {
     pause 30
 }
 
-# The newest release's tarball, prereleases included: during the beta every
-# release is one, and /releases/latest skips them.
+# The newest release's tarball for this processor, prereleases included:
+# during the beta every release is one, and /releases/latest skips them.
 latest_tarball_url() {
     curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=5" |
-        grep -o '"browser_download_url": *"[^"]*-x86_64-linux\.tar\.gz"' |
+        grep -o "\"browser_download_url\": *\"[^\"]*-$(uname -m)-linux\\.tar\\.gz\"" |
         head -n 1 |
         sed 's/.*"\(https[^"]*\)"$/\1/'
 }
@@ -84,6 +85,10 @@ main() {
         tarball=$1
         say "Installing from $tarball"
     else
+        case $(uname -m) in
+            x86_64 | aarch64) ;;
+            *) fail "there is no Lightforge release for $(uname -m); see INSTALL.md to build from source" ;;
+        esac
         say "Looking up the newest Lightforge release"
         url=$(latest_tarball_url) || true
         [ -n "${url:-}" ] || fail "could not reach GitHub to find the newest release"

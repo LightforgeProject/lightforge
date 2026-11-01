@@ -1,0 +1,14 @@
+#!/bin/sh
+# Starts the launcher; `cli` as the first argument runs the command-line tool
+# instead, e.g. `./Lightforge-x86_64.AppImage cli doctor`.
+#
+# Nothing is put on LD_LIBRARY_PATH: the binaries need only libc, libm and
+# libgcc_s from the host, and anything set here would reach Proton, Wine and
+# Battle.net too.
+
+here=${APPDIR:-$(dirname "$(readlink -f "$0")")}
+if [ "${1:-}" = cli ]; then
+    shift
+    exec "$here/usr/bin/lightforge" "$@"
+fi
+exec "$here/usr/bin/lightforge-gui" "$@"

@@ -52,11 +52,11 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use wire::*;
 
-/// Agent's tag expression for a region, locale and account.
+/// Agent's tag expression for a processor, region, locale and account.
 ///
 /// Both halves are identical but for the trailing `speech?` / `text?`.
-pub fn agent_tags(region: &str, locale: &str, account: &str, geo: &str) -> String {
-    let mut common = format!("Windows x86_64 {}?", region.to_uppercase());
+pub fn agent_tags(cpu: &str, region: &str, locale: &str, account: &str, geo: &str) -> String {
+    let mut common = format!("Windows {cpu} {}?", region.to_uppercase());
     if !account.is_empty() {
         common.push_str(&format!(" acct-{account}?"));
     }
@@ -65,6 +65,16 @@ pub fn agent_tags(region: &str, locale: &str, account: &str, geo: &str) -> Strin
     }
     common.push_str(&format!(" {locale}"));
     format!("{common} speech?:{common} text?")
+}
+
+/// The processor a tag expression names: `arm64` for Blizzard's ARM client,
+/// else `x86_64`.
+fn cpu_from_tags(tags: &str) -> &'static str {
+    let arm = crate::tact::install::Cpu::Arm64.tag();
+    match tags.split([' ', ':']).any(|tag| tag.trim_end_matches('?') == arm) {
+        true => arm,
+        false => crate::tact::install::Cpu::X86_64.tag(),
+    }
 }
 
 /// The locale named in a tag expression, e.g. `enUS` from

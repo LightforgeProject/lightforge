@@ -246,6 +246,8 @@ pub(crate) struct GameSettings {
     pub(crate) leftovers: Vec<lightforge_core::library::Library>,
     /// The leftover whose Remove was pressed, by library id.
     pub(crate) leftover_confirm: Option<String>,
+    /// The game's `Cache` folder was cleared since the card opened.
+    pub(crate) cache_cleared: bool,
 }
 
 /// The question asked when the high-resolution textures are switched off.

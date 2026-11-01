@@ -783,6 +783,32 @@ fn the_release_notes_open_once_after_an_update_and_never_uninvited() {
 }
 
 #[test]
+fn a_failed_download_of_another_game_still_says_so() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.queue.clear();
+    let other = match app.selected.code {
+        ProductCode::Retail => ProductCode::ClassicEra,
+        _ => ProductCode::Retail,
+    };
+    app.queue.push(Download {
+        code: other.clone(),
+        label: String::new(),
+        stage: Stage::Running { rx: tokio::sync::watch::channel(TransferState::default()).1, cancel: Cancel::new() },
+        sample: TransferState::default(),
+        rate: Rate::default(),
+        job: Job::default(),
+        pre_download: false,
+    });
+
+    let _ = app.update(Message::Downloaded(other.clone(), Err("connection reset".into())));
+
+    let shown = &app.error.as_ref().expect("the failure is shown").message;
+    assert_eq!(*shown, format!("{}: connection reset", app.label_of(&other)));
+    assert!(app.queue.is_empty());
+}
+
+#[test]
 fn a_resume_during_the_wind_down_is_not_swallowed() {
     let (mut app, _) = Lightforge::new();
     // Nothing read from or written to the real queue file.
@@ -1190,6 +1216,7 @@ fn the_update_card_draws_for_every_route_and_stage() {
         Origin::Deb,
         Origin::Copr { atomic: true },
         Origin::Checkout { repo: "/home/u/lightforge".into() },
+        Origin::Nix,
         Origin::Unknown,
     ];
     let stages = [
@@ -1564,8 +1591,10 @@ fn moving(code: ProductCode) -> Moving {
 /// between the two leaves the game in two places, never in none.
 #[test]
 fn a_committed_copy_points_the_config_at_the_new_library_first() {
+    let dir = std::env::temp_dir().join(format!("lightforge-moved-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
     let (mut app, _) = Lightforge::new();
-    app.dirs = None;
+    app.dirs = Some(AppDirs::with_dirs(dir.join("config"), dir.join("cache"), dir.join("data")));
     app.track_selected();
     let code = app.selected.code.clone();
     let move_ = moving(code.clone());
@@ -1576,6 +1605,27 @@ fn a_committed_copy_points_the_config_at_the_new_library_first() {
 
     assert_eq!(app.config.product(&code).unwrap().profile.library.as_deref(), Some(to.as_str()));
     assert!(app.moving.as_ref().unwrap().releasing);
+    let saved = Config::load_or_default(&dir.join("config/config.toml")).unwrap();
+    assert_eq!(saved.product(&code).unwrap().profile.library.as_deref(), Some(to.as_str()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Releasing now would delete the copy the config on disk still points at.
+#[test]
+fn a_copy_whose_config_cannot_be_saved_keeps_the_old_one() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.track_selected();
+    let code = app.selected.code.clone();
+    let move_ = moving(code.clone());
+    let from = move_.from.id.clone();
+    app.moving = Some(move_);
+
+    let _ = app.update(Message::GameCopied(code.clone(), Ok(lightforge_core::migrate::Moved::Copied { files: 1, bytes: 1 })));
+
+    assert_eq!(app.config.product(&code).unwrap().profile.library.as_deref(), Some(from.as_str()));
+    assert!(app.moving.is_none());
+    assert!(app.error.as_ref().unwrap().message.contains("stays on A"));
 }
 
 #[test]
@@ -1689,4 +1739,31 @@ fn a_new_game_language_leaves_a_game_mid_download_in_its_own() {
     assert_eq!(app.config.locale, "deDE");
     assert_eq!(app.config.locale_for(&code), "enUS", "its files are enUS: switching is Modify Install's");
     let _ = app.downloads_section();
+}
+
+#[test]
+fn a_link_that_is_not_a_web_page_is_not_opened() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+
+    let _ = app.update(Message::OpenUrl("file:///home/someone/evil.desktop".to_owned()));
+
+    assert!(app.error.as_ref().unwrap().message.starts_with("not opening file://"));
+}
+
+#[test]
+fn a_settings_report_keeps_env_flags_and_hides_the_rest() {
+    let (mut app, _) = Lightforge::new();
+    app.dirs = None;
+    app.config.battle_net_tweaks.env = [
+        ("DXVK_HUD".to_owned(), "fps".to_owned()),
+        ("API_TOKEN".to_owned(), "ghp_abcdefghijklmnopqrstuvwxyz0123".to_owned()),
+    ]
+    .into();
+
+    let sent = app.report_attachment(report::Category::Settings);
+
+    assert!(sent.contains("DXVK_HUD = \"fps\""), "{sent}");
+    assert!(sent.contains("API_TOKEN = \"(hidden)\""), "{sent}");
+    assert!(!sent.contains("ghp_"));
 }

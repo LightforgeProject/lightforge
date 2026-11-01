@@ -1,22 +1,24 @@
 # Maintainer: Kenny <onlyusemycontroler@gmail.com>
 #
-# The prebuilt binaries from the release page — built in a Debian 12 container
-# against glibc 2.36, so they run on anything newer. For a source build, see
+# The prebuilt binaries from the release page: built in a Debian 12 container
+# and checked to need no glibc newer than 2.35, so they run on anything newer. For a source build, see
 # `lightforge`.
 
 pkgname=lightforge-bin
-pkgver=1.0.0beta.8
+pkgver=1.0.0beta.9
 pkgrel=1
 # See the note in the `lightforge` PKGBUILD for why the version loses its
 # hyphen here.
-_tag=v1.0.0-beta.8
+_tag=v1.0.0-beta.9
 pkgdesc='Install, update and play World of Warcraft on Linux, and a home for all your other Battle.net games'
 arch=('x86_64')
 url='https://github.com/LightforgeProject/lightforge'
 license=('GPL-3.0-or-later')
-depends=('glibc' 'gcc-libs' 'fontconfig' 'systemd-libs')
+depends=('glibc' 'gcc-libs' 'fontconfig' 'systemd-libs' 'python')
 optdepends=(
-  'wine: 32-bit runtime for the Battle.net installer (needs multilib)'
+  'lib32-gnutls: 32-bit runtime for Battle.net (needs multilib)'
+  'lib32-freetype2: 32-bit runtime for Battle.net (needs multilib)'
+  'lib32-vulkan-icd-loader: 32-bit runtime for Battle.net (needs multilib)'
   'mangohud: the in-game overlay Lightforge can enable per game'
 )
 provides=("lightforge=$pkgver")
@@ -25,9 +27,9 @@ conflicts=('lightforge')
 # builds an empty `-debug` package out of what it does not find.
 options=('!debug' '!strip')
 source=("lightforge-${_tag#v}-x86_64-linux.tar.gz::$url/releases/download/$_tag/lightforge-${_tag#v}-x86_64-linux.tar.gz")
-# Of the tarball attached to the v1.0.0-beta.8 release, as published in its
+# Of the tarball attached to the v1.0.0-beta.9 release, as published in its
 # SHA256SUMS. Regenerate with `updpkgsums` if the artifacts are ever rebuilt.
-sha256sums=('7b858f067265b16c63422698d021d2acd6a935feb1e5789576fc134bcbf42b27')
+sha256sums=('SKIP')
 _srcdir="lightforge-${_tag#v}"
 
 package() {

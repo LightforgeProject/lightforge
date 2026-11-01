@@ -5,21 +5,23 @@
 //! lives: every package ships the same binary.
 //!
 //! - The installer's copy in `~/.local/bin` is the user's own, and Lightforge
-//!   replaces it itself ([`tarball`]).
+//!   replaces it itself ([`tarball`]). So is an AppImage ([`appimage`]).
 //! - A package manager's copy is replaced by that package manager, run in a
 //!   terminal where it asks for the password itself ([`terminal`]).
 //!   Lightforge only fetches and checks what it will install.
-//! - Everything else gets words: COPR and Fedora Atomic update with the
+//! - Everything else gets words: COPR, Fedora Atomic and Nix update with the
 //!   system, and a build from source is rebuilt the way it was built.
 //!
 //! Lightforge never runs anything as root.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
 use crate::net::{Http, NetError};
 
+pub mod appimage;
 pub mod tarball;
 pub mod terminal;
 
@@ -34,6 +36,8 @@ const PKGBUILDS: &str =
 /// The one-line install for everyone the routes below cannot help.
 pub const INSTALLER_COMMAND: &str = "curl -fsSL https://raw.githubusercontent.com/LightforgeProject/lightforge/main/packaging/installer/install.sh | bash";
 
+const NIX_STORE: &str = "/nix/store";
+
 /// The COPR repository's file, as `dnf copr enable` writes it.
 const COPR_REPO: &str = "etc/yum.repos.d/_copr:copr.fedorainfracloud.org:simplykenny:lightforge.repo";
 
@@ -43,6 +47,8 @@ pub enum Origin {
     /// `install.sh`, the double-click installer, or the tarball by hand into
     /// the same place: `~/.local/bin`.
     Installer { bin_dir: PathBuf },
+    /// The AppImage, wherever the user keeps it.
+    AppImage { path: PathBuf },
     /// One of the PKGBUILDs, `lightforge` or `lightforge-bin`.
     Pacman { package: String },
     /// The `.deb` from the release page.
@@ -56,6 +62,8 @@ pub enum Origin {
     Checkout { repo: PathBuf },
     /// `cargo install`.
     Cargo,
+    /// Anything in the Nix store.
+    Nix,
     /// None of these.
     Unknown,
 }
@@ -63,9 +71,15 @@ pub enum Origin {
 impl Origin {
     /// This process's own, read at start: once replaced, the path reads `(deleted)`.
     pub fn detect() -> Self {
+        if let Some(path) = appimage::running() {
+            return Self::AppImage { path };
+        }
         let Ok(exe) = std::env::current_exe() else { return Self::Unknown };
-        let home = directories::BaseDirs::new().map(|d| d.home_dir().to_path_buf()).unwrap_or_default();
-        let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from);
+        // `current_exe` comes resolved, so these have to be too: on older
+        // Fedora Atomic `/home` is a link to `/var/home`.
+        let resolved = |path: PathBuf| path.canonicalize().unwrap_or(path);
+        let home = home().map(resolved).unwrap_or_default();
+        let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from).map(resolved);
         Self::detect_at(&exe, &home, cargo_home.as_deref(), Path::new("/"))
     }
 
@@ -79,6 +93,10 @@ impl Origin {
         let cargo_bin = cargo_home.map(|c| c.join("bin")).unwrap_or_else(|| home.join(".cargo/bin"));
         if bin_dir == cargo_bin {
             return Self::Cargo;
+        }
+        // `current_exe` resolves profile symlinks to the store path.
+        if bin_dir.starts_with(NIX_STORE) {
+            return Self::Nix;
         }
         // `<repo>/target/<profile>/`, or deeper for a custom target dir.
         if let Some(repo) = exe
@@ -116,7 +134,7 @@ impl Origin {
             note: note.to_owned(),
         };
         match self {
-            Self::Installer { .. } => Route::InPlace,
+            Self::Installer { .. } | Self::AppImage { .. } => Route::InPlace,
             Self::Pacman { package } => Route::Terminal(Package::Pacman { package: package.clone() }),
             Self::Deb => Route::Terminal(Package::Deb),
             Self::Rpm { atomic: false } => Route::Terminal(Package::Rpm),
@@ -154,6 +172,14 @@ impl Origin {
                 )],
                 note: "This Lightforge was installed with cargo.".to_owned(),
             },
+            // No command: the store path does not say how it was installed.
+            Self::Nix => say(
+                &[],
+                "Lightforge comes from Nix, so it updates the way the rest of the system \
+                 does: update what it came from, such as its flake input, and rebuild your \
+                 NixOS or Home Manager configuration. Installed with `nix profile`, \
+                 `nix profile upgrade lightforge` does both.",
+            ),
             Self::Unknown => say(
                 &[INSTALLER_COMMAND],
                 "Lightforge cannot tell how it was installed here. The installer puts it \
@@ -180,6 +206,47 @@ pub enum Package {
     Pacman { package: String },
     Deb,
     Rpm,
+}
+
+/// What starts this Lightforge again later: `current_exe`, the AppImage
+/// rather than the mount inside it, or for a Nix install a profile's link,
+/// since a store path is deleted by garbage collection after an update.
+pub fn lasting_exe() -> std::io::Result<PathBuf> {
+    if let Some(appimage) = appimage::running() {
+        return Ok(appimage);
+    }
+    let exe = std::env::current_exe()?;
+    if !exe.starts_with(NIX_STORE) {
+        return Ok(exe);
+    }
+    // Linux appends this once the running binary is deleted.
+    let exe = exe.to_str().and_then(|path| path.strip_suffix(" (deleted)")).map(PathBuf::from).unwrap_or(exe);
+    let user = std::env::var_os("USER").unwrap_or_default();
+    Ok(nix_profile_link(&exe, home().as_deref(), &user, Path::new("/")).unwrap_or(exe))
+}
+
+/// Another version's link would start that version, so only a link to `exe`,
+/// unless `exe` is gone.
+fn nix_profile_link(exe: &Path, home: Option<&Path>, user: &OsStr, root: &Path) -> Option<PathBuf> {
+    let name = exe.file_name()?;
+    let exe = std::fs::canonicalize(exe).ok();
+    let mut bins = vec![
+        root.join("run/current-system/sw/bin"),
+        root.join("etc/profiles/per-user").join(user).join("bin"),
+    ];
+    if let Some(home) = home {
+        bins.push(home.join(".nix-profile/bin"));
+        bins.push(home.join(".local/state/nix/profile/bin"));
+    }
+    bins.push(root.join("nix/var/nix/profiles/default/bin"));
+    bins.into_iter().map(|bin| bin.join(name)).find(|link| match std::fs::canonicalize(link) {
+        Ok(target) => exe.as_ref().is_none_or(|exe| *exe == target),
+        Err(_) => false,
+    })
+}
+
+fn home() -> Option<PathBuf> {
+    directories::BaseDirs::new().map(|d| d.home_dir().to_path_buf())
 }
 
 /// `lightforge` or `lightforge-bin`, from pacman's database folders, which
@@ -326,6 +393,7 @@ mod tests {
         );
         assert_eq!(detect("/home/u/.cargo/bin/lightforge-gui", &empty), Origin::Cargo);
         assert_eq!(detect("/opt/lightforge/lightforge-gui", &empty), Origin::Unknown);
+        assert_eq!(detect("/nix/store/aaaa-lightforge-1/bin/lightforge-gui", &empty), Origin::Nix);
         let _ = std::fs::remove_dir_all(&empty);
     }
 
@@ -357,6 +425,47 @@ mod tests {
     }
 
     #[test]
+    fn a_nix_install_is_kept_by_the_profile_that_links_to_it() {
+        use std::os::unix::fs::symlink;
+
+        let root = root(
+            "nix",
+            &["nix/store/aaaa-lightforge-1/bin/lightforge-gui", "nix/store/bbbb-lightforge-2/bin/lightforge-gui"],
+            &[
+                "run/current-system/sw/bin",
+                "etc/profiles/per-user/u/bin",
+                "home/u/.nix-profile/bin",
+                "nix/var/nix/profiles/default/bin",
+            ],
+        );
+        let (old, new) = (
+            root.join("nix/store/aaaa-lightforge-1/bin/lightforge-gui"),
+            root.join("nix/store/bbbb-lightforge-2/bin/lightforge-gui"),
+        );
+        let home = root.join("home/u");
+        let link = |profile: &str, to: &Path| {
+            let at = root.join(profile).join("lightforge-gui");
+            symlink(to, &at).unwrap();
+            at
+        };
+        let find = |exe: &Path| nix_profile_link(exe, Some(&home), "u".as_ref(), &root);
+
+        assert_eq!(find(&new), None, "`nix run`: no profile has it");
+        let default = link("nix/var/nix/profiles/default/bin", &new);
+        assert_eq!(find(&new), Some(default.clone()), "multi-user Nix on another distribution");
+        let system = link("run/current-system/sw/bin", &old);
+        let users = link("home/u/.nix-profile/bin", &new);
+        assert_eq!(find(&new), Some(users));
+        assert_eq!(nix_profile_link(&new, None, "u".as_ref(), &root), Some(default), "no home folder, no profile in it");
+        let per_user = link("etc/profiles/per-user/u/bin", &new);
+        assert_eq!(find(&new), Some(per_user), "the NixOS profiles come first");
+
+        let gone = root.join("nix/store/0000-lightforge-0/bin/lightforge-gui");
+        assert_eq!(find(&gone), Some(system));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn a_build_from_a_checkout_is_rebuilt_there() {
         let repo = root("checkout", &["Cargo.toml"], &["crates/launcher-gui", "target/release"]);
         let exe = repo.join("target/release/lightforge-gui");
@@ -383,6 +492,7 @@ mod tests {
             Origin::Copr { atomic: true },
             Origin::Rpm { atomic: true },
             Origin::Cargo,
+            Origin::Nix,
             Origin::Unknown,
         ] {
             assert!(!pressable(words.clone()), "{words:?}");

@@ -54,6 +54,10 @@ pub async fn run(
                 .map_err(|e| Problem::of(&e))?;
             Ok(Prepared::Installed)
         }
+        (Route::InPlace, Origin::AppImage { path }) => {
+            upgrade::appimage::install(&http, &version, &path, progress).await.map_err(|e| Problem::of(&e))?;
+            Ok(Prepared::Installed)
+        }
         (Route::Terminal(package), _) => {
             let work = dirs.cache_dir().join("upgrade");
             let (script, command) = terminal::prepare(&http, &package, &version, &work, progress)

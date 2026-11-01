@@ -92,6 +92,26 @@ impl Lightforge {
 
     /// The filter, the update count, and the three buttons over the list.
     fn mine_toolbar(&self, outdated: usize) -> Element<'_, Message> {
+        // Skipped by the check and by Update all; said, or a ledger of pins
+        // reads as "no updates" (#31).
+        let pinned = self
+            .addons
+            .rows
+            .iter()
+            .filter(|row| row.child_of.is_none() && row.managed.as_ref().is_some_and(|m| m.pinned.is_some()))
+            .count();
+        let checked = match (self.updates.is_empty(), outdated) {
+            (true, _) => None,
+            (false, 0) if pinned > 0 => Some("the rest is up to date".to_owned()),
+            (false, 0) => Some("everything is up to date".to_owned()),
+            (false, n) => Some(format!("{n} have updates")),
+        };
+        let summary = match (checked, pinned) {
+            (None, _) => String::new(),
+            (Some(checked), 0) => checked,
+            (Some(_), n) if n == self.addons.managed => format!("{n} pinned, not checked"),
+            (Some(checked), n) => format!("{n} pinned, not checked; {checked}"),
+        };
         container(
             row![
                 // Sized, or it reads as a search.
@@ -105,14 +125,7 @@ impl Lightforge {
                         .width(Length::Fixed(260.0)),
                 ),
                 Space::new().width(Length::Fill),
-                muted(
-                    match (self.updates.is_empty(), outdated) {
-                        (true, _) => String::new(),
-                        (false, 0) => "everything is up to date".to_owned(),
-                        (false, n) => format!("{n} have updates"),
-                    },
-                    theme::LABEL,
-                ),
+                muted(summary, theme::LABEL),
                 // One shape for the three; blue is the one to press.
                 action_button("Check for updates", theme::PAUSE, Message::CheckAddonUpdates)
                     .enabled(!self.addons_locked() && self.addons.managed > 0),
@@ -121,6 +134,9 @@ impl Lightforge {
                 action_button("Open folder", theme::PAUSE, Message::OpenAddonsDir)
                     .enabled(true),
             ]
+            .push((pinned > 0).then(|| {
+                secondary("Unpin all", Message::UnpinAddons).enabled(!self.addons_locked())
+            }))
             .spacing(theme::SM)
             .align_y(Alignment::Center),
         )

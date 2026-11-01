@@ -92,7 +92,7 @@ pub enum RuntimeError {
 /// Cheap enough to call before any download. Passes off x86-64, where it
 /// means nothing.
 pub fn check_loader() -> Result<(), RuntimeError> {
-    if !cfg!(target_arch = "x86_64") {
+    if !needs_32bit_libraries() {
         return Ok(());
     }
     if LOADER_CANDIDATES.iter().any(|p| Path::new(p).exists()) {
@@ -129,6 +129,12 @@ pub fn check_wine(dist: &Path) -> Result<(), RuntimeError> {
         code: output.status.code(),
         stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
     })
+}
+
+/// Whether 32-bit Windows programs need the host's 32-bit libraries. Not on
+/// ARM: there Wine runs them through FEX with the native aarch64 ones.
+pub fn needs_32bit_libraries() -> bool {
+    cfg!(target_arch = "x86_64")
 }
 
 /// Whether a 32-bit runtime is present, for a debug bundle or a settings
@@ -351,13 +357,15 @@ pub fn remedy_for(os: &OsRelease) -> Remedy {
             None,
         )
     } else if os.is("arch") {
-        // UNVERIFIED. Arch's `wine` is built against multilib and pulls its
-        // lib32-* dependencies, so no separate 32-bit package exists.
+        // UNVERIFIED on a clean install. Arch's `wine` has been pure WoW64
+        // since June 2025 and pulls no lib32 package at all; Proton's 32-bit
+        // Wine still loads the host's. These are on a CachyOS desktop where
+        // Battle.net works, gnutls being the one SteamOS lacked.
         (
-            Some("sudo pacman -S wine".to_owned()),
+            Some("sudo pacman -S lib32-gnutls lib32-freetype2 lib32-vulkan-icd-loader".to_owned()),
             Some(
-                "`wine` lives in the multilib repository — if pacman cannot \
-                 find it, uncomment the `[multilib]` section in \
+                "lib32 packages live in the multilib repository — if pacman \
+                 cannot find them, uncomment the `[multilib]` section in \
                  /etc/pacman.conf first"
                     .to_owned(),
             ),
@@ -477,7 +485,7 @@ mod remedy_tests {
     /// Every command asks for a 32-bit *Wine*, not a list of libraries: those
     /// pass our checks and still fail the installer.
     #[test]
-    fn every_command_installs_a_32_bit_wine() {
+    fn every_command_installs_32_bit_libraries() {
         for id in ["debian", "ubuntu", "arch", "fedora", "opensuse-tumbleweed"] {
             let os = OsRelease {
                 id: id.into(),
@@ -491,15 +499,13 @@ mod remedy_tests {
             };
             let remedy = remedy_for(&os);
             let command = remedy.command.unwrap_or_default();
-            assert!(command.contains("wine"), "{id} installs no wine: {command}");
-            // Arch's `wine` is multilib: no suffix, and the note names the repository.
+            // Arch's `wine` is 64-bit only, so there it is the lib32 set.
+            let installs = ["wine", "lib32-gnutls"].iter().any(|m| command.contains(m));
+            assert!(installs, "{id} installs neither wine nor gnutls: {command}");
             let names_arch = ["i386", "i686", "32bit", "lib32"]
                 .iter()
                 .any(|m| command.contains(m));
-            assert!(
-                names_arch || remedy.note.is_some_and(|n| n.contains("multilib")),
-                "{id} neither names a 32-bit build nor explains why it need not: {command}"
-            );
+            assert!(names_arch, "{id} names no 32-bit build: {command}");
         }
     }
 
@@ -654,7 +660,7 @@ pub fn tls_container(
     proton_root: &Path,
     steam: Option<&crate::steam::SteamRoot>,
 ) -> Result<Option<PathBuf>, RuntimeError> {
-    if has_32bit_tls() != Some(false) {
+    if !needs_32bit_libraries() || has_32bit_tls() != Some(false) {
         return Ok(None);
     }
     let appid = required_runtime(proton_root);
@@ -668,12 +674,14 @@ pub fn tls_container(
 }
 
 /// Whether `ldconfig -p` lists a 32-bit `lib`. A 64-bit entry is tagged
-/// `(libc6,x86-64)`, a 32-bit one plain `(libc6)`.
+/// `(libc6,x86-64)`, a 32-bit one plain `(libc6)`, or `(libc6, OS ABI: …)`
+/// when the library carries an ABI note.
 fn has_32bit(ldconfig: &str, lib: &str) -> bool {
     ldconfig.lines().any(|line| {
-        line.trim_start()
-            .strip_prefix(lib)
-            .is_some_and(|rest| rest.trim_start().starts_with("(libc6)"))
+        line.trim_start().strip_prefix(lib).is_some_and(|rest| {
+            let tag = rest.trim_start();
+            tag.starts_with("(libc6)") || tag.starts_with("(libc6, ")
+        })
     })
 }
 
@@ -705,6 +713,14 @@ mod container_tests {
         assert!(!has_32bit(LDCONFIG, "libgnutls.so.30"));
         let arch = format!("{LDCONFIG}\tlibgnutls.so.30 (libc6) => /usr/lib32/libgnutls.so.30\n");
         assert!(has_32bit(&arch, "libgnutls.so.30"));
+    }
+
+    #[test]
+    fn a_32_bit_entry_with_an_abi_note_counts() {
+        let abi = "\tlibc.so.6 (libc6,x86-64, OS ABI: Linux 3.2.0) => /lib64/libc.so.6\n";
+        assert!(!has_32bit(abi, "libc.so.6"));
+        let both = format!("{abi}\tlibc.so.6 (libc6, OS ABI: Linux 3.2.0) => /lib/libc.so.6\n");
+        assert!(has_32bit(&both, "libc.so.6"));
     }
 
     #[test]

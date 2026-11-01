@@ -69,8 +69,8 @@ pub(crate) static LAUNCHES: std::sync::atomic::AtomicU64 = std::sync::atomic::At
 /// How often the prefix is re-scanned while waiting for the game (60 ms a scan).
 pub(crate) const WATCH_POLL: Duration = Duration::from_millis(500);
 
-/// How often it is re-scanned once the game is up: the delay before PLAY
-/// returns, about 0.4% of a core.
+/// How often it is re-scanned once the game is up, where no pidfd can be
+/// had: the delay before PLAY returns.
 pub(crate) const EXIT_POLL: Duration = Duration::from_millis(150);
 
 /// The first launch on a new build gets a settings backup first.
@@ -403,8 +403,11 @@ pub async fn await_game_exit(
     settle_after: Option<u64>,
 ) -> Result<String, Problem> {
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
-        while lightforge_core::preflight::games_running(&layout).iter().any(|p| p.pid == game.pid) {
-            std::thread::sleep(EXIT_POLL);
+        if let Err(e) = lightforge_core::preflight::wait_for_exit(game.pid) {
+            tracing::warn!("no pidfd for {} (pid {}), polling instead: {e}", game.name, game.pid);
+            while lightforge_core::preflight::games_running(&layout).iter().any(|p| p.pid == game.pid) {
+                std::thread::sleep(EXIT_POLL);
+            }
         }
         crate::trace::mark(format!("launch: {} has exited", game.name));
         // Best effort: the next pre-flight does the same work.

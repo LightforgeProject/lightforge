@@ -381,7 +381,7 @@ pub(super) fn games<'a>(app: &'a Lightforge) -> Element<'a, Message> {
     let mut list = column![].spacing(theme::SM);
 
     let row_for = |entry: &lightforge_core::product::CatalogEntry| -> Element<Message> {
-        let mark: Element<Message> = match app.icons.get(&entry.code) {
+        let mark: Element<Message> = match app.tile_art(&entry.line) {
             Some(mark) => image(mark.handle.clone())
                 .content_fit(ContentFit::Contain)
                 .width(Length::Fixed(28.0))

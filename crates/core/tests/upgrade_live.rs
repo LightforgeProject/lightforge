@@ -7,8 +7,9 @@
 //! cargo test -p lightforge-core --test upgrade_live -- --ignored --nocapture
 //! ```
 //!
-//! Proves a real release has the names the routes look for, and its tarball
-//! installs, all in a temporary folder (`XDG_DATA_HOME` included).
+//! Proves a real release has the names the routes look for, its tarball
+//! installs and its AppImage replaces an older one, all in a temporary folder
+//! (`XDG_DATA_HOME` included).
 
 use lightforge_core::net::Http;
 use lightforge_core::upgrade::{self, tarball};
@@ -33,6 +34,13 @@ async fn the_published_release_installs_and_every_package_is_found() {
     assert!(said.contains(VERSION), "{said}");
     let entry = std::fs::read_to_string(data.join("applications/pro.tuxcore.Lightforge.desktop")).unwrap();
     assert!(entry.contains(&bin.join("lightforge-gui").display().to_string()), "{entry}");
+
+    let appimage = dir.join("Desktop").join(upgrade::appimage::asset());
+    std::fs::create_dir_all(appimage.parent().unwrap()).unwrap();
+    std::fs::write(&appimage, b"the old one").unwrap();
+    upgrade::appimage::install(&http, VERSION, &appimage, |_, _| {}).await.expect("the AppImage replaces itself");
+    assert!(std::fs::metadata(&appimage).unwrap().len() > 1_000_000, "the release's AppImage, not the stand-in");
+    println!("replaced: {}", appimage.display());
 
     for suffix in ["_amd64.deb", ".x86_64.rpm"] {
         let path = upgrade::fetch_asset(&http, VERSION, suffix, &dir.join("packages"), |_, _| {})

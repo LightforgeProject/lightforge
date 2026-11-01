@@ -1,8 +1,8 @@
 # Installing Lightforge
 
 There's a package for Debian/Ubuntu, a COPR repository and a package for
-Fedora, a PKGBUILD for Arch, and an installer for SteamOS, Bazzite and
-everything else. You can also build it yourself: it's a Rust program with
+Fedora, a PKGBUILD for Arch, an installer for SteamOS, Bazzite and
+everything else, and an AppImage. You can also build it yourself: it's a Rust program with
 very few dependencies, so that takes three commands and a few minutes.
 
 Everything below installs the same two binaries, the menu entry and the icons.
@@ -11,22 +11,16 @@ Everything below installs the same two binaries, the menu entry and the icons.
 
 Download `lightforge_<version>_amd64.deb` from the
 [releases page](https://github.com/LightforgeProject/lightforge/releases).
-The file name says `1.0.0.beta.7` because GitHub doesn't allow a `~` in an
+The file name says `1.0.0.beta.9` because GitHub doesn't allow a `~` in an
 asset name. The version inside the package, which `apt` reads and sorts by,
-is `1.0.0~beta.7`:
+is `1.0.0~beta.9`:
 
 ```bash
-sudo apt install ./lightforge_1.0.0.beta.7-1_amd64.deb
+sudo apt install ./lightforge_1.0.0.beta.9-1_amd64.deb
 ```
 
-It needs glibc 2.36 or newer: Debian 12, Ubuntu 22.10 or anything later.
+It needs glibc 2.35 or newer: Ubuntu 22.04, Debian 12 or anything later.
 `apt` installs nothing else with it; see [what you need](#to-run) below.
-
-Ubuntu 22.04 LTS has glibc 2.35, and `apt` will refuse the package. The
-binaries themselves only need 2.34 and 2.35, so the
-[installer](#steamos-bazzite-and-other-systems) below works there. The `.deb`
-asks for 2.36 because that's the version of the build container, and the only
-one I can promise for every future build.
 
 ## Fedora
 
@@ -48,11 +42,11 @@ Without the repository, download `lightforge-<version>.x86_64.rpm` from the
 and install it by hand. You then download each new release yourself:
 
 ```bash
-sudo dnf install ./lightforge-1.0.0.beta.7-1.x86_64.rpm
+sudo dnf install ./lightforge-1.0.0.beta.9-1.x86_64.rpm
 ```
 
 The same file installs on openSUSE with `sudo zypper install`. Like the
-`.deb`, it needs glibc 2.36 or newer.
+`.deb`, it needs glibc 2.35 or newer.
 
 ## Arch, CachyOS, EndeavourOS, Omarchy
 
@@ -71,7 +65,7 @@ on the AUR as `lightforge` and `lightforge-bin` once I can get an account.
 
 ## SteamOS, Bazzite and other systems
 
-The installer works on any distribution with glibc 2.36 or newer, needs no
+The installer works on any distribution with glibc 2.35 or newer, needs no
 root, and only touches your home folder. Run it again any time to update.
 
 **Double-click:** download `lightforge-installer.desktop` from the
@@ -103,6 +97,48 @@ needs, so leave `steamos-readonly` alone. The first-run setup asks whether the
 device is a Steam Deck or Steam Machine or a desktop PC running SteamOS.
 Retail World of Warcraft is well over 100 GB, so on a Deck add your SD card as
 a drive during setup.
+
+## AppImage
+
+One file, no install: download `Lightforge-x86_64.AppImage` (or
+`Lightforge-aarch64.AppImage` on ARM, see [ARM64](#arm64)) from the
+[releases page](https://github.com/LightforgeProject/lightforge/releases),
+put it wherever you like, make it executable and start it:
+
+```bash
+chmod +x Lightforge-x86_64.AppImage
+./Lightforge-x86_64.AppImage
+```
+
+A browser download is never executable, which is why the `chmod`. In a file
+manager the same switch is under Properties, Permissions. The AppImage updates
+itself in place when a new version is out, so keep it in a folder you can
+write to, and don't rename it.
+
+Lightforge doesn't add itself to your application menu from an AppImage. Gear
+Lever or AppImageLauncher do that, or use Add to Steam in Settings.
+
+The command-line tool is inside too: `./Lightforge-x86_64.AppImage cli doctor`.
+
+It needs FUSE, which every current desktop distribution and SteamOS have. If
+it says otherwise, `./Lightforge-x86_64.AppImage --appimage-extract-and-run`
+starts it without.
+
+## ARM64
+
+Experimental: nobody has run Lightforge on ARM hardware yet. Each release has
+an aarch64 tarball and `Lightforge-aarch64.AppImage`, and the installer above
+picks the aarch64 tarball by itself. There are no ARM `.deb`, `.rpm` or Arch
+packages yet.
+
+On ARM, Lightforge installs Blizzard's native ARM64 client, so the game itself
+runs without emulation. Battle.net exists only for x86, and runs through the
+FEX emulator that GE-Proton's ARM build brings along. Lightforge downloads that
+build by itself.
+
+Asahi Linux on Apple Silicon uses 16K memory pages, and Wine does not run on
+those without Asahi's `muvm`. Expect it to fail there for now. If you try it on
+any ARM machine, tell me how it went, with the output of `lightforge doctor`.
 
 ## Build it yourself
 
@@ -181,7 +217,7 @@ starts and shows the command for your distro. Here they are:
 | **Fedora** | `sudo dnf install wine.i686` ✅ verified on Fedora 44 |
 | **Fedora Atomic** (Bazzite, Silverblue) | `rpm-ostree install --apply-live wine.i686` (if it refuses: without the flag, then reboot) |
 | **Debian / Ubuntu** | `sudo dpkg --add-architecture i386 && sudo apt update && sudo apt install wine32:i386` |
-| **Arch** | `sudo pacman -S wine` (multilib must be enabled) |
+| **Arch** | `sudo pacman -S lib32-gnutls lib32-freetype2 lib32-vulkan-icd-loader` (multilib must be enabled; Arch's `wine` no longer brings them) |
 | **openSUSE** | `sudo zypper install wine-32bit` |
 
 **Only the Fedora line has been tested on a real machine.** The others should
@@ -212,8 +248,8 @@ newer than SteamOS and Bazzite have, so it didn't start on either.
 make release
 ```
 
-builds inside a Debian 12 container (glibc 2.36) and **fails if the result
-needs anything newer**. The binaries end up in `target/container/release/`,
+builds inside a Debian 12 container and **fails if the result needs a glibc
+newer than 2.35**. The binaries end up in `target/container/release/`,
 stripped, and run on Arch, Fedora, Ubuntu, Bazzite and the Steam Deck.
 
 You need `podman` (or `make release CONTAINER=docker`).
@@ -241,6 +277,8 @@ When a new version is out, Lightforge shows an update notice:
 
 - **Installer**: the notice updates Lightforge for you. Running the installer
   again works too.
+- **AppImage**: the notice downloads the new AppImage and puts it in place of
+  the old one; restart Lightforge to use it.
 - **`.deb` or `.rpm` you downloaded**: the notice fetches and checks the new
   package and opens a terminal where your package manager installs it and
   asks for your password. Or install the new file over the old one yourself.

@@ -201,7 +201,20 @@ impl ProtonRunner {
         cmd
     }
 
-    /// Proton's runtime directory, `files` or `dist`, holding `bin/wineserver`.
+    /// The `wineserver` the `proton` script runs. An ARM build keeps its
+    /// binaries in `bin-arm64` (GE-Proton11-7-aarch64 has no `bin`), and the
+    /// script takes it on aarch64 unless `PROTON_USE_ARM64` is not `1`.
+    pub fn wineserver(&self) -> PathBuf {
+        let arm = self.dist.join("bin-arm64");
+        let wants_arm = cfg!(target_arch = "aarch64")
+            && std::env::var_os("PROTON_USE_ARM64").is_none_or(|v| v == "1");
+        match wants_arm && arm.is_dir() {
+            true => arm.join("wineserver"),
+            false => self.dist.join("bin").join("wineserver"),
+        }
+    }
+
+    /// Proton's runtime directory, `files` or `dist`.
     pub fn dist(&self) -> &Path {
         &self.dist
     }
@@ -267,7 +280,7 @@ impl ProtonRunner {
     /// Proton's runtime directly: the `proton` script has no verb for it. A
     /// live wineserver holds the registry, so every mutation waits for this.
     pub fn wineserver_kill(&self) -> Result<(), PrefixError> {
-        let wineserver = self.dist.join("bin").join("wineserver");
+        let wineserver = self.wineserver();
         if !wineserver.is_file() {
             return Err(PrefixError::MissingRuntime(wineserver));
         }

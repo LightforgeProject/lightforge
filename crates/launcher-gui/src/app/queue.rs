@@ -115,6 +115,31 @@ impl Lightforge {
         }
     }
 
+    /// Take or drop the sleep lock, after every message: a suspend in the
+    /// middle of a 60 GiB download stalls it until someone wakes the machine.
+    pub(crate) fn keep_awake(&mut self) -> Task<Message> {
+        match (self.store_writer().is_some(), &self.awake) {
+            (true, Awake::Off) => {
+                self.awake = Awake::Asking;
+                Task::perform(tasks::keep_awake("Lightforge is writing game files"), Message::KeptAwake)
+            }
+            (false, Awake::Held(_)) => {
+                self.awake = Awake::Off;
+                Task::none()
+            }
+            _ => Task::none(),
+        }
+    }
+
+    /// A desktop notification for a download that ended while the window was
+    /// not in front. None when it is: the status line says it there.
+    pub(crate) fn notify_unseen(&self, code: &ProductCode, what: &str, detail: String) -> Task<Message> {
+        if self.window_focused {
+            return Task::none();
+        }
+        Task::future(tasks::notify(format!("{} {what}", self.label_of(code)), detail)).discard()
+    }
+
     /// Whether addon work may start: not while the user's own runs, nor
     /// while the unattended pass is writing the same folder and ledger.
     pub(crate) fn addons_locked(&self) -> bool {

@@ -87,6 +87,36 @@ impl Lightforge {
                 Task::none()
             }
 
+            // The monitor comes in points at the scale in effect, so it is
+            // multiplied back before the new scale is worked out.
+            Message::WindowFit { id, monitor, position } => {
+                if self.console() {
+                    return Ok(Task::none());
+                }
+                let min_size = iced::window::set_min_size(id, Some(WINDOW_MIN));
+                if fit::owned() {
+                    return Ok(min_size);
+                }
+                let chosen = f32::from(self.config.interface_size) / 100.0;
+                let was = self.ui_scale;
+                self.ui_scale = match monitor {
+                    Some(monitor) => fit::desktop_scale(chosen, monitor * was),
+                    None => chosen,
+                };
+                // Sizes in these tasks are read at the new scale: iced applies
+                // it before it runs them.
+                let resized = min_size.chain(iced::window::resize(id, WINDOW));
+                // Only X11 says where a window is; there it grows about its middle.
+                match position.filter(|_| self.ui_scale != was) {
+                    Some(at) => {
+                        let grown = WINDOW * ((self.ui_scale - was) / 2.0);
+                        let at = iced::Point::new(at.x - grown.width, at.y - grown.height);
+                        resized.chain(iced::window::move_to(id, at))
+                    }
+                    None => resized,
+                }
+            }
+
             Message::WindowFocused(focused) => {
                 self.window_focused = focused;
                 Task::none()
@@ -157,6 +187,12 @@ impl Lightforge {
                 self.window_mode()
             }
 
+            Message::InterfaceSize(InterfaceSizeChoice(percent)) => {
+                self.config.interface_size = percent;
+                self.save_config();
+                self.fit_window()
+            }
+
             Message::MinimizeOnLaunch(on) => {
                 self.config.minimize_on_launch = on;
                 self.save_config();
@@ -221,8 +257,17 @@ impl Lightforge {
                 Task::none()
             }
 
+            // From addon pages and descriptions: `xdg-open` would hand a
+            // `file://` or `smb://` link to whatever handles it.
             Message::OpenUrl(url) => {
-                if let Err(e) = tasks::open_url(&url) {
+                let web = ["https://", "http://"]
+                    .iter()
+                    .any(|scheme| url.get(..scheme.len()).is_some_and(|start| start.eq_ignore_ascii_case(scheme)));
+                let opened = match web {
+                    true => tasks::open_url(&url),
+                    false => Err(format!("not opening {url}: only web links are opened")),
+                };
+                if let Err(e) = opened {
                     self.error = Some(e.into());
                 }
                 Task::none()

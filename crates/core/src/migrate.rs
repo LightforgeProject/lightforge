@@ -46,6 +46,8 @@ pub enum MoveError {
     AlreadyThere { product: String, library: String },
     #[error("{0} is not mounted")]
     Offline(String),
+    #[error("{library} is where {product} is installed, not a copy left behind")]
+    NotALeftover { product: String, library: String },
     #[error("{0} of the game's files are damaged where it is now; repair it there first")]
     Damaged(usize),
     #[error("{0} copied files did not read back intact; the game was not moved")]
@@ -139,10 +141,16 @@ pub async fn copy(
         if dest.exists() {
             std::fs::remove_dir(&dest).map_err(io(&dest))?;
         }
-        std::fs::rename(&from, &dest).map_err(io(&dest))?;
         // Its `.product.db` still names the old Windows path.
         let record = ProductInstall::from_build_info(&info, code, &flavor, &windows_path)?;
-        productdb::upsert(&dest, &[record])?;
+        std::fs::rename(&from, &dest).map_err(io(&dest))?;
+        if let Err(e) = productdb::upsert(&dest, &[record]) {
+            // Back where the config says, or the game is in no library it knows.
+            if let Err(back) = std::fs::rename(&dest, &from) {
+                tracing::error!("could not move {} back to {}: {back}", dest.display(), from.display());
+            }
+            return Err(e.into());
+        }
         tracing::info!("moved {} by renaming {} to {}", code.as_str(), from.display(), dest.display());
         return Ok(Moved::Renamed);
     }
@@ -277,6 +285,23 @@ pub async fn release(http: &Http, layout: &Layout, code: &ProductCode, from: &Li
         return Err(MoveError::Busy(process.name.clone()));
     }
     let source = layout.wow_install_in(from);
+    let dest = layout.wow_install(code);
+    if source == dest {
+        return Err(MoveError::NotALeftover { product: code.as_str().to_owned(), library: from.label.clone() });
+    }
+    // Checked before anything goes: the copy left behind may be the only one.
+    let dest_info = BuildInfo::load(dest.join(".build.info"))?;
+    let windows_path = layout
+        .library(code)
+        .map(Library::windows_wow_path)
+        .unwrap_or_else(|| crate::paths::WINDOWS_WOW_PATH.to_owned());
+    let record = ProductInstall::from_build_info(
+        &dest_info,
+        code,
+        &crate::paths::flavor_dir_name(&dest, code),
+        &windows_path,
+    )?;
+
     let info_path = source.join(".build.info");
     let mut freed = 0;
     // Gone with the folder after a rename.
@@ -299,39 +324,32 @@ pub async fn release(http: &Http, layout: &Layout, code: &ProductCode, from: &Li
     }
 
     crate::prefix::link_libraries(layout)?;
-    let dest = layout.wow_install(code);
-    let windows_path = layout
-        .library(code)
-        .map(Library::windows_wow_path)
-        .unwrap_or_else(|| crate::paths::WINDOWS_WOW_PATH.to_owned());
-    let record = ProductInstall::from_build_info(
-        &BuildInfo::load(dest.join(".build.info"))?,
-        code,
-        &crate::paths::flavor_dir_name(&dest, code),
-        &windows_path,
-    )?;
     productdb::register(&layout.agent_dir(), &[record])?;
     Ok(freed)
 }
 
 /// Libraries besides `code`'s own whose install still holds it: what a move
-/// leaves when [`release`] failed. Releasing from one removes it. None while
-/// the game's own library is not mounted, since release registers that one.
+/// leaves when [`release`] failed. Releasing from one removes it. None unless
+/// the game's own library is mounted and holds it: otherwise the "leftover"
+/// may be the only copy, and the config the stale part.
 pub fn leftovers(layout: &Layout, code: &ProductCode) -> Vec<Library> {
     if layout.library(code).is_some_and(|own| !own.state().is_present()) {
         return Vec::new();
     }
     let own = layout.wow_install(code);
+    let holds = |install: &Path| {
+        BuildInfo::load(install.join(".build.info")).is_ok_and(|info| info.row(code).is_some())
+    };
+    if !holds(&own) {
+        return Vec::new();
+    }
     layout
         .libraries()
         .all()
         .iter()
         .filter(|library| library.state().is_present())
         .filter(|library| layout.wow_install_in(library) != own)
-        .filter(|library| {
-            BuildInfo::load(layout.wow_install_in(library).join(".build.info"))
-                .is_ok_and(|info| info.row(code).is_some())
-        })
+        .filter(|library| holds(&layout.wow_install_in(library)))
         .cloned()
         .collect()
 }
@@ -434,5 +452,46 @@ mod tests {
         let found: Vec<String> = leftovers(&layout, &code).into_iter().map(|l| l.label).collect();
         assert_eq!(found, ["B"]);
         assert!(leftovers(&layout, &ProductCode::Retail).is_empty(), "another game's row is not this one");
+    }
+
+    /// The config still naming the old library after a move: the new copy is
+    /// the only one, not a leftover.
+    #[test]
+    fn a_copy_is_no_leftover_while_the_game_s_own_library_lacks_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (layout, _, to) = libraries(root.path());
+        let code = ProductCode::ClassicEra;
+        install(&layout.wow_install_in(&to), &code);
+
+        assert!(leftovers(&layout, &code).is_empty());
+    }
+
+    #[tokio::test]
+    async fn releasing_from_the_game_s_own_library_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let (layout, from, _) = libraries(root.path());
+        let code = ProductCode::ClassicEra;
+        install(&layout.wow_install_in(&from), &code);
+
+        let http = Http::new().unwrap();
+        let refused = release(&http, &layout, &code, &from).await;
+
+        assert!(matches!(refused, Err(MoveError::NotALeftover { .. })));
+        assert!(layout.wow_install_in(&from).join("_classic_era_/WowClassic.exe").is_file());
+    }
+
+    #[tokio::test]
+    async fn release_keeps_the_old_copy_while_the_new_library_has_no_row() {
+        let root = tempfile::tempdir().unwrap();
+        let (layout, from, to) = libraries(root.path());
+        let code = ProductCode::ClassicEra;
+        install(&layout.wow_install_in(&from), &code);
+        let mut moved = layout.libraries().clone();
+        moved.assign(code.clone(), to.id.clone());
+        let layout = layout.with_libraries(moved);
+
+        let http = Http::new().unwrap();
+        assert!(release(&http, &layout, &code, &from).await.is_err());
+        assert!(layout.wow_install_in(&from).join("_classic_era_/WowClassic.exe").is_file());
     }
 }

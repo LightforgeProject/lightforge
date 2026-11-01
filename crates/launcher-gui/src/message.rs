@@ -114,6 +114,13 @@ pub(crate) enum Message {
     /// The window's height in points, and the [`Lightforge::ui_scale_gen`]
     /// it was asked under.
     WindowHeight(u64, f32),
+    /// The monitor's size at the scale in effect, and where the window is
+    /// (X11 only), for [`Lightforge::fit_window`].
+    WindowFit {
+        id: iced::window::Id,
+        monitor: Option<iced::Size>,
+        position: Option<iced::Point>,
+    },
     /// An arrow key: move the selection ring; see [`focus`].
     FocusStep(focus::Step),
     /// Enter: press the control with the ring on it.
@@ -143,6 +150,8 @@ pub(crate) enum Message {
     Primary,
     Tick,
     Downloaded(ProductCode, Result<Box<Complete>, Problem>),
+    /// logind's answer to [`tasks::keep_awake`].
+    KeptAwake(Result<Arc<std::os::fd::OwnedFd>, String>),
     CloseRequested(iced::window::Id),
     /// A launch ended without a game of its own to watch: the client was
     /// opened, the hand-off came to nothing, or it failed.
@@ -177,6 +186,9 @@ pub(crate) enum Message {
     BattleNet,
     ManageSubscription,
     OpenFiles,
+    /// Delete the game's `Cache` folder, from Game Settings.
+    ClearGameCache,
+    GameCacheCleared(Result<(), String>),
     CopyDebug,
     /// Run [`lightforge_core::doctor`] for the Diagnostics block.
     RunDiagnostics,
@@ -320,6 +332,8 @@ pub(crate) enum Message {
     GameLanguage(String),
     /// Whether the launcher gets out of the way once a game is up.
     MinimizeOnLaunch(bool),
+    /// An interface size was picked in Settings › General.
+    InterfaceSize(InterfaceSizeChoice),
     /// Whether a Battle.net hand-off puts the client in the tray.
     BattleNetMinimized(bool),
     CloseBattleNetOnPlay(bool),
@@ -415,6 +429,8 @@ pub(crate) enum Message {
     /// Show the product's AddOns folder in the file manager.
     OpenAddonsDir,
     AddonRemoved(Result<Vec<String>, String>),
+    /// A link from outside Lightforge; only `http(s)` is opened. Lightforge's
+    /// own links, `steam://` among them, are [`Message::OpenLink`].
     OpenUrl(String),
     /// Drop one "could not install" row. It is a report, not a record:
     /// nothing was installed, so there is nothing to remove but the line.
@@ -433,6 +449,8 @@ pub(crate) enum Message {
     AddonAutoUpdate(String, String, Option<bool>),
     /// Hold one addon at a file id, or `None` to let it track its channel.
     AddonPin(String, String, Option<String>),
+    /// Clear every pin in the selected game's ledger.
+    UnpinAddons,
     /// Recognise hand-installed addons and manage them from now on.
     AdoptAddons,
     /// What adoption found.
@@ -609,6 +627,16 @@ pub(crate) struct ChannelChoice(pub(crate) Channel);
 impl std::fmt::Display for ChannelChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.0.label())
+    }
+}
+
+/// An interface size in percent, as a `pick_list` option.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InterfaceSizeChoice(pub(crate) u16);
+
+impl std::fmt::Display for InterfaceSizeChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}%", self.0)
     }
 }
 

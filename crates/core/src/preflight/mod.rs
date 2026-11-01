@@ -38,7 +38,7 @@ mod shutdown;
 mod tests;
 
 pub use games::{
-    client_running, games_running, stop_game, wait_for_game_start,
+    client_running, games_running, stop_game, wait_for_exit, wait_for_game_start,
     GameProcess, Stopped,
 };
 pub use gate::{DownloadGuard, NoDownloads, Preflight, Report, Timing};

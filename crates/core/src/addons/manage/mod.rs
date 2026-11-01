@@ -13,7 +13,7 @@ mod tests;
 pub use adopt::{adopt, Adopted};
 pub use fetch::{install_all, resolve_everywhere, update_all};
 pub use settings::{
-    remove, requests_from, set_auto_update, set_channel, set_ignored, set_pinned, unsupported,
+    remove, requests_from, set_auto_update, set_channel, set_ignored, set_pinned, unpin_all, unsupported,
 };
 pub use updates::{auto_update_requests, check_updates, update_requests, UpdateStatus};
 

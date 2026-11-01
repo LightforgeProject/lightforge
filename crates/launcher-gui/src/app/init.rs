@@ -35,6 +35,13 @@ impl Lightforge {
             layout.libraries().all().len(),
         );
         let bnet_icon = layout.battle_net_icon().and_then(|path| art::try_mark(&path));
+        // Opened at the chosen size before the screen is known; `fit_window`
+        // shrinks it once it is, if it has to.
+        let ui_scale = match fit::owned() || config.steamos_use == Some(SteamOsUse::Console) {
+            true => 1.0,
+            false => f32::from(config.interface_size) / 100.0,
+        };
+        fit::open_at(ui_scale);
 
         let choices: Vec<Choice> = config
             .products
@@ -122,6 +129,7 @@ impl Lightforge {
             config_error,
             queue_frozen: false,
             winding_down: None,
+            awake: Awake::Off,
             downloads: SharedDownloads::default(),
             busy: false,
             status: "checking…".to_owned(),
@@ -132,7 +140,7 @@ impl Lightforge {
             wizard: None,
             patch_notes: None,
             splash: None,
-            ui_scale: 1.0,
+            ui_scale,
             ui_scale_gen: 0,
             setup_rx: None,
             setup_sample: provision::Progress::default(),
@@ -157,7 +165,8 @@ impl Lightforge {
             update_notice: None,
             newer_release: None,
             origin: lightforge_core::upgrade::Origin::detect(),
-            exe: std::env::current_exe().ok(),
+            // What a restart starts: the AppImage, not its mount.
+            exe: lightforge_core::upgrade::lasting_exe().ok(),
             upgrade: None,
             launcher_check: LauncherCheck::default(),
             diagnostics: Diagnostics::default(),
