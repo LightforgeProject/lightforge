@@ -394,8 +394,9 @@ struct Lightforge {
     uninstall_dialog: Option<UninstallDialog>,
     moving: Option<Moving>,
     cancel_dialog: Option<CancelDialog>,
-    /// A newer Lightforge on GitHub, found at start-up. Shown once per
-    /// release; see `core::update`, and `core::upgrade` for installing it.
+    /// A newer Lightforge on GitHub, found at start-up. Shown on every start
+    /// until it is installed; see `core::update`, and `core::upgrade` for
+    /// installing it.
     update_notice: Option<lightforge_core::update::Available>,
     /// The newer Lightforge this session knows of, dismissed or not: what
     /// "Update now" in Settings installs.

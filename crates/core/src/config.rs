@@ -113,10 +113,6 @@ pub struct Config {
     /// by default, listed in `DISCLAIMER.md`; nothing installs by itself.
     #[serde(default = "yes")]
     pub check_for_updates: bool,
-    /// The newest version already mentioned, so the notice opens once per
-    /// release, not on every start.
-    #[serde(default)]
-    pub update_seen: Option<String>,
     /// How many `WTF/Account` backups each game keeps.
     #[serde(default = "default_backup_keep")]
     pub backup_keep: usize,
@@ -188,7 +184,6 @@ impl Default for Config {
             patch_notes_muted: false,
             patch_notes_seen: None,
             check_for_updates: true,
-            update_seen: None,
             backup_keep: default_backup_keep(),
             interface_size: default_interface_size(),
             products: Vec::new(),

@@ -1259,6 +1259,28 @@ fn the_update_card_draws_for_every_route_and_stage() {
     }
 }
 
+/// Later is not "never": the next start asks again, until the update
+/// is installed.
+#[test]
+fn a_newer_release_is_offered_on_every_start_until_installed() {
+    let found = lightforge_core::update::Available {
+        current: "1.0.0-beta.9".to_owned(),
+        latest: "1.0.0-beta.10".to_owned(),
+        url: lightforge_core::update::RELEASES_PAGE.to_owned(),
+    };
+    let (mut app, _scratch) = test_app();
+    let _ = app.update(Message::UpdateChecked(Some(found.clone())));
+    assert!(app.update_notice.is_some());
+    let _ = app.update(Message::DismissUpdate);
+    assert!(app.update_notice.is_none());
+    let saved = app.config.clone();
+
+    let (mut next_start, _scratch) = test_app();
+    next_start.config = saved;
+    let _ = next_start.update(Message::UpdateChecked(Some(found)));
+    assert!(next_start.update_notice.is_some(), "Later hid the release for good");
+}
+
 #[test]
 fn the_check_button_shows_a_release_that_was_dismissed_before() {
     let (mut app, _scratch) = test_app();
@@ -1268,9 +1290,10 @@ fn the_check_button_shows_a_release_that_was_dismissed_before() {
         latest: "1.0.0-beta.7".to_owned(),
         url: lightforge_core::update::RELEASES_PAGE.to_owned(),
     };
-    app.config.update_seen = Some(found.latest.clone());
+    let _ = app.update(Message::UpdateChecked(Some(found.clone())));
+    let _ = app.update(Message::DismissUpdate);
     let _ = app.update(Message::LauncherChecked(Ok(Some(found))));
-    assert!(app.update_notice.is_some(), "the button's answer was swallowed by update_seen");
+    assert!(app.update_notice.is_some(), "the button's answer was swallowed by Later");
     assert_eq!(app.launcher_check, LauncherCheck::Idle);
 }
 
@@ -1283,9 +1306,9 @@ fn a_dismissed_release_stays_one_press_away_in_settings() {
         latest: "1.0.0-beta.8".to_owned(),
         url: lightforge_core::update::RELEASES_PAGE.to_owned(),
     };
-    // Dismissed in an earlier session: no notice at start-up.
-    app.config.update_seen = Some(found.latest.clone());
+    // Later: the notice closes for this session, the release stays known.
     let _ = app.update(Message::UpdateChecked(Some(found)));
+    let _ = app.update(Message::DismissUpdate);
     assert!(app.update_notice.is_none() && app.newer_release.is_some());
     let _ = app.about_section();
 

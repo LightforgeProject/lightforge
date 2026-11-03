@@ -12,10 +12,8 @@ impl Lightforge {
             Message::UpdateChecked(found) => {
                 let Some(available) = found else { return Ok(Task::none()) };
                 self.newer_release = Some(available.clone());
-                // The notice once per release; Settings offers it from then on.
-                if self.config.update_seen.as_deref() == Some(available.latest.as_str()) {
-                    return Ok(Task::none());
-                }
+                // On every start until it is installed; Later only closes it
+                // for this session.
                 self.update_notice = Some(available);
                 Task::none()
             }
@@ -28,8 +26,8 @@ impl Lightforge {
             }
             Message::LauncherChecked(answer) => {
                 self.launcher_check = match answer {
-                    // Shown even if this version was dismissed before: the
-                    // button is the request, so "once per release" no longer applies.
+                    // Shown even if Later closed it this session: the button
+                    // is the request.
                     Ok(Some(available)) => {
                         self.newer_release = Some(available.clone());
                         if self.update_notice.is_none() {
@@ -49,10 +47,7 @@ impl Lightforge {
                     return Ok(Task::none());
                 }
                 self.upgrade = None;
-                if let Some(available) = self.update_notice.take() {
-                    self.config.update_seen = Some(available.latest);
-                    self.save_config();
-                }
+                self.update_notice = None;
                 Task::none()
             }
             Message::OpenReleases => {
