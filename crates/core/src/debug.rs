@@ -26,6 +26,7 @@ pub struct DebugInfo {
     pub proton_path: Option<PathBuf>,
     pub dxvk: Option<String>,
     pub vkd3d: Option<String>,
+    pub nvapi: Option<String>,
     pub prefix: PathBuf,
     /// Distribution and kernel, as fields so a report can be tagged with them.
     pub os: String,
@@ -85,6 +86,7 @@ impl DebugInfo {
             proton_path: proton.map(|p| p.path.clone()),
             dxvk: proton.and_then(|p| component_version(&p.path, "dxvk")),
             vkd3d: proton.and_then(|p| component_version(&p.path, "vkd3d-proton")),
+            nvapi: proton.and_then(|p| component_version(&p.path, "nvapi")),
             prefix: layout.prefix(),
             os: os_release(),
             kernel: kernel(),
@@ -120,6 +122,7 @@ impl DebugInfo {
         row(&mut out, "proton path", &opt_path(&self.proton_path));
         row(&mut out, "dxvk", &opt(&self.dxvk));
         row(&mut out, "vkd3d", &opt(&self.vkd3d));
+        row(&mut out, "nvapi", &opt(&self.nvapi));
         row(&mut out, "prefix", &self.prefix.display().to_string());
         row(&mut out, "os", &self.os);
         row(&mut out, "kernel", &self.kernel);
@@ -180,17 +183,21 @@ fn scrub_with(text: &str, home: Option<&Path>) -> String {
 /// Read a bundled component's version out of a Proton build.
 ///
 /// Several locations: the layout has moved between releases.
+/// A component Proton bundles, as `git describe` names it: `v3.1-19-g601930949`.
+///
+/// Valve's and GE's builds (10 and 11 checked) keep it in
+/// `files/lib/wine/<component>/version` as ` <commit> <name> (<describe>)`.
 fn component_version(proton: &Path, component: &str) -> Option<String> {
     let candidates = [
+        proton.join("files/lib/wine").join(component).join("version"),
         proton.join(format!("{component}.version")),
         proton.join("files").join(format!("lib64/{component}/version")),
         proton.join("files").join(format!("share/{component}/version")),
     ];
-    candidates
-        .iter()
-        .find_map(|p| std::fs::read_to_string(p).ok())
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
+    let text = candidates.iter().find_map(|p| std::fs::read_to_string(p).ok())?;
+    let line = text.trim();
+    let described = line.rsplit_once(" (").and_then(|(_, rest)| rest.strip_suffix(')'));
+    Some(described.unwrap_or(line).to_owned()).filter(|v| !v.is_empty())
 }
 
 /// The newest file in any of the install's error/log directories.
@@ -332,6 +339,7 @@ mod tests {
             "proton",
             "dxvk",
             "vkd3d",
+            "nvapi",
             "prefix",
             "os",
             "kernel",
@@ -346,6 +354,20 @@ mod tests {
         }
         assert!(text.contains("unavailable"));
         assert!(text.contains("no crash log found"));
+    }
+
+    #[test]
+    fn a_bundled_component_reports_its_git_describe() {
+        let proton = std::env::temp_dir().join("lightforge-debug-proton");
+        let _ = std::fs::remove_dir_all(&proton);
+        let dir = proton.join("files/lib/wine/dxvk");
+        std::fs::create_dir_all(&dir).unwrap();
+        // GE-Proton11-7's file, verbatim.
+        std::fs::write(dir.join("version"), " 601930949d111edbbcf9dd463948426d9f8f6ddd dxvk (v3.1-19-g601930949)\n")
+            .unwrap();
+
+        assert_eq!(component_version(&proton, "dxvk").as_deref(), Some("v3.1-19-g601930949"));
+        assert_eq!(component_version(&proton, "vkd3d-proton"), None);
     }
 
     #[test]
