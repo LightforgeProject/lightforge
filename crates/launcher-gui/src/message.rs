@@ -185,6 +185,22 @@ pub(crate) enum Message {
     HandoffStarted(Result<tasks::Handoff, Problem>),
     BattleNet,
     ManageSubscription,
+    /// Game Tools: ask the file picker for an installer or a program.
+    CompanionPick(CompanionPick),
+    CompanionPicked(CompanionPick, Option<PathBuf>),
+    /// Which game the page's next install is for.
+    CompanionGamePicked(ProductCode),
+    CompanionInstallerStarted(Result<std::collections::BTreeSet<PathBuf>, Problem>),
+    /// The user says the installer has finished: look for what it added.
+    CompanionInstallDone,
+    CompanionCandidates(Vec<PathBuf>),
+    CompanionChosen(PathBuf),
+    CompanionInstallCancel,
+    CompanionLaunch(usize),
+    CompanionStarted(Result<String, Problem>),
+    CompanionAutoStart(usize, bool),
+    /// Off the list only: the program stays in the prefix.
+    CompanionRemove(usize),
     /// The play card's region dropdown: the login server a direct launch
     /// signs in to.
     LoginRegionPicked(lightforge_core::portal::Portal),

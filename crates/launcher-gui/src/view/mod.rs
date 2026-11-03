@@ -1,6 +1,7 @@
 //! What each screen draws.
 
 mod addons;
+mod companions;
 mod dashboard;
 mod dialogs;
 mod header;

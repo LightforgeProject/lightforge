@@ -246,7 +246,7 @@ pub(crate) fn reap(mut child: std::process::Child) -> Result<String, Problem> {
 
 /// Wait on a Battle.net invocation off-thread. A dropped `Child` is never
 /// waited on, and each hand-off would stay a `<defunct>` until the GUI exits.
-fn reap_later(mut child: std::process::Child) {
+pub(crate) fn reap_later(mut child: std::process::Child) {
     std::thread::spawn(move || {
         let _ = child.wait();
     });

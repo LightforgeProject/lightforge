@@ -17,6 +17,7 @@ pub mod backup;
 pub mod battlenet;
 pub mod buildinfo;
 pub mod clientlocale;
+pub mod companion;
 pub mod config;
 pub(crate) mod cvars;
 pub mod debug;

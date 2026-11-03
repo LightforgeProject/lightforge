@@ -160,6 +160,11 @@ impl Lightforge {
                 nav("Play", Screen::Dashboard),
             ),
             self.ring(
+                focus::Target::Tab(Screen::Companions),
+                Some(Message::Show(Screen::Companions)),
+                nav("Tools", Screen::Companions),
+            ),
+            self.ring(
                 focus::Target::Shop,
                 Some(Message::OpenLink(SHOP_URL)),
                 outbound("Battle.net Shop", SHOP_URL),

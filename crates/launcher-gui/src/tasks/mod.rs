@@ -38,6 +38,7 @@ mod launch;
 mod backups;
 mod doctor;
 mod desktop;
+mod companions;
 pub(crate) mod upgrade;
 
 pub(crate) use branding::*;
@@ -48,6 +49,7 @@ pub(crate) use launch::*;
 pub(crate) use backups::*;
 pub(crate) use doctor::*;
 pub(crate) use desktop::*;
+pub(crate) use companions::*;
 pub(crate) use upgrade::{Prepared, Stamp};
 
 

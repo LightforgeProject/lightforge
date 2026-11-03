@@ -149,6 +149,35 @@ pub(crate) enum Screen {
     /// Setup lives here too, as the first card.
     Settings,
     Addons,
+    /// Windows programs that run beside the games.
+    Companions,
+}
+
+/// What the Game Tools page asks the file picker for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompanionPick {
+    /// An installer, run in the prefix.
+    Installer,
+    /// The program itself, added as it is.
+    Program,
+}
+
+/// An install on the Game Tools page, from starting the installer to
+/// picking the program out of what it added.
+#[derive(Debug, Clone)]
+pub(crate) struct CompanionInstall {
+    pub(crate) game: ProductCode,
+    pub(crate) stage: CompanionStage,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum CompanionStage {
+    Starting,
+    /// It runs; what the prefix held before it, to compare against.
+    Running(std::collections::BTreeSet<PathBuf>),
+    Looking,
+    /// What it added, for the user to pick the program from.
+    Choosing(Vec<PathBuf>),
 }
 
 /// What a backup row is asking to confirm.

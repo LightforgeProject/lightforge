@@ -1814,3 +1814,53 @@ fn a_settings_report_keeps_env_flags_and_hides_the_rest() {
     assert!(sent.contains("API_TOKEN = \"(hidden)\""), "{sent}");
     assert!(!sent.contains("ghp_"));
 }
+
+/// An installer's run on the Game Tools page: started, finished by the
+/// user, and the program picked out of what it added, for the game chosen.
+#[test]
+fn a_companion_is_added_from_what_its_installer_put_in_the_prefix() {
+    let (mut app, _scratch) = test_app();
+    let drive_c = app.layout.prefix().join("drive_c");
+    let exe = drive_c.join("users/steamuser/AppData/Local/Uploader/app-1.2.0/Uploader.exe");
+    let _ = app.update(Message::CompanionGamePicked(ProductCode::Forever));
+    app.companion_install = Some(CompanionInstall { game: app.companion_target(), stage: CompanionStage::Starting });
+
+    let _ = app.update(Message::CompanionInstallerStarted(Ok(Default::default())));
+    assert!(matches!(app.companion_install.as_ref().unwrap().stage, CompanionStage::Running(_)));
+    let _ = app.update(Message::CompanionInstallDone);
+    let _ = app.update(Message::CompanionCandidates(vec![exe.clone()]));
+    let _ = app.companions_screen();
+    let _ = app.update(Message::CompanionChosen(exe));
+
+    assert!(app.companion_install.is_none());
+    let added = &app.config.companions[0];
+    assert_eq!(added.name, "Uploader");
+    assert_eq!(added.game, ProductCode::Forever);
+    assert_eq!(added.exe, PathBuf::from("users/steamuser/AppData/Local/Uploader/app-1.2.0/Uploader.exe"));
+    assert!(!added.start_with_game, "off until asked for");
+}
+
+#[test]
+fn a_companion_starts_with_its_game_only_when_switched_on_and_leaves_with_remove() {
+    let (mut app, _scratch) = test_app();
+    let program = app.layout.prefix().join("drive_c/Program Files/Tracker/Tracker.exe");
+    let _ = app.update(Message::CompanionPicked(CompanionPick::Program, Some(program.clone())));
+    let _ = app.update(Message::CompanionPicked(CompanionPick::Program, Some(program)));
+    assert_eq!(app.config.companions.len(), 1, "the same program twice is one entry");
+
+    let _ = app.update(Message::CompanionAutoStart(0, true));
+    assert!(app.config.companions[0].start_with_game);
+    let _ = app.companions_screen();
+
+    let _ = app.update(Message::CompanionRemove(0));
+    assert!(app.config.companions.is_empty());
+}
+
+#[test]
+fn an_installer_that_would_not_start_ends_the_install_with_its_error() {
+    let (mut app, _scratch) = test_app();
+    app.companion_install = Some(CompanionInstall { game: ProductCode::Retail, stage: CompanionStage::Starting });
+    let _ = app.update(Message::CompanionInstallerStarted(Err("no supported Proton-GE build installed".to_owned().into())));
+    assert!(app.companion_install.is_none());
+    assert!(app.error.is_some());
+}

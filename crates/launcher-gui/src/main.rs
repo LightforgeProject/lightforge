@@ -393,6 +393,10 @@ struct Lightforge {
     install_dialog: Option<InstallDialog>,
     uninstall_dialog: Option<UninstallDialog>,
     moving: Option<Moving>,
+    /// An install under way on the Game Tools page.
+    companion_install: Option<CompanionInstall>,
+    /// The game the page's next install is for; `None` is the selected one.
+    companion_game: Option<ProductCode>,
     cancel_dialog: Option<CancelDialog>,
     /// A newer Lightforge on GitHub, found at start-up. Shown on every start
     /// until it is installed; see `core::update`, and `core::upgrade` for

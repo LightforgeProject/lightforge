@@ -24,6 +24,7 @@ impl Lightforge {
             Screen::Updates => self.updates_screen(),
             Screen::Settings => self.settings(),
             Screen::Addons => self.addons_screen(),
+            Screen::Companions => self.companions_screen(),
         };
 
         // The download manager, top right on every screen, under its button.

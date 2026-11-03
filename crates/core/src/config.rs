@@ -122,6 +122,9 @@ pub struct Config {
     pub interface_size: u16,
     /// Every product Lightforge manages, official and custom alike.
     pub products: Vec<Product>,
+    /// Windows programs that run beside a game in its prefix.
+    #[serde(default)]
+    pub companions: Vec<crate::companion::Companion>,
 }
 
 /// Where themed branding comes from unless `assets_source` says otherwise.
@@ -187,6 +190,7 @@ impl Default for Config {
             backup_keep: default_backup_keep(),
             interface_size: default_interface_size(),
             products: Vec::new(),
+            companions: Vec::new(),
         }
     }
 }

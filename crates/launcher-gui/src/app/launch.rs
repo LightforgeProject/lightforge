@@ -41,10 +41,19 @@ impl Lightforge {
         self.status = format!("{} is running", game.name);
         self.playing.retain(|s| s.code != code);
         self.playing.push(Session { code: code.clone(), game: game.clone(), stopping: false });
-        Task::perform(
+        // After the game, so its pre-flight is long done and cannot end them.
+        let companions: Vec<Task<Message>> = self
+            .config
+            .companions
+            .iter()
+            .filter(|c| c.game == code && c.start_with_game)
+            .map(|c| Task::perform(tasks::launch_companion(self.layout.clone(), c.clone()), Message::CompanionStarted))
+            .collect();
+        let watch = Task::perform(
             tasks::await_game_exit(self.layout.clone(), code.clone(), game, settle_after),
             move |result| Message::GameExited(code.clone(), result),
-        )
+        );
+        Task::batch(companions.into_iter().chain(std::iter::once(watch)))
     }
 
     /// Ask the process table whether the Battle.net client is up.

@@ -161,6 +161,8 @@ impl Lightforge {
             install_dialog: None,
             uninstall_dialog: None,
             moving: None,
+            companion_install: None,
+            companion_game: None,
             cancel_dialog: None,
             update_notice: None,
             newer_release: None,
