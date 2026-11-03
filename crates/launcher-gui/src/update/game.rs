@@ -129,6 +129,21 @@ impl Lightforge {
     /// The Game Settings card: opening it, its switches and its environment editor.
     fn update_game_settings(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
+            Message::LoginRegionPicked(portal) => {
+                let code = self.selected.code.clone();
+                // The client rewrites Config.wtf on exit, undoing the change.
+                if self.session(&code).is_some() {
+                    self.error = Some("close the game before changing its region".to_owned().into());
+                    return Ok(Task::none());
+                }
+                let file = self.layout.wtf_dir(&code).join("Config.wtf");
+                match lightforge_core::portal::set(&file, portal) {
+                    Ok(()) => self.local.portal = Some(portal),
+                    Err(e) => self.error = Some(format!("{}: {e}", file.display()).into()),
+                }
+                Task::none()
+            }
+
             Message::OpenGameSettings => {
                 self.close_panels();
                 self.game_settings = Some(GameSettings {

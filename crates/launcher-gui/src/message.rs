@@ -185,6 +185,9 @@ pub(crate) enum Message {
     HandoffStarted(Result<tasks::Handoff, Problem>),
     BattleNet,
     ManageSubscription,
+    /// The play card's region dropdown: the login server a direct launch
+    /// signs in to.
+    LoginRegionPicked(lightforge_core::portal::Portal),
     OpenFiles,
     /// Delete the game's `Cache` folder, from Game Settings.
     ClearGameCache,

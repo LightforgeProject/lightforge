@@ -2,6 +2,7 @@
 
 use crate::*;
 use iced::widget::{column, Column};
+use lightforge_core::portal::Portal;
 
 impl Lightforge {
     /// The action panel for a game Battle.net installs and starts.
@@ -399,7 +400,7 @@ impl Lightforge {
             .style(theme::ghost)
             .padding(theme::tap([theme::XS, theme::SM]))
         };
-        row![
+        let mut links = row![
             // Disabled until there is an install.
             self.ring(
                 focus::Target::Addons,
@@ -423,8 +424,21 @@ impl Lightforge {
         ]
         // Each link carries its own air.
         .spacing(theme::XS)
-        .align_y(Alignment::Center)
-        .into()
+        .align_y(Alignment::Center);
+
+        // A direct launch's login server; Battle.net has its own picker.
+        if self.local.version.is_some() && self.kind_of(&self.selected.code) == Kind::Managed {
+            links = links.push(self.picker(
+                "login region".to_owned(),
+                Portal::ALL.to_vec(),
+                self.local.portal,
+                "region",
+                Message::LoginRegionPicked,
+                Length::Shrink,
+                theme::LABEL,
+            ));
+        }
+        links.into()
     }
 
     /// The right of the panel: the primary action with its cog, Battle.net

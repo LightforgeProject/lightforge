@@ -291,6 +291,7 @@ fn a_game_on_an_absent_drive_is_held_rather_than_played_or_downloaded() {
         executable: Some(PathBuf::from("/nowhere/Wow.exe")),
         store_files: 12,
         staged: None,
+        portal: None,
     };
     assert!(matches!(app.action(), ActionState::Play));
 
@@ -1536,6 +1537,7 @@ fn a_pre_download_leaves_play_alone() {
         executable: Some(PathBuf::from("/nowhere/Wow.exe")),
         store_files: 12,
         staged: None,
+        portal: None,
     };
     let code = app.selected.code.clone();
     app.queue.push(paused_pre_download(code.clone()));
