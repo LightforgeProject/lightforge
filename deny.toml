@@ -15,6 +15,9 @@ ignore = [
     { id = "RUSTSEC-2026-0367", reason = "extract() is never called, archive modes are never applied" },
     { id = "RUSTSEC-2026-0368", reason = "extract() is never called, no symlink is ever created from an archive" },
     { id = "RUSTSEC-2026-0369", reason = "extract() is never called, archive modes are never applied" },
+    # A symlink entry's declared size sizes an allocation inside extract().
+    # Ours never allocate from a declared size: io::copy under a take() cap.
+    { id = "RUSTSEC-2026-0429", reason = "extract() is never called, entry sizes never size an allocation" },
 ]
 
 [licenses]
