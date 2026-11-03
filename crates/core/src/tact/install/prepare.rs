@@ -14,9 +14,10 @@ use crate::tact::config::{BuildConfig, CdnConfig, KeyPair};
 use crate::tact::encoding::Encoding;
 use crate::tact::indices::{IndexCache, Locations};
 use crate::tact::manifest::{DownloadEntry, DownloadManifest, InstallManifest, Tag, TagSet};
-use crate::tact::plan::{reverse_encoding, Options as PlanOptions, Plan};
+use crate::tact::plan::{reverse_encoding, Loose, Options as PlanOptions, Plan};
 use crate::tact::storage::{EKey, Storage};
 use crate::tact::version;
+use crate::text::hex;
 
 /// Everything resolved before a byte is fetched: what the build is, what is
 /// wanted, and where each key lives. Enough for a dry run or a size.
@@ -34,6 +35,10 @@ pub struct Prepared {
     pub cdn: version::Cdn,
     pub client: Client,
     pub encoding: Encoding,
+    /// The encoding manifest as the CDN served it, for the store: the client
+    /// needs it at start and no manifest lists it.
+    pub encoding_key: EKey,
+    pub encoding_blte: Vec<u8>,
     pub install: InstallManifest,
     pub locations: Locations,
     pub loose: FileIndex,
@@ -241,7 +246,11 @@ pub async fn prepare(
         }
     };
 
-    let encoding = Encoding::parse(&fetch_manifest(Some(build.encoding), "encoding").await?)?;
+    let encoding_key = build.encoding.ekey.ok_or(InstallError::MissingManifest("encoding"))?;
+    let (encoding_blte, encoding) = {
+        let (blte, decoded) = client.fetch_loose_blte(http, &encoding_key, &build.encoding.ckey).await?;
+        (blte, Encoding::parse(&decoded)?)
+    };
     on_event(Event::Encoding { entries: encoding.len() });
 
     let download_manifest =
@@ -330,6 +339,21 @@ pub async fn prepare(
         have,
         PlanOptions { max_gap: options.gap_bytes, ..PlanOptions::default() },
     );
+    // No manifest lists the TVFS manifests, and the client reads them at
+    // start: left out, its first launch fetches them itself (with the
+    // encoding, 190 MiB for wowf 1.60.1.70707, measured 2026-11-03).
+    // `vfs-root` repeats `vfs-1`.
+    let mut queued = HashSet::new();
+    for pair in &build.vfs {
+        let Some(ekey) = pair.ekey else { continue };
+        if probe.has(&ekey) || !queued.insert(ekey) {
+            continue;
+        }
+        match loose.lookup(&ekey) {
+            Some(entry) => plan.loose.push(Loose { ekey, ckey: Some(pair.ckey), size: entry.size }),
+            None => tracing::warn!("TVFS manifest {} is not in the file index, left to the client", hex(&ekey)),
+        }
+    }
     if options.skip_loose {
         plan.loose.clear();
     }
@@ -355,6 +379,8 @@ pub async fn prepare(
         cdn,
         client,
         encoding,
+        encoding_key,
+        encoding_blte,
         install,
         locations,
         loose,

@@ -256,6 +256,7 @@ mod tests {
             },
             install: None,
             download: None,
+            vfs: Vec::new(),
             size: None,
         }
     }

@@ -41,6 +41,9 @@ pub struct BuildConfig {
     pub install: Option<KeyPair>,
     pub download: Option<KeyPair>,
     pub size: Option<KeyPair>,
+    /// The TVFS manifests, `vfs-root` and `vfs-1` to `vfs-N`, in no order.
+    /// The client reads them at start and no other manifest lists them.
+    pub vfs: Vec<KeyPair>,
 }
 
 impl BuildConfig {
@@ -63,6 +66,12 @@ impl BuildConfig {
             install: pair("install"),
             download: pair("download"),
             size: pair("size"),
+            vfs: config
+                .values
+                .keys()
+                .filter(|key| key.starts_with("vfs-") && !key.ends_with("-size"))
+                .filter_map(|key| pair(key))
+                .collect(),
         })
     }
 
@@ -245,6 +254,35 @@ build-product = WoW
         let build = BuildConfig::parse(REAL_BUILD).unwrap();
         assert_ne!(hex(&build.encoding.ckey), "199496988");
         assert_eq!(build.encoding.ckey.len(), 16);
+    }
+
+    #[test]
+    fn every_tvfs_manifest_is_listed_and_no_size_line() {
+        // Trimmed verbatim from wowf 1.60.1.70707's build config.
+        let text = "\
+root = 9a43d50e1b05de8cd9c8930762290b5e
+encoding = d8812e84dabbd70e5bc08359aa55366c 04d104d7d75f945466ad45ed8af46eae
+vfs-root = 68f35ce1e85d44a6b0a4d438deb0e228 b48915e76575572e7bc495b655b2668f
+vfs-root-size = 37378 23804
+vfs-1 = 68f35ce1e85d44a6b0a4d438deb0e228 b48915e76575572e7bc495b655b2668f
+vfs-1-size = 37378 23804
+vfs-2 = d79e3fefce9db65b712b4ef06968f519 3ca9f4cef5d411a729dfdc0f6c7cfe4e
+vfs-2-size = 154 178
+vfs-575 = 9fea321735471916d55efd94bf4c2948 8b68090288c2911e0241eaffb759df13
+vfs-575-size = 91269105 57905793
+";
+        let build = BuildConfig::parse(text).unwrap();
+        let mut ekeys: Vec<String> = build.vfs.iter().filter_map(|p| p.ekey).map(|e| hex(&e)).collect();
+        ekeys.sort();
+        assert_eq!(
+            ekeys,
+            [
+                "3ca9f4cef5d411a729dfdc0f6c7cfe4e",
+                "8b68090288c2911e0241eaffb759df13",
+                "b48915e76575572e7bc495b655b2668f",
+                "b48915e76575572e7bc495b655b2668f",
+            ]
+        );
     }
 
     #[test]
