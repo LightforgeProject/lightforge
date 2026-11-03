@@ -106,7 +106,10 @@ pub async fn list(layout: Layout, code: ProductCode) -> Listing {
             let dropped = ledger.prune_missing(&dir);
             if !dropped.is_empty() {
                 if let Some(path) = &path {
-                    let _ = ledger.save(path);
+                    // Unsaved, the dropped entries come back next time.
+                    if let Err(e) = ledger.save(path) {
+                        tracing::warn!("could not save the addon ledger {}: {}", path.display(), chain(&e));
+                    }
                 }
                 crate::trace::mark(format_args!(
                     "dropped from the addon ledger, folders gone: {}",

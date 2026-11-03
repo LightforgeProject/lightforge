@@ -236,9 +236,9 @@ impl Library {
         let marker = self.marker();
         match read_marker(&marker) {
             Some(existing) => self.id = existing,
-            None => {
-                std::fs::write(&marker, marker_text(&self.id)).map_err(io(&marker))?
-            }
+            // Atomic: a marker cut short by a crash would leave the drive
+            // looking like no library at all.
+            None => crate::fsutil::write_atomic(&marker, marker_text(&self.id).as_bytes()).map_err(io(&marker))?,
         }
         self.claimed = true;
         Ok(())

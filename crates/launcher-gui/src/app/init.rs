@@ -5,8 +5,8 @@ use crate::*;
 impl Lightforge {
     /// The state the first frame draws: the config, the layout it resolves
     /// to, and everything built from those. Nothing is started here.
-    pub(crate) fn load_state() -> Self {
-        let dirs = AppDirs::discover().ok();
+    /// The app's state from `dirs`: the user's own, or a test's scratch.
+    pub(crate) fn load_state(dirs: Option<AppDirs>) -> Self {
         // Missing: a first run. Unloadable: stop, not save defaults over it.
         let loaded = dirs.as_ref().map(|d| Config::load_or_default(&d.config_file()));
         let config_error = match (&loaded, dirs.as_ref()) {

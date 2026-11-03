@@ -515,7 +515,7 @@ struct Lightforge {
 
 impl Lightforge {
     fn new() -> (Self, Task<Message>) {
-        let mut app = Self::load_state();
+        let mut app = Self::load_state(AppDirs::discover().ok());
         let task = app.startup_tasks();
         (app, task)
     }
