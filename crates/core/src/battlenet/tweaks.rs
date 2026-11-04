@@ -148,6 +148,21 @@ pub fn product_tweaks(codes: &[ProductCode]) -> Vec<Tweak> {
         .collect()
 }
 
+/// Whether the client updates `uid` by itself. There is no command for starting
+/// an update (its `--exec` verbs are `launch`, `launch_uid`, `launch_register`,
+/// `dialog`, `logout` and `shutdown`); this, read when it starts, is what makes
+/// one begin within seconds (measured on Forever, 2026-11-04).
+pub fn auto_update_tweak(uid: &str, on: bool) -> Tweak {
+    Tweak::new(
+        &format!("Games.{uid}.AutoUpdate"),
+        json!(match on {
+            true => "true",
+            false => "false",
+        }),
+        "a game Battle.net owns updates when the user asks for it, not behind their back",
+    )
+}
+
 /// Defaults for a per-account `<hash>.config`. The client stores window
 /// behaviour per account and ignores these keys in `Battle.net.config`.
 pub fn account_tweaks(background: bool) -> Vec<Tweak> {

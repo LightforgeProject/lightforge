@@ -61,6 +61,32 @@ impl Lightforge {
         Task::perform(tasks::client_running(self.layout.clone()), Message::ClientSeen)
     }
 
+    /// Ask the client's log about the selected game, for the button's word.
+    /// Only where pressing it can do something about the answer.
+    pub(crate) fn check_update_pending(&self) -> Task<Message> {
+        let code = self.selected.code.clone();
+        if !self.config.battle_net_in_background || Kind::of(&code) != Kind::HandOff {
+            return Task::none();
+        }
+        let uid = self.install_uid_of(&code);
+        Task::perform(
+            tasks::update_pending(self.layout.clone(), self.config.prefix_user.clone(), uid),
+            move |pending| Message::ClientUpdatePending(code.clone(), pending),
+        )
+    }
+
+    /// Have the client update a game, and follow it on the game's panel.
+    pub(crate) fn start_client_update(&mut self, code: ProductCode) -> Task<Message> {
+        let progress = Arc::new(std::sync::Mutex::new(state::Progress::default()));
+        let stop = lightforge_core::tact::download::Cancel::new();
+        self.client_update = Some(ClientUpdate { code: code.clone(), progress: progress.clone(), stop: stop.clone() });
+        let uid = self.install_uid_of(&code);
+        Task::perform(
+            tasks::update_through_client(self.layout.clone(), self.config.prefix_user.clone(), uid, progress, stop),
+            move |result| Message::ClientUpdateDone(code.clone(), result),
+        )
+    }
+
     /// A launch that ended without a game. An error, not a status line: the
     /// state re-read after it overwrites the status within milliseconds.
     pub(crate) fn launch_failed(&mut self, why: &str) -> Task<Message> {
@@ -355,6 +381,7 @@ impl Lightforge {
         let installed = self.installed_versions.contains_key(self.selected.code.as_str());
         match (family.is_some(), installed) {
             (false, _) => HandoffAct::OpenClient,
+            (true, true) if self.update_pending.as_ref() == Some(&self.selected.code) => HandoffAct::Update,
             (true, true) => HandoffAct::Play,
             (true, false) => HandoffAct::Install,
         }

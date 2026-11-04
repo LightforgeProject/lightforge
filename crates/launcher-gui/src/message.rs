@@ -360,6 +360,12 @@ pub(crate) enum Message {
     BattleNetInBackground(bool),
     /// What came of starting it out of sight.
     BackgroundClient(Result<tasks::Warmed, Problem>),
+    /// Whether the client holds this game back for an update.
+    ClientUpdatePending(ProductCode, bool),
+    /// Stop following a game's update. The client carries on.
+    StopWatchingClientUpdate,
+    /// The update the client was running for this game ended.
+    ClientUpdateDone(ProductCode, Result<tasks::ClientUpdated, Problem>),
     /// Battle.net's own limit, as read from its config.
     BattleNetLimitRead(Option<u64>),
     /// The Battle.net limit field changed.

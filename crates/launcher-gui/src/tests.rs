@@ -1800,6 +1800,70 @@ fn a_launch_that_starts_nothing_says_why_where_it_stays_on_screen() {
 }
 
 #[test]
+fn the_button_says_update_while_the_client_holds_the_game_back() {
+    let (mut app, _scratch) = test_app();
+    // A product with a compiled-in family, so the client knows which tile.
+    app.selected.code = ProductCode::Forever;
+    app.installed_versions.insert("wowf".to_owned(), "1.60.1".to_owned());
+    assert_eq!(app.handoff_act(), HandoffAct::Play);
+
+    let _ = app.update(Message::ClientUpdatePending(ProductCode::Forever, true));
+    assert_eq!(app.handoff_act(), HandoffAct::Update);
+    assert_eq!(app.handoff_act().label(), "Update via Battle.net");
+
+    let _ = app.update(Message::ClientSeen(false));
+    assert_eq!(app.handoff_act(), HandoffAct::Play, "no client, nothing known about it");
+}
+
+#[test]
+fn a_battle_net_game_held_for_an_update_updates_and_leaves_the_launcher_free() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.battle_net_in_background = true;
+    let hearthstone = ProductCode::Custom("hs_beta".to_owned());
+    app.selected.code = hearthstone.clone();
+    app.busy = true;
+    app.launching = Some(hearthstone.clone());
+
+    let _ = app.update(Message::HandoffStarted(Ok(tasks::Handoff::NeedsUpdate)));
+    assert!(!app.busy, "WoW can be played during a Hearthstone patch");
+    assert!(app.error.is_none());
+    assert_eq!(app.client_update.as_ref().map(|u| u.code.clone()), Some(hearthstone.clone()));
+    let _ = app.view();
+
+    let _ = app.update(Message::StopWatchingClientUpdate);
+    assert!(app.client_update.as_ref().is_some_and(|u| u.stop.is_cancelled()));
+
+    let _ = app.update(Message::ClientUpdateDone(hearthstone, Ok(tasks::ClientUpdated::StoppedWatching)));
+    assert!(app.client_update.is_none() && !app.busy, "stopping watching starts nothing");
+}
+
+#[test]
+fn a_finished_update_starts_the_game_it_was_asked_for() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    let hearthstone = ProductCode::Custom("hs_beta".to_owned());
+    app.selected.code = hearthstone.clone();
+    let _ = app.start_client_update(hearthstone.clone());
+
+    let _ = app.update(Message::ClientUpdateDone(hearthstone, Ok(tasks::ClientUpdated::Completed)));
+    assert!(app.busy, "the launch's pre-flight is under way");
+}
+
+#[test]
+fn a_game_lightforge_manages_is_never_updated_through_the_client() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.battle_net_in_background = true;
+    app.launching = Some(ProductCode::Forever);
+    app.busy = true;
+
+    let _ = app.update(Message::HandoffStarted(Ok(tasks::Handoff::NeedsUpdate)));
+    assert!(app.client_update.is_none());
+    assert!(app.error.as_ref().is_some_and(|e| e.message.contains("press Play")));
+}
+
+#[test]
 fn a_client_that_gave_way_returns_once_nothing_needs_the_prefix() {
     let (mut app, _scratch) = test_app();
     app.dirs = None;

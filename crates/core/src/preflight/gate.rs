@@ -138,6 +138,13 @@ impl Preflight {
         // prefix update, without `HideOnClose`, so it is re-applied every launch.
         let mut tweaks = battlenet::default_tweaks(layout, self.background);
         tweaks.extend(battlenet::product_tweaks(&self.managed));
+        // A client that stays up must not start downloads nobody asked for.
+        // Here because it rewrites the file on exit, undoing what an update
+        // asked for: only a closed client can be told.
+        if self.background {
+            let known = battlenet::known_product_codes(layout, &self.user);
+            tweaks.extend(known.iter().map(|uid| battlenet::auto_update_tweak(uid, false)));
+        }
         let mut configs = vec![battlenet::configure(layout, &self.user, &tweaks)?];
         configs.extend(battlenet::configure_accounts(
             layout,

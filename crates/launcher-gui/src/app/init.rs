@@ -113,6 +113,8 @@ impl Lightforge {
             client_menu_open: false,
             client_phase: ClientPhase::Settled,
             launch_after_client: None,
+            update_pending: None,
+            client_update: None,
             quitting_client: false,
             quit_client_dialog: None,
             scan_rx: None,

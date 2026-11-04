@@ -4,6 +4,7 @@ use std::time::{Duration, Instant, SystemTime};
 use serde_json::Value;
 
 use crate::paths::Layout;
+use crate::state::Progress;
 
 /// Whether the client signs in by itself, which is what makes starting it
 /// minimized safe: a hidden sign-in form is a launch that never happens.
@@ -151,6 +152,57 @@ pub(super) fn pending_update(log: &str, uid: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Where the client has got with updating a game.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateState {
+    NotStarted,
+    /// Empty while the log has given no sizes: a bar with no number, never a
+    /// guessed one.
+    Running(Progress),
+    Completed,
+}
+
+/// What a client session's log says about updating `uid`. The sizes are on the
+/// `InstallState` lines, each carrying only the fields that changed:
+///
+/// ```text
+/// InstallState (hs_beta): currentOperationStatus=Running bytesToDownload=52458135 … downloadRate=1807604 downloadRemaining=52458135 progress=0.3
+/// ```
+pub(super) fn update_state(log: &str, uid: &str) -> UpdateState {
+    let started = format!("Update started: {uid}");
+    let completed = format!("Update completed: {uid}");
+    let state = format!("InstallState ({uid}): ");
+    let mut seen = false;
+    let (mut total, mut remaining, mut rate) = (0u64, 0u64, 0u64);
+    for line in log.lines() {
+        if line.ends_with(&completed) {
+            return UpdateState::Completed;
+        }
+        if line.ends_with(&started) {
+            seen = true;
+        }
+        let Some((_, fields)) = line.split_once(&state) else { continue };
+        for (key, value) in fields.split_whitespace().filter_map(|field| field.split_once('=')) {
+            let Ok(value) = value.parse::<u64>() else { continue };
+            match key {
+                // Back to zero once downloaded, with the patch still to apply.
+                "bytesToDownload" => total = total.max(value),
+                "downloadRemaining" => remaining = value,
+                "downloadRate" => rate = value,
+                _ => {}
+            }
+        }
+    }
+    match seen {
+        true => UpdateState::Running(Progress {
+            downloaded_bytes: total.saturating_sub(remaining),
+            total_bytes: total,
+            bytes_per_second: rate,
+        }),
+        false => UpdateState::NotStarted,
+    }
+}
+
 /// The log of the client session running now, read from where it stood when
 /// found.
 pub struct SessionLog {
@@ -199,6 +251,12 @@ impl SessionLog {
     /// Whether the client is holding `uid` back for an update.
     pub fn pending_update(&self, uid: &str) -> bool {
         std::fs::read_to_string(&self.path).is_ok_and(|text| pending_update(&text, uid))
+    }
+
+    /// Where the client has got with updating `uid` during this session.
+    pub fn update_state(&self, uid: &str) -> UpdateState {
+        let text = std::fs::read_to_string(&self.path).unwrap_or_default();
+        update_state(&text, uid)
     }
 
     /// Whether the client took a launch sent after [`SessionLog::find`].

@@ -12,6 +12,13 @@ use super::*;
 /// signing it in by hand.
 const SIGN_IN_PATIENCE: Duration = Duration::from_secs(30 * 60);
 
+/// How long an update gets to show up in the log. It began 2 s after the client
+/// came up on Forever; a client still updating itself may make a game wait.
+const UPDATE_STARTS_WITHIN: Duration = Duration::from_secs(60);
+
+/// The log gets a progress line about every 1.5 s.
+const UPDATE_POLL: Duration = Duration::from_millis(500);
+
 /// The background client went away for a reason that passes, and is owed a
 /// restart once nothing needs the prefix. A static because the work that
 /// closes it runs far from the app's state; the client poll reads it.
@@ -81,6 +88,80 @@ pub async fn await_sign_in(layout: Layout, user: String, started: SystemTime) ->
     })
     .await
     .map_err(|e| Problem::of(&e))
+}
+
+/// What came of following an update through the client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientUpdated {
+    Completed,
+    /// The user stopped watching. The client carries on regardless.
+    StoppedWatching,
+}
+
+/// Have the client update `uid`, and follow it. Battle.net owns this game's
+/// files; Lightforge only starts the client so that it updates, and reads its log.
+pub async fn update_through_client(
+    layout: Layout,
+    user: String,
+    uid: String,
+    progress: Arc<Mutex<lightforge_core::state::Progress>>,
+    stop: Cancel,
+) -> Result<ClientUpdated, Problem> {
+    use lightforge_core::battlenet::{SessionLog, UpdateState};
+
+    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
+        if let Some(game) = preflight::games_running(&layout).first() {
+            return Err(format!("close {} first — Battle.net has to restart for this update", game.name).into());
+        }
+        let runner = lone_client_runner(&layout)?;
+        // Read when it starts, and written back when it exits.
+        preflight::quit_client(&runner, &layout, STOP_GRACE).map_err(|e| Problem::of(&e))?;
+        battlenet::configure(&layout, &user, &[battlenet::auto_update_tweak(&uid, true)])
+            .map_err(|e| Problem::of(&e))?;
+        tracing::info!("asking Battle.net to update {uid}");
+        LAUNCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+        let started = start_client(&in_tls_container(runner)?, &layout, &user, true)?;
+        if battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT) == Readiness::NeedsAttention {
+            return Err("Battle.net needs you to sign in — press its button, then try the update again".into());
+        }
+        let log = SessionLog::find(&layout, &user)
+            .ok_or_else(|| Problem::from("Battle.net's log cannot be read"))?;
+
+        let began = Instant::now();
+        loop {
+            if stop.is_cancelled() {
+                return Ok(ClientUpdated::StoppedWatching);
+            }
+            match log.update_state(&uid) {
+                UpdateState::Completed => return Ok(ClientUpdated::Completed),
+                UpdateState::Running(now) => {
+                    if let Ok(mut shown) = progress.lock() {
+                        *shown = now;
+                    }
+                }
+                UpdateState::NotStarted if began.elapsed() >= UPDATE_STARTS_WITHIN => {
+                    return Err("Battle.net did not start the update — open Battle.net to see why".into());
+                }
+                UpdateState::NotStarted => {}
+            }
+            if !preflight::client_running(&layout) {
+                return Err("Battle.net closed during the update".into());
+            }
+            std::thread::sleep(UPDATE_POLL);
+        }
+    })
+    .await
+    .map_err(|e| Problem::of(&e))?
+}
+
+/// Whether the client holds `uid` back for an update, from its log.
+pub async fn update_pending(layout: Layout, user: String, uid: String) -> bool {
+    tokio::task::spawn_blocking(move || {
+        battlenet::SessionLog::find(&layout, &user).is_some_and(|log| log.pending_update(&uid))
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// Close the client unless something is using it: a game, or a window someone

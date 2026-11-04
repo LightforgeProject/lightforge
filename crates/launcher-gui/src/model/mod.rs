@@ -205,6 +205,8 @@ pub(crate) struct Maintain {
 pub(crate) enum HandoffAct {
     /// Installed, and the client knows which tile it is: start it.
     Play,
+    /// Installed, and the client holds it back for an update: run that, then start it.
+    Update,
     /// Known tile, nothing installed: land on it so Install can be pressed.
     Install,
     /// No game family, so nothing can be named. Opens the client and stops.
@@ -215,6 +217,7 @@ impl HandoffAct {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Play => "Play via Battle.net",
+            Self::Update => "Update via Battle.net",
             Self::Install => "Install via Battle.net",
             Self::OpenClient => "Open Battle.net",
         }
@@ -226,7 +229,7 @@ impl HandoffAct {
     pub(crate) fn colour(self) -> Option<iced::Color> {
         match self {
             Self::Play => Some(theme::ACCENT),
-            Self::Install => Some(theme::PAUSE),
+            Self::Update | Self::Install => Some(theme::PAUSE),
             Self::OpenClient => None,
         }
     }
@@ -238,6 +241,11 @@ impl HandoffAct {
                 "Lightforge starts Battle.net, waits for it to sign in, tells it to launch \
                  this game, and holds here until the game exits. Battle.net installs and \
                  updates it; Lightforge never touches its files."
+            }
+            Self::Update => {
+                "Battle.net has an update for this game. Lightforge restarts it out of sight \
+                 so that it updates, shows the progress here, and starts the game when it is \
+                 done. Battle.net does the patching; Lightforge never touches its files."
             }
             Self::Install => {
                 "Lightforge opens Battle.net's install dialog for this game, where you \
@@ -254,7 +262,8 @@ impl HandoffAct {
 
     pub(crate) fn message(self) -> Message {
         match self {
-            Self::Play => Message::BattleNet,
+            // The same hand-off: it finds the update and deals with it.
+            Self::Play | Self::Update => Message::BattleNet,
             Self::Install => Message::InstallViaBattleNet,
             Self::OpenClient => Message::OpenBattleNet,
         }
@@ -269,6 +278,14 @@ pub(crate) enum ClientPhase {
     SigningIn,
     /// Out of sight, and waiting for someone to sign it in.
     NeedsSignIn,
+}
+
+/// A game's update, running in the client and followed through its log.
+#[derive(Debug, Clone)]
+pub(crate) struct ClientUpdate {
+    pub(crate) code: ProductCode,
+    pub(crate) progress: Arc<std::sync::Mutex<state::Progress>>,
+    pub(crate) stop: lightforge_core::tact::download::Cancel,
 }
 
 /// What a pre-flight pass is clearing the way for.

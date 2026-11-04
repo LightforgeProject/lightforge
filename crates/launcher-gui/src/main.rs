@@ -294,6 +294,10 @@ struct Lightforge {
     client_phase: ClientPhase,
     /// A launch through the client, waiting for it to finish signing in.
     launch_after_client: Option<Launch>,
+    /// The game the client holds back for an update, of those asked about.
+    update_pending: Option<ProductCode>,
+    /// The update being followed.
+    client_update: Option<ClientUpdate>,
     /// Battle.net is being closed.
     quitting_client: bool,
     quit_client_dialog: Option<QuitClientDialog>,

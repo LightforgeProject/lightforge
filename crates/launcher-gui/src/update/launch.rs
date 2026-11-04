@@ -166,11 +166,23 @@ impl Lightforge {
                     }
                     Ok(tasks::Handoff::NeedsUpdate) => {
                         let code = self.launching.clone().unwrap_or_else(|| self.selected.code.clone());
-                        self.launch_failed(match Kind::of(&code) {
+                        match (Kind::of(&code), self.config.battle_net_in_background) {
                             // Its store is ours: Agent must not patch it.
-                            Kind::Managed => "Battle.net wants to update this game — press Play to start it here",
-                            Kind::HandOff => "Battle.net has an update for this game — open Battle.net to install it",
-                        })
+                            (Kind::Managed, _) => {
+                                self.launch_failed("Battle.net wants to update this game — press Play to start it here")
+                            }
+                            (Kind::HandOff, false) => {
+                                self.launch_failed("Battle.net has an update for this game — open Battle.net to install it")
+                            }
+                            // The lock is released: an update can take an hour,
+                            // and another game can be played meanwhile.
+                            (Kind::HandOff, true) => {
+                                self.busy = false;
+                                self.launching = None;
+                                self.status = "updating in Battle.net…".to_owned();
+                                self.start_client_update(code)
+                            }
+                        }
                     }
                     Ok(tasks::Handoff::Ignored) => {
                         self.launch_failed("Battle.net did not start the game — open Battle.net to see why")
@@ -249,6 +261,9 @@ impl Lightforge {
                         self.client_phase = ClientPhase::Settled;
                     }
                 }
+                if !up {
+                    self.update_pending = None;
+                }
                 if self.client_may_return() && tasks::take_client_owed() {
                     return Ok(self.warm_client());
                 }
@@ -259,7 +274,46 @@ impl Lightforge {
                         |()| Message::ClientWatch,
                     ));
                 }
+                match up {
+                    true => self.check_update_pending(),
+                    false => Task::none(),
+                }
+            }
+
+            Message::ClientUpdatePending(code, pending) => {
+                self.update_pending = pending.then_some(code);
                 Task::none()
+            }
+
+            Message::StopWatchingClientUpdate => {
+                if let Some(update) = &self.client_update {
+                    update.stop.cancel();
+                }
+                Task::none()
+            }
+
+            Message::ClientUpdateDone(code, result) => {
+                self.client_update = None;
+                self.update_pending = None;
+                match result {
+                    // Asked for by pressing Play, so it starts, unless the user
+                    // has since gone to another game or started something else.
+                    Ok(tasks::ClientUpdated::Completed) if self.selected.code == code && !self.busy => {
+                        self.preflight(Launch::BattleNet)
+                    }
+                    Ok(tasks::ClientUpdated::Completed) => {
+                        self.status = "the update is done".to_owned();
+                        Task::none()
+                    }
+                    Ok(tasks::ClientUpdated::StoppedWatching) => {
+                        self.status = "Battle.net carries on updating".to_owned();
+                        Task::none()
+                    }
+                    Err(e) => {
+                        self.error = Some(e);
+                        Task::none()
+                    }
+                }
             }
 
             Message::BackgroundClient(result) => {

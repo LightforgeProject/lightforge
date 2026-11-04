@@ -90,6 +90,7 @@ impl Lightforge {
         self.reset_addon_screen();
         Task::batch([
             self.reload(choice.code),
+            self.check_client(),
             Task::done(Message::AutoUpdateAddons),
             // The popular list is per flavor, so it follows the selection for
             // the same reason the installed list does.

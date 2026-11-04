@@ -18,6 +18,11 @@ impl Lightforge {
         });
 
         left = self.scan_progress(left);
+        let updating = self.client_update.as_ref().filter(|update| update.code == self.selected.code);
+        if let Some(update) = updating {
+            let progress = update.progress.lock().map(|p| *p).unwrap_or_default();
+            left = transfer_lines(left, progress, "Updating in Battle.net".to_owned());
+        }
         match self.installed_versions.get(self.selected.code.as_str()) {
             Some(version) => {
                 left = left.push(
@@ -55,9 +60,10 @@ impl Lightforge {
         let session = self.session(&self.selected.code);
         let stoppable = session.is_some_and(|s| !s.stopping);
         let open = button(
-            container(text(match session {
-                Some(session) => stop_label(session),
-                None => act.label(),
+            container(text(match (session, updating) {
+                (Some(session), _) => stop_label(session),
+                (None, Some(_)) => "Stop waiting",
+                (None, None) => act.label(),
             })
             .size(theme::HEADING))
             .center_x(Length::Fill),
@@ -73,11 +79,12 @@ impl Lightforge {
         .width(Length::Fixed(240.0))
         .height(Length::Fixed(theme::CONTROL_HEIGHT));
 
-        let press = match stoppable {
-            true => Message::AskStopGame,
-            false => act.message(),
+        let press = match (stoppable, updating) {
+            (true, _) => Message::AskStopGame,
+            (false, Some(_)) => Message::StopWatchingClientUpdate,
+            (false, None) => act.message(),
         };
-        let can_press = stoppable || (session.is_none() && !self.busy);
+        let can_press = stoppable || (session.is_none() && (!self.busy || updating.is_some()));
 
         container(
             row![

@@ -153,6 +153,41 @@ fn the_client_says_when_it_holds_a_game_back_for_an_update() {
 }
 
 #[test]
+fn an_update_is_followed_through_the_clients_log() {
+    // From a Hearthstone update, 2026-10-27.
+    let started = "D 2026-10-27 16:51:45.651795 [InstallManager] {Main} Update started: hs_beta\r\n";
+    let running = "D 2026-10-27 16:51:48.211613 [ProductState] {Main} InstallState (hs_beta): currentOperationStatus=Running bytesToDownload=52458135 updatesToApplySize=511408526 downloadRate=1807604 downloadRemaining=20000000 progress=0.3\r\n";
+    let applying = "D 2026-10-27 16:51:49.721426 [ProductState] {Main} InstallState (hs_beta): currentOperationStatus=Waiting bytesToDownload=0 updatesToApplySize=0 downloadRate=0 downloadRemaining=0 progress=1\r\n";
+    let completed = "D 2026-10-27 16:51:49.722062 [InstallManager] {Main} Update completed: hs_beta\r\n";
+
+    assert_eq!(update_state("", "hs_beta"), UpdateState::NotStarted);
+    assert_eq!(
+        update_state(started, "hs_beta"),
+        UpdateState::Running(crate::state::Progress::default()),
+        "no sizes yet: no number"
+    );
+    assert_eq!(
+        update_state(&format!("{started}{running}"), "hs_beta"),
+        UpdateState::Running(crate::state::Progress {
+            downloaded_bytes: 32458135,
+            total_bytes: 52458135,
+            bytes_per_second: 1807604,
+        })
+    );
+    let UpdateState::Running(done) = update_state(&format!("{started}{running}{applying}"), "hs_beta") else {
+        panic!("still running");
+    };
+    assert_eq!((done.downloaded_bytes, done.total_bytes), (52458135, 52458135));
+    assert_eq!(update_state(&format!("{started}{running}{completed}"), "hs_beta"), UpdateState::Completed);
+}
+
+#[test]
+fn another_games_update_is_not_this_ones() {
+    let other = "D 2026-11-04 08:09:52.148886 [InstallManager] {Main} Update completed: wow_classic\r\n";
+    assert_eq!(update_state(other, "wow"), UpdateState::NotStarted);
+}
+
+#[test]
 fn the_session_log_is_the_one_that_signed_in_not_the_second_invocation() {
     let dir = scratch("session-log");
     let layout = Layout::with_root(&dir);
