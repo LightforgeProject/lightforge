@@ -22,6 +22,7 @@ Lightforge 1.0.0-beta.10 is the update for the WoW Forever launch. It fixes the 
 - Get it from GitHub on addons now says why it failed when the author's link is out of date, instead of "this project no longer exists". Thanks to xalvor for the report.
 - Diagnostics now reports the versions bundled with your Proton, and warns about the open-source NVIDIA driver.
 - A crash can no longer leave a damaged drive marker or catalogue cache behind.
+- On NixOS the flake now starts Lightforge through steam-run-free, which has the 32-bit loader Proton needs, and the 32-bit advice shown there is corrected.
 
 ## 1.0.0-beta.9
 

@@ -78,6 +78,17 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.0.0-beta.10" date="2026-11-04">
+      <description>
+        <p>
+          The update for the WoW Forever launch. Fixes the problems that came
+          up around Forever and Battle.net and from bug reports, and adds
+          Seamless Battle.net Mode (experimental), Game Tools and a login
+          region picker.
+        </p>
+      </description>
+      <url>https://github.com/LightforgeProject/lightforge/blob/main/RELEASES.md</url>
+    </release>
     <release version="1.0.0-beta.9" date="2026-11-01">
       <description>
         <p>

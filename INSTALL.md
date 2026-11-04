@@ -2,7 +2,7 @@
 
 There's a package for Debian/Ubuntu, a COPR repository and a package for
 Fedora, a PKGBUILD for Arch, an installer for SteamOS, Bazzite and
-everything else, and an AppImage. You can also build it yourself: it's a Rust program with
+everything else, an AppImage and a Nix flake. You can also build it yourself: it's a Rust program with
 very few dependencies, so that takes three commands and a few minutes.
 
 Everything below installs the same two binaries, the menu entry and the icons.
@@ -11,12 +11,12 @@ Everything below installs the same two binaries, the menu entry and the icons.
 
 Download `lightforge_<version>_amd64.deb` from the
 [releases page](https://github.com/LightforgeProject/lightforge/releases).
-The file name says `1.0.0.beta.9` because GitHub doesn't allow a `~` in an
+The file name says `1.0.0.beta.10` because GitHub doesn't allow a `~` in an
 asset name. The version inside the package, which `apt` reads and sorts by,
-is `1.0.0~beta.9`:
+is `1.0.0~beta.10`:
 
 ```bash
-sudo apt install ./lightforge_1.0.0.beta.9-1_amd64.deb
+sudo apt install ./lightforge_1.0.0.beta.10-1_amd64.deb
 ```
 
 It needs glibc 2.35 or newer: Ubuntu 22.04, Debian 12 or anything later.
@@ -42,7 +42,7 @@ Without the repository, download `lightforge-<version>.x86_64.rpm` from the
 and install it by hand. You then download each new release yourself:
 
 ```bash
-sudo dnf install ./lightforge-1.0.0.beta.9-1.x86_64.rpm
+sudo dnf install ./lightforge-1.0.0.beta.10-1.x86_64.rpm
 ```
 
 The same file installs on openSUSE with `sudo zypper install`. Like the
@@ -139,6 +139,17 @@ build by itself.
 Asahi Linux on Apple Silicon uses 16K memory pages, and Wine does not run on
 those without Asahi's `muvm`. Expect it to fail there for now. If you try it on
 any ARM machine, tell me how it went, with the output of `lightforge doctor`.
+
+## NixOS
+
+```bash
+nix run github:LightforgeProject/lightforge
+```
+
+The flake starts Lightforge through `steam-run-free`, because Proton needs a
+32-bit loader in the standard paths and NixOS has none. Keep
+`hardware.graphics.enable32Bit = true;` set for Battle.net's 32-bit graphics.
+Steam itself isn't needed.
 
 ## Build it yourself
 
