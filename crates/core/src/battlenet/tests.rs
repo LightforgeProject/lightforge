@@ -115,6 +115,68 @@ fn a_launch_waits_for_the_game_list_not_just_the_sign_in() {
     assert!(client_ready(&signed, GAMES_GRACE), "a line that never comes costs the grace, not 60 s");
 }
 
+// From the client's log, 2026-11-04: Hearthstone ran, exited, and a launch
+// sent before Agent reported the exit only selected its tile.
+const HS_STARTED: &str = "D 2026-11-04 00:53:36.388350 [InstallManager] {Main} Game is running: hs_beta\r\n";
+const HS_GONE: &str = "D 2026-11-04 00:54:03.478889 [InstallManager] {Main} Game is no longer running: hs_beta\r\n";
+const W3_STARTED: &str = "D 2026-11-04 00:53:03.307605 [InstallManager] {Main} Game is running: w3\r\n";
+
+#[test]
+fn a_game_counts_as_running_until_the_client_hears_it_exit() {
+    assert!(!counts_as_running("", "hs_beta"));
+    assert!(counts_as_running(HS_STARTED, "hs_beta"));
+    assert!(!counts_as_running(&format!("{HS_STARTED}{HS_GONE}"), "hs_beta"));
+    assert!(counts_as_running(&format!("{HS_STARTED}{HS_GONE}{HS_STARTED}"), "hs_beta"));
+}
+
+#[test]
+fn another_game_running_does_not_hold_a_launch() {
+    assert!(!counts_as_running(W3_STARTED, "hs_beta"));
+    assert!(!counts_as_running(&format!("{HS_STARTED}{HS_GONE}{W3_STARTED}"), "hs_beta"));
+}
+
+#[test]
+fn the_client_says_whether_it_took_a_launch() {
+    let launching = "I 2026-11-04 00:53:34.342537 [GameLaunchController] {Main} LaunchBinary: uid=hs_beta selectedRegion=EU binaryType=game\r\n";
+    let updating = "I 2026-11-03 23:36:09.637024 [GameController] {Main} Update: uid=hs_beta selected region=EU\r\n";
+    let selected = "D 2026-11-04 00:54:03.082449 [GameController] {Main} Selecting game family by id: WTCG\r\n";
+    // `launch_uid` logs this, and it starts nothing.
+    let prioritized = "D 2026-11-04 00:50:12.000000 [GameController] {Main} Prioritize Update: uid=hs_beta\r\n";
+
+    assert_eq!(taken_in(launching), Some(Taken::Launching));
+    assert_eq!(taken_in(updating), Some(Taken::Updating));
+    assert_eq!(taken_in(selected), None);
+    assert_eq!(taken_in(prioritized), None);
+}
+
+#[test]
+fn the_session_log_is_the_one_that_signed_in_not_the_second_invocation() {
+    let dir = scratch("session-log");
+    let layout = Layout::with_root(&dir);
+    let logs = layout.battle_net_logs("steamuser");
+    std::fs::create_dir_all(&logs).unwrap();
+    let client = logs.join("battle.net-20261104T005254.117078.log");
+    std::fs::write(&client, format!("I [BNLogin] {SIGNED_IN}. |bnet=1:0:x\r\n{HS_STARTED}")).unwrap();
+    // Written after the client's, as every hand-off's own invocation is.
+    std::thread::sleep(Duration::from_millis(20));
+    std::fs::write(
+        logs.join("battle.net-20261104T005403.063011.log"),
+        "I [Main] {Main} Command line arguments: {[0]=--productcode=hs_beta, [1]=--exec=launch WTCG}\r\n",
+    )
+    .unwrap();
+
+    let session = SessionLog::find(&layout, "steamuser").unwrap();
+    assert!(!session.wait_until_closed("hs_beta", Duration::ZERO), "the client's log says it still runs");
+
+    let mut text = std::fs::read_to_string(&client).unwrap();
+    text.push_str(HS_GONE);
+    std::fs::write(&client, text).unwrap();
+    assert!(session.wait_until_closed("hs_beta", Duration::ZERO));
+    assert_eq!(session.taken(Duration::ZERO), Taken::Ignored, "only lines after it was found count");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn game_uids_are_client_family_ids_not_tact_codes() {
     use super::*;

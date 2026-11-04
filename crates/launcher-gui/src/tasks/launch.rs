@@ -257,10 +257,11 @@ pub async fn launch_via_battle_net(
     code: ProductCode,
     user: String,
     family: Option<String>,
+    install_uid: String,
     minimized: bool,
 ) -> Result<Handoff, Problem> {
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
-        use lightforge_core::battlenet::{self, Launch, Readiness};
+        use lightforge_core::battlenet::{self, Launch, Readiness, Taken};
         use lightforge_core::preflight;
 
         tracing::info!("hand-off to Battle.net for {} (family {family:?})", code.as_str());
@@ -308,6 +309,15 @@ pub async fn launch_via_battle_net(
             return Ok(Handoff::ClientClosed);
         }
 
+        // A game that just exited is still running to the client for a few
+        // seconds, and a launch then only selects its tile.
+        let session = battlenet::SessionLog::find(&layout, &user);
+        if let Some(log) = &session {
+            if !log.wait_until_closed(&install_uid, GAME_GONE_WITHIN) {
+                tracing::warn!("Battle.net still counts {install_uid} as running; sending the launch anyway");
+            }
+        }
+
         // The client raises its window for the command until the game is up;
         // one nobody could see before goes straight back to the tray.
         let client: Vec<u32> = preflight::scan(&layout)
@@ -333,6 +343,20 @@ pub async fn launch_via_battle_net(
                     tracing::warn!("stopped keeping Battle.net in the tray: {}", chain(&e));
                 }
             });
+        }
+
+        // A launch the client did not take would otherwise hold the button
+        // for the whole game wait, with nothing on screen to say why.
+        match session.map(|log| log.taken(TAKEN_WITHIN)) {
+            Some(Taken::Updating) => {
+                tracing::info!("Battle.net hand-off for {}: the client is updating it first", code.as_str());
+                return Ok(Handoff::Updating);
+            }
+            Some(Taken::Ignored) => {
+                tracing::warn!("Battle.net hand-off for {}: the client did not take the launch", code.as_str());
+                return Ok(Handoff::Ignored);
+            }
+            Some(Taken::Launching) | None => {}
         }
 
         let handoff = match preflight::wait_for_game_start(&layout, &before, HANDOFF_TIMEOUT) {
@@ -393,6 +417,10 @@ pub enum Handoff {
     NeedsAttention { minimized: bool },
     /// It was there and then it was not, closed while we waited.
     ClientClosed,
+    /// The client is updating the game before it can start.
+    Updating,
+    /// The client got the launch and did nothing with it.
+    Ignored,
     /// Signed in, told to launch, and nothing appeared.
     NothingStarted,
 }
@@ -401,6 +429,14 @@ pub enum Handoff {
 ///
 /// A cold start signs in after about 5.5 s; the rest is for bad days.
 pub(crate) const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How long a game that just exited gets to be gone in the client's eyes.
+/// Agent tells it 4 to 6 s late.
+pub(crate) const GAME_GONE_WITHIN: Duration = Duration::from_secs(15);
+
+/// How long the client gets to log what it did with a launch. It takes
+/// about 15 ms.
+pub(crate) const TAKEN_WITHIN: Duration = Duration::from_secs(10);
 
 /// How long after a hand-off the client's window is sent back to the tray.
 /// It closes it itself once the game runs: 3.3 s after a cold start, measured.

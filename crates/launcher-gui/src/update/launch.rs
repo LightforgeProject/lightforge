@@ -158,6 +158,12 @@ impl Lightforge {
                                 .to_owned(),
                         })))
                     }
+                    Ok(tasks::Handoff::Updating) => self.update(Message::Launched(Ok(
+                        "Battle.net is updating the game first — press Play again when it is done".to_owned(),
+                    ))),
+                    Ok(tasks::Handoff::Ignored) => self.update(Message::Launched(Ok(
+                        "Battle.net did not start the game — open Battle.net to see why".to_owned(),
+                    ))),
                     // Signed in, told to launch, and nothing came up.
                     Ok(tasks::Handoff::NothingStarted) => self.update(Message::Launched(Ok(
                         "Battle.net is open — no game started".to_owned(),

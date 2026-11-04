@@ -26,7 +26,7 @@ mod tests;
 
 pub use installer::{fetch_installer, InstallOutcome, Installer, INSTALLER_FILE, INSTALLER_URL};
 pub use launch::{game_uid, game_uri, launch, launch_wrapped, resolve_game_uid, Launch};
-pub use readiness::{signs_in_by_itself, wait_until_ready, Readiness};
+pub use readiness::{signs_in_by_itself, wait_until_ready, Readiness, SessionLog, Taken};
 pub use registry::{apply_registry, registry_tweaks, RegValue};
 pub use tweaks::{
     account_tweaks, apply_tweaks, configure, configure_accounts, default_tweaks, download_limit,

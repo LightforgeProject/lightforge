@@ -111,6 +111,107 @@ pub fn wait_until_ready(
     }
 }
 
+/// What the client logs when Agent reports a game it launched as up or gone.
+/// It hears of an exit 4 to 6 s late, and a launch it is sent meanwhile only
+/// selects the game's tile (measured 2026-11-04).
+pub(super) const GAME_RUNNING: &str = "Game is running: ";
+pub(super) const GAME_STOPPED: &str = "Game is no longer running: ";
+
+/// What the client logs on taking a launch: starting the game, or updating
+/// it first.
+pub(super) const LAUNCHING: &str = "[GameLaunchController] {Main} LaunchBinary: uid=";
+pub(super) const UPDATING: &str = "[GameController] {Main} Update: uid=";
+
+/// What the client did with a launch command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Taken {
+    Launching,
+    /// The game needs an update, which the client started instead.
+    Updating,
+    /// Nothing within the wait: no launch, no update.
+    Ignored,
+}
+
+/// Whether the client's log still has `uid` running.
+pub(super) fn counts_as_running(log: &str, uid: &str) -> bool {
+    let running = format!("{GAME_RUNNING}{uid}");
+    let stopped = format!("{GAME_STOPPED}{uid}");
+    log.lines()
+        .rev()
+        .find_map(|line| match line {
+            _ if line.ends_with(&running) => Some(true),
+            _ if line.ends_with(&stopped) => Some(false),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
+/// What a log written after a launch command says the client did with it.
+/// The command just sent is the only one, so any game's line answers.
+pub(super) fn taken_in(log: &str) -> Option<Taken> {
+    log.lines().find_map(|line| match line {
+        _ if line.contains(LAUNCHING) => Some(Taken::Launching),
+        _ if line.contains(UPDATING) => Some(Taken::Updating),
+        _ => None,
+    })
+}
+
+/// The log of the client session running now, read from where it stood when
+/// found.
+pub struct SessionLog {
+    path: PathBuf,
+    from: usize,
+}
+
+impl SessionLog {
+    /// The newest log that signed in. A second invocation writes one of its
+    /// own, newer, that only holds its command line.
+    pub fn find(layout: &Layout, user: &str) -> Option<Self> {
+        let mut logs: Vec<_> = std::fs::read_dir(layout.battle_net_logs(user))
+            .ok()?
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("battle.net-"))
+            .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
+            .collect();
+        logs.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+        logs.into_iter().take(4).find_map(|(_, path)| {
+            let text = std::fs::read_to_string(&path).ok()?;
+            text.contains(SIGNED_IN).then_some(Self { path, from: text.len() })
+        })
+    }
+
+    /// Wait until the client no longer counts `uid` as running. `false` if it
+    /// still does after `within`.
+    pub fn wait_until_closed(&self, uid: &str, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        loop {
+            let text = std::fs::read_to_string(&self.path).unwrap_or_default();
+            if !counts_as_running(&text, uid) {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(READY_POLL);
+        }
+    }
+
+    /// What the client did with a launch sent after [`SessionLog::find`].
+    pub fn taken(&self, within: Duration) -> Taken {
+        let deadline = Instant::now() + within;
+        loop {
+            let text = std::fs::read_to_string(&self.path).unwrap_or_default();
+            if let Some(taken) = text.get(self.from..).and_then(taken_in) {
+                return taken;
+            }
+            if Instant::now() >= deadline {
+                return Taken::Ignored;
+            }
+            std::thread::sleep(READY_POLL);
+        }
+    }
+}
+
 /// The most recently written `battle.net-*.log`, if newer than `since`. By
 /// mtime: the name carries the prefix's local time, which can differ from the host's.
 fn newest_log_after(dir: &Path, since: SystemTime) -> Option<PathBuf> {

@@ -201,6 +201,7 @@ impl Lightforge {
                         code.clone(),
                         self.config.prefix_user.clone(),
                         self.family_of(&code),
+                        self.install_uid_of(&code),
                         self.config.battle_net_minimized,
                     ),
                     Message::HandoffStarted,
