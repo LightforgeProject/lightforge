@@ -41,7 +41,7 @@ mod write;
 #[cfg(test)]
 mod tests;
 
-pub use read::{decode, read, Installed};
+pub use read::{countries, decode, read, Installed};
 pub use write::{
     encode, graft, lift, register, splice, unregister, upsert, without, write, ProductInstall,
     Record,

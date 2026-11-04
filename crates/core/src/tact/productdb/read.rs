@@ -59,6 +59,31 @@ pub fn read(path: &Path) -> Result<Vec<Installed>, ProductDbError> {
     Ok(decode(&bytes))
 }
 
+/// The account and geo countries Agent files its records under, which its tag
+/// expressions carry. Empty where the registry cannot say: no account has
+/// signed in yet, and the tags leave them out.
+pub fn countries(agent_dir: &Path) -> (String, String) {
+    let bytes = std::fs::read(agent_dir.join("product.db")).unwrap_or_default();
+    for (field, value) in Fields::new(&bytes) {
+        let (1, Wire::Bytes(record)) = (field, value) else { continue };
+        for (field, value) in Fields::new(record) {
+            let (3, Wire::Bytes(settings)) = (field, value) else { continue };
+            let (mut account, mut geo) = (String::new(), String::new());
+            for (field, value) in Fields::new(settings) {
+                match (field, value) {
+                    (11, Wire::Bytes(b)) => account = string(b),
+                    (12, Wire::Bytes(b)) => geo = string(b),
+                    _ => {}
+                }
+            }
+            if !account.is_empty() {
+                return (account, geo);
+            }
+        }
+    }
+    (String::new(), String::new())
+}
+
 pub(super) fn decode_install(bytes: &[u8]) -> Option<Installed> {
     let mut product = String::new();
     let mut product_code = String::new();

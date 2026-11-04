@@ -111,10 +111,18 @@ impl Options {
 
     /// [`Options::tag_column`] for a locale other than the one asked for,
     /// see [`shipped_locale`].
+    ///
+    /// In Agent's form: `.build.info` must read as it writes it, or Agent marks
+    /// the install unfinished and Battle.net will not start it. The `?`s select
+    /// the same files.
     fn tag_column_for(&self, locale: &str) -> String {
-        let r = self.region.as_str().to_uppercase();
-        let cpu = self.cpu.tag();
-        format!("Windows {cpu} {r} {locale} speech:Windows {cpu} {r} {locale} text")
+        crate::tact::productdb::agent_tags(
+            self.cpu.tag(),
+            self.region.as_str(),
+            locale,
+            &self.account_country,
+            &self.geo_country,
+        )
     }
 
     /// True when any option truncates the plan.

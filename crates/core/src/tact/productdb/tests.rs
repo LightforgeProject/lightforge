@@ -167,6 +167,16 @@ mod writing {
     }
 
     #[test]
+    fn the_countries_come_from_the_first_record_that_has_them() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(countries(dir.path()), (String::new(), String::new()), "no registry yet");
+
+        let bare = sample().with_countries("", "");
+        std::fs::write(dir.path().join("product.db"), encode(&[bare, sample()])).unwrap();
+        assert_eq!(countries(dir.path()), ("AUT".to_owned(), "AT".to_owned()));
+    }
+
+    #[test]
     fn agent_tags_parse_back_to_the_same_names_we_select_on() {
         use crate::tact::manifest::TagSet;
 

@@ -63,9 +63,13 @@ pub async fn download(
                     .library(&code)
                     .map(|library| library.windows_wow_path())
                     .unwrap_or_else(|| lightforge_core::paths::WINDOWS_WOW_PATH.to_owned());
+                let (account_country, geo_country) =
+                    lightforge_core::tact::productdb::countries(&layout.agent_dir());
                 let options = InstallOptions {
                     region,
                     locale,
+                    account_country,
+                    geo_country,
                     // Empty for a new install: its product config decides.
                     flavor: layout.known_flavor(&code).unwrap_or_default().to_owned(),
                     optional_tags: optional_tags.clone(),
