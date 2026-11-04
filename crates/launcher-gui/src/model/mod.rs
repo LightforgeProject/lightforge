@@ -261,6 +261,16 @@ impl HandoffAct {
     }
 }
 
+/// What the background Battle.net is doing, beyond running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClientPhase {
+    Settled,
+    /// Starting out of sight: it drops launch commands until this is over.
+    SigningIn,
+    /// Out of sight, and waiting for someone to sign it in.
+    NeedsSignIn,
+}
+
 /// What a pre-flight pass is clearing the way for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Launch {

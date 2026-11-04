@@ -47,6 +47,15 @@ pub struct GameProcess {
     pub name: String,
 }
 
+/// The pids of the client itself, not its CEF children or Agent.
+pub fn client_pids(layout: &Layout) -> Vec<u32> {
+    scan(layout)
+        .into_iter()
+        .filter(|p| p.kind == ProcKind::BattleNet)
+        .map(|p| p.pid)
+        .collect()
+}
+
 /// Whether a Battle.net client is already up in this prefix, and can take a
 /// launch command directly.
 pub fn client_running(layout: &Layout) -> bool {

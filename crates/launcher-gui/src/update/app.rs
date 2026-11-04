@@ -214,7 +214,10 @@ impl Lightforge {
             Message::BattleNetInBackground(on) => {
                 self.config.battle_net_in_background = on;
                 self.save_config();
-                Task::none()
+                match on {
+                    true => self.warm_client(),
+                    false => self.close_background_client(),
+                }
             }
             other => return Err(other),
         })

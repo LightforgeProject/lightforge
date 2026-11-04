@@ -111,6 +111,8 @@ impl Lightforge {
             gear_open: false,
             client_up: false,
             client_menu_open: false,
+            client_phase: ClientPhase::Settled,
+            launch_after_client: None,
             quitting_client: false,
             quit_client_dialog: None,
             scan_rx: None,
@@ -277,6 +279,7 @@ impl Lightforge {
         }
         // The splash is this art fetch; the wizard's first slide counts it.
         let artwork = self.open_splash();
+        let client = self.warm_client();
         Task::batch([
             self.reload(self.selected.code.clone()),
             addons,
@@ -287,6 +290,7 @@ impl Lightforge {
             bnet_limit,
             resume,
             artwork,
+            client,
             iced::system::information().map(|info| Message::SystemInfo(Box::new(info))),
         ])
     }

@@ -112,10 +112,10 @@ impl Lightforge {
                     "Keep Battle.net ready in the background",
                     "Games that start through Battle.net open without waiting for it to sign in.",
                     self.hint(
-                        "It stays signed in out of sight after it starts a game, instead of \
-                         exiting. World of Warcraft never goes through it, so it starts no \
-                         faster. Lightforge still closes it for a game pinned to another \
-                         Proton build.",
+                        "It starts hidden with Lightforge and closes with it, unless a game \
+                         or its window is open. Needs a saved sign-in. World of Warcraft never \
+                         goes through it, so it starts no faster. Lightforge still closes it \
+                         for a game pinned to another Proton build.",
                     ),
                     switch("battle.net in background", self.config.battle_net_in_background, Message::BattleNetInBackground),
                 ),

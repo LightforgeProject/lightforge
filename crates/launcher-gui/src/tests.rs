@@ -1725,6 +1725,57 @@ fn battle_net_running_offers_show_and_quit_and_closes_the_menu_when_it_goes() {
 }
 
 #[test]
+fn nothing_starts_in_the_background_unless_asked() {
+    let (mut app, _scratch) = test_app();
+    let _ = app.warm_client();
+    assert_eq!(app.client_phase, ClientPhase::Settled);
+}
+
+#[test]
+fn a_hand_off_waits_while_the_background_client_signs_in() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.client_phase = ClientPhase::SigningIn;
+
+    let _ = app.preflight(Launch::BattleNet);
+    assert_eq!(app.launch_after_client, Some(Launch::BattleNet));
+    assert!(app.busy, "the button is held while it waits");
+
+    let _ = app.update(Message::BackgroundClient(Ok(tasks::Warmed::Ready)));
+    assert_eq!(app.client_phase, ClientPhase::Settled);
+    assert_eq!(app.launch_after_client, None);
+}
+
+#[test]
+fn play_does_not_wait_for_the_background_client() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.client_phase = ClientPhase::SigningIn;
+
+    let _ = app.preflight(Launch::Game);
+    assert_eq!(app.launch_after_client, None);
+}
+
+#[test]
+fn a_client_that_needs_signing_in_releases_the_launch_waiting_on_it() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.client_phase = ClientPhase::SigningIn;
+    let _ = app.preflight(Launch::BattleNet);
+
+    let started = std::time::SystemTime::now();
+    let _ = app.update(Message::BackgroundClient(Ok(tasks::Warmed::NeedsSignIn { started })));
+    assert_eq!(app.client_phase, ClientPhase::NeedsSignIn);
+    assert!(!app.busy, "nobody can sign in behind a held button");
+
+    // Drawn with its warning dot.
+    let _ = app.view();
+
+    let _ = app.update(Message::ClientSeen(false));
+    assert_eq!(app.client_phase, ClientPhase::Settled, "it was quit, so it no longer needs anything");
+}
+
+#[test]
 fn quitting_battle_net_asks_first_only_when_a_game_runs() {
     let (mut app, _scratch) = test_app();
     app.dirs = None;

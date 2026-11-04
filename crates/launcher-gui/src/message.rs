@@ -358,6 +358,8 @@ pub(crate) enum Message {
     CloseBattleNetOnPlay(bool),
     /// Whether Battle.net is kept running between games.
     BattleNetInBackground(bool),
+    /// What came of starting it out of sight.
+    BackgroundClient(Result<tasks::Warmed, Problem>),
     /// Battle.net's own limit, as read from its config.
     BattleNetLimitRead(Option<u64>),
     /// The Battle.net limit field changed.

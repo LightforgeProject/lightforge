@@ -61,6 +61,30 @@ impl Lightforge {
         Task::perform(tasks::client_running(self.layout.clone()), Message::ClientSeen)
     }
 
+    /// Start the client out of sight, if that is what the user asked for.
+    pub(crate) fn warm_client(&mut self) -> Task<Message> {
+        if !self.config.battle_net_in_background
+            || !self.config.setup_complete
+            || self.config.battle_net_declined
+        {
+            return Task::none();
+        }
+        self.client_phase = ClientPhase::SigningIn;
+        Task::perform(
+            tasks::warm_battle_net(self.layout.clone(), self.config.prefix_user.clone()),
+            Message::BackgroundClient,
+        )
+    }
+
+    /// The setting was switched off: a client nobody is using goes with it.
+    pub(crate) fn close_background_client(&mut self) -> Task<Message> {
+        if !self.client_up || self.busy || self.quitting_client {
+            return Task::none();
+        }
+        self.quitting_client = true;
+        Task::perform(tasks::close_background_client(self.layout.clone()), Message::BattleNetQuit)
+    }
+
     /// Close Battle.net, unless a launch is under way: it may be the one
     /// starting the client.
     pub(crate) fn quit_client(&mut self) -> Task<Message> {
@@ -144,6 +168,13 @@ impl Lightforge {
         if self.addon_auto_running && !matches!(what, Launch::Client) {
             self.status = "finishing addon updates…".to_owned();
             self.launch_after_addons = Some(what);
+            return Task::none();
+        }
+
+        // The client drops commands until it has signed in.
+        if self.client_phase == ClientPhase::SigningIn && what != Launch::Game {
+            self.status = "Battle.net is signing in…".to_owned();
+            self.launch_after_client = Some(what);
             return Task::none();
         }
 

@@ -194,7 +194,10 @@ fn main() -> iced::Result {
     // Closing is handled by the app, so a transfer can checkpoint first.
     // Set after `window`, which replaces the settings wholesale.
     .exit_on_close_request(false)
-    .run()
+    .run()?;
+    // Here, not in a message: every way out of the app ends up on this line.
+    tasks::stop_background_client_at_exit();
+    Ok(())
 }
 
 struct Lightforge {
@@ -287,6 +290,10 @@ struct Lightforge {
     client_up: bool,
     /// Whether the menu beside a running Battle.net's button is open.
     client_menu_open: bool,
+    /// What the background client is doing, beyond running.
+    client_phase: ClientPhase,
+    /// A launch through the client, waiting for it to finish signing in.
+    launch_after_client: Option<Launch>,
     /// Battle.net is being closed.
     quitting_client: bool,
     quit_client_dialog: Option<QuitClientDialog>,

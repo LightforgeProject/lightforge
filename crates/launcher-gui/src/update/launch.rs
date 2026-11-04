@@ -232,8 +232,45 @@ impl Lightforge {
                 self.client_up = up;
                 if !up {
                     self.client_menu_open = false;
+                    // Quit before anyone signed it in.
+                    if self.client_phase == ClientPhase::NeedsSignIn {
+                        self.client_phase = ClientPhase::Settled;
+                    }
                 }
                 Task::none()
+            }
+
+            Message::BackgroundClient(result) => {
+                let waiting = self.launch_after_client.take();
+                match result {
+                    Ok(tasks::Warmed::NeedsSignIn { started }) => {
+                        // The first answer: watch for someone signing in. The
+                        // watch running out changes nothing.
+                        let watch = match self.client_phase == ClientPhase::SigningIn {
+                            true => Task::perform(
+                                tasks::await_sign_in(self.layout.clone(), self.config.prefix_user.clone(), started),
+                                Message::BackgroundClient,
+                            ),
+                            false => Task::none(),
+                        };
+                        self.client_phase = ClientPhase::NeedsSignIn;
+                        let released = match waiting {
+                            Some(_) => self.update(Message::Launched(Ok(
+                                "Battle.net needs you to sign in — press its button".to_owned(),
+                            ))),
+                            None => Task::none(),
+                        };
+                        Task::batch([watch, released, self.check_client()])
+                    }
+                    other => {
+                        if let Err(e) = other {
+                            tracing::warn!("Battle.net did not start in the background: {e}");
+                        }
+                        self.client_phase = ClientPhase::Settled;
+                        let launch = waiting.map_or_else(Task::none, |what| self.preflight(what));
+                        Task::batch([launch, self.check_client()])
+                    }
+                }
             }
 
             Message::ToggleClientMenu => {

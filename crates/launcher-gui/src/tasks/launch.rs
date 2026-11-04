@@ -252,6 +252,30 @@ pub(crate) fn reap_later(mut child: std::process::Child) {
     });
 }
 
+/// Start a client, in the tray or as a window. Returns the moment after which
+/// its log answers for this start.
+pub(crate) fn start_client(
+    runner: &lightforge_core::prefix::ProtonRunner,
+    layout: &Layout,
+    user: &str,
+    in_tray: bool,
+) -> Result<std::time::SystemTime, Problem> {
+    use lightforge_core::battlenet::{self, Launch};
+
+    let _ = battlenet::configure(layout, user, &battlenet::window_state_tweaks(in_tray));
+    // The preference is only read on an autostart.
+    let how = match in_tray {
+        true => Launch::Autostart,
+        false => Launch::Client,
+    };
+    let started = std::time::SystemTime::now();
+    // Wrappers here only: this invocation becomes the client.
+    let wrappers = config_tweaks().wrappers(&HostTools::detect());
+    let client = battlenet::launch_wrapped(runner, layout, &how, &wrappers).map_err(|e| Problem::of(&e))?;
+    reap_later(client);
+    Ok(started)
+}
+
 pub async fn launch_via_battle_net(
     layout: Layout,
     code: ProductCode,
@@ -280,21 +304,7 @@ pub async fn launch_via_battle_net(
         if !preflight::client_running(&layout) {
             // Minimized only where it signs itself in.
             let minimize = minimized && battlenet::signs_in_by_itself(&layout, &user);
-            let _ = battlenet::configure(&layout, &user, &battlenet::window_state_tweaks(minimize));
-
-            // The preference is only read on an autostart.
-            let how = match minimize {
-                true => Launch::Autostart,
-                false => Launch::Client,
-            };
-
-            let started = std::time::SystemTime::now();
-            // Wrappers here only: this invocation becomes the client.
-            let tools = HostTools::detect();
-            let wrappers = config_tweaks().wrappers(&tools);
-            let client = battlenet::launch_wrapped(&runner, &layout, &how, &wrappers)
-                .map_err(|e| Problem::of(&e))?;
-            reap_later(client);
+            let started = start_client(&runner, &layout, &user, minimize)?;
 
             if battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT)
                 == Readiness::NeedsAttention
@@ -320,12 +330,7 @@ pub async fn launch_via_battle_net(
 
         // The client raises its window for the command until the game is up;
         // one nobody could see before goes straight back to the tray.
-        let client: Vec<u32> = preflight::scan(&layout)
-            .into_iter()
-            .filter(|p| p.kind == preflight::ProcKind::BattleNet)
-            .map(|p| p.pid)
-            .collect();
-        let tray = match battlenet::ClientWindows::connect(client) {
+        let tray = match battlenet::ClientWindows::connect(preflight::client_pids(&layout)) {
             Ok(windows) if windows.any_shown().is_ok_and(|shown| !shown) => Some(windows),
             Ok(_) => None,
             Err(e) => {
@@ -484,7 +489,7 @@ pub async fn await_game_exit(
 }
 
 /// How long a game gets to close on `SIGTERM` before it is killed outright.
-const STOP_GRACE: Duration = Duration::from_secs(5);
+pub(crate) const STOP_GRACE: Duration = Duration::from_secs(5);
 
 /// Stop one running game, leaving Battle.net, other games and the rest of
 /// the prefix be.
