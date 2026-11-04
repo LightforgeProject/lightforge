@@ -61,6 +61,12 @@ impl Lightforge {
         Task::perform(tasks::client_running(self.layout.clone()), Message::ClientSeen)
     }
 
+    /// A launch that ended without a game. An error, not a status line: the
+    /// state re-read after it overwrites the status within milliseconds.
+    pub(crate) fn launch_failed(&mut self, why: &str) -> Task<Message> {
+        self.update(Message::Launched(Err(why.into())))
+    }
+
     /// Start the client out of sight, if that is what the user asked for.
     pub(crate) fn warm_client(&mut self) -> Task<Message> {
         if !self.config.battle_net_in_background
@@ -77,7 +83,8 @@ impl Lightforge {
     }
 
     /// Whether a background client that gave way can come back: nothing is
-    /// using the prefix or the game files.
+    /// using the prefix or writing the game files. A download counts: Agent
+    /// rewrites `product.db` from memory, over the record the install leaves.
     pub(crate) fn client_may_return(&self) -> bool {
         let removing_textures = self
             .game_settings
@@ -89,7 +96,7 @@ impl Lightforge {
             && !self.busy
             && !self.quitting_client
             && !self.in_play()
-            && self.maintenance().is_none()
+            && self.store_writer().is_none()
             && !removing_textures
     }
 

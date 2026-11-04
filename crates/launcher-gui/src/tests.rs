@@ -1787,6 +1787,19 @@ fn a_hand_off_games_pin_is_locked_only_while_the_client_is_kept_in_the_backgroun
 }
 
 #[test]
+fn a_launch_that_starts_nothing_says_why_where_it_stays_on_screen() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.busy = true;
+    app.launching = Some(ProductCode::Forever);
+
+    let _ = app.update(Message::HandoffStarted(Ok(tasks::Handoff::NeedsUpdate)));
+    assert!(!app.busy);
+    let shown = app.error.as_ref().expect("the status line would be overwritten by the reload");
+    assert!(shown.message.contains("press Play"), "{}", shown.message);
+}
+
+#[test]
 fn a_client_that_gave_way_returns_once_nothing_needs_the_prefix() {
     let (mut app, _scratch) = test_app();
     app.dirs = None;

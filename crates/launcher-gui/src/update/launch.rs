@@ -143,20 +143,16 @@ impl Lightforge {
                         Task::batch([self.game_up(game, None), self.minimize_if_asked()])
                     }
                     // Closed while signing in: nothing to hand off to.
-                    Ok(tasks::Handoff::ClientClosed) => self.update(Message::Launched(Ok(
-                        "Battle.net closed before the game could start — press Play again".to_owned(),
-                    ))),
-                    Ok(tasks::Handoff::NeedsAttention { minimized }) => {
-                        // Waiting on a person (two-factor, an update); left
-                        // running, and said where: a minimized client is in the tray.
-                        self.update(Message::Launched(Ok(match minimized {
-                            true => "Battle.net needs attention — open it from the tray, \
-                                     finish there and press Play"
-                                .to_owned(),
-                            false => "Battle.net needs attention — finish in its window and \
-                                      press Play there"
-                                .to_owned(),
-                        })))
+                    Ok(tasks::Handoff::ClientClosed) => {
+                        self.launch_failed("Battle.net closed before the game could start — press Play again")
+                    }
+                    // Waiting on a person (two-factor, an update); left running,
+                    // and said where: a minimized client is in the tray.
+                    Ok(tasks::Handoff::NeedsAttention { minimized: true }) => self.launch_failed(
+                        "Battle.net needs attention — open it from the tray, finish there and press Play",
+                    ),
+                    Ok(tasks::Handoff::NeedsAttention { minimized: false }) => {
+                        self.launch_failed("Battle.net needs attention — finish in its window and press Play there")
                     }
                     // Nothing went wrong that the user could act on: start it
                     // again and send the same launch. The button stays held.
@@ -165,19 +161,24 @@ impl Lightforge {
                         self.launch_after_client = Some(Launch::BattleNet);
                         self.warm_client()
                     }
-                    Ok(tasks::Handoff::ClientUpdated) => self.update(Message::Launched(Ok(
-                        "Battle.net updated itself — press Play again".to_owned(),
-                    ))),
-                    Ok(tasks::Handoff::Updating) => self.update(Message::Launched(Ok(
-                        "Battle.net is updating the game first — press Play again when it is done".to_owned(),
-                    ))),
-                    Ok(tasks::Handoff::Ignored) => self.update(Message::Launched(Ok(
-                        "Battle.net did not start the game — open Battle.net to see why".to_owned(),
-                    ))),
+                    Ok(tasks::Handoff::ClientUpdated) => {
+                        self.launch_failed("Battle.net updated itself — press Play again")
+                    }
+                    Ok(tasks::Handoff::NeedsUpdate) => {
+                        let code = self.launching.clone().unwrap_or_else(|| self.selected.code.clone());
+                        self.launch_failed(match Kind::of(&code) {
+                            // Its store is ours: Agent must not patch it.
+                            Kind::Managed => "Battle.net wants to update this game — press Play to start it here",
+                            Kind::HandOff => "Battle.net has an update for this game — open Battle.net to install it",
+                        })
+                    }
+                    Ok(tasks::Handoff::Ignored) => {
+                        self.launch_failed("Battle.net did not start the game — open Battle.net to see why")
+                    }
                     // Signed in, told to launch, and nothing came up.
-                    Ok(tasks::Handoff::NothingStarted) => self.update(Message::Launched(Ok(
-                        "Battle.net is open — no game started".to_owned(),
-                    ))),
+                    Ok(tasks::Handoff::NothingStarted) => {
+                        self.launch_failed("Battle.net is open — no game started")
+                    }
                     Err(e) => self.update(Message::Launched(Err(e))),
                 }
             }
@@ -276,9 +277,7 @@ impl Lightforge {
                         };
                         self.client_phase = ClientPhase::NeedsSignIn;
                         let released = match waiting {
-                            Some(_) => self.update(Message::Launched(Ok(
-                                "Battle.net needs you to sign in — press its button".to_owned(),
-                            ))),
+                            Some(_) => self.launch_failed("Battle.net needs you to sign in — press its button"),
                             None => Task::none(),
                         };
                         Task::batch([watch, released, self.check_client()])

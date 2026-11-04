@@ -136,17 +136,20 @@ fn another_game_running_does_not_hold_a_launch() {
 }
 
 #[test]
-fn the_client_says_whether_it_took_a_launch() {
-    let launching = "I 2026-11-04 00:53:34.342537 [GameLaunchController] {Main} LaunchBinary: uid=hs_beta selectedRegion=EU binaryType=game\r\n";
-    let updating = "I 2026-11-03 23:36:09.637024 [GameController] {Main} Update: uid=hs_beta selected region=EU\r\n";
-    let selected = "D 2026-11-04 00:54:03.082449 [GameController] {Main} Selecting game family by id: WTCG\r\n";
-    // `launch_uid` logs this, and it starts nothing.
-    let prioritized = "D 2026-11-04 00:50:12.000000 [GameController] {Main} Prioritize Update: uid=hs_beta\r\n";
+fn the_client_says_when_it_holds_a_game_back_for_an_update() {
+    // Forever, and Hearthstone beside it, at the client's start, 2026-11-04.
+    let waiting = "D 2026-11-04 07:51:18.920525 [ProductState] {Main} InstallState (wowf): currentOperation=Update currentOperationStatus=New installed=1 installPath=H:/World of Warcraft\r\n";
+    let fine = "D 2026-11-04 07:51:18.920568 [ProductState] {Main} InstallState (hs_beta): currentOperation=UpToDate currentOperationStatus=Paused installed=1 playable=1\r\n";
+    // Its own lines in between carry other fields, and say nothing about this.
+    let progress = "D 2026-11-03 23:36:12.000000 [ProductState] {Main} InstallState (wowf): currentOperationStatus=Running progress=0.3\r\n";
+    let finished = "D 2026-11-03 23:36:16.271653 [ProductState] {Main} InstallState (wowf): currentOperation=UpToDate currentOperationStatus=Paused\r\n";
 
-    assert_eq!(taken_in(launching), Some(Taken::Launching));
-    assert_eq!(taken_in(updating), Some(Taken::Updating));
-    assert_eq!(taken_in(selected), None);
-    assert_eq!(taken_in(prioritized), None);
+    assert!(pending_update(waiting, "wowf"));
+    assert!(pending_update(&format!("{waiting}{fine}{progress}"), "wowf"));
+    assert!(!pending_update(&format!("{waiting}{finished}"), "wowf"));
+    assert!(!pending_update(fine, "hs_beta"));
+    assert!(!pending_update(waiting, "hs_beta"), "another game's update");
+    assert!(!pending_update("", "wowf"));
 }
 
 #[test]
@@ -172,7 +175,12 @@ fn the_session_log_is_the_one_that_signed_in_not_the_second_invocation() {
     text.push_str(HS_GONE);
     std::fs::write(&client, text).unwrap();
     assert!(session.wait_until_closed("hs_beta", Duration::ZERO));
-    assert_eq!(session.taken(Duration::ZERO), Taken::Ignored, "only lines after it was found count");
+    assert!(!session.launch_taken(Duration::ZERO));
+
+    let mut text = std::fs::read_to_string(&client).unwrap();
+    text.push_str("I 2026-11-04 00:53:34.342537 [GameLaunchController] {Main} LaunchBinary: uid=hs_beta selectedRegion=EU binaryType=game\r\n");
+    std::fs::write(&client, text).unwrap();
+    assert!(session.launch_taken(Duration::ZERO));
 
     assert!(!session.updated_itself());
     let mut text = std::fs::read_to_string(&client).unwrap();

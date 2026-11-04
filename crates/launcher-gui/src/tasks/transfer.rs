@@ -43,6 +43,7 @@ pub async fn download(
     std::thread::Builder::new()
         .name("lightforge-download".to_owned())
         .spawn(move || {
+            make_way(&layout);
             let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
                 Ok(runtime) => runtime,
                 Err(e) => {

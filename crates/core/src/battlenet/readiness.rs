@@ -117,25 +117,13 @@ pub fn wait_until_ready(
 pub(super) const GAME_RUNNING: &str = "Game is running: ";
 pub(super) const GAME_STOPPED: &str = "Game is no longer running: ";
 
-/// What the client logs on taking a launch: starting the game, or updating
-/// it first.
+/// What the client logs on taking a launch.
 pub(super) const LAUNCHING: &str = "[GameLaunchController] {Main} LaunchBinary: uid=";
-pub(super) const UPDATING: &str = "[GameController] {Main} Update: uid=";
 
 /// What the client logs when it has updated itself. It then quits on the next
 /// command it gets, to switch to the new version, and does not come back
 /// (build 17952 to 17986, 2026-11-04).
 pub(super) const SELF_UPDATED: &str = "Update completed: battle.net";
-
-/// What the client did with a launch command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Taken {
-    Launching,
-    /// The game needs an update, which the client started instead.
-    Updating,
-    /// Nothing within the wait: no launch, no update.
-    Ignored,
-}
 
 /// Whether the client's log still has `uid` running.
 pub(super) fn counts_as_running(log: &str, uid: &str) -> bool {
@@ -151,14 +139,16 @@ pub(super) fn counts_as_running(log: &str, uid: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// What a log written after a launch command says the client did with it.
-/// The command just sent is the only one, so any game's line answers.
-pub(super) fn taken_in(log: &str) -> Option<Taken> {
-    log.lines().find_map(|line| match line {
-        _ if line.contains(LAUNCHING) => Some(Taken::Launching),
-        _ if line.contains(UPDATING) => Some(Taken::Updating),
-        _ => None,
-    })
+/// Whether the client's log has `uid` waiting on an update. A launch then only
+/// selects the game's tile; nothing starts and nothing is patched (measured on
+/// Forever, 2026-11-04). The line comes once with both fields, and again each
+/// time the operation changes.
+pub(super) fn pending_update(log: &str, uid: &str) -> bool {
+    let state = format!("InstallState ({uid}): currentOperation=");
+    log.lines()
+        .rev()
+        .find_map(|line| line.split_once(&state).map(|(_, rest)| rest.starts_with("Update ")))
+        .unwrap_or(false)
 }
 
 /// The log of the client session running now, read from where it stood when
@@ -206,16 +196,22 @@ impl SessionLog {
         std::fs::read_to_string(&self.path).is_ok_and(|text| text.contains(SELF_UPDATED))
     }
 
-    /// What the client did with a launch sent after [`SessionLog::find`].
-    pub fn taken(&self, within: Duration) -> Taken {
+    /// Whether the client is holding `uid` back for an update.
+    pub fn pending_update(&self, uid: &str) -> bool {
+        std::fs::read_to_string(&self.path).is_ok_and(|text| pending_update(&text, uid))
+    }
+
+    /// Whether the client took a launch sent after [`SessionLog::find`].
+    pub fn launch_taken(&self, within: Duration) -> bool {
         let deadline = Instant::now() + within;
         loop {
             let text = std::fs::read_to_string(&self.path).unwrap_or_default();
-            if let Some(taken) = text.get(self.from..).and_then(taken_in) {
-                return taken;
+            // The command just sent is the only one, so any game's line answers.
+            if text.get(self.from..).is_some_and(|sent| sent.contains(LAUNCHING)) {
+                return true;
             }
             if Instant::now() >= deadline {
-                return Taken::Ignored;
+                return false;
             }
             std::thread::sleep(READY_POLL);
         }

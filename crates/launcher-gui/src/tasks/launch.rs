@@ -292,7 +292,7 @@ pub async fn launch_via_battle_net(
     minimized: bool,
 ) -> Result<Handoff, Problem> {
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
-        use lightforge_core::battlenet::{self, Launch, Readiness, Taken};
+        use lightforge_core::battlenet::{self, Launch, Readiness};
         use lightforge_core::preflight;
 
         tracing::info!("hand-off to Battle.net for {} (family {family:?})", code.as_str());
@@ -330,6 +330,10 @@ pub async fn launch_via_battle_net(
         // seconds, and a launch then only selects its tile.
         let session = battlenet::SessionLog::find(&layout, &user);
         if let Some(log) = &session {
+            if log.pending_update(&install_uid) {
+                tracing::info!("Battle.net holds {install_uid} back for an update; not sending the launch");
+                return Ok(Handoff::NeedsUpdate);
+            }
             if !log.wait_until_closed(&install_uid, GAME_GONE_WITHIN) {
                 tracing::warn!("Battle.net still counts {install_uid} as running; sending the launch anyway");
             }
@@ -359,23 +363,16 @@ pub async fn launch_via_battle_net(
 
         // A launch the client did not take would otherwise hold the button
         // for the whole game wait, with nothing on screen to say why.
-        match session.as_ref().map(|log| log.taken(TAKEN_WITHIN)) {
-            Some(Taken::Updating) => {
-                tracing::info!("Battle.net hand-off for {}: the client is updating it first", code.as_str());
-                return Ok(Handoff::Updating);
-            }
-            Some(Taken::Ignored) if !preflight::client_running(&layout) => {
-                tracing::warn!("Battle.net hand-off for {}: the client closed instead", code.as_str());
-                return Ok(match session.is_some_and(|log| log.updated_itself()) {
-                    true => Handoff::ClientUpdated,
-                    false => Handoff::ClientClosed,
-                });
-            }
-            Some(Taken::Ignored) => {
+        if session.as_ref().is_some_and(|log| !log.launch_taken(TAKEN_WITHIN)) {
+            if preflight::client_running(&layout) {
                 tracing::warn!("Battle.net hand-off for {}: the client did not take the launch", code.as_str());
                 return Ok(Handoff::Ignored);
             }
-            Some(Taken::Launching) | None => {}
+            tracing::warn!("Battle.net hand-off for {}: the client closed instead", code.as_str());
+            return Ok(match session.is_some_and(|log| log.updated_itself()) {
+                true => Handoff::ClientUpdated,
+                false => Handoff::ClientClosed,
+            });
         }
 
         let handoff = match preflight::wait_for_game_start(&layout, &before, HANDOFF_TIMEOUT) {
@@ -438,8 +435,8 @@ pub enum Handoff {
     ClientClosed,
     /// It quit on the launch to switch to a version it had just updated to.
     ClientUpdated,
-    /// The client is updating the game before it can start.
-    Updating,
+    /// The client holds the game back for an update, so the launch was not sent.
+    NeedsUpdate,
     /// The client got the launch and did nothing with it.
     Ignored,
     /// Signed in, told to launch, and nothing appeared.
