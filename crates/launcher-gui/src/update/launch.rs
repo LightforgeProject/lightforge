@@ -144,7 +144,7 @@ impl Lightforge {
                     }
                     // Closed while signing in: nothing to hand off to.
                     Ok(tasks::Handoff::ClientClosed) => self.update(Message::Launched(Ok(
-                        "Battle.net was closed before the game could start".to_owned(),
+                        "Battle.net closed before the game could start — press Play again".to_owned(),
                     ))),
                     Ok(tasks::Handoff::NeedsAttention { minimized }) => {
                         // Waiting on a person (two-factor, an update); left

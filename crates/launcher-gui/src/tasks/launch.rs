@@ -338,10 +338,10 @@ pub async fn launch_via_battle_net(
         let launch = Launch::Product { code: code.clone(), exec: family };
         reap_later(battlenet::launch(&runner, &layout, &launch).map_err(|e| Problem::of(&e))?);
         if let Some(windows) = tray {
-            std::thread::spawn(move || {
-                if let Err(e) = windows.keep_closed(Instant::now() + KEEP_IN_TRAY) {
-                    tracing::warn!("stopped keeping Battle.net in the tray: {}", chain(&e));
-                }
+            std::thread::spawn(move || match windows.keep_closed(Instant::now() + KEEP_IN_TRAY) {
+                Ok(0) => {}
+                Ok(closed) => tracing::info!("sent Battle.net's window back to the tray {closed} time(s)"),
+                Err(e) => tracing::warn!("stopped keeping Battle.net in the tray: {}", chain(&e)),
             });
         }
 
@@ -351,6 +351,12 @@ pub async fn launch_via_battle_net(
             Some(Taken::Updating) => {
                 tracing::info!("Battle.net hand-off for {}: the client is updating it first", code.as_str());
                 return Ok(Handoff::Updating);
+            }
+            // A client that has just updated itself quits to restart on the
+            // next command it gets (build 17952 to 17986, 2026-11-04).
+            Some(Taken::Ignored) if !preflight::client_running(&layout) => {
+                tracing::warn!("Battle.net hand-off for {}: the client closed instead", code.as_str());
+                return Ok(Handoff::ClientClosed);
             }
             Some(Taken::Ignored) => {
                 tracing::warn!("Battle.net hand-off for {}: the client did not take the launch", code.as_str());
