@@ -34,7 +34,7 @@ source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
 # Of GitHub's generated source archive for the tag, which is not
 # byte-identical to anything produced locally. Regenerate with `updpkgsums`
 # once the tag is pushed, before uploading.
-sha256sums=('SKIP')
+sha256sums=('aa2053c38c511e7c32582a56d8a12d41571f8c5771fe4232d4efa9c645c48086')
 _srcdir="$pkgname-${_tag#v}"
 
 prepare() {
