@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
 members = ["crates/core", "crates/launcher-cli", "crates/launcher-gui"]
+exclude = ["vendor"]
+
+# Clicks landing off target on Wayland; vendor/iced_winit/PATCHED.md says why
+# and when this can go.
+[patch.crates-io]
+iced_winit = { path = "vendor/iced_winit" }
 
 [workspace.package]
 version = "1.0.0-beta.9"
