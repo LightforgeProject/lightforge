@@ -20,6 +20,7 @@ mod launch;
 mod readiness;
 mod registry;
 mod tweaks;
+mod window;
 #[cfg(test)]
 mod tests;
 
@@ -32,6 +33,7 @@ pub use tweaks::{
     known_product_codes, product_tweaks, set_download_limit, window_state_tweaks, Tweak,
     AUTOSTART_MINIMIZED_KEY, DOWNLOAD_LIMIT_KEY,
 };
+pub use window::{ClientWindows, WindowError};
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

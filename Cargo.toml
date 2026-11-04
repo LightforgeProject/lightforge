@@ -84,6 +84,10 @@ tokio = { version = "1", default-features = false }
 # regex engine for a filter that `Targets` and one environment variable cover.
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "registry", "tracing-log"] }
+# Closing the window Battle.net raises during a hand-off (`battlenet::window`).
+# Already in the lock through winit. No features: the pure-Rust connection,
+# so nothing links libxcb.
+x11rb = { version = "0.13", default-features = false }
 # Release ordering for the update check. Already in the lock as a build
 # dependency of `sentry-contexts`, pulls nothing of its own, and knows the
 # prerelease precedence rules a string compare gets wrong: `beta.10` is newer

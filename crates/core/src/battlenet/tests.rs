@@ -318,7 +318,15 @@ fn an_existing_value_is_overwritten_not_appended() {
 fn a_background_client_stays_after_a_hand_off() {
     let mut config = json!({ "Client": { "GameLaunchWindowBehavior": "2" } });
     apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard"), true));
-    assert_eq!(config["Client"]["GameLaunchWindowBehavior"], json!("1"));
+    assert_eq!(config["Client"]["GameLaunchWindowBehavior"], json!("3"));
+    assert_eq!(config["Client"]["RestoreWindowOnGameEnd"], json!("false"));
+}
+
+#[test]
+fn a_client_that_exits_after_a_hand_off_keeps_its_own_restore_setting() {
+    let mut config = json!({ "Client": { "RestoreWindowOnGameEnd": "true" } });
+    apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard"), false));
+    assert_eq!(config["Client"]["RestoreWindowOnGameEnd"], json!("true"));
 }
 
 #[test]

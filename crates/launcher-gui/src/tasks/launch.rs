@@ -308,9 +308,32 @@ pub async fn launch_via_battle_net(
             return Ok(Handoff::ClientClosed);
         }
 
+        // The client raises its window for the command until the game is up;
+        // one nobody could see before goes straight back to the tray.
+        let client: Vec<u32> = preflight::scan(&layout)
+            .into_iter()
+            .filter(|p| p.kind == preflight::ProcKind::BattleNet)
+            .map(|p| p.pid)
+            .collect();
+        let tray = match battlenet::ClientWindows::connect(client) {
+            Ok(windows) if windows.any_shown().is_ok_and(|shown| !shown) => Some(windows),
+            Ok(_) => None,
+            Err(e) => {
+                tracing::info!("Battle.net's window stays as the client leaves it: {}", chain(&e));
+                None
+            }
+        };
+
         // Over IPC to the running client, with the family the panel resolved.
         let launch = Launch::Product { code: code.clone(), exec: family };
         reap_later(battlenet::launch(&runner, &layout, &launch).map_err(|e| Problem::of(&e))?);
+        if let Some(windows) = tray {
+            std::thread::spawn(move || {
+                if let Err(e) = windows.keep_closed(Instant::now() + KEEP_IN_TRAY) {
+                    tracing::warn!("stopped keeping Battle.net in the tray: {}", chain(&e));
+                }
+            });
+        }
 
         let handoff = match preflight::wait_for_game_start(&layout, &before, HANDOFF_TIMEOUT) {
             Some(game) => Handoff::Playing(game),
@@ -378,6 +401,10 @@ pub enum Handoff {
 ///
 /// A cold start signs in after about 5.5 s; the rest is for bad days.
 pub(crate) const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How long after a hand-off the client's window is sent back to the tray.
+/// It closes it itself once the game runs: 3.3 s after a cold start, measured.
+pub(crate) const KEEP_IN_TRAY: Duration = Duration::from_secs(8);
 
 /// How long a handed-off game gets to appear before the launcher stops
 /// claiming a launch is in progress.

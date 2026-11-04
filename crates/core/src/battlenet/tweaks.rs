@@ -46,14 +46,16 @@ pub fn default_tweaks(layout: &Layout, background: bool) -> Vec<Tweak> {
         .default_library()
         .map(|library| library.windows_games_path())
         .unwrap_or_else(|| WINDOWS_PROGRAM_FILES.to_owned());
-    vec![
-        // The client names three behaviours in its log, `Game is now running
-        // with game launch behavior set to exit|minimize|close`; `2` is exit.
+    let mut tweaks = vec![
+        // The client logs which it took: `Game is now running with game launch
+        // behavior set to …`. Measured on 2.53.6: `0` and `1` minimize to the
+        // taskbar, `2` exits, `3` closes the window, which `HideOnClose` turns
+        // into the tray.
         match background {
             true => Tweak::new(
                 "Client.GameLaunchWindowBehavior",
-                json!("1"),
-                "stay out of sight once the game has been handed off, ready for the next one",
+                json!("3"),
+                "go back to the tray once the game has been handed off, ready for the next one",
             ),
             false => Tweak::new(
                 "Client.GameLaunchWindowBehavior",
@@ -76,7 +78,15 @@ pub fn default_tweaks(layout: &Layout, background: bool) -> Vec<Tweak> {
             json!("false"),
             "no background scanning of the filesystem for other Blizzard installs",
         ),
-    ]
+    ];
+    if background {
+        tweaks.push(Tweak::new(
+            "Client.RestoreWindowOnGameEnd",
+            json!("false"),
+            "stay in the tray when the game exits: \"Restoring auto closed window\" otherwise",
+        ));
+    }
+    tweaks
 }
 
 /// The download limit Battle.net applies to its own transfers, in bytes per

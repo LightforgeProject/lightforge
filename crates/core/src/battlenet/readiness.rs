@@ -50,7 +50,8 @@ pub(super) const GAMES_READY: &str = "GameController initialization complete";
 
 /// How long after sign-in the game list gets before the command goes anyway,
 /// so a marker that never comes costs a short wait, not the sign-in timeout.
-pub(super) const GAMES_GRACE: Duration = Duration::from_secs(20);
+/// It waits on Agent, which once took 27 s after sign-in (2026-11-04).
+pub(super) const GAMES_GRACE: Duration = Duration::from_secs(40);
 
 /// Whether a launch command sent now would be acted on, given the log so far
 /// and how long it has said the client is signed in.
