@@ -18,7 +18,7 @@ pub enum Launch {
     /// varAutoStarted`).
     Autostart,
     /// Hand straight off into a product. With `GameLaunchWindowBehavior: 2`
-    /// the client exits once the game is up.
+    /// the client exits once the game is up; kept in the background, it stays.
     Product { code: ProductCode, exec: Option<String> },
     /// Open the client's install flow for a product, by its install uid. An
     /// action, not view state, so the client's boot to its homepage keeps it.

@@ -30,7 +30,7 @@ pub use registry::{apply_registry, registry_tweaks, RegValue};
 pub use tweaks::{
     account_tweaks, apply_tweaks, configure, configure_accounts, default_tweaks, download_limit,
     known_product_codes, product_tweaks, set_download_limit, window_state_tweaks, Tweak,
-    AUTOSTART_MINIMIZED_KEY, DOWNLOAD_LIMIT_KEY, WINDOW_STATE_KEY,
+    AUTOSTART_MINIMIZED_KEY, DOWNLOAD_LIMIT_KEY,
 };
 
 use std::path::{Path, PathBuf};
@@ -81,10 +81,11 @@ pub fn provision(
     apply_registry(runner, &registry)?;
 
     // Last, with nothing running: the client rewrites this file on exit.
-    let mut tweaks = default_tweaks(layout);
+    // Pre-flight writes the background values before every cold start.
+    let mut tweaks = default_tweaks(layout, false);
     tweaks.extend(product_tweaks(managed));
     let config_path = configure(layout, user, &tweaks)?;
-    let account_configs = configure_accounts(layout, user, &account_tweaks())?;
+    let account_configs = configure_accounts(layout, user, &account_tweaks(false))?;
 
     Ok(SetupReport {
         install,

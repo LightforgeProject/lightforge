@@ -166,8 +166,8 @@ pub fn stop_game(layout: &Layout, pid: u32, grace: Duration) -> Option<Stopped> 
 ///
 /// `before` is [`games_running`] from before the hand-off, so a game already
 /// playing does not count. `None` means nothing started in time, usually a
-/// client at its login screen. Needed because the client exits once the game
-/// is up (`GameLaunchWindowBehavior: 2`).
+/// client at its login screen. Needed because the client usually exits once
+/// the game is up (`GameLaunchWindowBehavior: 2`).
 pub fn wait_for_game_start(
     layout: &Layout,
     before: &[GameProcess],

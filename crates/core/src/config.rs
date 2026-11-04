@@ -77,6 +77,11 @@ pub struct Config {
     /// friends and chat stay up.
     #[serde(default)]
     pub close_battle_net_on_play: bool,
+    /// Whether Battle.net is kept running between games, so a hand-off goes
+    /// straight to a signed-in client. Off by default; overrides
+    /// [`Config::close_battle_net_on_play`] while on.
+    #[serde(default)]
+    pub battle_net_in_background: bool,
     /// How Battle.net and every game it launches are started. Shared: a
     /// running client takes launches over IPC, so games cannot differ. Only
     /// the host and runtime half of [`crate::tweaks::Tweaks`] applies.
@@ -178,6 +183,7 @@ impl Default for Config {
             minimize_on_launch: false,
             battle_net_minimized: true,
             close_battle_net_on_play: false,
+            battle_net_in_background: false,
             battle_net_tweaks: crate::tweaks::Tweaks::default(),
             region: crate::tact::version::Region::default(),
             locale: default_locale(),
@@ -433,6 +439,12 @@ impl Config {
             .or_else(|| self.default_proton.version())
     }
 
+    /// Whether pre-flight leaves a running client up, for PLAY or for
+    /// something the client itself is asked to do.
+    pub fn keeps_battle_net(&self, play: bool) -> bool {
+        self.battle_net_in_background || (play && !self.close_battle_net_on_play)
+    }
+
     /// The Proton build a Battle.net *hand-off* for `code` runs under.
     ///
     /// The product's own pin, then Battle.net's, then the app default. An
@@ -640,6 +652,25 @@ mod tests {
         assert!(old.battle_net_minimized);
         // And a config from before the switch leaves the client running.
         assert!(!old.close_battle_net_on_play);
+        assert!(!old.battle_net_in_background);
+    }
+
+    #[test]
+    fn a_background_client_is_kept_for_hand_offs_and_play_alike() {
+        let config = Config {
+            battle_net_in_background: true,
+            close_battle_net_on_play: true,
+            ..Config::default()
+        };
+        assert!(config.keeps_battle_net(true));
+        assert!(config.keeps_battle_net(false));
+    }
+
+    #[test]
+    fn without_the_background_only_play_keeps_the_client() {
+        let config = Config::default();
+        assert!(config.keeps_battle_net(true));
+        assert!(!config.keeps_battle_net(false));
     }
 
     #[test]
@@ -787,7 +818,7 @@ mod tests {
         // What *does* move: where a new game lands, and the folder Battle.net
         // proposes for its own titles.
         assert_eq!(after.games_root(), PathBuf::from("/mnt/games/Lightforge/games"));
-        let install_path = crate::battlenet::default_tweaks(&after)
+        let install_path = crate::battlenet::default_tweaks(&after, false)
             .into_iter()
             .find(|t| t.key() == "Client.Install.DefaultInstallPath")
             .map(|t| t.value);

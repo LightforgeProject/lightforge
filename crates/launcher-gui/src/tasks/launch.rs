@@ -24,8 +24,8 @@ pub async fn preflight(
         tracing::info!("preflight for {} ({runs:?})", code.as_str());
         let report = Preflight::new(config.prefix_user.clone())
             .with_managed(config.managed_products())
-            // PLAY only: anything that goes through the client starts it afresh.
-            .keeping_client(runs == Runs::Game && !config.close_battle_net_on_play)
+            .keeping_client(config.keeps_battle_net(runs == Runs::Game))
+            .with_background_client(config.battle_net_in_background)
             .run(&runner, &layout, Some(&code), &mut guard)
             .map_err(|e| Problem::of(&e))?;
         // The stage timings say where a launch that feels stuck sits.
@@ -279,11 +279,7 @@ pub async fn launch_via_battle_net(
         if !preflight::client_running(&layout) {
             // Minimized only where it signs itself in.
             let minimize = minimized && battlenet::signs_in_by_itself(&layout, &user);
-            let _ = battlenet::configure_accounts(
-                &layout,
-                &user,
-                &battlenet::window_state_tweaks(minimize),
-            );
+            let _ = battlenet::configure(&layout, &user, &battlenet::window_state_tweaks(minimize));
 
             // The preference is only read on an autostart.
             let how = match minimize {
@@ -352,11 +348,7 @@ pub async fn install_via_battle_net(
 
         // Normal window, whatever a launch would have chosen: the next thing
         // that happens is a person choosing where to install.
-        let _ = battlenet::configure_accounts(
-            &layout,
-            &user,
-            &battlenet::window_state_tweaks(false),
-        );
+        let _ = battlenet::configure(&layout, &user, &battlenet::window_state_tweaks(false));
 
         let child = battlenet::launch(&runner, &layout, &Launch::InstallFlow { uid })
             .map_err(|e| Problem::of(&e))?;
@@ -523,11 +515,7 @@ pub async fn open_battle_net(
 
         let runner = client_runner(&layout, &code)?;
         // A normal window: the client itself was asked for.
-        let _ = battlenet::configure_accounts(
-            &layout,
-            &user,
-            &battlenet::window_state_tweaks(false),
-        );
+        let _ = battlenet::configure(&layout, &user, &battlenet::window_state_tweaks(false));
         reap_later(battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| Problem::of(&e))?);
         Ok("Battle.net opening".to_owned())
     })

@@ -109,14 +109,33 @@ impl Lightforge {
                     switch("battle.net minimized", self.config.battle_net_minimized, Message::BattleNetMinimized),
                 ),
                 setting(
-                    "Close Battle.net when I press Play",
-                    "Off keeps it open beside the game.",
+                    "Keep Battle.net ready in the background",
+                    "Games that start through Battle.net open without waiting for it to sign in.",
                     self.hint(
-                        "Only for Play. Launching through Battle.net, and its own install \
-                         and repair flows, start the client afresh whatever this says.",
+                        "It stays signed in out of sight after it starts a game, instead of \
+                         exiting. World of Warcraft never goes through it, so it starts no \
+                         faster. Lightforge still closes it for a game pinned to another \
+                         Proton build.",
                     ),
-                    switch("close battle.net on play", self.config.close_battle_net_on_play, Message::CloseBattleNetOnPlay),
+                    switch("battle.net in background", self.config.battle_net_in_background, Message::BattleNetInBackground),
                 ),
+                match self.config.battle_net_in_background {
+                    true => setting(
+                        "Close Battle.net when I press Play",
+                        "Off while Battle.net is kept ready in the background.",
+                        None,
+                        iced::widget::toggler(false).size(theme::tap_text(20.0)).style(theme::switch),
+                    ),
+                    false => setting(
+                        "Close Battle.net when I press Play",
+                        "Off keeps it open beside the game.",
+                        self.hint(
+                            "Only for Play. Launching through Battle.net, and its own install \
+                             and repair flows, start the client afresh whatever this says.",
+                        ),
+                        switch("close battle.net on play", self.config.close_battle_net_on_play, Message::CloseBattleNetOnPlay),
+                    ),
+                },
             ]),
             setting_group([
                 setting(

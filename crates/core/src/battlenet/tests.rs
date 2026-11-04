@@ -1,21 +1,12 @@
 #[test]
-fn the_window_state_key_is_qts_own_and_is_written_as_a_string() {
+fn starting_in_the_tray_is_a_global_key_written_as_a_string() {
     // The client stores every one of these as a string, and a real
-    // integer here is a value it reads back as zero, the booleans
-    // included, so `"true"` is quoted below.
+    // boolean here is a value it reads back as false.
     let minimized = window_state_tweaks(true);
-    assert_eq!(minimized.len(), 2);
-    assert_eq!(minimized[0].path, WINDOW_STATE_KEY.split('.').collect::<Vec<_>>());
-    assert_eq!(minimized[0].value, json!("1"));
-    assert_eq!(
-        minimized[1].path,
-        AUTOSTART_MINIMIZED_KEY.split('.').collect::<Vec<_>>()
-    );
-    assert_eq!(minimized[1].value, json!("true"));
-
-    let normal = window_state_tweaks(false);
-    assert_eq!(normal[0].value, json!("0"));
-    assert_eq!(normal[1].value, json!("false"));
+    assert_eq!(minimized.len(), 1);
+    assert_eq!(minimized[0].path, ["Client", "AutoStartMinimized"]);
+    assert_eq!(minimized[0].value, json!("true"));
+    assert_eq!(window_state_tweaks(false)[0].value, json!("false"));
 }
 
 #[test]
@@ -302,7 +293,7 @@ fn tweaks_create_missing_objects_without_touching_anything_else() {
         "Client": { "Sound": { "Enabled": "true" } },
         "Games": { "wow": { "LastPlayed": "1" } }
     });
-    apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard")));
+    apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard"), false));
 
     assert_eq!(config["Client"]["GameLaunchWindowBehavior"], json!("2"));
     assert_eq!(config["Client"]["HardwareAcceleration"], json!("false"));
@@ -319,8 +310,23 @@ fn tweaks_create_missing_objects_without_touching_anything_else() {
 #[test]
 fn an_existing_value_is_overwritten_not_appended() {
     let mut config = json!({ "Client": { "GameLaunchWindowBehavior": "0" } });
-    apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard")));
+    apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard"), false));
     assert_eq!(config["Client"]["GameLaunchWindowBehavior"], json!("2"));
+}
+
+#[test]
+fn a_background_client_stays_after_a_hand_off() {
+    let mut config = json!({ "Client": { "GameLaunchWindowBehavior": "2" } });
+    apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard"), true));
+    assert_eq!(config["Client"]["GameLaunchWindowBehavior"], json!("1"));
+}
+
+#[test]
+fn a_background_client_hides_on_close() {
+    let mut config = json!({ "User": { "Client": { "HideOnClose": "false" } } });
+    apply_tweaks(&mut config, &account_tweaks(true));
+    assert_eq!(config["User"]["Client"]["HideOnClose"], json!("true"));
+    assert_eq!(config["User"]["Client"]["DisplayExitPrompt"], json!("false"));
 }
 
 #[test]
@@ -328,7 +334,7 @@ fn a_scalar_where_an_object_belongs_is_replaced() {
     // Battle.net has shipped schema changes before; a stale scalar must not
     // abort setup.
     let mut config = json!({ "Client": { "Install": "C:\\somewhere" } });
-    apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard")));
+    apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard"), false));
     assert_eq!(config["Client"]["Install"]["DefaultInstallPath"], json!(r"E:\"));
 }
 
@@ -342,8 +348,8 @@ fn hide_on_close_is_written_to_every_account_config_but_not_the_global_one() {
         .unwrap();
     std::fs::write(bnet.join("beef0001.config"), "{}").unwrap();
 
-    configure(&layout, "steamuser", &default_tweaks(&layout)).unwrap();
-    let changed = configure_accounts(&layout, "steamuser", &account_tweaks()).unwrap();
+    configure(&layout, "steamuser", &default_tweaks(&layout, false)).unwrap();
+    let changed = configure_accounts(&layout, "steamuser", &account_tweaks(false)).unwrap();
     assert_eq!(changed.len(), 2);
 
     for name in ["1c858370.config", "beef0001.config"] {
@@ -366,10 +372,10 @@ fn hide_on_close_is_written_to_every_account_config_but_not_the_global_one() {
 fn a_prefix_with_no_account_yet_is_a_no_op() {
     let dir = scratch("noaccount");
     let layout = Layout::with_root(&dir);
-    configure(&layout, "steamuser", &default_tweaks(&layout)).unwrap();
+    configure(&layout, "steamuser", &default_tweaks(&layout, false)).unwrap();
 
     // Only Battle.net.config exists before the first login.
-    assert!(configure_accounts(&layout, "steamuser", &account_tweaks()).unwrap().is_empty());
+    assert!(configure_accounts(&layout, "steamuser", &account_tweaks(false)).unwrap().is_empty());
 }
 
 #[test]
@@ -377,7 +383,7 @@ fn configure_seeds_a_config_that_does_not_exist_yet() {
     let dir = scratch("seed");
     let layout = Layout::with_root(&dir);
 
-    let path = configure(&layout, "steamuser", &default_tweaks(&layout)).unwrap();
+    let path = configure(&layout, "steamuser", &default_tweaks(&layout, false)).unwrap();
     assert_eq!(path, layout.battle_net_config("steamuser"));
 
     let written: Value =
@@ -390,9 +396,9 @@ fn configure_is_idempotent_and_leaves_no_temp_files() {
     let dir = scratch("idempotent");
     let layout = Layout::with_root(&dir);
 
-    let path = configure(&layout, "steamuser", &default_tweaks(&layout)).unwrap();
+    let path = configure(&layout, "steamuser", &default_tweaks(&layout, false)).unwrap();
     let first = std::fs::read_to_string(&path).unwrap();
-    configure(&layout, "steamuser", &default_tweaks(&layout)).unwrap();
+    configure(&layout, "steamuser", &default_tweaks(&layout, false)).unwrap();
     assert_eq!(first, std::fs::read_to_string(&path).unwrap());
 
     let leftovers = std::fs::read_dir(path.parent().unwrap()).unwrap().count();
@@ -408,7 +414,7 @@ fn a_corrupt_config_is_reported_rather_than_silently_replaced() {
     std::fs::write(&path, "{ not json").unwrap();
 
     assert!(matches!(
-        configure(&layout, "steamuser", &default_tweaks(&layout)),
+        configure(&layout, "steamuser", &default_tweaks(&layout, false)),
         Err(BattleNetError::MalformedConfig { .. })
     ));
 }

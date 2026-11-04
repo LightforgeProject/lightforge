@@ -210,6 +210,12 @@ impl Lightforge {
                 self.save_config();
                 Task::none()
             }
+
+            Message::BattleNetInBackground(on) => {
+                self.config.battle_net_in_background = on;
+                self.save_config();
+                Task::none()
+            }
             other => return Err(other),
         })
     }

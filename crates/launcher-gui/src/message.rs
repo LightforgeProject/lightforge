@@ -356,6 +356,8 @@ pub(crate) enum Message {
     /// Whether a Battle.net hand-off puts the client in the tray.
     BattleNetMinimized(bool),
     CloseBattleNetOnPlay(bool),
+    /// Whether Battle.net is kept running between games.
+    BattleNetInBackground(bool),
     /// Battle.net's own limit, as read from its config.
     BattleNetLimitRead(Option<u64>),
     /// The Battle.net limit field changed.
