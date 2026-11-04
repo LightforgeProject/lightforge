@@ -41,15 +41,109 @@ impl Lightforge {
         self.status = format!("{} is running", game.name);
         self.playing.retain(|s| s.code != code);
         self.playing.push(Session { code: code.clone(), game: game.clone(), stopping: false });
-        Task::perform(
+        // After the game, so its pre-flight is long done and cannot end them.
+        let companions: Vec<Task<Message>> = self
+            .config
+            .companions
+            .iter()
+            .filter(|c| c.game == code && c.start_with_game)
+            .map(|c| Task::perform(tasks::launch_companion(self.layout.clone(), c.clone()), Message::CompanionStarted))
+            .collect();
+        let watch = Task::perform(
             tasks::await_game_exit(self.layout.clone(), code.clone(), game, settle_after),
             move |result| Message::GameExited(code.clone(), result),
-        )
+        );
+        Task::batch(companions.into_iter().chain(std::iter::once(watch)))
     }
 
     /// Ask the process table whether the Battle.net client is up.
     pub(crate) fn check_client(&self) -> Task<Message> {
         Task::perform(tasks::client_running(self.layout.clone()), Message::ClientSeen)
+    }
+
+    /// Ask the client's log about the selected game, for the button's word.
+    /// Only where pressing it can do something about the answer.
+    pub(crate) fn check_update_pending(&self) -> Task<Message> {
+        let code = self.selected.code.clone();
+        if !self.config.battle_net_in_background || Kind::of(&code) != Kind::HandOff {
+            return Task::none();
+        }
+        let uid = self.install_uid_of(&code);
+        Task::perform(
+            tasks::update_pending(self.layout.clone(), self.config.prefix_user.clone(), uid),
+            move |pending| Message::ClientUpdatePending(code.clone(), pending),
+        )
+    }
+
+    /// Have the client update a game, and follow it on the game's panel.
+    pub(crate) fn start_client_update(&mut self, code: ProductCode) -> Task<Message> {
+        let progress = Arc::new(std::sync::Mutex::new(state::Progress::default()));
+        let stop = lightforge_core::tact::download::Cancel::new();
+        self.client_update = Some(ClientUpdate { code: code.clone(), progress: progress.clone(), stop: stop.clone() });
+        let uid = self.install_uid_of(&code);
+        Task::perform(
+            tasks::update_through_client(self.layout.clone(), self.config.prefix_user.clone(), uid, progress, stop),
+            move |result| Message::ClientUpdateDone(code.clone(), result),
+        )
+    }
+
+    /// A launch that ended without a game. An error, not a status line: the
+    /// state re-read after it overwrites the status within milliseconds.
+    pub(crate) fn launch_failed(&mut self, why: &str) -> Task<Message> {
+        self.update(Message::Launched(Err(why.into())))
+    }
+
+    /// Bring the client in line with the mode, without a restart.
+    pub(crate) fn apply_mode(&mut self) -> Task<Message> {
+        match self.config.battle_net_in_background {
+            true => self.warm_client(),
+            false => self.close_background_client(),
+        }
+    }
+
+    /// Start the client out of sight, if that is what the user asked for.
+    pub(crate) fn warm_client(&mut self) -> Task<Message> {
+        if !self.config.battle_net_in_background
+            || !self.config.setup_complete
+            || self.config.battle_net_declined
+        {
+            return Task::none();
+        }
+        self.client_phase = ClientPhase::SigningIn;
+        Task::perform(
+            tasks::warm_battle_net(self.layout.clone(), self.config.prefix_user.clone()),
+            Message::BackgroundClient,
+        )
+    }
+
+    /// Whether a background client that gave way can come back: nothing is
+    /// using the prefix or writing the game files. A download counts: Agent
+    /// rewrites `product.db` from memory, over the record the install leaves.
+    pub(crate) fn client_may_return(&self) -> bool {
+        let removing_textures = self
+            .game_settings
+            .as_ref()
+            .is_some_and(|settings| matches!(settings.textures, TexturesStep::Removing));
+        self.config.battle_net_in_background
+            && !self.client_up
+            && self.client_phase == ClientPhase::Settled
+            && !self.busy
+            && !self.quitting_client
+            && !self.in_play()
+            && self.store_writer().is_none()
+            && !removing_textures
+    }
+
+    /// The setting was switched off: a client nobody is using goes with it.
+    pub(crate) fn close_background_client(&mut self) -> Task<Message> {
+        if self.busy || self.quitting_client {
+            return Task::none();
+        }
+        self.quitting_client = true;
+        Task::perform(
+            tasks::close_background_client(self.layout.clone(), self.config.prefix_user.clone()),
+            Message::BattleNetQuit,
+        )
     }
 
     /// Close Battle.net, unless a launch is under way: it may be the one
@@ -138,6 +232,13 @@ impl Lightforge {
             return Task::none();
         }
 
+        // The client drops commands until it has signed in.
+        if self.client_phase == ClientPhase::SigningIn && what != Launch::Game {
+            self.status = "Battle.net is signing in…".to_owned();
+            self.launch_after_client = Some(what);
+            return Task::none();
+        }
+
         // Pre-flight pauses this product's download; the rest only when asked.
         if self.config.pause_downloads_while_playing {
             let others: Vec<ProductCode> = self
@@ -192,6 +293,7 @@ impl Lightforge {
                         code.clone(),
                         self.config.prefix_user.clone(),
                         self.family_of(&code),
+                        self.install_uid_of(&code),
                         self.config.battle_net_minimized,
                     ),
                     Message::HandoffStarted,
@@ -290,6 +392,7 @@ impl Lightforge {
         let installed = self.installed_versions.contains_key(self.selected.code.as_str());
         match (family.is_some(), installed) {
             (false, _) => HandoffAct::OpenClient,
+            (true, true) if self.update_pending.as_ref() == Some(&self.selected.code) => HandoffAct::Update,
             (true, true) => HandoffAct::Play,
             (true, false) => HandoffAct::Install,
         }

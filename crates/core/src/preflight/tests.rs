@@ -208,6 +208,17 @@ fn a_handed_off_game_is_whatever_is_not_battle_net_or_wine() {
     );
 }
 
+/// A companion app counts as running in the prefix like a game: pre-flight
+/// goes beside it and the prefix is not settled under it, which an
+/// uploader that works after logout depends on (`core::companion`).
+#[test]
+fn a_companion_app_counts_as_running_in_the_prefix() {
+    assert_eq!(
+        names_a_game(&argv(&[r"C:\users\steamuser\AppData\Local\Uploader\app-1.2.0\Uploader.exe"]), "Uploader.exe"),
+        Some("Uploader.exe".to_owned())
+    );
+}
+
 #[test]
 fn only_the_processes_that_cause_the_deadlock_are_classified() {
     assert_eq!(

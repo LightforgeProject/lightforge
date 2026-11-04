@@ -194,7 +194,10 @@ fn main() -> iced::Result {
     // Closing is handled by the app, so a transfer can checkpoint first.
     // Set after `window`, which replaces the settings wholesale.
     .exit_on_close_request(false)
-    .run()
+    .run()?;
+    // Here, not in a message: every way out of the app ends up on this line.
+    tasks::stop_background_client_at_exit();
+    Ok(())
 }
 
 struct Lightforge {
@@ -287,9 +290,19 @@ struct Lightforge {
     client_up: bool,
     /// Whether the menu beside a running Battle.net's button is open.
     client_menu_open: bool,
+    /// What the background client is doing, beyond running.
+    client_phase: ClientPhase,
+    /// A launch through the client, waiting for it to finish signing in.
+    launch_after_client: Option<Launch>,
+    /// The game the client holds back for an update, of those asked about.
+    update_pending: Option<ProductCode>,
+    /// The update being followed.
+    client_update: Option<ClientUpdate>,
     /// Battle.net is being closed.
     quitting_client: bool,
     quit_client_dialog: Option<QuitClientDialog>,
+    /// Seamless Battle.net Mode was just switched to this: offer a restart.
+    mode_restart: Option<bool>,
     /// Whether the cog menu beside the primary button is open.
     gear_open: bool,
     /// Live progress of a store scan, and whether one is running.
@@ -393,9 +406,14 @@ struct Lightforge {
     install_dialog: Option<InstallDialog>,
     uninstall_dialog: Option<UninstallDialog>,
     moving: Option<Moving>,
+    /// An install under way on the Game Tools page.
+    companion_install: Option<CompanionInstall>,
+    /// The game the page's next install is for; `None` is the selected one.
+    companion_game: Option<ProductCode>,
     cancel_dialog: Option<CancelDialog>,
-    /// A newer Lightforge on GitHub, found at start-up. Shown once per
-    /// release; see `core::update`, and `core::upgrade` for installing it.
+    /// A newer Lightforge on GitHub, found at start-up. Shown on every start
+    /// until it is installed; see `core::update`, and `core::upgrade` for
+    /// installing it.
     update_notice: Option<lightforge_core::update::Available>,
     /// The newer Lightforge this session knows of, dismissed or not: what
     /// "Update now" in Settings installs.
@@ -515,7 +533,7 @@ struct Lightforge {
 
 impl Lightforge {
     fn new() -> (Self, Task<Message>) {
-        let mut app = Self::load_state();
+        let mut app = Self::load_state(AppDirs::discover().ok());
         let task = app.startup_tasks();
         (app, task)
     }

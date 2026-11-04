@@ -85,7 +85,7 @@ impl Lightforge {
             body = body.push(
                 text(match github {
                     Some(_) => "The author has disabled third-party downloads from CurseForge. \
-                                They publish it on GitHub too, which is where Lightforge can get it.",
+                                They link a GitHub repository, which Lightforge can try.",
                     None => "The author has disabled third-party downloads. It can only be \
                              installed from the project page.",
                 })

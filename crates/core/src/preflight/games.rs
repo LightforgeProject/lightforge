@@ -47,6 +47,15 @@ pub struct GameProcess {
     pub name: String,
 }
 
+/// The pids of the client itself, not its CEF children or Agent.
+pub fn client_pids(layout: &Layout) -> Vec<u32> {
+    scan(layout)
+        .into_iter()
+        .filter(|p| p.kind == ProcKind::BattleNet)
+        .map(|p| p.pid)
+        .collect()
+}
+
 /// Whether a Battle.net client is already up in this prefix, and can take a
 /// launch command directly.
 pub fn client_running(layout: &Layout) -> bool {
@@ -166,8 +175,8 @@ pub fn stop_game(layout: &Layout, pid: u32, grace: Duration) -> Option<Stopped> 
 ///
 /// `before` is [`games_running`] from before the hand-off, so a game already
 /// playing does not count. `None` means nothing started in time, usually a
-/// client at its login screen. Needed because the client exits once the game
-/// is up (`GameLaunchWindowBehavior: 2`).
+/// client at its login screen. Needed because the client usually exits once
+/// the game is up (`GameLaunchWindowBehavior: 2`).
 pub fn wait_for_game_start(
     layout: &Layout,
     before: &[GameProcess],

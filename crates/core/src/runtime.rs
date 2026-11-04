@@ -300,11 +300,10 @@ pub fn remedy_for(os: &OsRelease) -> Remedy {
         (
             None,
             Some(
-                "NixOS is configured declaratively — set \
-                 `hardware.graphics.enable32Bit = true;` (named \
-                 `hardware.opengl.driSupport32Bit` before 24.11) and \
-                 rebuild. Note that nixpkgs' `wine` is 64-bit only; \
-                 `wineWowPackages` is the 32-bit-capable set"
+                "NixOS has no 32-bit loader in the standard paths, with or \
+                 without `hardware.graphics.enable32Bit`, and Proton needs \
+                 one. Start Lightforge from its flake, which sets this up, \
+                 or through `steam-run`"
                     .to_owned(),
             ),
         )

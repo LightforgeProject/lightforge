@@ -9,7 +9,7 @@ on:
 
 jobs:
   glibc:
-    name: Release build stays within glibc 2.36
+    name: Release build stays within glibc 2.35
     runs-on: ubuntu-24.04
     # The image `make release` builds in. Its glibc is the ceiling.
     container: docker.io/library/rust:bookworm
@@ -24,5 +24,7 @@ jobs:
       - name: Build
         run: cargo build --release --locked
 
+      # x86_64 only: the aarch64 binaries are cross-built, and checked, in
+      # the release image, which this job does not have.
       - name: Check
-        run: make check-glibc
+        run: make check-glibc-x86_64

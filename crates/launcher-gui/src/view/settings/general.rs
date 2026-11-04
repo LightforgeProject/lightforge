@@ -90,6 +90,19 @@ impl Lightforge {
         column![
             setting_group([
                 setting(
+                    "Seamless Battle.net Mode (Experimental)",
+                    "Games that start through Battle.net open without waiting for it to sign in.",
+                    self.hint(
+                        "It starts hidden with Lightforge and closes with it, unless a game \
+                         or its window is open. Needs a saved sign-in. Its notifications stay \
+                         off, and games it starts use its Proton build. World of Warcraft never goes through it, so it starts no \
+                         faster, and Play closes it for a build of its own.",
+                    ),
+                    switch("battle.net in background", self.config.battle_net_in_background, Message::BattleNetInBackground),
+                ),
+            ]),
+            setting_group([
+                setting(
                     "Minimize when a game starts",
                     "The window waits in the taskbar until you bring it back.",
                     self.hint(
@@ -108,15 +121,23 @@ impl Lightforge {
                     ),
                     switch("battle.net minimized", self.config.battle_net_minimized, Message::BattleNetMinimized),
                 ),
-                setting(
-                    "Close Battle.net when I press Play",
-                    "Off keeps it open beside the game.",
-                    self.hint(
-                        "Only for Play. Launching through Battle.net, and its own install \
-                         and repair flows, start the client afresh whatever this says.",
+                match self.config.battle_net_in_background {
+                    true => setting(
+                        "Close Battle.net when I press Play",
+                        "Off while Seamless Battle.net Mode is on.",
+                        None,
+                        iced::widget::toggler(false).size(theme::tap_text(20.0)).style(theme::switch),
                     ),
-                    switch("close battle.net on play", self.config.close_battle_net_on_play, Message::CloseBattleNetOnPlay),
-                ),
+                    false => setting(
+                        "Close Battle.net when I press Play",
+                        "Off keeps it open beside the game.",
+                        self.hint(
+                            "Only for Play. Launching through Battle.net, and its own install \
+                             and repair flows, start the client afresh whatever this says.",
+                        ),
+                        switch("close battle.net on play", self.config.close_battle_net_on_play, Message::CloseBattleNetOnPlay),
+                    ),
+                },
             ]),
             setting_group([
                 setting(

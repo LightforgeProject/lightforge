@@ -77,6 +77,11 @@ pub struct Config {
     /// friends and chat stay up.
     #[serde(default)]
     pub close_battle_net_on_play: bool,
+    /// Whether Battle.net is kept running between games, so a hand-off goes
+    /// straight to a signed-in client. Off by default; overrides
+    /// [`Config::close_battle_net_on_play`] while on.
+    #[serde(default)]
+    pub battle_net_in_background: bool,
     /// How Battle.net and every game it launches are started. Shared: a
     /// running client takes launches over IPC, so games cannot differ. Only
     /// the host and runtime half of [`crate::tweaks::Tweaks`] applies.
@@ -113,10 +118,6 @@ pub struct Config {
     /// by default, listed in `DISCLAIMER.md`; nothing installs by itself.
     #[serde(default = "yes")]
     pub check_for_updates: bool,
-    /// The newest version already mentioned, so the notice opens once per
-    /// release, not on every start.
-    #[serde(default)]
-    pub update_seen: Option<String>,
     /// How many `WTF/Account` backups each game keeps.
     #[serde(default = "default_backup_keep")]
     pub backup_keep: usize,
@@ -126,6 +127,9 @@ pub struct Config {
     pub interface_size: u16,
     /// Every product Lightforge manages, official and custom alike.
     pub products: Vec<Product>,
+    /// Windows programs that run beside a game in its prefix.
+    #[serde(default)]
+    pub companions: Vec<crate::companion::Companion>,
 }
 
 /// Where themed branding comes from unless `assets_source` says otherwise.
@@ -179,6 +183,7 @@ impl Default for Config {
             minimize_on_launch: false,
             battle_net_minimized: true,
             close_battle_net_on_play: false,
+            battle_net_in_background: false,
             battle_net_tweaks: crate::tweaks::Tweaks::default(),
             region: crate::tact::version::Region::default(),
             locale: default_locale(),
@@ -188,10 +193,10 @@ impl Default for Config {
             patch_notes_muted: false,
             patch_notes_seen: None,
             check_for_updates: true,
-            update_seen: None,
             backup_keep: default_backup_keep(),
             interface_size: default_interface_size(),
             products: Vec::new(),
+            companions: Vec::new(),
         }
     }
 }
@@ -434,12 +439,24 @@ impl Config {
             .or_else(|| self.default_proton.version())
     }
 
+    /// Whether pre-flight leaves a running client up, for PLAY or for
+    /// something the client itself is asked to do.
+    pub fn keeps_battle_net(&self, play: bool) -> bool {
+        self.battle_net_in_background || (play && !self.close_battle_net_on_play)
+    }
+
     /// The Proton build a Battle.net *hand-off* for `code` runs under.
     ///
     /// The product's own pin, then Battle.net's, then the app default. An
     /// older pin downgrades the shared prefix ([`crate::proton::prefix_fit`]);
     /// it is honoured all the same.
+    ///
+    /// A client kept in the background ignores the product's pin: it takes
+    /// launches over IPC, under the build it is already running.
     pub fn handoff_proton(&self, code: &ProductCode) -> Option<&str> {
+        if self.battle_net_in_background {
+            return self.battle_net_proton_version();
+        }
         self.product(code)
             .and_then(|p| p.profile.proton_ge_version.as_deref())
             .or_else(|| self.battle_net_proton_version())
@@ -610,6 +627,22 @@ mod tests {
     }
 
     #[test]
+    fn a_background_client_runs_every_hand_off_under_its_own_build() {
+        let mut config = Config::with_default_products();
+        config.battle_net_proton = ProtonPin::Pinned("GE-Proton11-8".into());
+        let diablo = ProductCode::Custom("d4".to_owned());
+        config.products.push(Product::new(diablo.clone(), "Diablo IV"));
+        config.product_mut(&diablo).unwrap().profile.proton_ge_version = Some("GE-Proton10-34".to_owned());
+
+        config.battle_net_in_background = true;
+        assert_eq!(config.handoff_proton(&diablo), Some("GE-Proton11-8"));
+
+        // The pin is only out of play: it is back when the mode is off.
+        config.battle_net_in_background = false;
+        assert_eq!(config.handoff_proton(&diablo), Some("GE-Proton10-34"));
+    }
+
+    #[test]
     fn a_download_cap_is_read_in_megabytes_and_spent_in_bytes() {
         let mut config = Config::default();
         assert_eq!(config.download_limit_bytes(), 0, "no cap by default");
@@ -641,6 +674,25 @@ mod tests {
         assert!(old.battle_net_minimized);
         // And a config from before the switch leaves the client running.
         assert!(!old.close_battle_net_on_play);
+        assert!(!old.battle_net_in_background);
+    }
+
+    #[test]
+    fn a_background_client_is_kept_for_hand_offs_and_play_alike() {
+        let config = Config {
+            battle_net_in_background: true,
+            close_battle_net_on_play: true,
+            ..Config::default()
+        };
+        assert!(config.keeps_battle_net(true));
+        assert!(config.keeps_battle_net(false));
+    }
+
+    #[test]
+    fn without_the_background_only_play_keeps_the_client() {
+        let config = Config::default();
+        assert!(config.keeps_battle_net(true));
+        assert!(!config.keeps_battle_net(false));
     }
 
     #[test]
@@ -788,7 +840,7 @@ mod tests {
         // What *does* move: where a new game lands, and the folder Battle.net
         // proposes for its own titles.
         assert_eq!(after.games_root(), PathBuf::from("/mnt/games/Lightforge/games"));
-        let install_path = crate::battlenet::default_tweaks(&after)
+        let install_path = crate::battlenet::default_tweaks(&after, false)
             .into_iter()
             .find(|t| t.key() == "Client.Install.DefaultInstallPath")
             .map(|t| t.value);

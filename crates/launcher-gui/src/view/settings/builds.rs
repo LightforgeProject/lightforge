@@ -170,6 +170,19 @@ impl Lightforge {
                 tags.push(tag("Older than this prefix".to_owned(), theme::UPDATE));
             }
 
+            if self.pin_follows_client(code) {
+                pins.push(pin_line(
+                    label.clone(),
+                    super::FOLLOWS_CLIENT,
+                    tags,
+                    self.locked_picker(
+                        ProtonChoice(None, Unpinned::BattleNet).to_string(),
+                        Length::Fixed(260.0),
+                        theme::BODY,
+                    ),
+                ));
+                continue;
+            }
             pins.push(pin_line(
                 label.clone(),
                 match Kind::of(code) {

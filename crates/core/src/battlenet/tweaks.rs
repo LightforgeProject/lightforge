@@ -36,19 +36,33 @@ impl Tweak {
 
 /// Lightforge's defaults for `Battle.net.config`. Every value is a JSON
 /// string: the client writes them that way and ignores a real boolean.
-pub fn default_tweaks(layout: &Layout) -> Vec<Tweak> {
+///
+/// `background` is [`crate::config::Config::battle_net_in_background`]: the
+/// client stays up after a hand-off instead of exiting.
+pub fn default_tweaks(layout: &Layout, background: bool) -> Vec<Tweak> {
     // Games Battle.net installs land on the default library's drive. The
     // client itself stays in the prefix.
     let install_path = layout
         .default_library()
         .map(|library| library.windows_games_path())
         .unwrap_or_else(|| WINDOWS_PROGRAM_FILES.to_owned());
-    vec![
-        Tweak::new(
-            "Client.GameLaunchWindowBehavior",
-            json!("2"),
-            "exit Battle.net completely once the game has been handed off",
-        ),
+    let mut tweaks = vec![
+        // The client logs which it took: `Game is now running with game launch
+        // behavior set to …`. Measured on 2.53.6: `0` and `1` minimize to the
+        // taskbar, `2` exits, `3` closes the window, which `HideOnClose` turns
+        // into the tray.
+        match background {
+            true => Tweak::new(
+                "Client.GameLaunchWindowBehavior",
+                json!("3"),
+                "go back to the tray once the game has been handed off, ready for the next one",
+            ),
+            false => Tweak::new(
+                "Client.GameLaunchWindowBehavior",
+                json!("2"),
+                "exit Battle.net completely once the game has been handed off",
+            ),
+        },
         Tweak::new(
             "Client.HardwareAcceleration",
             json!("false"),
@@ -64,7 +78,15 @@ pub fn default_tweaks(layout: &Layout) -> Vec<Tweak> {
             json!("false"),
             "no background scanning of the filesystem for other Blizzard installs",
         ),
-    ]
+    ];
+    if background {
+        tweaks.push(Tweak::new(
+            "Client.RestoreWindowOnGameEnd",
+            json!("false"),
+            "stay in the tray when the game exits: \"Restoring auto closed window\" otherwise",
+        ));
+    }
+    tweaks
 }
 
 /// The download limit Battle.net applies to its own transfers, in bytes per
@@ -126,67 +148,93 @@ pub fn product_tweaks(codes: &[ProductCode]) -> Vec<Tweak> {
         .collect()
 }
 
+/// Whether the client shows its corner notifications. Per account: the same
+/// key in `Battle.net.config` is ignored. It logs `Toasts are disabled in
+/// ClientSettings and will not be displayed` (measured 2026-11-04).
+pub fn toasts_tweak(on: bool) -> Tweak {
+    Tweak::new(
+        "User.Client.ToastsEnabled",
+        json!(match on {
+            true => "true",
+            false => "false",
+        }),
+        "a client kept out of sight does not pop up over whatever is on screen",
+    )
+}
+
+/// Whether the client updates `uid` by itself. There is no command for starting
+/// an update (its `--exec` verbs are `launch`, `launch_uid`, `launch_register`,
+/// `dialog`, `logout` and `shutdown`); this, read when it starts, is what makes
+/// one begin within seconds (measured on Forever, 2026-11-04).
+pub fn auto_update_tweak(uid: &str, on: bool) -> Tweak {
+    Tweak::new(
+        &format!("Games.{uid}.AutoUpdate"),
+        json!(match on {
+            true => "true",
+            false => "false",
+        }),
+        "a game Battle.net owns updates when the user asks for it, not behind their back",
+    )
+}
+
 /// Defaults for a per-account `<hash>.config`. The client stores window
 /// behaviour per account and ignores these keys in `Battle.net.config`.
-pub fn account_tweaks() -> Vec<Tweak> {
-    vec![
-        Tweak::new(
-            "User.Client.HideOnClose",
-            json!("false"),
-            "closing the window quits — no tray icon, no lingering background client",
-        ),
+pub fn account_tweaks(background: bool) -> Vec<Tweak> {
+    let mut tweaks = vec![
+        match background {
+            true => Tweak::new(
+                "User.Client.HideOnClose",
+                json!("true"),
+                "closing the window sends it to the tray, where it waits for the next hand-off",
+            ),
+            false => Tweak::new(
+                "User.Client.HideOnClose",
+                json!("false"),
+                "closing the window quits — no tray icon, no lingering background client",
+            ),
+        },
         Tweak::new(
             "User.Client.DisplayExitPrompt",
             json!("false"),
             "quit immediately instead of showing the close countdown",
         ),
-    ]
+    ];
+    if background {
+        tweaks.push(toasts_tweak(false));
+    }
+    tweaks
 }
 
-/// The Qt `WindowState` the client saves on exit and restores on start: `0`
-/// normal, `1` minimized. The only way to start it out of sight: Wine cannot
-/// minimize a window for us, and Wayland lets nothing do it from outside.
-pub const WINDOW_STATE_KEY: &str = "User.Client.Windows.BrowserMainWindow.WindowState";
+/// The settings checkbox "Launch Battle.net minimized to the system tray".
+/// Read from `Battle.net.config` only: the same key in the per-account file
+/// is ignored, and so is the Qt `WindowState` there (client 2.53.6, measured
+/// 2026-11-04). The window then lives in the tray alone, with no taskbar
+/// entry, and a second plain start brings it back. Wine cannot minimize a
+/// window for us, and Wayland lets nothing do it from outside.
+pub const AUTOSTART_MINIMIZED_KEY: &str = "Client.AutoStartMinimized";
 
-/// The settings checkbox "Launch Battle.net minimized to the system tray",
-/// a per-account key like `HideOnClose`.
-pub const AUTOSTART_MINIMIZED_KEY: &str = "User.Client.AutoStartMinimized";
-
-/// Start the client minimized, or normally. It logs the decision on every start:
+/// Start the client in the tray, or as a window. For [`configure`]. It logs
+/// the decision on every start:
 ///
 /// ```text
-/// [Frontend] {Main} Attempting to show main window. isMinimizedOnStartup=false
-/// shouldMainWindowShowMinimizedAtAutoStartup=false varAutoStarted=false …
+/// [Frontend] {Main} Attempting to show main window. isMinimizedOnStartup=true
+/// shouldMainWindowShowMinimizedAtAutoStartup=true varAutoStarted=true … needToMinimize=true
 /// ```
 ///
-/// `isMinimizedOnStartup` is [`WINDOW_STATE_KEY`]; [`AUTOSTART_MINIMIZED_KEY`]
-/// is only read when `varAutoStarted` is set, see [`super::Launch::Autostart`]. Both
-/// are re-applied before each start: the client rewrites them on exit.
+/// Only an autostart honours it, see [`super::Launch::Autostart`]. Re-applied
+/// before each start: the client rewrites the file on exit.
 pub fn window_state_tweaks(minimized: bool) -> Vec<Tweak> {
-    vec![
-        Tweak::new(
-            WINDOW_STATE_KEY,
-            json!(match minimized {
-                true => "1",
-                false => "0",
-            }),
-            match minimized {
-                true => "come up minimized: the hand-off drives the client, nobody needs to see it",
-                false => "come up as a normal window",
-            },
-        ),
-        Tweak::new(
-            AUTOSTART_MINIMIZED_KEY,
-            json!(match minimized {
-                true => "true",
-                false => "false",
-            }),
-            match minimized {
-                true => "stay minimized when started as an autostart, which a hand-off is",
-                false => "show the window when started as an autostart",
-            },
-        ),
-    ]
+    vec![Tweak::new(
+        AUTOSTART_MINIMIZED_KEY,
+        json!(match minimized {
+            true => "true",
+            false => "false",
+        }),
+        match minimized {
+            true => "start in the tray when started as an autostart, which a hand-off is",
+            false => "show the window when started as an autostart",
+        },
+    )]
 }
 
 /// Merge `tweaks` into a parsed config, creating missing objects and leaving

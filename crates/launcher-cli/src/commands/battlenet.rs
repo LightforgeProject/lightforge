@@ -82,7 +82,7 @@ pub(crate) fn battlenet_setup(ctx: Ctx, proton: Option<String>, locale: String, 
 }
 
 pub(crate) fn battlenet_config(ctx: Ctx) -> Result<()> {
-    let Ctx { layout, .. } = ctx;
+    let Ctx { layout, config } = ctx;
     use lightforge_core::battlenet;
     use lightforge_core::config::Config;
 
@@ -90,14 +90,14 @@ pub(crate) fn battlenet_config(ctx: Ctx) -> Result<()> {
 
     // The same set setup and pre-flight write, so running this by
     // hand cannot leave a config the next launch disagrees with.
-    let mut tweaks = battlenet::default_tweaks(&layout);
+    let mut tweaks = battlenet::default_tweaks(&layout, config.battle_net_in_background);
     tweaks.extend(battlenet::product_tweaks(&managed_products()));
     let path = battlenet::configure(&layout, &user, &tweaks)
         .context("writing Battle.net.config")?;
     println!("{}", path.display());
     print_tweaks(&tweaks);
 
-    let account_tweaks = battlenet::account_tweaks();
+    let account_tweaks = battlenet::account_tweaks(config.battle_net_in_background);
     let accounts = battlenet::configure_accounts(&layout, &user, &account_tweaks)
         .context("writing the per-account config")?;
     if accounts.is_empty() {
@@ -154,6 +154,7 @@ pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<Pr
     let mut download_paused = false;
     if !skip_preflight {
         let report = Preflight::new(config.prefix_user.clone()).with_managed(managed_products())
+            .with_background_client(config.battle_net_in_background)
             .run(&runner, &layout, code.as_ref(), &mut downloads)
             .context("pre-flight cleanup")?;
         print_preflight(&report);

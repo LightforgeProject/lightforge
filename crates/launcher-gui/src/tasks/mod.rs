@@ -38,6 +38,8 @@ mod launch;
 mod backups;
 mod doctor;
 mod desktop;
+mod companions;
+mod client;
 pub(crate) mod upgrade;
 
 pub(crate) use branding::*;
@@ -48,6 +50,8 @@ pub(crate) use launch::*;
 pub(crate) use backups::*;
 pub(crate) use doctor::*;
 pub(crate) use desktop::*;
+pub(crate) use companions::*;
+pub(crate) use client::*;
 pub(crate) use upgrade::{Prepared, Stamp};
 
 
@@ -193,13 +197,40 @@ fn client_runner(
     layout: &Layout,
     code: &ProductCode,
 ) -> Result<lightforge_core::prefix::ProtonRunner, Problem> {
-    let runner = runner_for(layout, code, Runs::BattleNet)?;
+    in_tls_container(runner_for(layout, code, Runs::BattleNet)?)
+}
+
+/// `runner` inside Steam's runtime, where the host has no 32-bit gnutls.
+fn in_tls_container(
+    runner: lightforge_core::prefix::ProtonRunner,
+) -> Result<lightforge_core::prefix::ProtonRunner, Problem> {
     let steam = lightforge_core::steam::SteamRoot::discover();
     match lightforge_core::runtime::tls_container(runner.build(), steam.as_ref()) {
         Ok(Some(entry)) => Ok(runner.in_container(entry)),
         Ok(None) => Ok(runner),
         Err(e) => Err(Problem::of(&e)),
     }
+}
+
+/// [`runner_for`] Battle.net on its own, for no game: its own pin and shared
+/// profile, and no per-product shader cache, since every game it goes on to
+/// start inherits this environment.
+fn lone_client_runner(layout: &Layout) -> Result<lightforge_core::prefix::ProtonRunner, String> {
+    use lightforge_core::prefix::ProtonRunner;
+    use lightforge_core::proton;
+
+    let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
+    let config = Config::load_or_default(&dirs.config_file()).unwrap_or_default();
+    let steam = lightforge_core::steam::SteamRoot::discover();
+    let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());
+    let build = proton::select(&builds, config.battle_net_proton_version())
+        .ok_or_else(|| "no supported Proton-GE build installed".to_owned())?;
+    let mut runner =
+        ProtonRunner::new(build, layout, ProtonRunner::steam_client_path(steam.as_ref(), &dirs));
+    for (key, value) in config.battle_net_tweaks.environment(&HostTools::detect()) {
+        runner = runner.with_env(key, value);
+    }
+    Ok(runner)
 }
 
 /// The shared profile Battle.net and its games launch under.

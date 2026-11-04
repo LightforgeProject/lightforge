@@ -1,6 +1,29 @@
 # Lightforge release notes
 
 
+## 1.0.0-beta.10
+
+Lightforge 1.0.0-beta.10 is the update for the WoW Forever launch. It fixes the problems that came up around Forever and Battle.net, and from your bug reports. It also adds Seamless Battle.net Mode, still experimental, which keeps Battle.net ready in the background so games that go through it start right away.
+
+- New: Seamless Battle.net Mode (Experimental), at the top of Settings, General. Battle.net starts hidden with Lightforge and stays signed in, so games that start through it open in about a second instead of waiting for it to sign in. It needs a saved sign-in. World of Warcraft does not go through Battle.net, so it starts no faster.
+- In that mode a dot on the Battle.net button shows its state: blue while signing in, yellow when it needs you, green when ready. Pressing the button shows the window.
+- In that mode Battle.net closes with Lightforge, unless a game or its window is open. It gets out of the way for downloads, repairs and moves and comes back afterwards, its notifications stay off, and games it starts use its Proton version.
+- In that mode, when Battle.net has an update for one of its own games, the button says Update via Battle.net. Lightforge shows the progress and starts the game when it is done, and you can play something else meanwhile.
+- Start Battle.net minimized never actually worked. It does now: Battle.net starts in the system tray with no window, and goes back there if it comes up during a launch.
+- Added Game Tools: a Tools tab for running side programs like Wowhead's client or HSReplay beside your games.
+- Added a login region picker on the play card: choose EU or NA per game. It only changes where you log in, not what is installed.
+- A new Lightforge version is now offered on every start until you install it.
+- Updates now store the files the game would otherwise fetch by itself on first launch, about 190 MiB. This may also help when a game would not start after an update.
+- Battle.net should no longer ask to update a WoW version Lightforge just installed, which also blocked starting it through Battle.net. Games keep the old state until Lightforge next updates them.
+- Fixed clicks landing above the buttons on KDE Plasma with fractional scaling, until the window was resized. Thanks to wormsparty for the report and roethlar for tracing it and testing the fix.
+- A launch through Battle.net that starts nothing now says why and releases the button, instead of holding it for three minutes.
+- Fixed pressing Play via Battle.net right after closing a game doing nothing. Lightforge now waits until Battle.net has noticed the game is gone.
+- Fixed Deep Scan reporting healthy games as damaged, and offering a repair that would have removed Battle.net's own data. This affected games Battle.net installed or updated.
+- Get it from GitHub on addons now says why it failed when the author's link is out of date, instead of "this project no longer exists". Thanks to xalvor for the report.
+- Diagnostics now reports the versions bundled with your Proton, and warns about the open-source NVIDIA driver.
+- A crash can no longer leave a damaged drive marker or catalogue cache behind.
+- On NixOS the flake now starts Lightforge through steam-run-free, which has the 32-bit loader Proton needs, and the 32-bit advice shown there is corrected.
+
 ## 1.0.0-beta.9
 
 Lightforge 1.0.0-beta.9 is a smaller update before WoW Forever launches. Lightforge is now also an AppImage, has experimental ARM64 builds and an interface size setting, and keeps your computer awake while games download. It also fixes a few things found in a review of the code, among them one way moving a game could lose it.

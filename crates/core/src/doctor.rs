@@ -69,8 +69,9 @@ pub fn run(config: &Config, layout: &Layout, proton_dir: &Path) -> Vec<Check> {
     checks.push(proton(config, proton_dir));
     checks.push(python());
     checks.push(prefix(layout));
-    if let Some(version) = crate::debug::nvidia_version() {
-        checks.extend(nvidia(&version));
+    match crate::debug::nvidia_version() {
+        Some(version) => checks.extend(nvidia(&version)),
+        None => checks.extend(open_nvidia(&crate::debug::cards())),
     }
     checks
 }
@@ -363,6 +364,19 @@ fn nvidia(version: &str) -> Vec<Check> {
     vec![driver, modeset, gl32]
 }
 
+/// An NVIDIA card on nouveau, which games reach through NVK. A GPU hang there
+/// froze a whole machine (GlitchTip #38, RTX 3060); the proprietary driver
+/// recovers and only the game dies (Xid 109).
+fn open_nvidia(cards: &[String]) -> Option<Check> {
+    let card = cards.iter().find(|card| card.starts_with("nouveau 10de:"))?;
+    Some(check(
+        "nvidia driver",
+        Status::Warn,
+        card.as_str(),
+        Some("On nouveau/NVK a game's GPU hang can freeze the whole system; the proprietary driver recovers from it".to_owned()),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,6 +389,19 @@ Max cpu time              unlimited            unlimited            seconds
 Max open files            1048576              2097152              files     
 Max locked memory         8388608              8388608              bytes     
 ";
+
+    #[test]
+    fn an_nvidia_card_on_nouveau_is_warned_about() {
+        // As GlitchTip #38 reported it.
+        let warned = open_nvidia(&["nouveau 10de:2503".to_owned()]).expect("a warning");
+        assert_eq!(warned.status, Status::Warn);
+        assert_eq!(warned.detail, "nouveau 10de:2503");
+    }
+
+    #[test]
+    fn other_cards_on_open_drivers_are_left_alone() {
+        assert_eq!(open_nvidia(&["amdgpu 1002:7550".to_owned(), "i915 8086:a780".to_owned()]), None);
+    }
 
     #[test]
     fn the_open_file_limit_is_read_from_proc() {

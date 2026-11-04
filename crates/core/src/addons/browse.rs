@@ -426,12 +426,13 @@ async fn cached_json<T: serde::de::DeserializeOwned>(
     }
 
     let body = http.get_bytes(url, MAX_CATALOGUE_BYTES).await?;
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(&path, &body);
-
-    serde_json::from_slice(&body).map_err(|source| CatalogError::Fixture { path, source })
+    // Cached only once it parses: a broken one would be served as fresh.
+    let parsed = match serde_json::from_slice(&body) {
+        Ok(parsed) => parsed,
+        Err(source) => return Err(CatalogError::Fixture { path, source }),
+    };
+    let _ = crate::fsutil::write_atomic(&path, &body);
+    Ok(parsed)
 }
 
 fn is_fresh(path: &PathBuf) -> bool {

@@ -1,21 +1,12 @@
 #[test]
-fn the_window_state_key_is_qts_own_and_is_written_as_a_string() {
+fn starting_in_the_tray_is_a_global_key_written_as_a_string() {
     // The client stores every one of these as a string, and a real
-    // integer here is a value it reads back as zero, the booleans
-    // included, so `"true"` is quoted below.
+    // boolean here is a value it reads back as false.
     let minimized = window_state_tweaks(true);
-    assert_eq!(minimized.len(), 2);
-    assert_eq!(minimized[0].path, WINDOW_STATE_KEY.split('.').collect::<Vec<_>>());
-    assert_eq!(minimized[0].value, json!("1"));
-    assert_eq!(
-        minimized[1].path,
-        AUTOSTART_MINIMIZED_KEY.split('.').collect::<Vec<_>>()
-    );
-    assert_eq!(minimized[1].value, json!("true"));
-
-    let normal = window_state_tweaks(false);
-    assert_eq!(normal[0].value, json!("0"));
-    assert_eq!(normal[1].value, json!("false"));
+    assert_eq!(minimized.len(), 1);
+    assert_eq!(minimized[0].path, ["Client", "AutoStartMinimized"]);
+    assert_eq!(minimized[0].value, json!("true"));
+    assert_eq!(window_state_tweaks(false)[0].value, json!("false"));
 }
 
 #[test]
@@ -122,6 +113,117 @@ fn a_launch_waits_for_the_game_list_not_just_the_sign_in() {
     assert!(client_ready(&format!("{GAMES_READY}\n{signed}"), none));
     assert!(!client_ready(&listed.replace(SIGNED_IN, "x"), GAMES_GRACE), "not signed in");
     assert!(client_ready(&signed, GAMES_GRACE), "a line that never comes costs the grace, not 60 s");
+}
+
+// From the client's log, 2026-11-04: Hearthstone ran, exited, and a launch
+// sent before Agent reported the exit only selected its tile.
+const HS_STARTED: &str = "D 2026-11-04 00:53:36.388350 [InstallManager] {Main} Game is running: hs_beta\r\n";
+const HS_GONE: &str = "D 2026-11-04 00:54:03.478889 [InstallManager] {Main} Game is no longer running: hs_beta\r\n";
+const W3_STARTED: &str = "D 2026-11-04 00:53:03.307605 [InstallManager] {Main} Game is running: w3\r\n";
+
+#[test]
+fn a_game_counts_as_running_until_the_client_hears_it_exit() {
+    assert!(!counts_as_running("", "hs_beta"));
+    assert!(counts_as_running(HS_STARTED, "hs_beta"));
+    assert!(!counts_as_running(&format!("{HS_STARTED}{HS_GONE}"), "hs_beta"));
+    assert!(counts_as_running(&format!("{HS_STARTED}{HS_GONE}{HS_STARTED}"), "hs_beta"));
+}
+
+#[test]
+fn another_game_running_does_not_hold_a_launch() {
+    assert!(!counts_as_running(W3_STARTED, "hs_beta"));
+    assert!(!counts_as_running(&format!("{HS_STARTED}{HS_GONE}{W3_STARTED}"), "hs_beta"));
+}
+
+#[test]
+fn the_client_says_when_it_holds_a_game_back_for_an_update() {
+    // Forever, and Hearthstone beside it, at the client's start, 2026-11-04.
+    let waiting = "D 2026-11-04 07:51:18.920525 [ProductState] {Main} InstallState (wowf): currentOperation=Update currentOperationStatus=New installed=1 installPath=H:/World of Warcraft\r\n";
+    let fine = "D 2026-11-04 07:51:18.920568 [ProductState] {Main} InstallState (hs_beta): currentOperation=UpToDate currentOperationStatus=Paused installed=1 playable=1\r\n";
+    // Its own lines in between carry other fields, and say nothing about this.
+    let progress = "D 2026-11-03 23:36:12.000000 [ProductState] {Main} InstallState (wowf): currentOperationStatus=Running progress=0.3\r\n";
+    let finished = "D 2026-11-03 23:36:16.271653 [ProductState] {Main} InstallState (wowf): currentOperation=UpToDate currentOperationStatus=Paused\r\n";
+
+    assert!(pending_update(waiting, "wowf"));
+    assert!(pending_update(&format!("{waiting}{fine}{progress}"), "wowf"));
+    assert!(!pending_update(&format!("{waiting}{finished}"), "wowf"));
+    assert!(!pending_update(fine, "hs_beta"));
+    assert!(!pending_update(waiting, "hs_beta"), "another game's update");
+    assert!(!pending_update("", "wowf"));
+}
+
+#[test]
+fn an_update_is_followed_through_the_clients_log() {
+    // From a Hearthstone update, 2026-10-27.
+    let started = "D 2026-10-27 16:51:45.651795 [InstallManager] {Main} Update started: hs_beta\r\n";
+    let running = "D 2026-10-27 16:51:48.211613 [ProductState] {Main} InstallState (hs_beta): currentOperationStatus=Running bytesToDownload=52458135 updatesToApplySize=511408526 downloadRate=1807604 downloadRemaining=20000000 progress=0.3\r\n";
+    let applying = "D 2026-10-27 16:51:49.721426 [ProductState] {Main} InstallState (hs_beta): currentOperationStatus=Waiting bytesToDownload=0 updatesToApplySize=0 downloadRate=0 downloadRemaining=0 progress=1\r\n";
+    let completed = "D 2026-10-27 16:51:49.722062 [InstallManager] {Main} Update completed: hs_beta\r\n";
+
+    assert_eq!(update_state("", "hs_beta"), UpdateState::NotStarted);
+    assert_eq!(
+        update_state(started, "hs_beta"),
+        UpdateState::Running(crate::state::Progress::default()),
+        "no sizes yet: no number"
+    );
+    assert_eq!(
+        update_state(&format!("{started}{running}"), "hs_beta"),
+        UpdateState::Running(crate::state::Progress {
+            downloaded_bytes: 32458135,
+            total_bytes: 52458135,
+            bytes_per_second: 1807604,
+        })
+    );
+    let UpdateState::Running(done) = update_state(&format!("{started}{running}{applying}"), "hs_beta") else {
+        panic!("still running");
+    };
+    assert_eq!((done.downloaded_bytes, done.total_bytes), (52458135, 52458135));
+    assert_eq!(update_state(&format!("{started}{running}{completed}"), "hs_beta"), UpdateState::Completed);
+}
+
+#[test]
+fn another_games_update_is_not_this_ones() {
+    let other = "D 2026-11-04 08:09:52.148886 [InstallManager] {Main} Update completed: wow_classic\r\n";
+    assert_eq!(update_state(other, "wow"), UpdateState::NotStarted);
+}
+
+#[test]
+fn the_session_log_is_the_one_that_signed_in_not_the_second_invocation() {
+    let dir = scratch("session-log");
+    let layout = Layout::with_root(&dir);
+    let logs = layout.battle_net_logs("steamuser");
+    std::fs::create_dir_all(&logs).unwrap();
+    let client = logs.join("battle.net-20261104T005254.117078.log");
+    std::fs::write(&client, format!("I [BNLogin] {SIGNED_IN}. |bnet=1:0:x\r\n{HS_STARTED}")).unwrap();
+    // Written after the client's, as every hand-off's own invocation is.
+    std::thread::sleep(Duration::from_millis(20));
+    std::fs::write(
+        logs.join("battle.net-20261104T005403.063011.log"),
+        "I [Main] {Main} Command line arguments: {[0]=--productcode=hs_beta, [1]=--exec=launch WTCG}\r\n",
+    )
+    .unwrap();
+
+    let session = SessionLog::find(&layout, "steamuser").unwrap();
+    assert!(!session.wait_until_closed("hs_beta", Duration::ZERO), "the client's log says it still runs");
+
+    let mut text = std::fs::read_to_string(&client).unwrap();
+    text.push_str(HS_GONE);
+    std::fs::write(&client, text).unwrap();
+    assert!(session.wait_until_closed("hs_beta", Duration::ZERO));
+    assert!(!session.launch_taken(Duration::ZERO));
+
+    let mut text = std::fs::read_to_string(&client).unwrap();
+    text.push_str("I 2026-11-04 00:53:34.342537 [GameLaunchController] {Main} LaunchBinary: uid=hs_beta selectedRegion=EU binaryType=game\r\n");
+    std::fs::write(&client, text).unwrap();
+    assert!(session.launch_taken(Duration::ZERO));
+
+    assert!(!session.updated_itself());
+    let mut text = std::fs::read_to_string(&client).unwrap();
+    text.push_str("D 2026-11-04 01:03:09.027560 [InstallManager] {Main} Update completed: battle.net\r\n");
+    std::fs::write(&client, text).unwrap();
+    assert!(session.updated_itself());
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -302,7 +404,7 @@ fn tweaks_create_missing_objects_without_touching_anything_else() {
         "Client": { "Sound": { "Enabled": "true" } },
         "Games": { "wow": { "LastPlayed": "1" } }
     });
-    apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard")));
+    apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard"), false));
 
     assert_eq!(config["Client"]["GameLaunchWindowBehavior"], json!("2"));
     assert_eq!(config["Client"]["HardwareAcceleration"], json!("false"));
@@ -319,8 +421,42 @@ fn tweaks_create_missing_objects_without_touching_anything_else() {
 #[test]
 fn an_existing_value_is_overwritten_not_appended() {
     let mut config = json!({ "Client": { "GameLaunchWindowBehavior": "0" } });
-    apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard")));
+    apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard"), false));
     assert_eq!(config["Client"]["GameLaunchWindowBehavior"], json!("2"));
+}
+
+#[test]
+fn a_background_client_stays_after_a_hand_off() {
+    let mut config = json!({ "Client": { "GameLaunchWindowBehavior": "2" } });
+    apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard"), true));
+    assert_eq!(config["Client"]["GameLaunchWindowBehavior"], json!("3"));
+    assert_eq!(config["Client"]["RestoreWindowOnGameEnd"], json!("false"));
+}
+
+#[test]
+fn a_client_that_exits_after_a_hand_off_keeps_its_own_restore_setting() {
+    let mut config = json!({ "Client": { "RestoreWindowOnGameEnd": "true" } });
+    apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard"), false));
+    assert_eq!(config["Client"]["RestoreWindowOnGameEnd"], json!("true"));
+}
+
+#[test]
+fn a_background_client_hides_on_close() {
+    let mut config = json!({ "User": { "Client": { "HideOnClose": "false" } } });
+    apply_tweaks(&mut config, &account_tweaks(true));
+    assert_eq!(config["User"]["Client"]["HideOnClose"], json!("true"));
+    assert_eq!(config["User"]["Client"]["DisplayExitPrompt"], json!("false"));
+}
+
+#[test]
+fn only_a_background_client_has_its_notifications_switched_off() {
+    let mut config = json!({ "User": { "Client": { "ToastsEnabled": "false" } } });
+    apply_tweaks(&mut config, &account_tweaks(false));
+    assert_eq!(config["User"]["Client"]["ToastsEnabled"], json!("false"), "the user's own choice stands");
+
+    let mut config = json!({ "User": { "Client": {} } });
+    apply_tweaks(&mut config, &account_tweaks(true));
+    assert_eq!(config["User"]["Client"]["ToastsEnabled"], json!("false"));
 }
 
 #[test]
@@ -328,7 +464,7 @@ fn a_scalar_where_an_object_belongs_is_replaced() {
     // Battle.net has shipped schema changes before; a stale scalar must not
     // abort setup.
     let mut config = json!({ "Client": { "Install": "C:\\somewhere" } });
-    apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard")));
+    apply_tweaks(&mut config, &default_tweaks(&Layout::with_root("/games/Blizzard"), false));
     assert_eq!(config["Client"]["Install"]["DefaultInstallPath"], json!(r"E:\"));
 }
 
@@ -342,8 +478,8 @@ fn hide_on_close_is_written_to_every_account_config_but_not_the_global_one() {
         .unwrap();
     std::fs::write(bnet.join("beef0001.config"), "{}").unwrap();
 
-    configure(&layout, "steamuser", &default_tweaks(&layout)).unwrap();
-    let changed = configure_accounts(&layout, "steamuser", &account_tweaks()).unwrap();
+    configure(&layout, "steamuser", &default_tweaks(&layout, false)).unwrap();
+    let changed = configure_accounts(&layout, "steamuser", &account_tweaks(false)).unwrap();
     assert_eq!(changed.len(), 2);
 
     for name in ["1c858370.config", "beef0001.config"] {
@@ -366,10 +502,10 @@ fn hide_on_close_is_written_to_every_account_config_but_not_the_global_one() {
 fn a_prefix_with_no_account_yet_is_a_no_op() {
     let dir = scratch("noaccount");
     let layout = Layout::with_root(&dir);
-    configure(&layout, "steamuser", &default_tweaks(&layout)).unwrap();
+    configure(&layout, "steamuser", &default_tweaks(&layout, false)).unwrap();
 
     // Only Battle.net.config exists before the first login.
-    assert!(configure_accounts(&layout, "steamuser", &account_tweaks()).unwrap().is_empty());
+    assert!(configure_accounts(&layout, "steamuser", &account_tweaks(false)).unwrap().is_empty());
 }
 
 #[test]
@@ -377,7 +513,7 @@ fn configure_seeds_a_config_that_does_not_exist_yet() {
     let dir = scratch("seed");
     let layout = Layout::with_root(&dir);
 
-    let path = configure(&layout, "steamuser", &default_tweaks(&layout)).unwrap();
+    let path = configure(&layout, "steamuser", &default_tweaks(&layout, false)).unwrap();
     assert_eq!(path, layout.battle_net_config("steamuser"));
 
     let written: Value =
@@ -390,9 +526,9 @@ fn configure_is_idempotent_and_leaves_no_temp_files() {
     let dir = scratch("idempotent");
     let layout = Layout::with_root(&dir);
 
-    let path = configure(&layout, "steamuser", &default_tweaks(&layout)).unwrap();
+    let path = configure(&layout, "steamuser", &default_tweaks(&layout, false)).unwrap();
     let first = std::fs::read_to_string(&path).unwrap();
-    configure(&layout, "steamuser", &default_tweaks(&layout)).unwrap();
+    configure(&layout, "steamuser", &default_tweaks(&layout, false)).unwrap();
     assert_eq!(first, std::fs::read_to_string(&path).unwrap());
 
     let leftovers = std::fs::read_dir(path.parent().unwrap()).unwrap().count();
@@ -408,7 +544,7 @@ fn a_corrupt_config_is_reported_rather_than_silently_replaced() {
     std::fs::write(&path, "{ not json").unwrap();
 
     assert!(matches!(
-        configure(&layout, "steamuser", &default_tweaks(&layout)),
+        configure(&layout, "steamuser", &default_tweaks(&layout, false)),
         Err(BattleNetError::MalformedConfig { .. })
     ));
 }

@@ -9,6 +9,28 @@ fn the_servers_caption_is_built_from_blizzards_date() {
 
 use super::*;
 
+/// The app on a throwaway config, queue and Blizzard root, set up as a
+/// user's would be. Never the real ones: `startup_tasks` saves the config
+/// when it finds a drive, and the queue is written after every message.
+/// Keep the folder alive as long as the app.
+pub(crate) fn test_app() -> (Lightforge, tempfile::TempDir) {
+    let scratch = tempfile::tempdir().unwrap();
+    let dirs = AppDirs::with_dirs(
+        scratch.path().join("config"),
+        scratch.path().join("cache"),
+        scratch.path().join("data"),
+    );
+    let config = Config {
+        blizzard_root: Some(scratch.path().join("Blizzard")),
+        setup_complete: true,
+        ..Config::with_default_products()
+    };
+    config.save(&dirs.config_file()).unwrap();
+    let mut app = Lightforge::load_state(Some(dirs));
+    let _ = app.startup_tasks();
+    (app, scratch)
+}
+
 fn chord(text: &str, modifiers: iced::keyboard::Modifiers) -> bool {
     hints_chord(&iced::keyboard::Key::Character(text.into()), modifiers)
 }
@@ -250,7 +272,7 @@ fn the_index_follows_the_page_to_its_last_section() {
 /// once the client it saw has gone.
 #[test]
 fn the_registry_is_read_again_when_battle_net_changes_it() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     assert!(app.registry_watch.is_some(), "watched from the start");
     let t0 = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1);
     let t1 = t0 + Duration::from_secs(5);
@@ -279,7 +301,7 @@ fn the_registry_is_read_again_when_battle_net_changes_it() {
 /// outcome this whole mechanism exists to prevent.
 #[test]
 fn a_game_on_an_absent_drive_is_held_rather_than_played_or_downloaded() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     let code = app.selected.code.clone();
@@ -291,6 +313,7 @@ fn a_game_on_an_absent_drive_is_held_rather_than_played_or_downloaded() {
         executable: Some(PathBuf::from("/nowhere/Wow.exe")),
         store_files: 12,
         staged: None,
+        portal: None,
     };
     assert!(matches!(app.action(), ActionState::Play));
 
@@ -321,7 +344,7 @@ fn a_game_on_an_absent_drive_is_held_rather_than_played_or_downloaded() {
 /// travel is still a click.
 #[test]
 fn dragging_a_tile_reorders_the_band() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
 
@@ -382,7 +405,7 @@ fn dragging_a_tile_reorders_the_band() {
 /// moves the pointer as it closes, and the ring went to the logo.
 #[test]
 fn the_ring_comes_back_where_the_mouse_took_it() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.splash = None;
     let at = |x, y| iced::Rectangle { x, y, width: 80.0, height: 30.0 };
@@ -411,7 +434,7 @@ fn the_ring_comes_back_where_the_mouse_took_it() {
 /// the ring lands on the Remove beside it, not at the top of the page.
 #[test]
 fn a_button_gone_once_pressed_leaves_the_ring_nearby() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.splash = None;
     let at = |x, y| iced::Rectangle { x, y, width: 80.0, height: 30.0 };
@@ -464,7 +487,7 @@ fn a_button_gone_once_pressed_leaves_the_ring_nearby() {
 
 #[test]
 fn right_from_the_settings_index_goes_in_and_left_comes_back_out() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.splash = None;
     app.wizard = None;
@@ -495,7 +518,7 @@ fn right_from_the_settings_index_goes_in_and_left_comes_back_out() {
 /// no mouse at all.
 #[test]
 fn the_keyboard_alone_picks_a_game_and_closes_the_release_notes() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     app.wizard = None;
@@ -588,7 +611,7 @@ fn the_keyboard_alone_picks_a_game_and_closes_the_release_notes() {
 /// ptr".
 #[test]
 fn removing_a_game_takes_its_ptr_and_beta_with_it() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
 
@@ -624,7 +647,7 @@ fn removing_a_game_takes_its_ptr_and_beta_with_it() {
 /// from going to zero.
 #[test]
 fn the_last_line_cannot_be_removed_even_with_its_branches_tracked() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
 
@@ -650,7 +673,7 @@ fn the_last_line_cannot_be_removed_even_with_its_branches_tracked() {
 /// band being rebuilt; the first action on it puts it in the band.
 #[test]
 fn a_game_opened_from_add_a_game_joins_the_band_only_when_acted_on() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
 
@@ -679,7 +702,7 @@ fn a_game_opened_from_add_a_game_joins_the_band_only_when_acted_on() {
 /// the menu; on the last tile it is held.
 #[test]
 fn a_tiles_menu_removes_its_line_and_closes() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
 
@@ -739,7 +762,7 @@ fn a_bug_report_needs_a_category_and_a_contact() {
 fn the_release_notes_open_once_after_an_update_and_never_uninvited() {
     let version = env!("CARGO_PKG_VERSION");
     let fresh = || {
-        let (mut app, _) = Lightforge::new();
+        let (mut app, _scratch) = test_app();
         app.dirs = None;
         app.queue.clear();
         app.config.setup_complete = true;
@@ -784,7 +807,7 @@ fn the_release_notes_open_once_after_an_update_and_never_uninvited() {
 
 #[test]
 fn a_failed_download_of_another_game_still_says_so() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     let other = match app.selected.code {
@@ -810,7 +833,7 @@ fn a_failed_download_of_another_game_still_says_so() {
 
 #[test]
 fn a_resume_during_the_wind_down_is_not_swallowed() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     // Nothing read from or written to the real queue file.
     app.dirs = None;
     app.queue.clear();
@@ -853,7 +876,7 @@ fn a_library_under_home_is_shown_short_and_one_elsewhere_is_not() {
 /// open, and deleting it under its own writer is the thing this defers.
 #[test]
 fn deleting_a_cancelled_install_waits_for_the_run_to_stop() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     let code = app.selected.code.clone();
@@ -901,7 +924,7 @@ fn stopped(cancelled: bool) -> Result<Box<Complete>, Problem> {
 
 #[test]
 fn a_running_download_is_removed_only_once_its_run_has_stopped() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     let code = app.selected.code.clone();
@@ -920,7 +943,7 @@ fn a_running_download_is_removed_only_once_its_run_has_stopped() {
 
 #[test]
 fn a_cancel_confirmed_after_the_install_finished_deletes_nothing() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     let code = app.selected.code.clone();
@@ -934,7 +957,7 @@ fn a_cancel_confirmed_after_the_install_finished_deletes_nothing() {
 
 #[test]
 fn scan_and_repair_waits_for_a_running_download() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     let code = app.selected.code.clone();
@@ -947,7 +970,7 @@ fn scan_and_repair_waits_for_a_running_download() {
 
 #[test]
 fn queueing_a_product_that_is_downloading_leaves_its_run_alone() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     let code = app.selected.code.clone();
@@ -960,7 +983,7 @@ fn queueing_a_product_that_is_downloading_leaves_its_run_alone() {
 
 #[test]
 fn a_launch_waits_for_its_paused_download_to_come_to_rest() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     let code = app.selected.code.clone();
@@ -982,7 +1005,7 @@ fn a_launch_waits_for_its_paused_download_to_come_to_rest() {
 fn a_download_a_launch_paused_is_restarted_when_the_game_exits() {
     use lightforge_core::preflight::DownloadGuard;
 
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     app.config.pause_downloads_while_playing = false;
@@ -1009,7 +1032,7 @@ fn a_download_a_launch_paused_is_restarted_when_the_game_exits() {
 
 #[test]
 fn closing_waits_for_a_repair_to_finish() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     app.repairing = Some(app.selected.code.clone());
@@ -1020,7 +1043,7 @@ fn closing_waits_for_a_repair_to_finish() {
 
 #[test]
 fn cancelling_an_update_never_deletes_anything() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     let code = app.selected.code.clone();
@@ -1051,7 +1074,7 @@ fn cancelling_an_update_never_deletes_anything() {
 /// offering to delete its install.
 #[test]
 fn there_is_nothing_to_cancel_when_nothing_is_downloading() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     let code = app.selected.code.clone();
@@ -1063,7 +1086,7 @@ fn there_is_nothing_to_cancel_when_nothing_is_downloading() {
 
 #[test]
 fn a_download_running_at_close_is_saved_as_running() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     let code = app.selected.code.clone();
@@ -1104,7 +1127,7 @@ fn a_config_that_will_not_load_is_described_kept_and_never_overwritten() {
     let backup = dirs.config_file().with_extension("toml.broken");
     assert_eq!(std::fs::read_to_string(backup).unwrap(), broken);
 
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = Some(dirs.clone());
     app.queue.clear();
     app.config_error = Some(message);
@@ -1195,7 +1218,7 @@ fn byte_readouts_survive_an_unknown_total() {
 }
 
 fn update_notice_app() -> Lightforge {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.update_notice = Some(lightforge_core::update::Available {
         current: "1.0.0-beta.6".to_owned(),
@@ -1236,33 +1259,56 @@ fn the_update_card_draws_for_every_route_and_stage() {
     }
 }
 
+/// Later is not "never": the next start asks again, until the update
+/// is installed.
+#[test]
+fn a_newer_release_is_offered_on_every_start_until_installed() {
+    let found = lightforge_core::update::Available {
+        current: "1.0.0-beta.9".to_owned(),
+        latest: "1.0.0-beta.10".to_owned(),
+        url: lightforge_core::update::RELEASES_PAGE.to_owned(),
+    };
+    let (mut app, _scratch) = test_app();
+    let _ = app.update(Message::UpdateChecked(Some(found.clone())));
+    assert!(app.update_notice.is_some());
+    let _ = app.update(Message::DismissUpdate);
+    assert!(app.update_notice.is_none());
+    let saved = app.config.clone();
+
+    let (mut next_start, _scratch) = test_app();
+    next_start.config = saved;
+    let _ = next_start.update(Message::UpdateChecked(Some(found)));
+    assert!(next_start.update_notice.is_some(), "Later hid the release for good");
+}
+
 #[test]
 fn the_check_button_shows_a_release_that_was_dismissed_before() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     let found = lightforge_core::update::Available {
         current: "1.0.0-beta.6".to_owned(),
         latest: "1.0.0-beta.7".to_owned(),
         url: lightforge_core::update::RELEASES_PAGE.to_owned(),
     };
-    app.config.update_seen = Some(found.latest.clone());
+    let _ = app.update(Message::UpdateChecked(Some(found.clone())));
+    let _ = app.update(Message::DismissUpdate);
     let _ = app.update(Message::LauncherChecked(Ok(Some(found))));
-    assert!(app.update_notice.is_some(), "the button's answer was swallowed by update_seen");
+    assert!(app.update_notice.is_some(), "the button's answer was swallowed by Later");
     assert_eq!(app.launcher_check, LauncherCheck::Idle);
 }
 
 #[test]
 fn a_dismissed_release_stays_one_press_away_in_settings() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     let found = lightforge_core::update::Available {
         current: "1.0.0-beta.7".to_owned(),
         latest: "1.0.0-beta.8".to_owned(),
         url: lightforge_core::update::RELEASES_PAGE.to_owned(),
     };
-    // Dismissed in an earlier session: no notice at start-up.
-    app.config.update_seen = Some(found.latest.clone());
+    // Later: the notice closes for this session, the release stays known.
     let _ = app.update(Message::UpdateChecked(Some(found)));
+    let _ = app.update(Message::DismissUpdate);
     assert!(app.update_notice.is_none() && app.newer_release.is_some());
     let _ = app.about_section();
 
@@ -1275,7 +1321,7 @@ fn a_dismissed_release_stays_one_press_away_in_settings() {
 
 #[test]
 fn update_now_on_a_checkout_shows_the_commands_instead() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.origin = lightforge_core::upgrade::Origin::Checkout { repo: "/src/lightforge".into() };
     app.newer_release = Some(lightforge_core::update::Available {
@@ -1290,7 +1336,7 @@ fn update_now_on_a_checkout_shows_the_commands_instead() {
 
 #[test]
 fn the_check_button_says_what_it_found() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     let _ = app.update(Message::LauncherChecked(Ok(None)));
     assert_eq!(app.launcher_check, LauncherCheck::Newest);
@@ -1344,7 +1390,7 @@ fn a_package_manager_replacing_the_binary_ends_the_wait() {
 
 #[test]
 fn the_proton_installer_opens_on_proton_ge_switches_tabs_and_closes_on_escape() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     app.wizard = None;
@@ -1375,7 +1421,7 @@ fn game(pid: u32) -> lightforge_core::preflight::GameProcess {
 
 #[test]
 fn stop_asks_first_and_play_comes_back_when_the_game_is_gone() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     app.wizard = None;
@@ -1417,7 +1463,7 @@ fn stop_asks_first_and_play_comes_back_when_the_game_is_gone() {
 
 #[test]
 fn a_second_game_starts_while_the_first_one_runs() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     let first = ProductCode::Forever;
@@ -1449,7 +1495,7 @@ fn a_second_game_starts_while_the_first_one_runs() {
 /// read as a hang and gave nothing to report. The reasons are the status now.
 #[test]
 fn a_run_that_ends_incomplete_says_why() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     let code = app.selected.code.clone();
@@ -1469,7 +1515,7 @@ fn env_edits_are_saved_once_typing_pauses_not_per_keystroke() {
     let dirs = AppDirs::with_dirs(dir.join("config"), dir.join("cache"), dir.join("data"));
     std::fs::create_dir_all(dirs.config_dir()).unwrap();
 
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = Some(dirs.clone());
     app.config_error = None;
     app.bnet_env_editor = Content::new();
@@ -1498,7 +1544,7 @@ fn an_env_edit_still_waiting_is_saved_when_the_window_closes() {
     let dirs = AppDirs::with_dirs(dir.join("config"), dir.join("cache"), dir.join("data"));
     std::fs::create_dir_all(dirs.config_dir()).unwrap();
 
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = Some(dirs.clone());
     app.config_error = None;
     app.queue.clear();
@@ -1527,7 +1573,7 @@ fn paused_pre_download(code: ProductCode) -> Download {
 
 #[test]
 fn a_pre_download_leaves_play_alone() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     app.local = Local {
@@ -1536,6 +1582,7 @@ fn a_pre_download_leaves_play_alone() {
         executable: Some(PathBuf::from("/nowhere/Wow.exe")),
         store_files: 12,
         staged: None,
+        portal: None,
     };
     let code = app.selected.code.clone();
     app.queue.push(paused_pre_download(code.clone()));
@@ -1546,7 +1593,7 @@ fn a_pre_download_leaves_play_alone() {
 
 #[test]
 fn an_update_takes_over_a_paused_pre_download_as_a_job_of_its_own() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     let code = app.selected.code.clone();
@@ -1563,7 +1610,7 @@ fn an_update_takes_over_a_paused_pre_download_as_a_job_of_its_own() {
 /// an installed game. Whatever the dialog asked, nothing may be deleted.
 #[test]
 fn cancelling_a_pre_download_never_deletes_the_installed_game() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     let code = app.selected.code.clone();
@@ -1593,7 +1640,7 @@ fn moving(code: ProductCode) -> Moving {
 fn a_committed_copy_points_the_config_at_the_new_library_first() {
     let dir = std::env::temp_dir().join(format!("lightforge-moved-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = Some(AppDirs::with_dirs(dir.join("config"), dir.join("cache"), dir.join("data")));
     app.track_selected();
     let code = app.selected.code.clone();
@@ -1613,7 +1660,7 @@ fn a_committed_copy_points_the_config_at_the_new_library_first() {
 /// Releasing now would delete the copy the config on disk still points at.
 #[test]
 fn a_copy_whose_config_cannot_be_saved_keeps_the_old_one() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.track_selected();
     let code = app.selected.code.clone();
@@ -1630,7 +1677,7 @@ fn a_copy_whose_config_cannot_be_saved_keeps_the_old_one() {
 
 #[test]
 fn a_failed_copy_leaves_the_game_where_it_was() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.track_selected();
     let code = app.selected.code.clone();
@@ -1659,7 +1706,7 @@ fn incomplete() -> Complete {
 
 #[test]
 fn battle_net_running_offers_show_and_quit_and_closes_the_menu_when_it_goes() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.wizard = None;
     app.splash = None;
@@ -1678,8 +1725,207 @@ fn battle_net_running_offers_show_and_quit_and_closes_the_menu_when_it_goes() {
 }
 
 #[test]
+fn nothing_starts_in_the_background_unless_asked() {
+    let (mut app, _scratch) = test_app();
+    let _ = app.warm_client();
+    assert_eq!(app.client_phase, ClientPhase::Settled);
+}
+
+#[test]
+fn a_hand_off_waits_while_the_background_client_signs_in() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.client_phase = ClientPhase::SigningIn;
+
+    let _ = app.preflight(Launch::BattleNet);
+    assert_eq!(app.launch_after_client, Some(Launch::BattleNet));
+    assert!(app.busy, "the button is held while it waits");
+
+    let _ = app.update(Message::BackgroundClient(Ok(tasks::Warmed::Ready)));
+    assert_eq!(app.client_phase, ClientPhase::Settled);
+    assert_eq!(app.launch_after_client, None);
+}
+
+#[test]
+fn play_does_not_wait_for_the_background_client() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.client_phase = ClientPhase::SigningIn;
+
+    let _ = app.preflight(Launch::Game);
+    assert_eq!(app.launch_after_client, None);
+}
+
+#[test]
+fn a_client_that_needs_signing_in_releases_the_launch_waiting_on_it() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.client_phase = ClientPhase::SigningIn;
+    let _ = app.preflight(Launch::BattleNet);
+
+    let started = std::time::SystemTime::now();
+    let _ = app.update(Message::BackgroundClient(Ok(tasks::Warmed::NeedsSignIn { started })));
+    assert_eq!(app.client_phase, ClientPhase::NeedsSignIn);
+    assert!(!app.busy, "nobody can sign in behind a held button");
+
+    // Drawn with its warning dot.
+    let _ = app.view();
+
+    let _ = app.update(Message::ClientSeen(false));
+    assert_eq!(app.client_phase, ClientPhase::Settled, "it was quit, so it no longer needs anything");
+}
+
+#[test]
+fn a_hand_off_games_pin_is_locked_only_while_the_client_is_kept_in_the_background() {
+    let (mut app, _scratch) = test_app();
+    let hearthstone = ProductCode::Custom("hs_beta".to_owned());
+    assert!(!app.pin_follows_client(&hearthstone));
+
+    app.config.battle_net_in_background = true;
+    assert!(app.pin_follows_client(&hearthstone));
+    assert!(!app.pin_follows_client(&ProductCode::Retail), "Play starts WoW under its own pin");
+}
+
+#[test]
+fn a_launch_that_starts_nothing_says_why_where_it_stays_on_screen() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.busy = true;
+    app.launching = Some(ProductCode::Forever);
+
+    let _ = app.update(Message::HandoffStarted(Ok(tasks::Handoff::NeedsUpdate)));
+    assert!(!app.busy);
+    let shown = app.error.as_ref().expect("the status line would be overwritten by the reload");
+    assert!(shown.message.contains("press Play"), "{}", shown.message);
+}
+
+#[test]
+fn the_button_says_update_while_the_client_holds_the_game_back() {
+    let (mut app, _scratch) = test_app();
+    // A product with a compiled-in family, so the client knows which tile.
+    app.selected.code = ProductCode::Forever;
+    app.installed_versions.insert("wowf".to_owned(), "1.60.1".to_owned());
+    assert_eq!(app.handoff_act(), HandoffAct::Play);
+
+    let _ = app.update(Message::ClientUpdatePending(ProductCode::Forever, true));
+    assert_eq!(app.handoff_act(), HandoffAct::Update);
+    assert_eq!(app.handoff_act().label(), "Update via Battle.net");
+
+    let _ = app.update(Message::ClientSeen(false));
+    assert_eq!(app.handoff_act(), HandoffAct::Play, "no client, nothing known about it");
+}
+
+#[test]
+fn a_battle_net_game_held_for_an_update_updates_and_leaves_the_launcher_free() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.battle_net_in_background = true;
+    let hearthstone = ProductCode::Custom("hs_beta".to_owned());
+    app.selected.code = hearthstone.clone();
+    app.busy = true;
+    app.launching = Some(hearthstone.clone());
+
+    let _ = app.update(Message::HandoffStarted(Ok(tasks::Handoff::NeedsUpdate)));
+    assert!(!app.busy, "WoW can be played during a Hearthstone patch");
+    assert!(app.error.is_none());
+    assert_eq!(app.client_update.as_ref().map(|u| u.code.clone()), Some(hearthstone.clone()));
+    let _ = app.view();
+
+    let _ = app.update(Message::StopWatchingClientUpdate);
+    assert!(app.client_update.as_ref().is_some_and(|u| u.stop.is_cancelled()));
+
+    let _ = app.update(Message::ClientUpdateDone(hearthstone, Ok(tasks::ClientUpdated::StoppedWatching)));
+    assert!(app.client_update.is_none() && !app.busy, "stopping watching starts nothing");
+}
+
+#[test]
+fn a_finished_update_starts_the_game_it_was_asked_for() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    let hearthstone = ProductCode::Custom("hs_beta".to_owned());
+    app.selected.code = hearthstone.clone();
+    let _ = app.start_client_update(hearthstone.clone());
+
+    let _ = app.update(Message::ClientUpdateDone(hearthstone, Ok(tasks::ClientUpdated::Completed)));
+    assert!(app.busy, "the launch's pre-flight is under way");
+}
+
+#[test]
+fn a_game_lightforge_manages_is_never_updated_through_the_client() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.battle_net_in_background = true;
+    app.launching = Some(ProductCode::Forever);
+    app.busy = true;
+
+    let _ = app.update(Message::HandoffStarted(Ok(tasks::Handoff::NeedsUpdate)));
+    assert!(app.client_update.is_none());
+    assert!(app.error.as_ref().is_some_and(|e| e.message.contains("press Play")));
+}
+
+#[test]
+fn switching_seamless_mode_offers_a_restart_and_later_applies_it_without_one() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.setup_complete = true;
+
+    let _ = app.update(Message::BattleNetInBackground(true));
+    assert_eq!(app.mode_restart, Some(true));
+    assert_eq!(app.client_phase, ClientPhase::Settled, "nothing starts until the answer");
+    let _ = app.view();
+
+    let _ = app.update(Message::ModeRestartLater);
+    assert_eq!(app.mode_restart, None);
+    assert_eq!(app.client_phase, ClientPhase::SigningIn);
+}
+
+#[test]
+fn switching_seamless_mode_off_closes_the_client_when_later_is_chosen() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.battle_net_in_background = true;
+
+    let _ = app.update(Message::BattleNetInBackground(false));
+    assert_eq!(app.mode_restart, Some(false));
+
+    let _ = app.update(Message::ModeRestartLater);
+    assert!(app.quitting_client);
+}
+
+#[test]
+fn a_client_that_gave_way_returns_once_nothing_needs_the_prefix() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.battle_net_in_background = true;
+    app.config.setup_complete = true;
+    tasks::owe_client();
+
+    app.scanning = true;
+    let _ = app.update(Message::ClientSeen(false));
+    assert_eq!(app.client_phase, ClientPhase::Settled, "not during a scan");
+
+    app.scanning = false;
+    let _ = app.update(Message::ClientSeen(false));
+    assert_eq!(app.client_phase, ClientPhase::SigningIn);
+}
+
+#[test]
+fn a_launch_that_found_the_client_updating_itself_is_sent_again() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.battle_net_in_background = true;
+    app.config.setup_complete = true;
+    app.busy = true;
+
+    let _ = app.update(Message::HandoffStarted(Ok(tasks::Handoff::ClientUpdated)));
+    assert_eq!(app.launch_after_client, Some(Launch::BattleNet));
+    assert_eq!(app.client_phase, ClientPhase::SigningIn);
+    assert!(app.busy, "the button stays held for the second try");
+}
+
+#[test]
 fn quitting_battle_net_asks_first_only_when_a_game_runs() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
 
     let _ = app.update(Message::QuitBattleNetChecked(vec!["Overwatch.exe".to_owned()]));
@@ -1696,7 +1942,7 @@ fn quitting_battle_net_asks_first_only_when_a_game_runs() {
 
 #[test]
 fn battle_net_is_not_quit_while_a_launch_may_be_starting_it() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.busy = true;
 
@@ -1706,7 +1952,7 @@ fn battle_net_is_not_quit_while_a_launch_may_be_starting_it() {
 
 #[test]
 fn a_fresh_proton_copy_sets_up_again_only_when_asked_for_by_the_fix() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
 
     let _ = app.update(Message::FreshProton("GE-Proton11-7".to_owned()));
@@ -1725,7 +1971,7 @@ fn a_fresh_proton_copy_sets_up_again_only_when_asked_for_by_the_fix() {
 
 #[test]
 fn a_new_game_language_leaves_a_game_mid_download_in_its_own() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.queue.clear();
     app.config.locale = "enUS".to_owned();
@@ -1743,7 +1989,7 @@ fn a_new_game_language_leaves_a_game_mid_download_in_its_own() {
 
 #[test]
 fn a_link_that_is_not_a_web_page_is_not_opened() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
 
     let _ = app.update(Message::OpenUrl("file:///home/someone/evil.desktop".to_owned()));
@@ -1753,7 +1999,7 @@ fn a_link_that_is_not_a_web_page_is_not_opened() {
 
 #[test]
 fn a_settings_report_keeps_env_flags_and_hides_the_rest() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.config.battle_net_tweaks.env = [
         ("DXVK_HUD".to_owned(), "fps".to_owned()),
@@ -1766,4 +2012,54 @@ fn a_settings_report_keeps_env_flags_and_hides_the_rest() {
     assert!(sent.contains("DXVK_HUD = \"fps\""), "{sent}");
     assert!(sent.contains("API_TOKEN = \"(hidden)\""), "{sent}");
     assert!(!sent.contains("ghp_"));
+}
+
+/// An installer's run on the Game Tools page: started, finished by the
+/// user, and the program picked out of what it added, for the game chosen.
+#[test]
+fn a_companion_is_added_from_what_its_installer_put_in_the_prefix() {
+    let (mut app, _scratch) = test_app();
+    let drive_c = app.layout.prefix().join("drive_c");
+    let exe = drive_c.join("users/steamuser/AppData/Local/Uploader/app-1.2.0/Uploader.exe");
+    let _ = app.update(Message::CompanionGamePicked(ProductCode::Forever));
+    app.companion_install = Some(CompanionInstall { game: app.companion_target(), stage: CompanionStage::Starting });
+
+    let _ = app.update(Message::CompanionInstallerStarted(Ok(Default::default())));
+    assert!(matches!(app.companion_install.as_ref().unwrap().stage, CompanionStage::Running(_)));
+    let _ = app.update(Message::CompanionInstallDone);
+    let _ = app.update(Message::CompanionCandidates(vec![exe.clone()]));
+    let _ = app.companions_screen();
+    let _ = app.update(Message::CompanionChosen(exe));
+
+    assert!(app.companion_install.is_none());
+    let added = &app.config.companions[0];
+    assert_eq!(added.name, "Uploader");
+    assert_eq!(added.game, ProductCode::Forever);
+    assert_eq!(added.exe, PathBuf::from("users/steamuser/AppData/Local/Uploader/app-1.2.0/Uploader.exe"));
+    assert!(!added.start_with_game, "off until asked for");
+}
+
+#[test]
+fn a_companion_starts_with_its_game_only_when_switched_on_and_leaves_with_remove() {
+    let (mut app, _scratch) = test_app();
+    let program = app.layout.prefix().join("drive_c/Program Files/Tracker/Tracker.exe");
+    let _ = app.update(Message::CompanionPicked(CompanionPick::Program, Some(program.clone())));
+    let _ = app.update(Message::CompanionPicked(CompanionPick::Program, Some(program)));
+    assert_eq!(app.config.companions.len(), 1, "the same program twice is one entry");
+
+    let _ = app.update(Message::CompanionAutoStart(0, true));
+    assert!(app.config.companions[0].start_with_game);
+    let _ = app.companions_screen();
+
+    let _ = app.update(Message::CompanionRemove(0));
+    assert!(app.config.companions.is_empty());
+}
+
+#[test]
+fn an_installer_that_would_not_start_ends_the_install_with_its_error() {
+    let (mut app, _scratch) = test_app();
+    app.companion_install = Some(CompanionInstall { game: ProductCode::Retail, stage: CompanionStage::Starting });
+    let _ = app.update(Message::CompanionInstallerStarted(Err("no supported Proton-GE build installed".to_owned().into())));
+    assert!(app.companion_install.is_none());
+    assert!(app.error.is_some());
 }

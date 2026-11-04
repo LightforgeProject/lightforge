@@ -6,22 +6,9 @@
 use std::io;
 use std::path::Path;
 
-const KEYS: [&str; 2] = ["textLocale", "audioLocale"];
-
 /// Point `config_wtf` at `locale` atomically, keeping every other line.
 pub fn set(config_wtf: &Path, locale: &str) -> io::Result<()> {
-    let old = match std::fs::read_to_string(config_wtf) {
-        Ok(text) => text,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e),
-    };
-    let mut out: Vec<String> = old
-        .lines()
-        .filter(|line| !KEYS.iter().any(|key| line.trim_start().starts_with(&format!("SET {key} "))))
-        .map(str::to_owned)
-        .collect();
-    out.extend(KEYS.iter().map(|key| format!("SET {key} \"{locale}\"")));
-    crate::fsutil::write_atomic(config_wtf, (out.join("\n") + "\n").as_bytes())
+    crate::cvars::set(config_wtf, &[("textLocale", locale), ("audioLocale", locale)])
 }
 
 #[cfg(test)]

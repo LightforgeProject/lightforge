@@ -43,6 +43,7 @@ pub async fn download(
     std::thread::Builder::new()
         .name("lightforge-download".to_owned())
         .spawn(move || {
+            make_way(&layout);
             let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
                 Ok(runtime) => runtime,
                 Err(e) => {
@@ -62,9 +63,13 @@ pub async fn download(
                     .library(&code)
                     .map(|library| library.windows_wow_path())
                     .unwrap_or_else(|| lightforge_core::paths::WINDOWS_WOW_PATH.to_owned());
+                let (account_country, geo_country) =
+                    lightforge_core::tact::productdb::countries(&layout.agent_dir());
                 let options = InstallOptions {
                     region,
                     locale,
+                    account_country,
+                    geo_country,
                     // Empty for a new install: its product config decides.
                     flavor: layout.known_flavor(&code).unwrap_or_default().to_owned(),
                     optional_tags: optional_tags.clone(),
@@ -257,7 +262,10 @@ pub async fn discard_download(
 
     // The same gate a repair and an uninstall go through.
     let alive = layout.clone();
-    let busy = tokio::task::spawn_blocking(move || lightforge_core::preflight::scan(&alive))
+    let busy = tokio::task::spawn_blocking(move || {
+        make_way(&alive);
+        lightforge_core::preflight::scan(&alive)
+    })
         .await
         .map_err(|e| chain(&e))?;
     if let Some(process) = busy.first() {

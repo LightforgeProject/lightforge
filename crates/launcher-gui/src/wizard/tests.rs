@@ -1,6 +1,7 @@
 use super::adopt::hand_off_entry;
 use super::steps::welcome_answered;
 use super::*;
+use crate::tests::test_app;
 
 fn install(path: &str, blocked: Option<&str>) -> WowInstall {
     WowInstall {
@@ -24,7 +25,7 @@ fn game(label: &str) -> HandOff {
 /// Only SteamOS is asked, and there the first slide waits for an answer.
 #[test]
 fn steamos_has_to_say_what_it_is_for_before_setup_goes_on() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.config.steamos_use = None;
 
@@ -42,7 +43,7 @@ fn steamos_has_to_say_what_it_is_for_before_setup_goes_on() {
 /// walks the slides, and Escape steps back and never leaves.
 #[test]
 fn setup_walks_by_enter_and_steps_back_by_escape() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.splash = None;
     app.steamos = false;
@@ -83,7 +84,7 @@ fn setup_walks_by_enter_and_steps_back_by_escape() {
 /// already linked into the default one.
 #[test]
 fn a_scan_after_setup_does_not_offer_what_is_already_here() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     let root = std::env::temp_dir().join(format!("lightforge-wizard-known-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -119,7 +120,7 @@ fn a_scan_after_setup_does_not_offer_what_is_already_here() {
 
 #[test]
 fn a_typed_folder_is_looked_through_once_and_off_the_ui_thread() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.wizard = Some(Wizard { pointed: "/nowhere/World of Warcraft".to_owned(), ..Wizard::default() });
 
@@ -138,7 +139,7 @@ fn a_typed_folder_is_looked_through_once_and_off_the_ui_thread() {
 /// finishing setup: the release notes stay owed.
 #[test]
 fn closing_a_scan_leaves_the_first_run_state_alone() {
-    let (mut app, _) = Lightforge::new();
+    let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.config.patch_notes_seen = Some("0.0.1".to_owned());
     let _ = update(&mut app, Msg::Scan);

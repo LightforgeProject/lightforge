@@ -46,6 +46,9 @@ pub struct Preflight {
     grace: Duration,
     /// Leave a running Battle.net client (and its Agent) alone.
     keep_client: bool,
+    /// The client is kept running between games: written to stay up after
+    /// a hand-off. See [`crate::config::Config::battle_net_in_background`].
+    background: bool,
 }
 
 impl Preflight {
@@ -55,6 +58,7 @@ impl Preflight {
             managed: Vec::new(),
             grace: DEFAULT_GRACE,
             keep_client: false,
+            background: false,
         }
     }
 
@@ -62,6 +66,13 @@ impl Preflight {
     /// launch. Cache and config work waits for a launch that finds it closed.
     pub fn keeping_client(mut self, keep: bool) -> Self {
         self.keep_client = keep;
+        self
+    }
+
+    /// Configure the client to stay up between games instead of exiting
+    /// after each hand-off.
+    pub fn with_background_client(mut self, on: bool) -> Self {
+        self.background = on;
         self
     }
 
@@ -125,13 +136,20 @@ impl Preflight {
 
         // The client recreates the per-account file on login and after a
         // prefix update, without `HideOnClose`, so it is re-applied every launch.
-        let mut tweaks = battlenet::default_tweaks(layout);
+        let mut tweaks = battlenet::default_tweaks(layout, self.background);
         tweaks.extend(battlenet::product_tweaks(&self.managed));
+        // A client that stays up must not start downloads nobody asked for.
+        // Here because it rewrites the file on exit, undoing what an update
+        // asked for: only a closed client can be told.
+        if self.background {
+            let known = battlenet::known_product_codes(layout, &self.user);
+            tweaks.extend(known.iter().map(|uid| battlenet::auto_update_tweak(uid, false)));
+        }
         let mut configs = vec![battlenet::configure(layout, &self.user, &tweaks)?];
         configs.extend(battlenet::configure_accounts(
             layout,
             &self.user,
-            &battlenet::account_tweaks(),
+            &battlenet::account_tweaks(self.background),
         )?);
 
         stamp(&mut timings, "battle.net config");
@@ -179,7 +197,7 @@ impl Preflight {
 
 /// Whether the prefix's live `wineserver`, if any, is this runner's. Two Wine
 /// builds cannot share one server. One whose binary cannot be read is let be.
-pub(super) fn served_by(runner: &ProtonRunner, layout: &Layout) -> bool {
+pub fn served_by(runner: &ProtonRunner, layout: &Layout) -> bool {
     let ours = runner.wineserver();
     let ours = ours.canonicalize().unwrap_or(ours);
     scan(layout)

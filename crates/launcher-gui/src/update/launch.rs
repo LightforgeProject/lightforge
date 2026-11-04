@@ -143,25 +143,54 @@ impl Lightforge {
                         Task::batch([self.game_up(game, None), self.minimize_if_asked()])
                     }
                     // Closed while signing in: nothing to hand off to.
-                    Ok(tasks::Handoff::ClientClosed) => self.update(Message::Launched(Ok(
-                        "Battle.net was closed before the game could start".to_owned(),
-                    ))),
-                    Ok(tasks::Handoff::NeedsAttention { minimized }) => {
-                        // Waiting on a person (two-factor, an update); left
-                        // running, and said where: a minimized client is in the tray.
-                        self.update(Message::Launched(Ok(match minimized {
-                            true => "Battle.net needs attention — open it from the tray, \
-                                     finish there and press Play"
-                                .to_owned(),
-                            false => "Battle.net needs attention — finish in its window and \
-                                      press Play there"
-                                .to_owned(),
-                        })))
+                    Ok(tasks::Handoff::ClientClosed) => {
+                        self.launch_failed("Battle.net closed before the game could start — press Play again")
+                    }
+                    // Waiting on a person (two-factor, an update); left running,
+                    // and said where: a minimized client is in the tray.
+                    Ok(tasks::Handoff::NeedsAttention { minimized: true }) => self.launch_failed(
+                        "Battle.net needs attention — open it from the tray, finish there and press Play",
+                    ),
+                    Ok(tasks::Handoff::NeedsAttention { minimized: false }) => {
+                        self.launch_failed("Battle.net needs attention — finish in its window and press Play there")
+                    }
+                    // Nothing went wrong that the user could act on: start it
+                    // again and send the same launch. The button stays held.
+                    Ok(tasks::Handoff::ClientUpdated) if self.config.battle_net_in_background => {
+                        self.status = "Battle.net updated itself, starting it again…".to_owned();
+                        self.launch_after_client = Some(Launch::BattleNet);
+                        self.warm_client()
+                    }
+                    Ok(tasks::Handoff::ClientUpdated) => {
+                        self.launch_failed("Battle.net updated itself — press Play again")
+                    }
+                    Ok(tasks::Handoff::NeedsUpdate) => {
+                        let code = self.launching.clone().unwrap_or_else(|| self.selected.code.clone());
+                        match (Kind::of(&code), self.config.battle_net_in_background) {
+                            // Its store is ours: Agent must not patch it.
+                            (Kind::Managed, _) => {
+                                self.launch_failed("Battle.net wants to update this game — press Play to start it here")
+                            }
+                            (Kind::HandOff, false) => {
+                                self.launch_failed("Battle.net has an update for this game — open Battle.net to install it")
+                            }
+                            // The lock is released: an update can take an hour,
+                            // and another game can be played meanwhile.
+                            (Kind::HandOff, true) => {
+                                self.busy = false;
+                                self.launching = None;
+                                self.status = "updating in Battle.net…".to_owned();
+                                self.start_client_update(code)
+                            }
+                        }
+                    }
+                    Ok(tasks::Handoff::Ignored) => {
+                        self.launch_failed("Battle.net did not start the game — open Battle.net to see why")
                     }
                     // Signed in, told to launch, and nothing came up.
-                    Ok(tasks::Handoff::NothingStarted) => self.update(Message::Launched(Ok(
-                        "Battle.net is open — no game started".to_owned(),
-                    ))),
+                    Ok(tasks::Handoff::NothingStarted) => {
+                        self.launch_failed("Battle.net is open — no game started")
+                    }
                     Err(e) => self.update(Message::Launched(Err(e))),
                 }
             }
@@ -223,11 +252,99 @@ impl Lightforge {
             Message::ClientWatch => self.check_client(),
 
             Message::ClientSeen(up) => {
+                let vanished = self.client_up && !up;
                 self.client_up = up;
                 if !up {
                     self.client_menu_open = false;
+                    // Quit before anyone signed it in.
+                    if self.client_phase == ClientPhase::NeedsSignIn {
+                        self.client_phase = ClientPhase::Settled;
+                    }
+                }
+                if !up {
+                    self.update_pending = None;
+                }
+                if self.client_may_return() && tasks::take_client_owed() {
+                    return Ok(self.warm_client());
+                }
+                // Not during a launch, which reads the same log itself.
+                if vanished && self.config.battle_net_in_background && !self.busy {
+                    return Ok(Task::perform(
+                        tasks::note_self_update(self.layout.clone(), self.config.prefix_user.clone()),
+                        |()| Message::ClientWatch,
+                    ));
+                }
+                match up {
+                    true => self.check_update_pending(),
+                    false => Task::none(),
+                }
+            }
+
+            Message::ClientUpdatePending(code, pending) => {
+                self.update_pending = pending.then_some(code);
+                Task::none()
+            }
+
+            Message::StopWatchingClientUpdate => {
+                if let Some(update) = &self.client_update {
+                    update.stop.cancel();
                 }
                 Task::none()
+            }
+
+            Message::ClientUpdateDone(code, result) => {
+                self.client_update = None;
+                self.update_pending = None;
+                match result {
+                    // Asked for by pressing Play, so it starts, unless the user
+                    // has since gone to another game or started something else.
+                    Ok(tasks::ClientUpdated::Completed) if self.selected.code == code && !self.busy => {
+                        self.preflight(Launch::BattleNet)
+                    }
+                    Ok(tasks::ClientUpdated::Completed) => {
+                        self.status = "the update is done".to_owned();
+                        Task::none()
+                    }
+                    Ok(tasks::ClientUpdated::StoppedWatching) => {
+                        self.status = "Battle.net carries on updating".to_owned();
+                        Task::none()
+                    }
+                    Err(e) => {
+                        self.error = Some(e);
+                        Task::none()
+                    }
+                }
+            }
+
+            Message::BackgroundClient(result) => {
+                let waiting = self.launch_after_client.take();
+                match result {
+                    Ok(tasks::Warmed::NeedsSignIn { started }) => {
+                        // The first answer: watch for someone signing in. The
+                        // watch running out changes nothing.
+                        let watch = match self.client_phase == ClientPhase::SigningIn {
+                            true => Task::perform(
+                                tasks::await_sign_in(self.layout.clone(), self.config.prefix_user.clone(), started),
+                                Message::BackgroundClient,
+                            ),
+                            false => Task::none(),
+                        };
+                        self.client_phase = ClientPhase::NeedsSignIn;
+                        let released = match waiting {
+                            Some(_) => self.launch_failed("Battle.net needs you to sign in — press its button"),
+                            None => Task::none(),
+                        };
+                        Task::batch([watch, released, self.check_client()])
+                    }
+                    other => {
+                        if let Err(e) = other {
+                            tracing::warn!("Battle.net did not start in the background: {e}");
+                        }
+                        self.client_phase = ClientPhase::Settled;
+                        let launch = waiting.map_or_else(Task::none, |what| self.preflight(what));
+                        Task::batch([launch, self.check_client()])
+                    }
+                }
             }
 
             Message::ToggleClientMenu => {
@@ -281,6 +398,8 @@ impl Lightforge {
 
             Message::BattleNetQuit(result) => {
                 self.quitting_client = false;
+                // Closed on purpose: no need to ask why it went.
+                self.client_up = false;
                 match result {
                     Ok(note) => self.status = note,
                     Err(e) => self.error = Some(e),

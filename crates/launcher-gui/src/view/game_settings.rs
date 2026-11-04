@@ -419,6 +419,18 @@ impl Lightforge {
     /// The same pin as Settings › Proton, for whoever is here.
     fn proton_group<'a>(&'a self, settings: &'a GameSettings) -> Element<'a, Message> {
         let code = &settings.code;
+        if self.pin_follows_client(code) {
+            return setting_group([setting(
+                "Proton version",
+                super::settings::FOLLOWS_CLIENT,
+                None,
+                self.locked_picker(
+                    ProtonChoice(None, Unpinned::BattleNet).to_string(),
+                    Length::Fixed(260.0),
+                    theme::BODY,
+                ),
+            )]);
+        }
         let unpinned = match Kind::of(code) {
             Kind::Managed => Unpinned::Default,
             Kind::HandOff => Unpinned::BattleNet,

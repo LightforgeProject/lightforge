@@ -24,10 +24,17 @@ pub async fn preflight(
         tracing::info!("preflight for {} ({runs:?})", code.as_str());
         let report = Preflight::new(config.prefix_user.clone())
             .with_managed(config.managed_products())
-            // PLAY only: anything that goes through the client starts it afresh.
-            .keeping_client(runs == Runs::Game && !config.close_battle_net_on_play)
+            .keeping_client(config.keeps_battle_net(runs == Runs::Game))
+            .with_background_client(config.battle_net_in_background)
             .run(&runner, &layout, Some(&code), &mut guard)
             .map_err(|e| Problem::of(&e))?;
+        // Closed for a game under another build: it comes back after.
+        if runs == Runs::Game
+            && config.battle_net_in_background
+            && report.processes.iter().any(|o| o.process.kind == lightforge_core::preflight::ProcKind::BattleNet)
+        {
+            owe_client();
+        }
         // The stage timings say where a launch that feels stuck sits.
         tracing::info!(
             "preflight done in {} ms, {} process(es) found: {}",
@@ -246,10 +253,34 @@ pub(crate) fn reap(mut child: std::process::Child) -> Result<String, Problem> {
 
 /// Wait on a Battle.net invocation off-thread. A dropped `Child` is never
 /// waited on, and each hand-off would stay a `<defunct>` until the GUI exits.
-fn reap_later(mut child: std::process::Child) {
+pub(crate) fn reap_later(mut child: std::process::Child) {
     std::thread::spawn(move || {
         let _ = child.wait();
     });
+}
+
+/// Start a client, in the tray or as a window. Returns the moment after which
+/// its log answers for this start.
+pub(crate) fn start_client(
+    runner: &lightforge_core::prefix::ProtonRunner,
+    layout: &Layout,
+    user: &str,
+    in_tray: bool,
+) -> Result<std::time::SystemTime, Problem> {
+    use lightforge_core::battlenet::{self, Launch};
+
+    let _ = battlenet::configure(layout, user, &battlenet::window_state_tweaks(in_tray));
+    // The preference is only read on an autostart.
+    let how = match in_tray {
+        true => Launch::Autostart,
+        false => Launch::Client,
+    };
+    let started = std::time::SystemTime::now();
+    // Wrappers here only: this invocation becomes the client.
+    let wrappers = config_tweaks().wrappers(&HostTools::detect());
+    let client = battlenet::launch_wrapped(runner, layout, &how, &wrappers).map_err(|e| Problem::of(&e))?;
+    reap_later(client);
+    Ok(started)
 }
 
 pub async fn launch_via_battle_net(
@@ -257,6 +288,7 @@ pub async fn launch_via_battle_net(
     code: ProductCode,
     user: String,
     family: Option<String>,
+    install_uid: String,
     minimized: bool,
 ) -> Result<Handoff, Problem> {
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
@@ -279,25 +311,7 @@ pub async fn launch_via_battle_net(
         if !preflight::client_running(&layout) {
             // Minimized only where it signs itself in.
             let minimize = minimized && battlenet::signs_in_by_itself(&layout, &user);
-            let _ = battlenet::configure_accounts(
-                &layout,
-                &user,
-                &battlenet::window_state_tweaks(minimize),
-            );
-
-            // The preference is only read on an autostart.
-            let how = match minimize {
-                true => Launch::Autostart,
-                false => Launch::Client,
-            };
-
-            let started = std::time::SystemTime::now();
-            // Wrappers here only: this invocation becomes the client.
-            let tools = HostTools::detect();
-            let wrappers = config_tweaks().wrappers(&tools);
-            let client = battlenet::launch_wrapped(&runner, &layout, &how, &wrappers)
-                .map_err(|e| Problem::of(&e))?;
-            reap_later(client);
+            let started = start_client(&runner, &layout, &user, minimize)?;
 
             if battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT)
                 == Readiness::NeedsAttention
@@ -312,9 +326,54 @@ pub async fn launch_via_battle_net(
             return Ok(Handoff::ClientClosed);
         }
 
+        // A game that just exited is still running to the client for a few
+        // seconds, and a launch then only selects its tile.
+        let session = battlenet::SessionLog::find(&layout, &user);
+        if let Some(log) = &session {
+            if log.pending_update(&install_uid) {
+                tracing::info!("Battle.net holds {install_uid} back for an update; not sending the launch");
+                return Ok(Handoff::NeedsUpdate);
+            }
+            if !log.wait_until_closed(&install_uid, GAME_GONE_WITHIN) {
+                tracing::warn!("Battle.net still counts {install_uid} as running; sending the launch anyway");
+            }
+        }
+
+        // The client raises its window for the command until the game is up;
+        // one nobody could see before goes straight back to the tray.
+        let tray = match battlenet::ClientWindows::connect(preflight::client_pids(&layout)) {
+            Ok(windows) if windows.any_shown().is_ok_and(|shown| !shown) => Some(windows),
+            Ok(_) => None,
+            Err(e) => {
+                tracing::info!("Battle.net's window stays as the client leaves it: {}", chain(&e));
+                None
+            }
+        };
+
         // Over IPC to the running client, with the family the panel resolved.
         let launch = Launch::Product { code: code.clone(), exec: family };
         reap_later(battlenet::launch(&runner, &layout, &launch).map_err(|e| Problem::of(&e))?);
+        if let Some(windows) = tray {
+            std::thread::spawn(move || match windows.keep_closed(Instant::now() + KEEP_IN_TRAY) {
+                Ok(0) => {}
+                Ok(closed) => tracing::info!("sent Battle.net's window back to the tray {closed} time(s)"),
+                Err(e) => tracing::warn!("stopped keeping Battle.net in the tray: {}", chain(&e)),
+            });
+        }
+
+        // A launch the client did not take would otherwise hold the button
+        // for the whole game wait, with nothing on screen to say why.
+        if session.as_ref().is_some_and(|log| !log.launch_taken(TAKEN_WITHIN)) {
+            if preflight::client_running(&layout) {
+                tracing::warn!("Battle.net hand-off for {}: the client did not take the launch", code.as_str());
+                return Ok(Handoff::Ignored);
+            }
+            tracing::warn!("Battle.net hand-off for {}: the client closed instead", code.as_str());
+            return Ok(match session.is_some_and(|log| log.updated_itself()) {
+                true => Handoff::ClientUpdated,
+                false => Handoff::ClientClosed,
+            });
+        }
 
         let handoff = match preflight::wait_for_game_start(&layout, &before, HANDOFF_TIMEOUT) {
             Some(game) => Handoff::Playing(game),
@@ -352,11 +411,7 @@ pub async fn install_via_battle_net(
 
         // Normal window, whatever a launch would have chosen: the next thing
         // that happens is a person choosing where to install.
-        let _ = battlenet::configure_accounts(
-            &layout,
-            &user,
-            &battlenet::window_state_tweaks(false),
-        );
+        let _ = battlenet::configure(&layout, &user, &battlenet::window_state_tweaks(false));
 
         let child = battlenet::launch(&runner, &layout, &Launch::InstallFlow { uid })
             .map_err(|e| Problem::of(&e))?;
@@ -378,6 +433,12 @@ pub enum Handoff {
     NeedsAttention { minimized: bool },
     /// It was there and then it was not, closed while we waited.
     ClientClosed,
+    /// It quit on the launch to switch to a version it had just updated to.
+    ClientUpdated,
+    /// The client holds the game back for an update, so the launch was not sent.
+    NeedsUpdate,
+    /// The client got the launch and did nothing with it.
+    Ignored,
     /// Signed in, told to launch, and nothing appeared.
     NothingStarted,
 }
@@ -386,6 +447,18 @@ pub enum Handoff {
 ///
 /// A cold start signs in after about 5.5 s; the rest is for bad days.
 pub(crate) const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How long a game that just exited gets to be gone in the client's eyes.
+/// Agent tells it 4 to 6 s late.
+pub(crate) const GAME_GONE_WITHIN: Duration = Duration::from_secs(15);
+
+/// How long the client gets to log what it did with a launch. It takes
+/// about 15 ms.
+pub(crate) const TAKEN_WITHIN: Duration = Duration::from_secs(10);
+
+/// How long after a hand-off the client's window is sent back to the tray.
+/// It closes it itself once the game runs: 3.3 s after a cold start, measured.
+pub(crate) const KEEP_IN_TRAY: Duration = Duration::from_secs(8);
 
 /// How long a handed-off game gets to appear before the launcher stops
 /// claiming a launch is in progress.
@@ -423,7 +496,7 @@ pub async fn await_game_exit(
 }
 
 /// How long a game gets to close on `SIGTERM` before it is killed outright.
-const STOP_GRACE: Duration = Duration::from_secs(5);
+pub(crate) const STOP_GRACE: Duration = Duration::from_secs(5);
 
 /// Stop one running game, leaving Battle.net, other games and the rest of
 /// the prefix be.
@@ -523,11 +596,7 @@ pub async fn open_battle_net(
 
         let runner = client_runner(&layout, &code)?;
         // A normal window: the client itself was asked for.
-        let _ = battlenet::configure_accounts(
-            &layout,
-            &user,
-            &battlenet::window_state_tweaks(false),
-        );
+        let _ = battlenet::configure(&layout, &user, &battlenet::window_state_tweaks(false));
         reap_later(battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| Problem::of(&e))?);
         Ok("Battle.net opening".to_owned())
     })

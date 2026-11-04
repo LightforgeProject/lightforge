@@ -4,6 +4,7 @@ use std::time::{Duration, Instant, SystemTime};
 use serde_json::Value;
 
 use crate::paths::Layout;
+use crate::state::Progress;
 
 /// Whether the client signs in by itself, which is what makes starting it
 /// minimized safe: a hidden sign-in form is a launch that never happens.
@@ -50,7 +51,8 @@ pub(super) const GAMES_READY: &str = "GameController initialization complete";
 
 /// How long after sign-in the game list gets before the command goes anyway,
 /// so a marker that never comes costs a short wait, not the sign-in timeout.
-pub(super) const GAMES_GRACE: Duration = Duration::from_secs(20);
+/// It waits on Agent, which once took 27 s after sign-in (2026-11-04).
+pub(super) const GAMES_GRACE: Duration = Duration::from_secs(40);
 
 /// Whether a launch command sent now would be acted on, given the log so far
 /// and how long it has said the client is signed in.
@@ -107,6 +109,170 @@ pub fn wait_until_ready(
             return Readiness::NeedsAttention;
         }
         std::thread::sleep(READY_POLL);
+    }
+}
+
+/// What the client logs when Agent reports a game it launched as up or gone.
+/// It hears of an exit 4 to 6 s late, and a launch it is sent meanwhile only
+/// selects the game's tile (measured 2026-11-04).
+pub(super) const GAME_RUNNING: &str = "Game is running: ";
+pub(super) const GAME_STOPPED: &str = "Game is no longer running: ";
+
+/// What the client logs on taking a launch.
+pub(super) const LAUNCHING: &str = "[GameLaunchController] {Main} LaunchBinary: uid=";
+
+/// What the client logs when it has updated itself. It then quits on the next
+/// command it gets, to switch to the new version, and does not come back
+/// (build 17952 to 17986, 2026-11-04).
+pub(super) const SELF_UPDATED: &str = "Update completed: battle.net";
+
+/// Whether the client's log still has `uid` running.
+pub(super) fn counts_as_running(log: &str, uid: &str) -> bool {
+    let running = format!("{GAME_RUNNING}{uid}");
+    let stopped = format!("{GAME_STOPPED}{uid}");
+    log.lines()
+        .rev()
+        .find_map(|line| match line {
+            _ if line.ends_with(&running) => Some(true),
+            _ if line.ends_with(&stopped) => Some(false),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
+/// Whether the client's log has `uid` waiting on an update. A launch then only
+/// selects the game's tile; nothing starts and nothing is patched (measured on
+/// Forever, 2026-11-04). The line comes once with both fields, and again each
+/// time the operation changes.
+pub(super) fn pending_update(log: &str, uid: &str) -> bool {
+    let state = format!("InstallState ({uid}): currentOperation=");
+    log.lines()
+        .rev()
+        .find_map(|line| line.split_once(&state).map(|(_, rest)| rest.starts_with("Update ")))
+        .unwrap_or(false)
+}
+
+/// Where the client has got with updating a game.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateState {
+    NotStarted,
+    /// Empty while the log has given no sizes: a bar with no number, never a
+    /// guessed one.
+    Running(Progress),
+    Completed,
+}
+
+/// What a client session's log says about updating `uid`. The sizes are on the
+/// `InstallState` lines, each carrying only the fields that changed:
+///
+/// ```text
+/// InstallState (hs_beta): currentOperationStatus=Running bytesToDownload=52458135 … downloadRate=1807604 downloadRemaining=52458135 progress=0.3
+/// ```
+pub(super) fn update_state(log: &str, uid: &str) -> UpdateState {
+    let started = format!("Update started: {uid}");
+    let completed = format!("Update completed: {uid}");
+    let state = format!("InstallState ({uid}): ");
+    let mut seen = false;
+    let (mut total, mut remaining, mut rate) = (0u64, 0u64, 0u64);
+    for line in log.lines() {
+        if line.ends_with(&completed) {
+            return UpdateState::Completed;
+        }
+        if line.ends_with(&started) {
+            seen = true;
+        }
+        let Some((_, fields)) = line.split_once(&state) else { continue };
+        for (key, value) in fields.split_whitespace().filter_map(|field| field.split_once('=')) {
+            let Ok(value) = value.parse::<u64>() else { continue };
+            match key {
+                // Back to zero once downloaded, with the patch still to apply.
+                "bytesToDownload" => total = total.max(value),
+                "downloadRemaining" => remaining = value,
+                "downloadRate" => rate = value,
+                _ => {}
+            }
+        }
+    }
+    match seen {
+        true => UpdateState::Running(Progress {
+            downloaded_bytes: total.saturating_sub(remaining),
+            total_bytes: total,
+            bytes_per_second: rate,
+        }),
+        false => UpdateState::NotStarted,
+    }
+}
+
+/// The log of the client session running now, read from where it stood when
+/// found.
+pub struct SessionLog {
+    path: PathBuf,
+    from: usize,
+}
+
+impl SessionLog {
+    /// The newest log that signed in. A second invocation writes one of its
+    /// own, newer, that only holds its command line.
+    pub fn find(layout: &Layout, user: &str) -> Option<Self> {
+        let mut logs: Vec<_> = std::fs::read_dir(layout.battle_net_logs(user))
+            .ok()?
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("battle.net-"))
+            .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
+            .collect();
+        logs.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+        logs.into_iter().take(4).find_map(|(_, path)| {
+            let text = std::fs::read_to_string(&path).ok()?;
+            text.contains(SIGNED_IN).then_some(Self { path, from: text.len() })
+        })
+    }
+
+    /// Wait until the client no longer counts `uid` as running. `false` if it
+    /// still does after `within`.
+    pub fn wait_until_closed(&self, uid: &str, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        loop {
+            let text = std::fs::read_to_string(&self.path).unwrap_or_default();
+            if !counts_as_running(&text, uid) {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(READY_POLL);
+        }
+    }
+
+    /// Whether the client updated itself during this session.
+    pub fn updated_itself(&self) -> bool {
+        std::fs::read_to_string(&self.path).is_ok_and(|text| text.contains(SELF_UPDATED))
+    }
+
+    /// Whether the client is holding `uid` back for an update.
+    pub fn pending_update(&self, uid: &str) -> bool {
+        std::fs::read_to_string(&self.path).is_ok_and(|text| pending_update(&text, uid))
+    }
+
+    /// Where the client has got with updating `uid` during this session.
+    pub fn update_state(&self, uid: &str) -> UpdateState {
+        let text = std::fs::read_to_string(&self.path).unwrap_or_default();
+        update_state(&text, uid)
+    }
+
+    /// Whether the client took a launch sent after [`SessionLog::find`].
+    pub fn launch_taken(&self, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        loop {
+            let text = std::fs::read_to_string(&self.path).unwrap_or_default();
+            // The command just sent is the only one, so any game's line answers.
+            if text.get(self.from..).is_some_and(|sent| sent.contains(LAUNCHING)) {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(READY_POLL);
+        }
     }
 }
 

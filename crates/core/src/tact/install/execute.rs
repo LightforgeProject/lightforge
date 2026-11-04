@@ -24,7 +24,8 @@ pub async fn execute(
     on_event: &mut impl FnMut(Event),
 ) -> Result<Summary, InstallError> {
     let Prepared {
-        plan, remote, cdn, client, encoding, install, locations, loose, tags, tag_column, flavor, executable, ..
+        plan, remote, cdn, client, encoding, encoding_key, encoding_blte, install, locations, loose, tags,
+        tag_column, flavor, executable, ..
     } = prepared;
 
     // Before a byte is fetched: the run ends by writing `.build.info` into
@@ -37,6 +38,9 @@ pub async fn execute(
     }
 
     let mut writer = StoreWriter::create(dest.join("Data").join("data"))?;
+    writer.write(&encoding_key, &encoding_blte)?;
+    // 141 MB for wowf, not to be held through an hours-long download.
+    drop(encoding_blte);
     let source = Source { http, client: &client };
     let downloader = Downloader::new(DownloadOptions {
         concurrency: options.concurrency,

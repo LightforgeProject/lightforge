@@ -38,10 +38,10 @@ mod shutdown;
 mod tests;
 
 pub use games::{
-    client_running, games_running, stop_game, wait_for_exit, wait_for_game_start,
+    client_pids, client_running, games_running, stop_game, wait_for_exit, wait_for_game_start,
     GameProcess, Stopped,
 };
-pub use gate::{DownloadGuard, NoDownloads, Preflight, Report, Timing};
+pub use gate::{served_by, DownloadGuard, NoDownloads, Preflight, Report, Timing};
 pub use scan::{scan, PrefixProcess, ProcKind};
 pub use shutdown::{quit_client, shutdown, Disposition, Outcome};
 

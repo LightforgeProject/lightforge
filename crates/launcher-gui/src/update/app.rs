@@ -210,6 +210,35 @@ impl Lightforge {
                 self.save_config();
                 Task::none()
             }
+
+            Message::BattleNetInBackground(on) => {
+                self.config.battle_net_in_background = on;
+                self.save_config();
+                // Under Game Mode a restart only closes the app.
+                if fit::under_gamescope() {
+                    return Ok(self.apply_mode());
+                }
+                self.mode_restart = Some(on);
+                Task::none()
+            }
+
+            Message::ModeRestart => {
+                self.mode_restart = None;
+                // The exit stops a client only while the setting is on, and
+                // this one has just been switched off.
+                match self.config.battle_net_in_background {
+                    true => Task::done(Message::UpgradeRestart),
+                    false => Task::perform(
+                        tasks::close_background_client(self.layout.clone(), self.config.prefix_user.clone()),
+                        |_| Message::UpgradeRestart,
+                    ),
+                }
+            }
+
+            Message::ModeRestartLater => {
+                self.mode_restart = None;
+                self.apply_mode()
+            }
             other => return Err(other),
         })
     }

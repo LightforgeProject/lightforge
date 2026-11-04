@@ -11,16 +11,18 @@
     in
     {
       overlays.default = final: _prev: {
-        lightforge = final.callPackage ./packaging/nix/package.nix { };
+        lightforge-unwrapped = final.callPackage ./packaging/nix/package.nix { };
+        lightforge = final.callPackage ./packaging/nix/fhs.nix { };
       };
 
       packages = forAllSystems (_: pkgs: rec {
-        lightforge = pkgs.callPackage ./packaging/nix/package.nix { };
+        lightforge-unwrapped = pkgs.callPackage ./packaging/nix/package.nix { };
+        lightforge = pkgs.callPackage ./packaging/nix/fhs.nix { inherit lightforge-unwrapped; };
         default = lightforge;
       });
 
       devShells = forAllSystems (system: pkgs:
-        let lightforge = self.packages.${system}.lightforge; in
+        let lightforge = self.packages.${system}.lightforge-unwrapped; in
         {
           default = pkgs.mkShell {
             inputsFrom = [ lightforge ];

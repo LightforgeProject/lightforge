@@ -3,6 +3,9 @@
 use crate::*;
 use iced::widget::column;
 
+/// Why a hand-off game's Proton picker is locked.
+pub(crate) const FOLLOWS_CLIENT: &str = "Uses Battle.net's build while Seamless Battle.net Mode is on.";
+
 mod builds;
 mod drives;
 mod general;
@@ -84,6 +87,12 @@ impl Lightforge {
             true => ShopBuild::Running,
             false => ShopBuild::Elsewhere,
         }
+    }
+
+    /// Whether a product's own Proton pin is out of play: a hand-off game goes
+    /// to the background client, under the build that is already running.
+    pub(crate) fn pin_follows_client(&self, code: &ProductCode) -> bool {
+        self.config.battle_net_in_background && Kind::of(code) == Kind::HandOff
     }
 
     /// The build a product's row resolves to, pin or no pin.

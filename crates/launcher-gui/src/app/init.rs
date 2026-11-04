@@ -5,8 +5,8 @@ use crate::*;
 impl Lightforge {
     /// The state the first frame draws: the config, the layout it resolves
     /// to, and everything built from those. Nothing is started here.
-    pub(crate) fn load_state() -> Self {
-        let dirs = AppDirs::discover().ok();
+    /// The app's state from `dirs`: the user's own, or a test's scratch.
+    pub(crate) fn load_state(dirs: Option<AppDirs>) -> Self {
         // Missing: a first run. Unloadable: stop, not save defaults over it.
         let loaded = dirs.as_ref().map(|d| Config::load_or_default(&d.config_file()));
         let config_error = match (&loaded, dirs.as_ref()) {
@@ -111,8 +111,13 @@ impl Lightforge {
             gear_open: false,
             client_up: false,
             client_menu_open: false,
+            client_phase: ClientPhase::Settled,
+            launch_after_client: None,
+            update_pending: None,
+            client_update: None,
             quitting_client: false,
             quit_client_dialog: None,
+            mode_restart: None,
             scan_rx: None,
             scan_sample: lightforge_core::tact::verify::Progress::default(),
             scanning: false,
@@ -161,6 +166,8 @@ impl Lightforge {
             install_dialog: None,
             uninstall_dialog: None,
             moving: None,
+            companion_install: None,
+            companion_game: None,
             cancel_dialog: None,
             update_notice: None,
             newer_release: None,
@@ -275,6 +282,7 @@ impl Lightforge {
         }
         // The splash is this art fetch; the wizard's first slide counts it.
         let artwork = self.open_splash();
+        let client = self.warm_client();
         Task::batch([
             self.reload(self.selected.code.clone()),
             addons,
@@ -285,6 +293,7 @@ impl Lightforge {
             bnet_limit,
             resume,
             artwork,
+            client,
             iced::system::information().map(|info| Message::SystemInfo(Box::new(info))),
         ])
     }

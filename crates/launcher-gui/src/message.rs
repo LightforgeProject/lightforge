@@ -185,6 +185,25 @@ pub(crate) enum Message {
     HandoffStarted(Result<tasks::Handoff, Problem>),
     BattleNet,
     ManageSubscription,
+    /// Game Tools: ask the file picker for an installer or a program.
+    CompanionPick(CompanionPick),
+    CompanionPicked(CompanionPick, Option<PathBuf>),
+    /// Which game the page's next install is for.
+    CompanionGamePicked(ProductCode),
+    CompanionInstallerStarted(Result<std::collections::BTreeSet<PathBuf>, Problem>),
+    /// The user says the installer has finished: look for what it added.
+    CompanionInstallDone,
+    CompanionCandidates(Vec<PathBuf>),
+    CompanionChosen(PathBuf),
+    CompanionInstallCancel,
+    CompanionLaunch(usize),
+    CompanionStarted(Result<String, Problem>),
+    CompanionAutoStart(usize, bool),
+    /// Off the list only: the program stays in the prefix.
+    CompanionRemove(usize),
+    /// The play card's region dropdown: the login server a direct launch
+    /// signs in to.
+    LoginRegionPicked(lightforge_core::portal::Portal),
     OpenFiles,
     /// Delete the game's `Cache` folder, from Game Settings.
     ClearGameCache,
@@ -337,6 +356,20 @@ pub(crate) enum Message {
     /// Whether a Battle.net hand-off puts the client in the tray.
     BattleNetMinimized(bool),
     CloseBattleNetOnPlay(bool),
+    /// Whether Battle.net is kept running between games.
+    BattleNetInBackground(bool),
+    /// Restart now, for the mode just switched.
+    ModeRestart,
+    /// Not now: the mode just switched applies without a restart.
+    ModeRestartLater,
+    /// What came of starting it out of sight.
+    BackgroundClient(Result<tasks::Warmed, Problem>),
+    /// Whether the client holds this game back for an update.
+    ClientUpdatePending(ProductCode, bool),
+    /// Stop following a game's update. The client carries on.
+    StopWatchingClientUpdate,
+    /// The update the client was running for this game ended.
+    ClientUpdateDone(ProductCode, Result<tasks::ClientUpdated, Problem>),
     /// Battle.net's own limit, as read from its config.
     BattleNetLimitRead(Option<u64>),
     /// The Battle.net limit field changed.

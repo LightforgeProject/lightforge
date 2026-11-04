@@ -40,6 +40,8 @@ rustPlatform.buildRustPackage {
       ../../Cargo.toml
       ../../Cargo.lock
       ../../crates
+      # The patched iced_winit, `[patch.crates-io]` in Cargo.toml.
+      ../../vendor
       ../../packaging/pro.tuxcore.Lightforge.desktop
       ../../packaging/pro.tuxcore.Lightforge.metainfo.xml
       ../../packaging/icons

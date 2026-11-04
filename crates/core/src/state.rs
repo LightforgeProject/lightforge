@@ -117,6 +117,8 @@ pub struct Local {
     pub store_files: usize,
     /// A build pre-downloaded ahead of its release.
     pub staged: Option<crate::tact::staged::Staged>,
+    /// The login region `Config.wtf` names, for a direct launch.
+    pub portal: Option<crate::portal::Portal>,
 }
 
 impl Local {
@@ -141,6 +143,7 @@ impl Local {
             executable: exe.is_file().then_some(exe),
             store_files,
             staged: crate::tact::staged::get(&layout.wow_install(code), code),
+            portal: crate::portal::read(&layout.wtf_dir(code).join("Config.wtf")),
         }
     }
 
@@ -257,6 +260,7 @@ mod tests {
             executable: Some("/games/_classic_era_/WowClassic.exe".into()),
             store_files: 146_669,
             staged: None,
+            portal: None,
         }
     }
 
@@ -411,6 +415,7 @@ mod queue_tests {
             executable: Some(PathBuf::from("/games/_retail_/Wow.exe")),
             store_files: 1,
             staged: None,
+            portal: None,
         }
     }
 
