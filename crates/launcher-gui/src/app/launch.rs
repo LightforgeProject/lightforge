@@ -128,11 +128,14 @@ impl Lightforge {
 
     /// The setting was switched off: a client nobody is using goes with it.
     pub(crate) fn close_background_client(&mut self) -> Task<Message> {
-        if !self.client_up || self.busy || self.quitting_client {
+        if self.busy || self.quitting_client {
             return Task::none();
         }
         self.quitting_client = true;
-        Task::perform(tasks::close_background_client(self.layout.clone()), Message::BattleNetQuit)
+        Task::perform(
+            tasks::close_background_client(self.layout.clone(), self.config.prefix_user.clone()),
+            Message::BattleNetQuit,
+        )
     }
 
     /// Close Battle.net, unless a launch is under way: it may be the one

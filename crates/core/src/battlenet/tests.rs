@@ -449,6 +449,17 @@ fn a_background_client_hides_on_close() {
 }
 
 #[test]
+fn only_a_background_client_has_its_notifications_switched_off() {
+    let mut config = json!({ "User": { "Client": { "ToastsEnabled": "false" } } });
+    apply_tweaks(&mut config, &account_tweaks(false));
+    assert_eq!(config["User"]["Client"]["ToastsEnabled"], json!("false"), "the user's own choice stands");
+
+    let mut config = json!({ "User": { "Client": {} } });
+    apply_tweaks(&mut config, &account_tweaks(true));
+    assert_eq!(config["User"]["Client"]["ToastsEnabled"], json!("false"));
+}
+
+#[test]
 fn a_scalar_where_an_object_belongs_is_replaced() {
     // Battle.net has shipped schema changes before; a stale scalar must not
     // abort setup.

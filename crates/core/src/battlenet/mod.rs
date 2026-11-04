@@ -30,7 +30,7 @@ pub use readiness::{signs_in_by_itself, wait_until_ready, Readiness, SessionLog,
 pub use registry::{apply_registry, registry_tweaks, RegValue};
 pub use tweaks::{
     account_tweaks, apply_tweaks, auto_update_tweak, configure, configure_accounts, default_tweaks, download_limit,
-    known_product_codes, product_tweaks, set_download_limit, window_state_tweaks, Tweak,
+    known_product_codes, product_tweaks, set_download_limit, toasts_tweak, window_state_tweaks, Tweak,
     AUTOSTART_MINIMIZED_KEY, DOWNLOAD_LIMIT_KEY,
 };
 pub use window::{ClientWindows, WindowError};

@@ -148,6 +148,20 @@ pub fn product_tweaks(codes: &[ProductCode]) -> Vec<Tweak> {
         .collect()
 }
 
+/// Whether the client shows its corner notifications. Per account: the same
+/// key in `Battle.net.config` is ignored. It logs `Toasts are disabled in
+/// ClientSettings and will not be displayed` (measured 2026-11-04).
+pub fn toasts_tweak(on: bool) -> Tweak {
+    Tweak::new(
+        "User.Client.ToastsEnabled",
+        json!(match on {
+            true => "true",
+            false => "false",
+        }),
+        "a client kept out of sight does not pop up over whatever is on screen",
+    )
+}
+
 /// Whether the client updates `uid` by itself. There is no command for starting
 /// an update (its `--exec` verbs are `launch`, `launch_uid`, `launch_register`,
 /// `dialog`, `logout` and `shutdown`); this, read when it starts, is what makes
@@ -166,7 +180,7 @@ pub fn auto_update_tweak(uid: &str, on: bool) -> Tweak {
 /// Defaults for a per-account `<hash>.config`. The client stores window
 /// behaviour per account and ignores these keys in `Battle.net.config`.
 pub fn account_tweaks(background: bool) -> Vec<Tweak> {
-    vec![
+    let mut tweaks = vec![
         match background {
             true => Tweak::new(
                 "User.Client.HideOnClose",
@@ -184,7 +198,11 @@ pub fn account_tweaks(background: bool) -> Vec<Tweak> {
             json!("false"),
             "quit immediately instead of showing the close countdown",
         ),
-    ]
+    ];
+    if background {
+        tweaks.push(toasts_tweak(false));
+    }
+    tweaks
 }
 
 /// The settings checkbox "Launch Battle.net minimized to the system tray".

@@ -211,13 +211,17 @@ pub async fn note_self_update(layout: Layout, user: String) {
     .await;
 }
 
-/// For the setting being switched off.
-pub async fn close_background_client(layout: Layout) -> Result<String, Problem> {
+/// For the setting being switched off: a client nobody is using goes with it,
+/// and its notifications come back. After it has closed, since it rewrites the
+/// file on exit. One that stays up keeps them off until it next exits.
+pub async fn close_background_client(layout: Layout, user: String) -> Result<String, Problem> {
     tokio::task::spawn_blocking(move || {
-        Ok(match close_if_idle(&layout)? {
-            true => "Battle.net closed".to_owned(),
-            false => "Battle.net stays open: a game or its window is using it".to_owned(),
-        })
+        if preflight::client_running(&layout) && !close_if_idle(&layout)? {
+            return Ok("Battle.net stays open: a game or its window is using it".to_owned());
+        }
+        battlenet::configure_accounts(&layout, &user, &[battlenet::toasts_tweak(true)])
+            .map_err(|e| Problem::of(&e))?;
+        Ok("Battle.net closed, its notifications are back on".to_owned())
     })
     .await
     .map_err(|e| Problem::of(&e))?
