@@ -117,6 +117,7 @@ impl Lightforge {
             client_update: None,
             quitting_client: false,
             quit_client_dialog: None,
+            mode_restart: None,
             scan_rx: None,
             scan_sample: lightforge_core::tact::verify::Progress::default(),
             scanning: false,

@@ -1864,6 +1864,35 @@ fn a_game_lightforge_manages_is_never_updated_through_the_client() {
 }
 
 #[test]
+fn switching_seamless_mode_offers_a_restart_and_later_applies_it_without_one() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.setup_complete = true;
+
+    let _ = app.update(Message::BattleNetInBackground(true));
+    assert_eq!(app.mode_restart, Some(true));
+    assert_eq!(app.client_phase, ClientPhase::Settled, "nothing starts until the answer");
+    let _ = app.view();
+
+    let _ = app.update(Message::ModeRestartLater);
+    assert_eq!(app.mode_restart, None);
+    assert_eq!(app.client_phase, ClientPhase::SigningIn);
+}
+
+#[test]
+fn switching_seamless_mode_off_closes_the_client_when_later_is_chosen() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.battle_net_in_background = true;
+
+    let _ = app.update(Message::BattleNetInBackground(false));
+    assert_eq!(app.mode_restart, Some(false));
+
+    let _ = app.update(Message::ModeRestartLater);
+    assert!(app.quitting_client);
+}
+
+#[test]
 fn a_client_that_gave_way_returns_once_nothing_needs_the_prefix() {
     let (mut app, _scratch) = test_app();
     app.dirs = None;

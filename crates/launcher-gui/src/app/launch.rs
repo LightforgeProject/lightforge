@@ -93,6 +93,14 @@ impl Lightforge {
         self.update(Message::Launched(Err(why.into())))
     }
 
+    /// Bring the client in line with the mode, without a restart.
+    pub(crate) fn apply_mode(&mut self) -> Task<Message> {
+        match self.config.battle_net_in_background {
+            true => self.warm_client(),
+            false => self.close_background_client(),
+        }
+    }
+
     /// Start the client out of sight, if that is what the user asked for.
     pub(crate) fn warm_client(&mut self) -> Task<Message> {
         if !self.config.battle_net_in_background

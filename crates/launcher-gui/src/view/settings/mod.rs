@@ -4,7 +4,7 @@ use crate::*;
 use iced::widget::column;
 
 /// Why a hand-off game's Proton picker is locked.
-pub(crate) const FOLLOWS_CLIENT: &str = "Uses Battle.net's build while it is kept in the background.";
+pub(crate) const FOLLOWS_CLIENT: &str = "Uses Battle.net's build while Seamless Battle.net Mode is on.";
 
 mod builds;
 mod drives;

@@ -134,6 +134,46 @@ impl Lightforge {
         .into()
     }
 
+    /// The offer to restart after Seamless Battle.net Mode was switched.
+    pub(crate) fn mode_restart_card(&self, on: bool) -> Element<'_, Message> {
+        let choice = |label: &'static str| {
+            button(text(label).size(theme::LABEL).width(Length::Fill).center())
+                .width(Length::Fixed(170.0))
+                .padding(theme::tap([theme::SM, theme::MD]))
+        };
+        // A restart would lose track of a running game, and stop a download.
+        let can_restart = self.can_restart() && !self.in_play() && !self.busy;
+        let actions = row![
+            Space::new().width(Length::Fill),
+            tappable("mode restart later", Some(Message::ModeRestartLater), choice("Later").style(theme::outlined)),
+            tappable(
+                "mode restart",
+                can_restart.then_some(Message::ModeRestart),
+                choice("Restart Lightforge").style(theme::filled(theme::ACCENT)),
+            ),
+        ]
+        .spacing(theme::SM)
+        .align_y(Alignment::Center);
+
+        let state = match on {
+            true => "Seamless Battle.net Mode is on. It takes full effect after a restart.",
+            false => "Seamless Battle.net Mode is off. It takes full effect after a restart.",
+        };
+        let mut body = column![
+            text("Restart Lightforge?").size(theme::HEADING + 2.0),
+            muted(state.to_owned(), theme::BODY),
+        ]
+        .spacing(theme::LG);
+        if !can_restart {
+            body = body.push(muted("A game or a download is running, so restart once it is done.".to_owned(), theme::LABEL));
+        }
+        container(body.push(actions))
+            .width(Length::Fixed(520.0))
+            .padding(theme::LG)
+            .style(theme::dialog)
+            .into()
+    }
+
     /// The question before a running game is stopped.
     pub(crate) fn stop_card<'a>(&'a self, dialog: &'a StopDialog) -> Element<'a, Message> {
         let choice = |label: &'static str| {

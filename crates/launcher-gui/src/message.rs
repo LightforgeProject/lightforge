@@ -358,6 +358,10 @@ pub(crate) enum Message {
     CloseBattleNetOnPlay(bool),
     /// Whether Battle.net is kept running between games.
     BattleNetInBackground(bool),
+    /// Restart now, for the mode just switched.
+    ModeRestart,
+    /// Not now: the mode just switched applies without a restart.
+    ModeRestartLater,
     /// What came of starting it out of sight.
     BackgroundClient(Result<tasks::Warmed, Problem>),
     /// Whether the client holds this game back for an update.

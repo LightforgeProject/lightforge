@@ -301,6 +301,8 @@ struct Lightforge {
     /// Battle.net is being closed.
     quitting_client: bool,
     quit_client_dialog: Option<QuitClientDialog>,
+    /// Seamless Battle.net Mode was just switched to this: offer a restart.
+    mode_restart: Option<bool>,
     /// Whether the cog menu beside the primary button is open.
     gear_open: bool,
     /// Live progress of a store scan, and whether one is running.

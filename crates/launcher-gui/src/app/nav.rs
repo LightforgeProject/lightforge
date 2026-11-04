@@ -171,6 +171,7 @@ impl Lightforge {
         Some(match () {
             _ if self.stop_dialog.is_some() => Message::StopGameDismiss,
             _ if self.quit_client_dialog.is_some() => Message::QuitBattleNetDismiss,
+            _ if self.mode_restart.is_some() => Message::ModeRestartLater,
             _ if self.version_dialog.is_some() => Message::CloseGameVersion,
             _ if self.modify_dialog.is_some() => Message::ModifyCancel,
             _ if self.install_dialog.is_some() => Message::InstallCancel,
