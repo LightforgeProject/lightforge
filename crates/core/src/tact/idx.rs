@@ -87,7 +87,9 @@ pub(crate) const CASC_ENTRY_HEADER_U32: u32 = CASC_ENTRY_HEADER as u32;
 /// Bytes reserved at the head of every `data.NNN` for the per-bucket markers.
 pub const ARCHIVE_RESERVED: usize = BUCKETS as usize * CASC_ENTRY_HEADER;
 
-/// Fixed tail of every archive-marker key, the same across a real install.
+/// Tail of the archive-marker keys Lightforge writes. Not a way to recognise
+/// one: Battle.net's differ per store (`00 21 61 14 4b 0d 7d` on Forever,
+/// 2026-11-04).
 const ARCHIVE_MARKER_SUFFIX: [u8; 7] = [0x00, 0x7e, 0xc0, 0x16, 0xa8, 0x90, 0x21];
 
 /// One key-to-location mapping.
@@ -117,11 +119,11 @@ impl Entry {
     /// Every `data.NNN` reserves 480 bytes at its head: sixteen bare 30-byte
     /// headers with no payload, and bucket `b`'s index points at slot `b * 30`.
     /// Decoding them as files reports failures on a healthy install, and a
-    /// written index has to reproduce them.
+    /// written index has to reproduce them. Told apart by place and size: a
+    /// file is never a bare header.
     pub fn is_archive_marker(&self) -> bool {
         let header = CASC_ENTRY_HEADER_U32;
-        self.key[2..] == ARCHIVE_MARKER_SUFFIX
-            && self.size == header
+        self.size == header
             && self.offset.is_multiple_of(header)
             && self.offset / header < u32::from(BUCKETS)
     }
@@ -562,6 +564,20 @@ mod tests {
 
     fn entry(key: [u8; 9], archive_id: u16, offset: u32, size: u32) -> Entry {
         Entry { key, archive_id, offset, size }
+    }
+
+    #[test]
+    fn battle_nets_own_marker_keys_are_markers_too() {
+        // From Forever's indices after Agent rewrote them, 2026-11-04.
+        let marker = Entry {
+            key: [0x0f, 0x00, 0x00, 0x21, 0x61, 0x14, 0x4b, 0x0d, 0x7d],
+            archive_id: 0,
+            offset: 270,
+            size: 30,
+        };
+        assert!(marker.is_archive_marker());
+        assert!(!Entry { offset: 480, ..marker }.is_archive_marker(), "past the reserved head");
+        assert!(!Entry { size: 31, ..marker }.is_archive_marker(), "a file with a payload");
     }
 
     #[test]
