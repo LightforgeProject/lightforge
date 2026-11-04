@@ -21,7 +21,7 @@ use serde::Deserialize;
 use super::{blank, missing, ProviderResult};
 use crate::addons::catalog::{Request, Resolved};
 use crate::addons::Channel;
-use crate::net::Http;
+use crate::net::{Http, NetError};
 
 #[derive(Debug, Clone, Deserialize)]
 struct Release {
@@ -77,10 +77,8 @@ pub async fn resolve(http: &Http, requests: &[Request], flavor: &str) -> Provide
                 let url = format!("https://api.github.com/repos/{repo}/releases/latest");
                 match http.get_json::<Release>(&url).await {
                     Ok(release) => Some(release),
-                    // Common: ElvUI's repo has none.
                     Err(e) => {
-                        resolved
-                            .push(missing(&request.id, format!("no GitHub release found ({e})")));
+                        resolved.push(missing(&request.id, no_release(repo, &e)));
                         continue;
                     }
                 }
@@ -92,8 +90,7 @@ pub async fn resolve(http: &Http, requests: &[Request], flavor: &str) -> Provide
                     // published at all, so it is never a candidate.
                     Ok(releases) => releases.into_iter().find(|r| !r.draft),
                     Err(e) => {
-                        resolved
-                            .push(missing(&request.id, format!("no GitHub release found ({e})")));
+                        resolved.push(missing(&request.id, no_release(repo, &e)));
                         continue;
                     }
                 }
@@ -144,6 +141,25 @@ pub async fn resolve(http: &Http, requests: &[Request], flavor: &str) -> Provide
         });
     }
     Ok(resolved)
+}
+
+/// Why asking GitHub for `repo`'s release got nothing, in words for the user.
+///
+/// A 404 is a repository that is gone or has never published a release. Both
+/// are common for a link taken from a CurseForge page: of 14 opted-out projects
+/// checked on 2026-11-04, 2 repositories were gone and 4 had no releases.
+fn no_release(repo: &str, error: &NetError) -> String {
+    match error {
+        NetError::Status { status: 404, .. } => format!(
+            "no release at github.com/{repo} — the author's link may be out of date, so \
+             download it from the addon's page"
+        ),
+        // Unauthenticated: 60 requests an hour, per address.
+        NetError::Status { status: 403 | 429, .. } => {
+            "GitHub's hourly limit is used up — try again in a while".to_owned()
+        }
+        other => format!("could not ask GitHub about {repo} ({other})"),
+    }
 }
 
 /// What kind of build a GitHub release is.
@@ -253,6 +269,20 @@ fn packager_flavors(flavor: &str) -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn answered(status: u16) -> NetError {
+        NetError::Status { url: "https://api.github.com/x".into(), status }
+    }
+
+    #[test]
+    fn a_dead_link_is_told_apart_from_a_used_up_limit() {
+        let gone = no_release("Auctionator/Auctionator", &answered(404));
+        assert!(gone.contains("github.com/Auctionator/Auctionator"), "{gone}");
+        assert!(gone.contains("addon's page"), "{gone}");
+
+        assert!(no_release("a/b", &answered(403)).contains("limit"));
+        assert!(no_release("a/b", &answered(500)).contains("HTTP 500"));
+    }
 
     fn release(assets: &[(&str, u64)]) -> Release {
         Release {

@@ -113,7 +113,10 @@ impl Resolved {
                 "the author has disabled third-party downloads — install it from the project page"
                     .to_owned(),
             ),
-            Status::NotFound => Some("this project no longer exists".to_owned()),
+            // A provider says why; it knows more than that nothing came back.
+            Status::NotFound => {
+                Some(self.note.clone().unwrap_or_else(|| "this project no longer exists".to_owned()))
+            }
         }
     }
 
@@ -505,6 +508,19 @@ mod tests {
         assert!(reason.contains("project page"), "{reason}");
         // The website is what makes it actionable.
         assert!(entry.website_url.is_some());
+    }
+
+    #[test]
+    fn a_provider_says_why_it_found_nothing() {
+        let mut entry = resolved(Status::NotFound, None);
+        assert_eq!(entry.unavailable_reason().as_deref(), Some("this project no longer exists"));
+
+        // Auctionator is alive: only the GitHub link on its page is not.
+        entry.note = Some("no release at github.com/Auctionator/Auctionator".into());
+        assert_eq!(
+            entry.unavailable_reason().as_deref(),
+            Some("no release at github.com/Auctionator/Auctionator")
+        );
     }
 
     #[test]

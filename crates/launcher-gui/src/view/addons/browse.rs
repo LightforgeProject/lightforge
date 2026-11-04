@@ -107,7 +107,7 @@ impl Lightforge {
             .spacing(theme::XS);
             if listing.opted_out {
                 info = info.push(opted_out_note(match listing.github {
-                    Some(_) => "the author has disabled third-party downloads, but publishes it on GitHub",
+                    Some(_) => "the author has disabled third-party downloads, but links a GitHub repository",
                     None => "the author has disabled third-party downloads",
                 }));
             }
