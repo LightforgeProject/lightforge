@@ -76,6 +76,23 @@ impl Lightforge {
         )
     }
 
+    /// Whether a background client that gave way can come back: nothing is
+    /// using the prefix or the game files.
+    pub(crate) fn client_may_return(&self) -> bool {
+        let removing_textures = self
+            .game_settings
+            .as_ref()
+            .is_some_and(|settings| matches!(settings.textures, TexturesStep::Removing));
+        self.config.battle_net_in_background
+            && !self.client_up
+            && self.client_phase == ClientPhase::Settled
+            && !self.busy
+            && !self.quitting_client
+            && !self.in_play()
+            && self.maintenance().is_none()
+            && !removing_textures
+    }
+
     /// The setting was switched off: a client nobody is using goes with it.
     pub(crate) fn close_background_client(&mut self) -> Task<Message> {
         if !self.client_up || self.busy || self.quitting_client {

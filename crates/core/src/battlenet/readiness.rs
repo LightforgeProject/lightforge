@@ -122,6 +122,11 @@ pub(super) const GAME_STOPPED: &str = "Game is no longer running: ";
 pub(super) const LAUNCHING: &str = "[GameLaunchController] {Main} LaunchBinary: uid=";
 pub(super) const UPDATING: &str = "[GameController] {Main} Update: uid=";
 
+/// What the client logs when it has updated itself. It then quits on the next
+/// command it gets, to switch to the new version, and does not come back
+/// (build 17952 to 17986, 2026-11-04).
+pub(super) const SELF_UPDATED: &str = "Update completed: battle.net";
+
 /// What the client did with a launch command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Taken {
@@ -194,6 +199,11 @@ impl SessionLog {
             }
             std::thread::sleep(READY_POLL);
         }
+    }
+
+    /// Whether the client updated itself during this session.
+    pub fn updated_itself(&self) -> bool {
+        std::fs::read_to_string(&self.path).is_ok_and(|text| text.contains(SELF_UPDATED))
     }
 
     /// What the client did with a launch sent after [`SessionLog::find`].

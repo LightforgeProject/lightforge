@@ -158,6 +158,16 @@ impl Lightforge {
                                 .to_owned(),
                         })))
                     }
+                    // Nothing went wrong that the user could act on: start it
+                    // again and send the same launch. The button stays held.
+                    Ok(tasks::Handoff::ClientUpdated) if self.config.battle_net_in_background => {
+                        self.status = "Battle.net updated itself, starting it again…".to_owned();
+                        self.launch_after_client = Some(Launch::BattleNet);
+                        self.warm_client()
+                    }
+                    Ok(tasks::Handoff::ClientUpdated) => self.update(Message::Launched(Ok(
+                        "Battle.net updated itself — press Play again".to_owned(),
+                    ))),
                     Ok(tasks::Handoff::Updating) => self.update(Message::Launched(Ok(
                         "Battle.net is updating the game first — press Play again when it is done".to_owned(),
                     ))),
@@ -229,6 +239,7 @@ impl Lightforge {
             Message::ClientWatch => self.check_client(),
 
             Message::ClientSeen(up) => {
+                let vanished = self.client_up && !up;
                 self.client_up = up;
                 if !up {
                     self.client_menu_open = false;
@@ -236,6 +247,16 @@ impl Lightforge {
                     if self.client_phase == ClientPhase::NeedsSignIn {
                         self.client_phase = ClientPhase::Settled;
                     }
+                }
+                if self.client_may_return() && tasks::take_client_owed() {
+                    return Ok(self.warm_client());
+                }
+                // Not during a launch, which reads the same log itself.
+                if vanished && self.config.battle_net_in_background && !self.busy {
+                    return Ok(Task::perform(
+                        tasks::note_self_update(self.layout.clone(), self.config.prefix_user.clone()),
+                        |()| Message::ClientWatch,
+                    ));
                 }
                 Task::none()
             }
@@ -324,6 +345,8 @@ impl Lightforge {
 
             Message::BattleNetQuit(result) => {
                 self.quitting_client = false;
+                // Closed on purpose: no need to ask why it went.
+                self.client_up = false;
                 match result {
                     Ok(note) => self.status = note,
                     Err(e) => self.error = Some(e),

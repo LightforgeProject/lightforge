@@ -26,6 +26,7 @@ pub async fn scan_and_repair(
 
         use lightforge_core::preflight;
 
+        make_way(&layout);
         if let Some(game) = preflight::games_running(&layout).first() {
             return Err(format!("close {} first — the store is in use", game.name));
         }
@@ -104,6 +105,7 @@ pub async fn repair(
     report: lightforge_core::tact::verify::Report,
 ) -> Result<usize, Unrepaired> {
     tokio::task::spawn_blocking(move || {
+        make_way(&layout);
         if !lightforge_core::preflight::scan(&layout).is_empty() {
             return Err(Unrepaired::InUse);
         }
@@ -188,7 +190,10 @@ pub async fn uninstall(
     use lightforge_core::tact::{productdb, reclaim, uninstall};
 
     let alive = layout.clone();
-    let busy = tokio::task::spawn_blocking(move || lightforge_core::preflight::scan(&alive))
+    let busy = tokio::task::spawn_blocking(move || {
+        make_way(&alive);
+        lightforge_core::preflight::scan(&alive)
+    })
         .await
         .map_err(|e| Problem::of(&e))?;
     if let Some(process) = busy.first() {
@@ -252,7 +257,10 @@ pub async fn optional_remove(
     plan: lightforge_core::tact::reclaim::Reclaim,
 ) -> Result<u64, Problem> {
     let alive = layout.clone();
-    let busy = tokio::task::spawn_blocking(move || lightforge_core::preflight::scan(&alive))
+    let busy = tokio::task::spawn_blocking(move || {
+        make_way(&alive);
+        lightforge_core::preflight::scan(&alive)
+    })
         .await
         .map_err(|e| Problem::of(&e))?;
     if let Some(process) = busy.first() {
@@ -305,7 +313,10 @@ pub async fn free_unused(
     use std::sync::atomic::Ordering;
 
     let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
-    let busy = tokio::task::spawn_blocking(move || lightforge_core::preflight::scan(&layout))
+    let busy = tokio::task::spawn_blocking(move || {
+        make_way(&layout);
+        lightforge_core::preflight::scan(&layout)
+    })
         .await
         .map_err(|e| chain(&e))?;
     if let Some(process) = busy.first() {
@@ -347,6 +358,7 @@ pub async fn clear_library(
     library: lightforge_core::library::Library,
 ) -> Result<u64, String> {
     tokio::task::spawn_blocking(move || {
+        make_way(&layout);
         lightforge_core::storage::clear_library(&layout, &library).map_err(|e| chain(&e))
     })
     .await
@@ -374,6 +386,7 @@ pub async fn move_copy(
     // Minutes of blocking reads and writes: off the runtime's workers.
     let runtime = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
+        make_way(&layout);
         runtime
             .block_on(migrate::copy(&http, &layout, &code, &to, &cancel, |p| {
                 if let Ok(mut shown) = progress.lock() {
@@ -397,6 +410,7 @@ pub async fn move_release(
     let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
     let runtime = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
+        make_way(&layout);
         runtime.block_on(migrate::release(&http, &layout, &code, &from)).map_err(|e| chain(&e))
     })
     .await

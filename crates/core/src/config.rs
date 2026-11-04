@@ -450,7 +450,13 @@ impl Config {
     /// The product's own pin, then Battle.net's, then the app default. An
     /// older pin downgrades the shared prefix ([`crate::proton::prefix_fit`]);
     /// it is honoured all the same.
+    ///
+    /// A client kept in the background ignores the product's pin: it takes
+    /// launches over IPC, under the build it is already running.
     pub fn handoff_proton(&self, code: &ProductCode) -> Option<&str> {
+        if self.battle_net_in_background {
+            return self.battle_net_proton_version();
+        }
         self.product(code)
             .and_then(|p| p.profile.proton_ge_version.as_deref())
             .or_else(|| self.battle_net_proton_version())
@@ -618,6 +624,22 @@ mod tests {
         assert_eq!(config.handoff_proton(&diablo), Some("GE-Proton10-34"));
         // Another product is untouched by it.
         assert_eq!(config.handoff_proton(&ProductCode::Retail), Some("GE-Proton11-8"));
+    }
+
+    #[test]
+    fn a_background_client_runs_every_hand_off_under_its_own_build() {
+        let mut config = Config::with_default_products();
+        config.battle_net_proton = ProtonPin::Pinned("GE-Proton11-8".into());
+        let diablo = ProductCode::Custom("d4".to_owned());
+        config.products.push(Product::new(diablo.clone(), "Diablo IV"));
+        config.product_mut(&diablo).unwrap().profile.proton_ge_version = Some("GE-Proton10-34".to_owned());
+
+        config.battle_net_in_background = true;
+        assert_eq!(config.handoff_proton(&diablo), Some("GE-Proton11-8"));
+
+        // The pin is only out of play: it is back when the mode is off.
+        config.battle_net_in_background = false;
+        assert_eq!(config.handoff_proton(&diablo), Some("GE-Proton10-34"));
     }
 
     #[test]

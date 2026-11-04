@@ -174,6 +174,12 @@ fn the_session_log_is_the_one_that_signed_in_not_the_second_invocation() {
     assert!(session.wait_until_closed("hs_beta", Duration::ZERO));
     assert_eq!(session.taken(Duration::ZERO), Taken::Ignored, "only lines after it was found count");
 
+    assert!(!session.updated_itself());
+    let mut text = std::fs::read_to_string(&client).unwrap();
+    text.push_str("D 2026-11-04 01:03:09.027560 [InstallManager] {Main} Update completed: battle.net\r\n");
+    std::fs::write(&client, text).unwrap();
+    assert!(session.updated_itself());
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 

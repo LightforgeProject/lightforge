@@ -246,6 +246,25 @@ impl Lightforge {
         focus::layer(container(rows).padding(theme::SM).style(theme::menu))
     }
 
+    /// A [`Lightforge::picker`] that cannot be opened: what it shows is
+    /// decided elsewhere, and the row's own line says where.
+    pub(crate) fn locked_picker<'a>(&self, shown: String, width: Length, size: f32) -> Element<'a, Message> {
+        button(
+            row![
+                text(shown).size(size).color(theme::MUTED).width(Length::Fill),
+                image(chevron_icon())
+                    .width(Length::Fixed(APP_MENU_CHEVRON))
+                    .height(Length::Fixed(APP_MENU_CHEVRON)),
+            ]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center),
+        )
+        .padding(theme::tap([theme::XS + 2.0, theme::SM]))
+        .width(width)
+        .style(theme::picker_button)
+        .into()
+    }
+
     /// A dropdown the ring can open and move through.
     ///
     /// Not a `pick_list`, which a keyboard cannot open. `key` must be unique

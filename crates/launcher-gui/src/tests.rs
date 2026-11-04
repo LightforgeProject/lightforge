@@ -1776,6 +1776,48 @@ fn a_client_that_needs_signing_in_releases_the_launch_waiting_on_it() {
 }
 
 #[test]
+fn a_hand_off_games_pin_is_locked_only_while_the_client_is_kept_in_the_background() {
+    let (mut app, _scratch) = test_app();
+    let hearthstone = ProductCode::Custom("hs_beta".to_owned());
+    assert!(!app.pin_follows_client(&hearthstone));
+
+    app.config.battle_net_in_background = true;
+    assert!(app.pin_follows_client(&hearthstone));
+    assert!(!app.pin_follows_client(&ProductCode::Retail), "Play starts WoW under its own pin");
+}
+
+#[test]
+fn a_client_that_gave_way_returns_once_nothing_needs_the_prefix() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.battle_net_in_background = true;
+    app.config.setup_complete = true;
+    tasks::owe_client();
+
+    app.scanning = true;
+    let _ = app.update(Message::ClientSeen(false));
+    assert_eq!(app.client_phase, ClientPhase::Settled, "not during a scan");
+
+    app.scanning = false;
+    let _ = app.update(Message::ClientSeen(false));
+    assert_eq!(app.client_phase, ClientPhase::SigningIn);
+}
+
+#[test]
+fn a_launch_that_found_the_client_updating_itself_is_sent_again() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.battle_net_in_background = true;
+    app.config.setup_complete = true;
+    app.busy = true;
+
+    let _ = app.update(Message::HandoffStarted(Ok(tasks::Handoff::ClientUpdated)));
+    assert_eq!(app.launch_after_client, Some(Launch::BattleNet));
+    assert_eq!(app.client_phase, ClientPhase::SigningIn);
+    assert!(app.busy, "the button stays held for the second try");
+}
+
+#[test]
 fn quitting_battle_net_asks_first_only_when_a_game_runs() {
     let (mut app, _scratch) = test_app();
     app.dirs = None;

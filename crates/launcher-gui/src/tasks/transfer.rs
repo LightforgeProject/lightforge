@@ -257,7 +257,10 @@ pub async fn discard_download(
 
     // The same gate a repair and an uninstall go through.
     let alive = layout.clone();
-    let busy = tokio::task::spawn_blocking(move || lightforge_core::preflight::scan(&alive))
+    let busy = tokio::task::spawn_blocking(move || {
+        make_way(&alive);
+        lightforge_core::preflight::scan(&alive)
+    })
         .await
         .map_err(|e| chain(&e))?;
     if let Some(process) = busy.first() {

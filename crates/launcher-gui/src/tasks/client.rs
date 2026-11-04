@@ -1,5 +1,6 @@
 //! The Battle.net client kept ready in the background.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
 use lightforge_core::battlenet::{self, ClientWindows, Readiness};
@@ -10,6 +11,19 @@ use super::*;
 /// How long a client that came up without signing in is watched for someone
 /// signing it in by hand.
 const SIGN_IN_PATIENCE: Duration = Duration::from_secs(30 * 60);
+
+/// The background client went away for a reason that passes, and is owed a
+/// restart once nothing needs the prefix. A static because the work that
+/// closes it runs far from the app's state; the client poll reads it.
+static CLIENT_OWED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn owe_client() {
+    CLIENT_OWED.store(true, Ordering::SeqCst);
+}
+
+pub(crate) fn take_client_owed() -> bool {
+    CLIENT_OWED.swap(false, Ordering::SeqCst)
+}
 
 /// What came of starting the client out of sight.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +95,39 @@ fn close_if_idle(layout: &Layout) -> Result<bool, Problem> {
     let runner = lone_client_runner(layout)?;
     preflight::quit_client(&runner, layout, STOP_GRACE).map_err(|e| Problem::of(&e))?;
     Ok(true)
+}
+
+/// Clear a background client out of the way of work that needs a quiet
+/// prefix. It comes back when that work is over. One someone is using stays,
+/// and the work's own check says what to close.
+pub(crate) fn make_way(layout: &Layout) {
+    let background = AppDirs::discover()
+        .ok()
+        .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
+        .is_some_and(|config| config.battle_net_in_background);
+    if !background || !preflight::client_running(layout) {
+        return;
+    }
+    match close_if_idle(layout) {
+        Ok(true) => {
+            tracing::info!("closed the background Battle.net for work on the game files");
+            owe_client();
+        }
+        Ok(false) => {}
+        Err(e) => tracing::warn!("could not close the background Battle.net: {e}"),
+    }
+}
+
+/// The client went away by itself: it is owed a restart if that was to switch
+/// to a version it had just updated to.
+pub async fn note_self_update(layout: Layout, user: String) {
+    let _ = tokio::task::spawn_blocking(move || {
+        if battlenet::SessionLog::find(&layout, &user).is_some_and(|log| log.updated_itself()) {
+            tracing::info!("Battle.net quit to switch to the version it updated to");
+            owe_client();
+        }
+    })
+    .await;
 }
 
 /// For the setting being switched off.
