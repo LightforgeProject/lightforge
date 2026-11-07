@@ -346,6 +346,7 @@ pub async fn storage(layout: Layout, dirs: AppDirs) -> lightforge_core::storage:
         app: Vec::new(),
         app_root: dirs.data_dir().to_path_buf(),
         app_disk: None,
+        prefix: lightforge_core::storage::PrefixUsage { path: layout.compat_data(), bytes: 0, disk: None },
     };
     tokio::task::spawn_blocking(move || lightforge_core::storage::report(&layout, &dirs))
         .await
@@ -415,6 +416,20 @@ pub async fn move_release(
     })
     .await
     .map_err(|e| chain(&e))?
+}
+
+/// Put the Wine prefix in `chosen`. A copy across drives takes minutes.
+pub async fn move_prefix(layout: Layout, chosen: PathBuf) -> Result<lightforge_core::prefix_move::Moved, String> {
+    tokio::task::spawn_blocking(move || lightforge_core::prefix_move::place(&layout, &chosen).map_err(|e| chain(&e)))
+        .await
+        .map_err(|e| chain(&e))?
+}
+
+/// Delete what a copied prefix left behind, once the config names the new one.
+pub async fn release_prefix(moved: lightforge_core::prefix_move::Moved) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || moved.release().map_err(|e| format!("{}: {e}", moved.from.display())))
+        .await
+        .map_err(|e| chain(&e))?
 }
 
 /// Delete one product's shader cache; `false` when it had none. Off the GUI

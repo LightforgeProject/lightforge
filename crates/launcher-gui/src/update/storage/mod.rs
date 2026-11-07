@@ -5,6 +5,7 @@ use crate::*;
 mod caches;
 mod drives;
 mod moving;
+mod prefix;
 mod repair;
 mod uninstall;
 
@@ -15,5 +16,6 @@ impl Lightforge {
             .or_else(|m| self.update_repair(m))
             .or_else(|m| self.update_caches(m))
             .or_else(|m| self.update_moving(m))
+            .or_else(|m| self.update_prefix_move(m))
     }
 }

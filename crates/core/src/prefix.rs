@@ -511,6 +511,9 @@ fn server_gone(status: std::process::ExitStatus, stderr: &[u8]) -> bool {
 /// Create the prefix if needed, then the symlink: linked earlier, `wineboot`
 /// can replace the link with a real directory.
 pub fn provision(runner: &ProtonRunner, layout: &Layout) -> Result<PrefixStatus, PrefixError> {
+    if layout.prefix_away() {
+        return Err(PrefixError::Away(layout.compat_data()));
+    }
     // A deleted prefix's wineserver keeps running, and a new prefix in its
     // place can inherit its socket. The scan only matches processes naming
     // this prefix. Skipped for an existing prefix: its client is the user's.
@@ -542,6 +545,10 @@ pub fn provision(runner: &ProtonRunner, layout: &Layout) -> Result<PrefixStatus,
 /// A [`crate::library::State::Missing`] library is skipped: relinking an unmounted
 /// drive would create an empty games directory under the mount point.
 pub fn link_libraries(layout: &Layout) -> Result<(), PrefixError> {
+    // Linking would conjure the folder, on what is under the mount point.
+    if layout.prefix_away() {
+        return Err(PrefixError::Away(layout.compat_data()));
+    }
     for library in layout.libraries().all() {
         // A first run's library comes out of the config migration unclaimed;
         // setup claims it. Only from `New`: there is no marker to adopt, so
@@ -592,6 +599,9 @@ pub enum PrefixError {
 
     #[error("Proton ran but left no usable prefix at {0}")]
     NotInitialized(PathBuf),
+
+    #[error("the Wine prefix at {0} is not there; is its drive mounted?")]
+    Away(PathBuf),
 
     #[error("the old prefix still has processes running, so a new one cannot be built: {}", .0.join(", "))]
     Busy(Vec<String>),
@@ -1097,5 +1107,19 @@ mod tests {
         ensure_link(&layout.wow_symlink(), &layout.wow_install(&crate::product::ProductCode::Retail)).unwrap();
 
         assert!(PrefixStatus::inspect(&layout).is_ready());
+    }
+
+    #[test]
+    fn a_moved_prefix_that_is_away_is_not_rebuilt_or_linked_into() {
+        let dir = tempfile::tempdir().unwrap();
+        let away = dir.path().join("unmounted/lightforge");
+        let layout = Layout::with_root(dir.path().join("Blizzard")).with_compat_data(Some(away.clone()));
+
+        assert!(matches!(link_libraries(&layout), Err(PrefixError::Away(_))));
+        assert!(matches!(
+            provision(&runner(dir.path()), &layout),
+            Err(PrefixError::Away(_))
+        ));
+        assert!(!away.exists(), "nothing conjured it on the disk underneath");
     }
 }

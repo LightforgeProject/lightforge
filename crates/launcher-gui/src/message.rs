@@ -251,6 +251,16 @@ pub(crate) enum Message {
     EnvEdit(Scope, iced::widget::text_editor::Action),
     /// Typing in the env editor paused; the number says after which edit.
     EnvSettled(u64),
+    /// Typing in the folder to move the Wine prefix to.
+    PrefixFolderTyped(String),
+    BrowsePrefixFolder,
+    PrefixFolderPicked(Option<PathBuf>),
+    /// Move the Wine prefix to the folder in the field.
+    MovePrefix,
+    /// The prefix is at its target; the config is next, then the old copy.
+    PrefixPlaced(Result<lightforge_core::prefix_move::Moved, String>),
+    /// The move is over, and whether the old copy could be deleted.
+    PrefixReleased(Result<(), String>),
     /// The library picked in Game Settings to move the game to, by id.
     MoveTargetPicked(String),
     /// Move the game in Game Settings to the picked library.

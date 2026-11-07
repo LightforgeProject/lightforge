@@ -158,6 +158,9 @@ fn runner_for(
     use lightforge_core::prefix::ProtonRunner;
     use lightforge_core::proton;
 
+    if layout.prefix_away() {
+        return Err(chain(&lightforge_core::prefix::PrefixError::Away(layout.compat_data())));
+    }
     let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
     let config = Config::load_or_default(&dirs.config_file()).unwrap_or_default();
     let steam = lightforge_core::steam::SteamRoot::discover();

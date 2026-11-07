@@ -71,6 +71,7 @@ mod tests {
                 include_str!("storage/repair.rs"),
                 include_str!("storage/caches.rs"),
                 include_str!("storage/moving.rs"),
+                include_str!("storage/prefix.rs"),
             ),
         ),
         ("setup", include_str!("setup.rs")),

@@ -2063,3 +2063,51 @@ fn an_installer_that_would_not_start_ends_the_install_with_its_error() {
     assert!(app.companion_install.is_none());
     assert!(app.error.is_some());
 }
+
+#[test]
+fn a_refused_prefix_move_frees_the_launcher_and_says_why() {
+    let (mut app, _scratch) = test_app();
+    app.prefix_folder = "/mnt/x/prefixes".to_owned();
+    let _ = app.update(Message::MovePrefix);
+    assert!(app.prefix_moving && app.locked(), "nothing may start in a prefix on its way");
+
+    let _ = app.update(Message::PrefixPlaced(Err("close these first".to_owned())));
+    assert!(!app.prefix_moving && !app.locked());
+    assert!(app.error.is_some());
+    assert_eq!(app.config.prefix_dir, None);
+}
+
+#[test]
+fn a_finished_prefix_move_is_saved_and_the_layout_follows_it() {
+    let (mut app, scratch) = test_app();
+    let to = scratch.path().join("prefixes/lightforge");
+    std::fs::create_dir_all(&to).unwrap();
+    let from = app.layout.compat_data();
+    app.prefix_moving = true;
+    app.busy = true;
+
+    let moved = lightforge_core::prefix_move::Moved {
+        from,
+        to: to.clone(),
+        how: lightforge_core::prefix_move::How::Renamed,
+    };
+    let _ = app.update(Message::PrefixPlaced(Ok(moved)));
+    assert_eq!(app.layout.compat_data(), to);
+    let saved = Config::load_or_default(&app.dirs.as_ref().unwrap().config_file()).unwrap();
+    assert_eq!(saved.prefix_dir.as_ref(), Some(&to));
+    assert!(app.prefix_moving, "still working until the old copy is gone");
+
+    let _ = app.update(Message::PrefixReleased(Ok(())));
+    assert!(!app.prefix_moving && !app.locked());
+    assert!(app.prefix_notice.as_deref().is_some_and(|note| note.starts_with("moved to")));
+}
+
+#[test]
+fn a_prefix_move_waits_for_setup_to_finish() {
+    let (mut app, _scratch) = test_app();
+    app.prefix_folder = "/mnt/x/prefixes".to_owned();
+    app.setup_running = true;
+    let _ = app.update(Message::MovePrefix);
+    assert!(!app.prefix_moving);
+    assert!(app.error.is_some());
+}

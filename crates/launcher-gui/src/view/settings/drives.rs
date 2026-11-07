@@ -21,11 +21,12 @@ impl Lightforge {
                         .map(|earlier| earlier.label.as_str());
                     drives = drives.push(self.drive_card(library, same_disk_as));
                 }
+                drives = drives.push(self.prefix_card(&report.prefix));
                 drives = drives.spacing(theme::SM);
                 drives = drives.extend(self.hint("The default drive is where a game goes unless you pick another one, and \
                      the folder Battle.net proposes for its own titles. It is only that: \
-                     Battle.net itself and the Wine prefix stay where they were installed, \
-                     above. Removing a drive takes it off this list and deletes nothing — \
+                     Battle.net itself and the Wine prefix stay where they are until you \
+                     move them. Removing a drive takes it off this list and deletes nothing — \
                      add it again and Lightforge finds the games on it.").map(Element::from));
             }
         }
@@ -151,6 +152,44 @@ impl Lightforge {
         card = card.extend(self.unused_rows(library));
         card = card.push(self.drive_actions(library));
         setting_card(card)
+    }
+
+    /// Where the Wine prefix is, and moving it.
+    fn prefix_card<'a>(&'a self, prefix: &'a storage::PrefixUsage) -> Element<'a, Message> {
+        let free = prefix.disk.map(|disk| format!(", {} free there", size_of(disk.free))).unwrap_or_default();
+        let idle = !self.prefix_moving;
+        let mut card = column![setting_group([setting(
+            "Wine prefix and Battle.net",
+            match self.layout.prefix_away() {
+                true => format!("{} is not there; is its drive mounted?", tilde(&prefix.path)),
+                false => format!("{}, {}{free}", tilde(&prefix.path), size_of(prefix.bytes)),
+            },
+            None,
+            row![
+                clickable(
+                    "prefix folder",
+                    text_input("folder to move it to", &self.prefix_folder)
+                        .on_input(Message::PrefixFolderTyped)
+                        .style(theme::field)
+                        .size(theme::BODY)
+                        .padding(theme::SM)
+                        .width(Length::Fixed(240.0)),
+                ),
+                secondary("Browse", Message::BrowsePrefixFolder).enabled(idle),
+                secondary("Move", Message::MovePrefix).enabled(idle && !self.prefix_folder.trim().is_empty()),
+            ]
+            .spacing(theme::SM)
+            .align_y(Alignment::Center),
+        )])]
+        .spacing(theme::SM);
+        card = card.extend(self.hint(
+            "It goes into a lightforge folder inside the one you pick. Close Battle.net first. \
+             Keep that drive mounted: games cannot start without it.",
+        ).map(Element::from));
+        if let Some(notice) = &self.prefix_notice {
+            card = card.push(muted(notice.clone(), theme::LABEL));
+        }
+        card.into()
     }
 
     /// One row per kind of thing on the drive, with a Clear button where it

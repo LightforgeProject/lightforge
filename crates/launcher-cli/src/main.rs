@@ -94,6 +94,7 @@ async fn run() -> Result<()> {
         Command::Prefix => commands::proton::prefix(ctx),
         Command::PrefixInit { proton } => commands::proton::prefix_init(ctx, proton),
         Command::PrefixLink => commands::proton::prefix_link(ctx),
+        Command::PrefixMove { folder } => commands::proton::prefix_move(ctx, folder),
         Command::BattlenetFetch => commands::battlenet::battlenet_fetch().await,
         Command::BattlenetSetup {
             proton,

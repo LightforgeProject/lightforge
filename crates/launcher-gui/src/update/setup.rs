@@ -98,6 +98,9 @@ impl Lightforge {
                 Task::done(Message::RunSetup)
             }
 
+            // Setup would build a new prefix behind one that is on its way.
+            Message::RunSetup if self.prefix_moving => Task::none(),
+
             Message::RunSetup => {
                 let (tx, rx) = tokio::sync::watch::channel(provision::Progress::default());
                 self.setup_rx = Some(rx);

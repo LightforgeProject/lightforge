@@ -406,6 +406,12 @@ struct Lightforge {
     install_dialog: Option<InstallDialog>,
     uninstall_dialog: Option<UninstallDialog>,
     moving: Option<Moving>,
+    /// The folder typed or picked to move the Wine prefix to.
+    prefix_folder: String,
+    /// The prefix is being moved; nothing may start in it.
+    prefix_moving: bool,
+    /// How the last move went, for the line under its card.
+    prefix_notice: Option<String>,
     /// An install under way on the Game Tools page.
     companion_install: Option<CompanionInstall>,
     /// The game the page's next install is for; `None` is the selected one.

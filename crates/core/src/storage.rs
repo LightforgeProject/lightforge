@@ -80,6 +80,16 @@ pub struct Report {
     /// The drive the entries in `app` are on.
     pub app_root: PathBuf,
     pub app_disk: Option<Disk>,
+    /// The Wine prefix, wherever it is, games Battle.net put in it included.
+    pub prefix: PrefixUsage,
+}
+
+/// Where the Wine prefix is and what it takes up there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrefixUsage {
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub disk: Option<Disk>,
 }
 
 impl Report {
@@ -119,6 +129,9 @@ pub fn report(layout: &Layout, dirs: &AppDirs) -> Report {
             // A missing drive is not measured: its mount point shows the
             // filesystem underneath.
             let holds_prefix = prefix_owner == Some(index);
+            // The owner may only be the default drive, standing in for a
+            // prefix on no library at all: its row would be counted wrongly.
+            let prefix_here = prefix_on.starts_with(library.root());
             let usage = match state.is_present() {
                 false => Vec::new(),
                 true => {
@@ -165,7 +178,7 @@ pub fn report(layout: &Layout, dirs: &AppDirs) -> Report {
                         clearable: false,
                     });
 
-                    if holds_prefix {
+                    if prefix_here {
                         // The prefix minus Battle.net's games inside it.
                         usage.push(Usage {
                             label: "Wine prefix and Battle.net".to_owned(),
@@ -178,6 +191,8 @@ pub fn report(layout: &Layout, dirs: &AppDirs) -> Report {
                             path: prefix_on.clone(),
                             clearable: false,
                         });
+                    }
+                    if holds_prefix {
                         usage.push(Usage {
                             label: "Battle.net leftovers".to_owned(),
                             bytes: [layout.battle_net_staging(), layout.agent_cache_dir()]
@@ -231,6 +246,11 @@ pub fn report(layout: &Layout, dirs: &AppDirs) -> Report {
         ],
         app_root: dirs.data_dir().to_path_buf(),
         app_disk: disk(dirs.data_dir()).ok(),
+        prefix: PrefixUsage {
+            bytes: dir_size(&prefix_on),
+            disk: disk(&prefix_on).ok(),
+            path: prefix_on,
+        },
     }
 }
 
@@ -337,6 +357,22 @@ pub fn disk(path: &Path) -> Result<Disk, StorageError> {
         total: u64::from(stat.f_blocks) * block,
         free: u64::from(stat.f_bavail) * block,
     })
+}
+
+/// Whether `path`'s filesystem, or its nearest existing ancestor's, is mounted
+/// `noexec`.
+pub(crate) fn is_noexec(path: &Path) -> std::io::Result<bool> {
+    let existing = path.ancestors().find(|p| p.exists()).unwrap_or(Path::new("/"));
+    let c_path = CString::new(existing.as_os_str().as_bytes())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: as in `disk`.
+    let rc = unsafe { libc::statvfs(c_path.as_ptr(), stat.as_mut_ptr()) };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: statvfs returned 0, so the struct is initialised.
+    Ok(unsafe { stat.assume_init() }.f_flag & libc::ST_NOEXEC != 0)
 }
 
 /// Whether nothing is installed under this library root, so moving it is

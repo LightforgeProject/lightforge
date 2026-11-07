@@ -184,8 +184,39 @@ pub(crate) fn prefix_init(ctx: Ctx, proton: Option<String>) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn prefix_move(ctx: Ctx, folder: PathBuf) -> Result<()> {
+    use lightforge_core::prefix_move::{self, How};
+
+    let Ctx { layout, mut config } = ctx;
+    // The move is recorded in the config, which `--root` does not describe.
+    if config.layout().context("resolving the Blizzard root")?.root() != layout.root() {
+        anyhow::bail!("--root cannot be combined with prefix-move");
+    }
+    let folder = std::path::absolute(&folder).with_context(|| format!("reading {}", folder.display()))?;
+    let moved = prefix_move::place(&layout, &folder).context("moving the prefix")?;
+
+    config.set_prefix_dir(&layout, moved.to.clone());
+    if let Err(e) = config.save(&AppDirs::discover()?.config_file()) {
+        moved.undo().with_context(|| format!("the prefix stayed at {}", moved.to.display()))?;
+        return Err(e).context("recording the new place, so the prefix was put back");
+    }
+    moved.release().with_context(|| format!("moved, but deleting the old copy at {}", moved.from.display()))?;
+
+    let how = match moved.how {
+        How::NothingToMove => "no prefix yet, setup will build it here",
+        How::Renamed => "renamed",
+        How::Copied => "copied, the old copy deleted",
+    };
+    println!("prefix          {}", moved.to.display());
+    println!("how             {how}");
+    Ok(())
+}
+
 pub(crate) fn prefix_link(ctx: Ctx) -> Result<()> {
     let Ctx { layout, .. } = ctx;
+    if layout.prefix_away() {
+        return Err(lightforge_core::prefix::PrefixError::Away(layout.compat_data()).into());
+    }
     let main = layout
         .default_library()
         .context("no storage library is configured")?;
