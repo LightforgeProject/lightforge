@@ -261,6 +261,8 @@ pub(crate) enum Message {
     PrefixPlaced(Result<lightforge_core::prefix_move::Moved, String>),
     /// The move is over, and whether the old copy could be deleted.
     PrefixReleased(Result<(), String>),
+    /// Whether the game in Game Settings gets DXVK-NVAPI.
+    NvapiPicked(lightforge_core::tweaks::Nvapi),
     /// The library picked in Game Settings to move the game to, by id.
     MoveTargetPicked(String),
     /// Move the game in Game Settings to the picked library.
@@ -584,7 +586,6 @@ pub(crate) enum Tweak {
     MangoHud,
     Wayland,
     NvidiaGpu,
-    Nvapi,
 }
 
 /// A Proton build in a picker, or the "follow the default" entry.
