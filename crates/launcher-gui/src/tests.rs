@@ -2111,3 +2111,23 @@ fn a_prefix_move_waits_for_setup_to_finish() {
     assert!(!app.prefix_moving);
     assert!(app.error.is_some());
 }
+
+#[test]
+fn a_failed_battle_net_repair_frees_the_setup_page_and_says_why() {
+    let (mut app, _scratch) = test_app();
+    let _ = app.update(Message::RepairBattleNet);
+    assert!(app.setup_running);
+
+    let _ = app.update(Message::BattleNetRepaired(Err("close these first: Agent.exe".to_owned().into())));
+    assert!(!app.setup_running);
+    assert!(app.error.is_some());
+    assert!(app.repair_notice.is_none());
+}
+
+#[test]
+fn a_battle_net_repair_waits_for_a_running_setup() {
+    let (mut app, _scratch) = test_app();
+    app.setup_running = true;
+    let _ = app.update(Message::RepairBattleNet);
+    assert!(app.error.is_some());
+}

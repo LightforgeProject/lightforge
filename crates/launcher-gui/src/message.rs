@@ -354,6 +354,9 @@ pub(crate) enum Message {
     /// row clears without restarting the app.
     RecheckRuntime,
     SetupFinished(Result<Box<SetupStatus>, Problem>),
+    /// Reinstall Battle.net, keeping its games and settings.
+    RepairBattleNet,
+    BattleNetRepaired(Result<Box<lightforge_core::setup::Repaired>, Problem>),
     PinDefaultProton(ProtonChoice),
     /// The build Battle.net and Agent launch under.
     PinBattleNetProton(ProtonChoice),

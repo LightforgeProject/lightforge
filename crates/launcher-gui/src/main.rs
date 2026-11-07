@@ -412,6 +412,8 @@ struct Lightforge {
     prefix_moving: bool,
     /// How the last move went, for the line under its card.
     prefix_notice: Option<String>,
+    /// What the last Battle.net repair kept, under the setup buttons.
+    repair_notice: Option<String>,
     /// An install under way on the Game Tools page.
     companion_install: Option<CompanionInstall>,
     /// The game the page's next install is for; `None` is the selected one.

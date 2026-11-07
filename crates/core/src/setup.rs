@@ -12,6 +12,7 @@ use crate::paths::{AppDirs, Layout};
 use crate::prefix::{self, PrefixStatus, ProtonRunner};
 use crate::proton::{self, ProtonRelease};
 use crate::runtime;
+use crate::tact::productdb;
 
 /// What provisioning still has to do on this machine.
 #[derive(Debug, Clone)]
@@ -223,6 +224,120 @@ pub async fn run(
     Ok(status)
 }
 
+/// What a Battle.net repair carried over.
+#[derive(Debug, Clone)]
+pub struct Repaired {
+    pub status: Status,
+    /// Games put back into the new registry, by Battle.net's names for them.
+    pub games: Vec<String>,
+}
+
+/// Reinstall Battle.net for a client that no longer comes back, Agent
+/// "sleeping" after a Locate that never finished (GitHub #23), without losing
+/// what it knew.
+///
+/// Every game's record in Agent's registry is lifted out first and grafted
+/// into the new one, byte for byte, so nothing has to be found again. The
+/// settings and sign-in under `AppData` are not touched, and no game's files
+/// are in the folders that go. Those are set aside rather than deleted until
+/// the new client is in; a failed install puts them back.
+pub async fn repair_battle_net(
+    layout: &Layout,
+    dirs: &AppDirs,
+    config: &Config,
+    proton_version: Option<&str>,
+    on_event: impl FnMut(Event),
+) -> Result<Repaired, SetupError> {
+    if config.battle_net_declined {
+        return Err(SetupError::BattleNetDeclined);
+    }
+    let running = crate::preflight::scan(layout);
+    if !running.is_empty() {
+        return Err(SetupError::Busy(running.into_iter().map(|p| p.name).collect()));
+    }
+
+    let agent_dir = layout.agent_dir();
+    let games = std::fs::read(agent_dir.join("product.db")).map(|bytes| game_records(&bytes)).unwrap_or_default();
+    let program_data = layout.drive_c().join("ProgramData");
+    let program = [
+        layout.battle_net_dir(),
+        agent_dir.clone(),
+        program_data.join("Battle.net").join("Setup"),
+        program_data.join("Battle.net").join("bdk"),
+        program_data.join("Battle.net_components"),
+    ];
+    // In `drive_c`, so every move is a rename.
+    let drive_c = layout.drive_c();
+    let aside = crate::staging::create_in(&drive_c).map_err(io(&drive_c))?;
+    let moved = set_aside(&program, aside.path())?;
+    tracing::info!(
+        "repairing Battle.net: {} folders set aside, {} games to keep",
+        moved.len(),
+        games.len()
+    );
+
+    let status = match run(layout, dirs, config, proton_version, on_event).await {
+        Ok(status) if status.battle_net => status,
+        outcome => {
+            if !put_back(&moved) {
+                let kept = aside.keep();
+                tracing::error!("the old Battle.net is left at {}", kept.display());
+            }
+            return match outcome {
+                Err(e) => Err(e),
+                Ok(_) => Err(SetupError::BattleNetDeclined),
+            };
+        }
+    };
+
+    let names: Vec<String> = games.iter().map(|record| record.product.clone()).collect();
+    if !games.is_empty() && !productdb::graft(&agent_dir, &games)? {
+        tracing::warn!("the new Battle.net registry could not be read, so {names:?} need a Locate");
+    }
+    Ok(Repaired { status, games: names })
+}
+
+/// The records of every game in a registry, not Battle.net's own.
+fn game_records(registry: &[u8]) -> Vec<productdb::Record> {
+    productdb::decode(registry)
+        .into_iter()
+        .filter(|game| !game.is_infrastructure())
+        .filter_map(|game| productdb::lift(registry, &game.product, &game.install_path))
+        .collect()
+}
+
+/// Move each of `dirs` that exists into `aside`, numbered. A move that fails
+/// takes the ones before it back.
+fn set_aside(dirs: &[PathBuf], aside: &Path) -> Result<Vec<(PathBuf, PathBuf)>, SetupError> {
+    let mut moved = Vec::new();
+    for (n, dir) in dirs.iter().enumerate() {
+        if !dir.exists() {
+            continue;
+        }
+        let to = aside.join(n.to_string());
+        if let Err(e) = std::fs::rename(dir, &to) {
+            put_back(&moved);
+            return Err(io(dir)(e));
+        }
+        moved.push((dir.clone(), to));
+    }
+    Ok(moved)
+}
+
+/// Undo [`set_aside`] over whatever a failed install left in its place.
+/// `false` when something could not go back.
+fn put_back(moved: &[(PathBuf, PathBuf)]) -> bool {
+    let mut all = true;
+    for (dir, aside) in moved.iter().rev() {
+        let _ = std::fs::remove_dir_all(dir);
+        if let Err(e) = std::fs::rename(aside, dir) {
+            tracing::error!("could not put {} back from {}: {e}", dir.display(), aside.display());
+            all = false;
+        }
+    }
+    all
+}
+
 /// Write each step to the log on its way to the caller. Download progress is
 /// left out; the downloader reports its own.
 fn logged(mut on_event: impl FnMut(Event)) -> impl FnMut(Event) {
@@ -348,6 +463,15 @@ pub enum SetupError {
     #[error("upstream has published only prereleases")]
     NoStableRelease,
 
+    #[error("Battle.net is switched off in setup")]
+    BattleNetDeclined,
+
+    #[error("close these first, they are running in the prefix: {}", .0.join(", "))]
+    Busy(Vec<String>),
+
+    #[error(transparent)]
+    ProductDb(#[from] productdb::ProductDbError),
+
     #[error("i/o error at {path}")]
     Io {
         path: PathBuf,
@@ -433,5 +557,80 @@ mod tests {
         // remaining steps must be reported, in order.
         let steps = status(true, false, false).outstanding();
         assert_eq!(steps, vec![Step::Prefix, Step::BattleNet]);
+    }
+
+    fn registry(products: &[&str]) -> Vec<u8> {
+        let install = |product: &str| productdb::ProductInstall {
+            product: product.into(),
+            install_path: "E:/Hearthstone".into(),
+            region: "eu".into(),
+            locale: "enUS".into(),
+            account_country: String::new(),
+            geo_country: String::new(),
+            flavor_dir: String::new(),
+            version: "1.0".into(),
+            build_key: "k".repeat(32),
+            tags: String::new(),
+            key_ring: None,
+            family: String::new(),
+            installed_at_ms: 0,
+        };
+        productdb::encode(&products.iter().map(|p| install(p)).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn a_repair_keeps_every_game_and_none_of_battle_nets_own_records() {
+        let old = registry(&["agent", "battle.net", "hs_beta", "wowf"]);
+        let kept: Vec<String> = game_records(&old).into_iter().map(|r| r.product).collect();
+        assert_eq!(kept, ["hs_beta", "wowf"]);
+    }
+
+    #[test]
+    fn the_kept_games_land_in_the_new_registry_beside_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let games = game_records(&registry(&["agent", "hs_beta", "wowf"]));
+        // What a fresh install's Agent writes: only itself.
+        std::fs::write(dir.path().join("product.db"), registry(&["agent", "battle.net"])).unwrap();
+
+        assert!(productdb::graft(dir.path(), &games).unwrap());
+        let now: Vec<String> = productdb::read(&dir.path().join("product.db")).unwrap().into_iter().map(|i| i.product).collect();
+        assert_eq!(now, ["agent", "battle.net", "hs_beta", "wowf"]);
+    }
+
+    #[test]
+    fn set_aside_folders_go_back_over_what_a_failed_install_left() {
+        let dir = tempfile::tempdir().unwrap();
+        let (client, agent, missing) = (dir.path().join("Battle.net"), dir.path().join("Agent"), dir.path().join("Setup"));
+        std::fs::create_dir_all(&client).unwrap();
+        std::fs::write(client.join("Battle.net.exe"), "old").unwrap();
+        std::fs::create_dir_all(&agent).unwrap();
+        std::fs::write(agent.join("product.db"), "registry").unwrap();
+        let aside = dir.path().join("aside");
+        std::fs::create_dir(&aside).unwrap();
+
+        let moved = set_aside(&[client.clone(), agent.clone(), missing.clone()], &aside).unwrap();
+        assert_eq!(moved.len(), 2, "a folder that was never there is skipped");
+        assert!(!client.exists() && !agent.exists());
+
+        // A half-finished install in the client's place.
+        std::fs::create_dir_all(&client).unwrap();
+        std::fs::write(client.join("partial"), "new").unwrap();
+        assert!(put_back(&moved));
+
+        assert_eq!(std::fs::read_to_string(client.join("Battle.net.exe")).unwrap(), "old");
+        assert!(!client.join("partial").exists());
+        assert_eq!(std::fs::read_to_string(agent.join("product.db")).unwrap(), "registry");
+        assert!(!missing.exists());
+    }
+
+    #[tokio::test]
+    async fn a_declined_battle_net_is_not_repaired() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::with_root(dir.path().join("Blizzard"));
+        let dirs = AppDirs::with_dirs(dir.path().join("c"), dir.path().join("k"), dir.path().join("d"));
+        let config = Config { battle_net_declined: true, ..Config::with_default_products() };
+
+        let result = repair_battle_net(&layout, &dirs, &config, None, |_| {}).await;
+        assert!(matches!(result, Err(SetupError::BattleNetDeclined)), "{result:?}");
     }
 }

@@ -88,6 +88,23 @@ pub async fn run(
         .map_err(|e| Problem::of(&e))
 }
 
+/// Reinstall Battle.net, keeping its games and settings; see
+/// [`setup::repair_battle_net`]. An idle client is closed first; one in use
+/// is named by the repair's refusal.
+pub async fn repair_battle_net(
+    layout: Layout,
+    config: Config,
+    proton_version: Option<String>,
+    tx: tokio::sync::watch::Sender<Progress>,
+) -> Result<setup::Repaired, Problem> {
+    let dirs = AppDirs::discover().map_err(|e| Problem::of(&e))?;
+    let quiet = layout.clone();
+    let _ = tokio::task::spawn_blocking(move || crate::tasks::make_way(&quiet)).await;
+    setup::repair_battle_net(&layout, &dirs, &config, proton_version.as_deref(), reporter(tx))
+        .await
+        .map_err(|e| Problem::of(&e))
+}
+
 /// Read what is already provisioned, off the UI thread.
 pub async fn status(layout: Layout, config: Config) -> Option<Status> {
     tokio::task::spawn_blocking(move || {

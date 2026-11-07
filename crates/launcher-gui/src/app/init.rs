@@ -169,6 +169,7 @@ impl Lightforge {
             prefix_folder: String::new(),
             prefix_moving: false,
             prefix_notice: None,
+            repair_notice: None,
             companion_install: None,
             companion_game: None,
             cancel_dialog: None,
