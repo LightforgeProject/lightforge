@@ -178,20 +178,20 @@ fn close_if_idle(layout: &Layout) -> Result<bool, Problem> {
     Ok(true)
 }
 
-/// Clear Battle.net out of the way of work that needs a quiet prefix. A
-/// background client comes back when that work is over. One someone is using
-/// stays, and the work's own check says what to close.
+/// Clear Battle.net out of the way of work that needs a quiet prefix, and say
+/// whether it is. A background client comes back when that work is over. One
+/// someone is using stays, and the work's own check says what to close.
 ///
 /// Agent too, in either mode: it outlives the client that handed a game off
 /// and keeps its registry in memory, so a download's new version can be
 /// written over with the old one (GlitchTip #40: every hand-off after
 /// Lightforge updated Forever asked for an update).
-pub(crate) fn make_way(layout: &Layout) {
+pub(crate) fn make_way(layout: &Layout) -> bool {
     let up = preflight::scan(layout)
         .iter()
         .any(|p| matches!(p.kind, preflight::ProcKind::BattleNet | preflight::ProcKind::Agent));
     if !up {
-        return;
+        return true;
     }
     let background = AppDirs::discover()
         .ok()
@@ -203,9 +203,16 @@ pub(crate) fn make_way(layout: &Layout) {
             if background {
                 owe_client();
             }
+            true
         }
-        Ok(false) => tracing::info!("Battle.net stays up for work on the game files: a game or its window is open"),
-        Err(e) => tracing::warn!("could not close Battle.net: {e}"),
+        Ok(false) => {
+            tracing::debug!("Battle.net stays up for work on the game files: a game or its window is open");
+            false
+        }
+        Err(e) => {
+            tracing::warn!("could not close Battle.net: {e}");
+            false
+        }
     }
 }
 

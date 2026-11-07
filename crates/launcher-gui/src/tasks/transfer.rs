@@ -43,7 +43,40 @@ pub async fn download(
     std::thread::Builder::new()
         .name("lightforge-download".to_owned())
         .spawn(move || {
-            make_way(&layout);
+            // Agent writes this same store, and beside it a download can
+            // corrupt both (GlitchTip #41). Held rather than refused, and
+            // asked again each round: Agent outlives a hand-off by itself.
+            let mut held = false;
+            while !make_way(&layout) {
+                if cancel.is_cancelled() {
+                    let _ = done_tx.send(Ok(Summary {
+                        outcome: lightforge_core::tact::download::Outcome { cancelled: true, ..Default::default() },
+                        store: lightforge_core::tact::writer::Summary {
+                            data_dir: layout.wow_install(&code),
+                            archives: 0,
+                            files: 0,
+                            bytes: 0,
+                            indices: Vec::new(),
+                        },
+                        missing: 0,
+                        complete: false,
+                        reasons: Vec::new(),
+                        version: None,
+                        flavor: String::new(),
+                        executable: None,
+                    }));
+                    return;
+                }
+                if !held {
+                    tracing::info!("{} waits for Battle.net to close: it writes the same game files", code.as_str());
+                    let _ = tx.send(TransferState {
+                        stage: "waiting for Battle.net to close".to_owned(),
+                        ..TransferState::default()
+                    });
+                    held = true;
+                }
+                std::thread::sleep(WAIT_FOR_CLIENT);
+            }
             let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
                 Ok(runtime) => runtime,
                 Err(e) => {
@@ -136,6 +169,9 @@ pub async fn download(
 
     done_rx.await.map_err(|_| "the download thread stopped unexpectedly".to_owned())?
 }
+
+/// How often a held download asks Battle.net to close again.
+const WAIT_FOR_CLIENT: Duration = Duration::from_secs(5);
 
 /// Write to the log when a running transfer stops moving.
 ///
