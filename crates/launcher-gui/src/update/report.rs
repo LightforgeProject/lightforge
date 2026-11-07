@@ -84,6 +84,14 @@ impl Lightforge {
                             info.cpu = Some(system.cpu_brand.clone());
                             info.memory = Some(system.memory_total);
                         }
+                        // Only into a report, which goes to the project, never
+                        // into Copy debug info, which gets pasted in public.
+                        info.client_log = lightforge_core::debug::client_excerpt(
+                            &self.layout.battle_net_logs(&self.config.prefix_user),
+                        );
+                        info.own_log = self.dirs.as_ref().and_then(|dirs| {
+                            lightforge_core::debug::log_tail(&dirs.log_dir().join("lightforge-gui.log"))
+                        });
                         let tags = report_tags(&info);
                         // Status lines too, scrubbed: a message can carry a path.
                         let mut text = info.render();

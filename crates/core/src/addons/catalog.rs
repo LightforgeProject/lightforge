@@ -93,6 +93,9 @@ pub struct Resolved {
     /// one, and from an older proxy.
     #[serde(default)]
     pub channel: Option<super::Channel>,
+    /// Projects at the same provider this file will not work without.
+    #[serde(default)]
+    pub dependencies: Vec<String>,
 }
 
 impl Resolved {

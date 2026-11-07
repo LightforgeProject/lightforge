@@ -1,7 +1,9 @@
 use super::*;
 use crate::addons::catalog::Request;
 use crate::addons::install::Record;
+use crate::addons::catalog::Catalog;
 use crate::addons::Collection;
+use crate::net::Http;
 
 #[test]
 fn a_pass_saving_keeps_choices_made_while_it_ran() {
@@ -450,16 +452,17 @@ fn an_unsupported_provider_is_reported_rather_than_requested() {
 
 #[test]
 fn a_published_md5_is_enforced_in_both_directions() {
-    let package = b"addon bytes";
+    let package: &[u8] = b"addon bytes";
     let digest = format!("{:x}", md5::compute(package));
+    let path = Path::new("package.zip");
 
-    assert!(verify_md5(package, Some(&digest), "BigWigs").is_ok());
+    assert!(verify_md5(package, path, Some(&digest), "BigWigs").is_ok());
     // Case differences are not corruption.
-    assert!(verify_md5(package, Some(&digest.to_uppercase()), "BigWigs").is_ok());
+    assert!(verify_md5(package, path, Some(&digest.to_uppercase()), "BigWigs").is_ok());
     // A provider that publishes no digest is not an error.
-    assert!(verify_md5(package, None, "ElvUI").is_ok());
+    assert!(verify_md5(package, path, None, "ElvUI").is_ok());
 
-    let err = verify_md5(b"tampered", Some(&digest), "BigWigs").unwrap_err();
+    let err = verify_md5(&b"tampered"[..], path, Some(&digest), "BigWigs").unwrap_err();
     assert!(matches!(err, ManageError::Checksum { .. }), "{err}");
 }
 
@@ -537,4 +540,138 @@ fn a_report_is_complete_only_when_nothing_was_left_out() {
         github: None,
     });
     assert!(!report.is_complete());
+}
+
+/// A package zip per URL path, from a local server, as the catalog's `download_url`s point at.
+fn package_server(packages: Vec<(&'static str, Vec<u8>)>) -> String {
+    use std::io::{Read, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut request = [0u8; 2048];
+            let read = stream.read(&mut request).unwrap_or(0);
+            let request = String::from_utf8_lossy(&request[..read]).into_owned();
+            let path = request.split_whitespace().nth(1).unwrap_or("").to_owned();
+            let body = packages.iter().find(|(name, _)| *name == path).map_or(&[][..], |(_, body)| body);
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(body);
+        }
+    });
+    url
+}
+
+fn addon_zip(folder: &str) -> Vec<u8> {
+    use std::io::Write;
+
+    let mut buffer = Vec::new();
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
+    zip.start_file(format!("{folder}/{folder}.toc"), zip::write::SimpleFileOptions::default()).unwrap();
+    zip.write_all(b"## Interface: 16001\n").unwrap();
+    zip.finish().unwrap();
+    buffer
+}
+
+/// Questie's real shape since 12.6: its data is a project of its own.
+fn questie_catalog(dir: &Path, url: &str) -> Catalog {
+    let entry = |id: &str, name: &str, dependencies: &[&str]| {
+        serde_json::json!({
+            "id": id,
+            "status": "ok",
+            "name": name,
+            "file_id": "1",
+            "download_url": format!("{url}/{name}"),
+            "dependencies": dependencies,
+        })
+    };
+    let reply = serde_json::json!({ "results": [
+        entry("334372", "Questie", &["1696795", "1695789"]),
+        // Each leads back to the other, which must not loop.
+        entry("1696795", "QuestieDB", &["334372"]),
+        entry("1695789", "QuestieTrace", &[]),
+    ]});
+    std::fs::write(dir.join("resolve.json"), reply.to_string()).unwrap();
+    Catalog::new(crate::addons::catalog::Origin::Dir(dir.to_path_buf()))
+}
+
+fn questie_options(dir: &Path) -> Options {
+    Options {
+        flavor: "forever".to_owned(),
+        addons_dir: dir.join("_forever_/Interface/AddOns"),
+        ledger_path: dir.join("addons.json"),
+        pinned: false,
+        reinstall: false,
+        channel: crate::addons::Channel::Stable,
+        backup: None,
+    }
+}
+
+fn questie_request() -> Request {
+    Request { provider: "curse".to_owned(), id: "334372".to_owned(), version_id: None, channel: None }
+}
+
+fn questie_packages() -> String {
+    package_server(vec![
+        ("/Questie", addon_zip("Questie")),
+        ("/QuestieDB", addon_zip("QuestieDB")),
+        ("/QuestieTrace", addon_zip("QuestieTrace")),
+    ])
+}
+
+#[tokio::test]
+async fn installing_an_addon_brings_its_required_dependencies() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = questie_catalog(dir.path(), &questie_packages());
+    let options = questie_options(dir.path());
+
+    let http = Http::new().unwrap();
+    let report = install_all(&http, Some(&catalog), &[questie_request()], &options, |_| {}).await.unwrap();
+
+    assert_eq!(report.installed, ["Questie", "QuestieDB", "QuestieTrace"]);
+    assert!(options.addons_dir.join("QuestieDB/QuestieDB.toc").is_file());
+    let ledger = Ledger::load(&options.ledger_path).unwrap();
+    assert!(ledger.find("curse", "1696795").is_some(), "a dependency updates and removes like any addon");
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path().join("_forever_/Interface"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(leftovers, ["AddOns"], "no package or staging folder stays behind");
+}
+
+#[tokio::test]
+async fn an_addon_already_up_to_date_does_not_bring_back_a_removed_dependency() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = questie_catalog(dir.path(), &questie_packages());
+    let options = questie_options(dir.path());
+    let http = Http::new().unwrap();
+    install_all(&http, Some(&catalog), &[questie_request()], &options, |_| {}).await.unwrap();
+
+    let mut ledger = Ledger::load(&options.ledger_path).unwrap();
+    ledger.addons.retain(|record| record.id != "1695789");
+    ledger.save(&options.ledger_path).unwrap();
+
+    let report = install_all(&http, Some(&catalog), &[questie_request()], &options, |_| {}).await.unwrap();
+    assert_eq!(report.up_to_date, ["Questie"]);
+    assert!(report.installed.is_empty(), "{:?}", report.installed);
+}
+
+#[tokio::test]
+async fn a_reinstall_restores_a_dependency_that_never_arrived() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = questie_catalog(dir.path(), &questie_packages());
+    let options = questie_options(dir.path());
+    let http = Http::new().unwrap();
+    install_all(&http, Some(&catalog), &[questie_request()], &options, |_| {}).await.unwrap();
+
+    // What every Questie install from before this fix looks like.
+    let mut ledger = Ledger::load(&options.ledger_path).unwrap();
+    ledger.addons.retain(|record| record.id == "334372");
+    ledger.save(&options.ledger_path).unwrap();
+
+    let repair = Options { reinstall: true, ..questie_options(dir.path()) };
+    let report = install_all(&http, Some(&catalog), &[questie_request()], &repair, |_| {}).await.unwrap();
+    assert_eq!(report.installed, ["Questie", "QuestieDB", "QuestieTrace"]);
 }

@@ -7,6 +7,17 @@ use std::sync::Arc;
 
 use ashpd::zbus::{self, zvariant};
 
+/// A folder, through the desktop portal; see `update/report.rs` for why not `rfd`.
+pub async fn pick_folder() -> Option<std::path::PathBuf> {
+    let request = ashpd::desktop::file_chooser::OpenFileRequest::default()
+        .title("Choose a folder for the Wine prefix")
+        .modal(true)
+        .multiple(false)
+        .directory(true);
+    let files = request.send().await.ok()?.response().ok()?;
+    files.uris().first().and_then(|uri| uri.to_file_path().ok())
+}
+
 /// Hold off suspend, an idle one included, until the descriptor is dropped.
 /// logind's lock rather than the portal's: it also holds in Steam's Game Mode,
 /// where no portal backend implements Inhibit.

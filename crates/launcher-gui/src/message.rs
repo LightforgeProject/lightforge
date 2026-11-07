@@ -201,6 +201,10 @@ pub(crate) enum Message {
     CompanionAutoStart(usize, bool),
     /// Off the list only: the program stays in the prefix.
     CompanionRemove(usize),
+    /// Look through the prefix for programs to add.
+    CompanionFind,
+    /// The program at this index now goes with another game.
+    CompanionMoved(usize, ProductCode),
     /// The play card's region dropdown: the login server a direct launch
     /// signs in to.
     LoginRegionPicked(lightforge_core::portal::Portal),
@@ -251,6 +255,18 @@ pub(crate) enum Message {
     EnvEdit(Scope, iced::widget::text_editor::Action),
     /// Typing in the env editor paused; the number says after which edit.
     EnvSettled(u64),
+    /// Typing in the folder to move the Wine prefix to.
+    PrefixFolderTyped(String),
+    BrowsePrefixFolder,
+    PrefixFolderPicked(Option<PathBuf>),
+    /// Move the Wine prefix to the folder in the field.
+    MovePrefix,
+    /// The prefix is at its target; the config is next, then the old copy.
+    PrefixPlaced(Result<lightforge_core::prefix_move::Moved, String>),
+    /// The move is over, and whether the old copy could be deleted.
+    PrefixReleased(Result<(), String>),
+    /// Whether the game in Game Settings gets DXVK-NVAPI.
+    NvapiPicked(lightforge_core::tweaks::Nvapi),
     /// The library picked in Game Settings to move the game to, by id.
     MoveTargetPicked(String),
     /// Move the game in Game Settings to the picked library.
@@ -338,6 +354,9 @@ pub(crate) enum Message {
     /// row clears without restarting the app.
     RecheckRuntime,
     SetupFinished(Result<Box<SetupStatus>, Problem>),
+    /// Reinstall Battle.net, keeping its games and settings.
+    RepairBattleNet,
+    BattleNetRepaired(Result<Box<lightforge_core::setup::Repaired>, Problem>),
     PinDefaultProton(ProtonChoice),
     /// The build Battle.net and Agent launch under.
     PinBattleNetProton(ProtonChoice),
@@ -574,7 +593,6 @@ pub(crate) enum Tweak {
     MangoHud,
     Wayland,
     NvidiaGpu,
-    Nvapi,
 }
 
 /// A Proton build in a picker, or the "follow the default" entry.

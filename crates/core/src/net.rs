@@ -292,17 +292,22 @@ impl Http {
         on_progress: impl FnMut(u64, Option<u64>),
     ) -> Result<String, NetError> {
         let dir = dest.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-        tokio::fs::create_dir_all(dir).await.map_err(io(dir))?;
-        sweep_stale_downloads(dir);
-
-        let temp = tempfile::Builder::new()
-            .prefix(DOWNLOAD_PREFIX)
-            .tempfile_in(dir).map_err(io(dir))?;
+        let temp = download_file_in(dir).await?;
         let file = tokio::fs::File::from_std(temp.as_file().try_clone().map_err(io(dir))?);
-        let digest = self.download_to(url, temp.path(), file, on_progress).await?;
+        let digest = self.download_to(url, temp.path(), file, usize::MAX, on_progress).await?;
 
         temp.persist(dest).map_err(|e| io(dest)(e.error))?;
         Ok(digest)
+    }
+
+    /// Stream `url` to a temporary file in `dir`, for a body too big to hold
+    /// in memory, failing once it passes `max` bytes. The file deletes itself
+    /// when dropped.
+    pub async fn download_temp(&self, url: &str, dir: &Path, max: usize) -> Result<tempfile::NamedTempFile, NetError> {
+        let temp = download_file_in(dir).await?;
+        let file = tokio::fs::File::from_std(temp.as_file().try_clone().map_err(io(dir))?);
+        self.download_to(url, temp.path(), file, max, |_, _| {}).await?;
+        Ok(temp)
     }
 
     async fn download_to(
@@ -310,6 +315,7 @@ impl Http {
         url: &str,
         dest: &Path,
         mut file: tokio::fs::File,
+        max: usize,
         mut on_progress: impl FnMut(u64, Option<u64>),
     ) -> Result<String, NetError> {
         let response = self
@@ -323,6 +329,10 @@ impl Http {
             })?;
         let response = check_status(url, response)?;
         let total = response.content_length();
+        let too_large = || NetError::TooLarge { url: url.to_owned(), max };
+        if total.is_some_and(|len| len > max as u64) {
+            return Err(too_large());
+        }
 
         let mut hasher = Sha512::new();
         let mut written = 0u64;
@@ -333,9 +343,12 @@ impl Http {
                 url: url.to_owned(),
                 source: e,
             })?;
+            written += chunk.len() as u64;
+            if written > max as u64 {
+                return Err(too_large());
+            }
             hasher.update(&chunk);
             file.write_all(&chunk).await.map_err(io(dest))?;
-            written += chunk.len() as u64;
             on_progress(written, total);
         }
 
@@ -348,6 +361,13 @@ impl Http {
 
         Ok(hex(&hasher.finalize()))
     }
+}
+
+/// A fresh temporary file in `dir`, after clearing what dead runs left there.
+async fn download_file_in(dir: &Path) -> Result<tempfile::NamedTempFile, NetError> {
+    tokio::fs::create_dir_all(dir).await.map_err(io(dir))?;
+    sweep_stale_downloads(dir);
+    tempfile::Builder::new().prefix(DOWNLOAD_PREFIX).tempfile_in(dir).map_err(io(dir))
 }
 
 /// Read a whole body, failing once it passes `max` bytes.
@@ -635,6 +655,35 @@ mod tests {
         assert_eq!(std::fs::read(&dest).unwrap(), b"downloaded");
         assert_eq!(digest, hex(&Sha512::digest(b"downloaded")));
         assert_eq!(names(dir.path()), ["release.tar.gz"]);
+    }
+
+    #[tokio::test]
+    async fn a_temporary_download_holds_the_body_and_deletes_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let temp = Http::new()
+            .unwrap()
+            .download_temp(&sized(b"downloaded", 10), dir.path(), 10)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(temp.path()).unwrap(), b"downloaded");
+
+        drop(temp);
+        assert!(names(dir.path()).is_empty(), "{:?}", names(dir.path()));
+    }
+
+    #[tokio::test]
+    async fn a_temporary_download_past_its_limit_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let http = Http::new().unwrap();
+
+        // Declared too big, then a server that declares nothing.
+        let declared = http.download_temp(&sized(b"downloaded", 10), dir.path(), 9).await;
+        assert!(matches!(declared, Err(NetError::TooLarge { max: 9, .. })), "{declared:?}");
+        let head = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_owned();
+        let undeclared = http.download_temp(&server(head, b"downloaded".to_vec(), false), dir.path(), 9).await;
+        assert!(matches!(undeclared, Err(NetError::TooLarge { max: 9, .. })), "{undeclared:?}");
+
+        assert!(names(dir.path()).is_empty(), "{:?}", names(dir.path()));
     }
 
     #[tokio::test]

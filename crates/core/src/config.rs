@@ -28,6 +28,8 @@ pub enum SteamOsUse {
 pub struct Config {
     /// Root of the dual-directory layout. Defaults to `~/Games/Blizzard`.
     pub blizzard_root: Option<PathBuf>,
+    /// The compat-data folder, when the Wine prefix was moved out of the root.
+    pub prefix_dir: Option<PathBuf>,
     /// Where games were installed before `libraries`; only
     /// [`Config::ensure_libraries`] reads it.
     pub games_dir: Option<PathBuf>,
@@ -168,6 +170,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             blizzard_root: None,
+            prefix_dir: None,
             games_dir: None,
             libraries: Vec::new(),
             prefix_user: DEFAULT_PREFIX_USER.to_owned(),
@@ -303,6 +306,11 @@ impl Config {
         Ok(())
     }
 
+    /// Record that the prefix is now at `compat_data`.
+    pub fn set_prefix_dir(&mut self, layout: &crate::paths::Layout, compat_data: PathBuf) {
+        self.prefix_dir = (compat_data != layout.default_compat_data()).then_some(compat_data);
+    }
+
     /// The layout this config describes: `blizzard_root` when set, else the
     /// default. Both front ends resolve it here.
     pub fn layout(&self) -> Result<crate::paths::Layout, crate::paths::PathError> {
@@ -310,6 +318,7 @@ impl Config {
             Some(root) => crate::paths::Layout::with_root(root),
             None => crate::paths::Layout::default_for_user()?,
         };
+        let layout = layout.with_compat_data(self.prefix_dir.clone());
         let mut layout = match self.libraries.is_empty() {
             true => layout.with_games(self.games_dir.clone()),
             false => {
@@ -809,6 +818,22 @@ mod tests {
         assert_eq!(config.library_of(&ProductCode::ClassicEra).unwrap().id, id);
         // The prefix does not move with the games.
         assert_eq!(layout.prefix(), PathBuf::from("/home/u/Games/Blizzard/prefix/pfx"));
+    }
+
+    #[test]
+    fn a_moved_prefix_is_remembered_and_moving_it_home_forgets_it() {
+        let mut config = Config::with_default_products();
+        config.blizzard_root = Some(PathBuf::from("/home/u/Games/Blizzard"));
+        let layout = config.layout().unwrap();
+
+        config.set_prefix_dir(&layout, PathBuf::from("/mnt/x/prefixes/lightforge"));
+        let moved = toml::from_str::<Config>(&toml::to_string(&config).unwrap()).unwrap().layout().unwrap();
+        assert_eq!(moved.prefix(), PathBuf::from("/mnt/x/prefixes/lightforge/pfx"));
+        assert!(moved.battle_net_dir().starts_with("/mnt/x/prefixes/lightforge"));
+        assert_eq!(moved.root(), layout.root(), "the games have not moved");
+
+        config.set_prefix_dir(&moved, layout.default_compat_data());
+        assert_eq!(config.prefix_dir, None);
     }
 
     /// The default drive decides where games go; the prefix stays at the

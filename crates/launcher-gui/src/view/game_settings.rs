@@ -152,15 +152,24 @@ impl Lightforge {
                 self.tool_switch("nvidia gpu", true, tweaks.nvidia_gpu, scope, Tweak::NvidiaGpu),
             ));
         }
-        if self.tools.nvidia.is_some() {
+        if self.tools.nvidia_card {
             rows.push(setting(
                 "NVIDIA features",
                 "Reflex and other NVIDIA-only options, through DXVK-NVAPI.",
                 self.hint(
-                    "Proton reports an NVIDIA card as an AMD one unless this is on, so games \
-                     leave their NVIDIA-only options out.",
+                    "Proton's choice depends on the build: GE-Proton turns it on, Valve's \
+                     Proton only for games it knows. Without it a game takes the card for an \
+                     AMD one. On nouveau, try Off if the game freezes the system.",
                 ),
-                self.tool_switch("nvapi", true, tweaks.nvapi, scope, Tweak::Nvapi),
+                self.picker(
+                    "nvapi".to_owned(),
+                    lightforge_core::tweaks::Nvapi::ALL.to_vec(),
+                    Some(tweaks.nvapi),
+                    "",
+                    Message::NvapiPicked,
+                    Length::Fixed(200.0),
+                    theme::BODY,
+                ),
             ));
         }
 

@@ -237,6 +237,21 @@ Options:
   -h, --help         Print help
 ```
 
+### `lightforge prefix-move`
+
+```text
+Move the prefix, and Battle.net in it, into a folder or to another drive
+
+Usage: lightforge prefix-move [OPTIONS] <FOLDER>
+
+Arguments:
+  <FOLDER>  The folder to put it in. The Blizzard root moves it back
+
+Options:
+      --root <ROOT>  Override the Blizzard root (default: ~/Games/Blizzard)
+  -h, --help         Print help
+```
+
 ## Battle.net
 
 ### `lightforge battlenet-fetch`

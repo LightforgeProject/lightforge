@@ -45,6 +45,11 @@ pub struct DebugInfo {
     pub memory: Option<u64>,
     /// Most recent crash/error log: path, modified time, and its tail.
     pub last_crash: Option<CrashLog>,
+    /// What the Battle.net client did about launches and installs; see
+    /// [`client_excerpt`]. Filled in by the GUI, for a report only.
+    pub client_log: Option<CrashLog>,
+    /// The end of Lightforge's own log; see [`log_tail`].
+    pub own_log: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +103,8 @@ impl DebugInfo {
             cpu: None,
             memory: None,
             last_crash: newest_log(&install),
+            client_log: None,
+            own_log: None,
         }
     }
 
@@ -148,6 +155,13 @@ impl DebugInfo {
             None => {
                 let _ = writeln!(out, "\nno crash log found");
             }
+        }
+        if let Some(log) = &self.client_log {
+            let _ = writeln!(out, "\n--- Battle.net launches and installs: {} ---", log.path.display());
+            let _ = writeln!(out, "{}", log.tail);
+        }
+        if let Some(tail) = &self.own_log {
+            let _ = writeln!(out, "\n--- Lightforge log ---\n{tail}");
         }
         scrub(&out)
     }
@@ -226,6 +240,61 @@ fn newest_log(install: &Path) -> Option<CrashLog> {
     let tail = lines[lines.len().saturating_sub(TAIL_LINES)..].join("\n");
 
     Some(CrashLog { path, modified: Some(modified), tail })
+}
+
+/// What the client logs about a game starting, installing, updating or
+/// exiting, and about itself quitting.
+const CLIENT_MARKERS: [&str; 9] = [
+    "LaunchBinary",
+    "Launched ",
+    "Game is ",
+    "InstallState (",
+    "Update: uid=",
+    "Update completed",
+    "Starting [Auto]",
+    "Destroying AppController",
+    "Logged into Battle.net successfully",
+];
+
+/// A line naming the account or carrying a credential, never sent: the
+/// client logs its account id and sign-in challenge URLs.
+fn sensitive(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    ["account", "token", "ticket", "challenge", "password", "bnet=", "@"].iter().any(|word| lower.contains(word))
+}
+
+/// The newest client log in `logs`, down to [`CLIENT_MARKERS`] lines.
+///
+/// Every product's `InstallState` at sign-in (`Install`/`New` for each one
+/// not installed) is left out, a launch's arguments are cut (a game that
+/// signs in with a token may be handed it there), and so are the ` |bnet=…`
+/// account ids the client appends to its sign-in line.
+pub fn client_excerpt(logs: &Path) -> Option<CrashLog> {
+    let (modified, path) = std::fs::read_dir(logs)
+        .ok()?
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("battle.net-"))
+        .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
+        .max_by_key(|(modified, _)| *modified)?;
+    let text = std::fs::read_to_string(&path).ok()?;
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| CLIENT_MARKERS.iter().any(|marker| line.contains(marker)))
+        .filter(|line| !line.ends_with("currentOperation=Install currentOperationStatus=New"))
+        .map(|line| line.split_once(" with args:").map_or(line, |(launched, _)| launched))
+        .map(|line| line.split_once(" |").map_or(line, |(said, _)| said))
+        .filter(|line| !sensitive(line) && !line.contains("://"))
+        .collect();
+    let tail = lines[lines.len().saturating_sub(TAIL_LINES)..].join("\n");
+    Some(CrashLog { path, modified: Some(modified), tail })
+}
+
+/// The last lines of a log of Lightforge's own, without any that name an
+/// account or carry a credential.
+pub fn log_tail(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let lines: Vec<&str> = text.lines().filter(|line| !sensitive(line)).collect();
+    Some(lines[lines.len().saturating_sub(TAIL_LINES)..].join("\n")).filter(|tail| !tail.is_empty())
 }
 
 /// Display server and desktop, from the session's environment.
@@ -440,5 +509,51 @@ mod tests {
 
         assert!(text.contains("~/Games/Blizzard"));
         assert!(!text.contains(&home.display().to_string()));
+    }
+
+    /// Real lines from client 2.53.6 logs, the account id and challenge id zeroed.
+    const CLIENT_LOG: &str = "\
+I 2026-11-05 10:09:32.775828 [LoginController] {Main} External Challenge URL: https://eu.account.battle.net/login/challenge/00000000-0000-0000-0000-000000000000
+D 2026-11-05 10:09:34.430467 [GSAccountProvider] {Main} Querying account level info for account: 1:0:00000000
+I 2026-11-05 10:09:34.738893 [BAPIGateway] {Main} Using cached auth token on startup. tokenType=Default
+D 2026-11-05 10:09:35.398285 [ProductState] {Main} InstallState (osi): currentOperation=Install currentOperationStatus=New
+I 2026-11-05 10:09:34.941025 [BNLogin] {Main} Logged into Battle.net successfully. |bnet=1:0:00000000|game=2:000000000:00000000
+E 2026-11-05 20:45:07.346281 [Qt] {Main} EnableNonClientDpiScaling() failed for HWND 0x129018a (120) (Call not implemented.)
+I 2026-11-05 18:25:32.414450 [GameLaunchController] {Main} LaunchBinary: uid=wowf selectedRegion=EU binaryType=game
+I 2026-11-05 18:25:32.630745 [InstallManager] {Main} Launched H:/World of Warcraft/_forever_/Wow.exe with args: -launcherlogin -uid wowf, pid: 2488
+D 2026-11-05 18:25:33.205293 [InstallManager] {Main} Game is running: wowf
+";
+
+    #[test]
+    fn the_client_excerpt_keeps_launches_and_drops_the_account() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("libcef-20261105T100925.log"), "not this one").unwrap();
+        std::fs::write(dir.path().join("battle.net-20261105T100924.log"), CLIENT_LOG).unwrap();
+
+        let tail = client_excerpt(dir.path()).unwrap().tail;
+
+        assert_eq!(tail.lines().count(), 4, "{tail}");
+        assert!(tail.contains("Logged into Battle.net successfully"));
+        assert!(tail.contains("LaunchBinary: uid=wowf"));
+        assert!(tail.ends_with("Game is running: wowf"));
+        assert!(tail.contains("Launched H:/World of Warcraft/_forever_/Wow.exe\n"), "arguments are cut: {tail}");
+        for gone in ["1:0:", "bnet=", "challenge", "token", "InstallState (osi)", "EnableNonClientDpiScaling"] {
+            assert!(!tail.contains(gone), "{gone} in {tail}");
+        }
+    }
+
+    #[test]
+    fn no_client_log_is_no_excerpt() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(client_excerpt(dir.path()).is_none());
+        assert!(client_excerpt(&dir.path().join("missing")).is_none());
+    }
+
+    #[test]
+    fn the_own_log_tail_leaves_out_what_names_an_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lightforge-gui.log");
+        std::fs::write(&path, "INFO hand-off to Battle.net for hs_beta\nINFO contact a@b.example\n").unwrap();
+        assert_eq!(log_tail(&path).as_deref(), Some("INFO hand-off to Battle.net for hs_beta"));
     }
 }

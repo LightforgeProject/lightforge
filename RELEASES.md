@@ -1,6 +1,21 @@
 # Lightforge release notes
 
 
+## 1.0.0-beta.11
+
+Lightforge 1.0.0-beta.11 is a fix update, almost all of it from your GitHub issues and bug reports. Addons that need other addons now bring them along, big voice packs install, and Lightforge and Battle.net no longer get in each other's way over the game files. It also adds moving the Wine prefix to another drive and a way to repair Battle.net without losing anything.
+
+- Addons that need another addon now install it too. Questie brings QuestieDB and QuestieTrace, and voice packs bring the voiceover addon they belong to. If you already have Questie, press Re-install on it or wait for its next update. Thanks to spartan195 for the report.
+- Big addons install now. Voice packs of up to 4 GiB are downloaded to disk instead of into memory; the old limit was 256 MiB. Thanks to Zagitta for the report.
+- A GitHub link to one pack of a repository that ships several, like a spoken-wow language pack, now installs that pack instead of the main addon. Thanks to snakeeater98.
+- Get it from GitHub now only shows when the author's repository still has a release to install. Thanks to xalvor for the report.
+- New: move the Wine prefix, and Battle.net inside it, to another folder or drive, in Settings, Storage. Your games, settings and sign-in come along. Keep that drive mounted: without it games cannot start, and Lightforge says so instead of quietly building a new prefix. Also in the command line as lightforge prefix-move. Thanks to spartan195 for the idea.
+- New: Repair Battle.net in Settings, Setup, for when Battle.net no longer starts or its Agent "is sleeping". It reinstalls Battle.net and keeps the list of installed games, your settings and your sign-in, so nothing has to be located again. Thanks to spartan195 for the idea.
+- Downloads, repairs and other work on the game files now close an idle Battle.net first, and a download waits while Battle.net is in use. Battle.net and Lightforge writing the same files could leave games that Battle.net would no longer start, and it is one more reason Battle.net asked to update a game Lightforge had just updated.
+- NVIDIA features in Game Settings now has three choices: Proton's choice, On and Off. Off really turns it off now; GE-Proton had it on for every game. It also shows on the open-source driver, where Off is worth a try if a game freezes the whole system.
+- Game Tools: a program can now be moved to another game, and Find in the prefix lists programs that are already installed, like an HSReplay installed under the wrong game.
+- Bug reports now include Battle.net's lines about starting and installing games, and the end of Lightforge's own log, so a game that will not start through Battle.net can be traced. Nothing about your account is sent, and the report shows everything before you send it.
+
 ## 1.0.0-beta.10
 
 Lightforge 1.0.0-beta.10 is the update for the WoW Forever launch. It fixes the problems that came up around Forever and Battle.net, and from your bug reports. It also adds Seamless Battle.net Mode, still experimental, which keeps Battle.net ready in the background so games that go through it start right away.

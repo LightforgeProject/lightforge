@@ -2,7 +2,9 @@
 //! limited to 60/hour per IP.
 //!
 //! Ids are `owner/repo`. Many authors release here first, RaiderIO's own
-//! `.toc` declares `X-AddonProvider: github`.
+//! `.toc` declares `X-AddonProvider: github`. A repository that ships several
+//! addons, each tagged `<component>/<version>`, has an id per addon:
+//! `owner/repo@component`.
 //!
 //! **Flavor selection uses `release.json` when it is present.** The BigWigs
 //! packager, which most serious addons use, publishes a `release.json` asset
@@ -68,11 +70,15 @@ pub async fn resolve(http: &Http, requests: &[Request], flavor: &str) -> Provide
     let mut resolved = Vec::with_capacity(requests.len());
 
     for request in requests {
-        let repo = request.id.trim_matches('/');
+        let (repo, component) = match request.id.trim_matches('/').split_once('@') {
+            Some((repo, component)) => (repo, Some(component)),
+            None => (request.id.trim_matches('/'), None),
+        };
         let wants_prerelease = request.channel.is_some_and(|c| c > Channel::Stable);
 
-        // `releases/latest` is exactly the stable channel; others page the list.
-        let release = match wants_prerelease {
+        // `releases/latest` is exactly the stable channel of a repository that
+        // ships one addon; anything else pages the list.
+        let release = match wants_prerelease || component.is_some() {
             false => {
                 let url = format!("https://api.github.com/repos/{repo}/releases/latest");
                 match http.get_json::<Release>(&url).await {
@@ -84,11 +90,10 @@ pub async fn resolve(http: &Http, requests: &[Request], flavor: &str) -> Provide
                 }
             }
             true => {
-                let url = format!("https://api.github.com/repos/{repo}/releases?per_page=10");
+                let url = format!("https://api.github.com/repos/{repo}/releases?per_page=100");
                 match http.get_json::<Vec<Release>>(&url).await {
-                    // Newest first, as GitHub returns them. A draft is not
-                    // published at all, so it is never a candidate.
-                    Ok(releases) => releases.into_iter().find(|r| !r.draft),
+                    // Newest first, as GitHub returns them.
+                    Ok(releases) => releases.into_iter().find(|r| offered(r, component, wants_prerelease)),
                     Err(e) => {
                         resolved.push(missing(&request.id, no_release(repo, &e)));
                         continue;
@@ -97,7 +102,10 @@ pub async fn resolve(http: &Http, requests: &[Request], flavor: &str) -> Provide
             }
         };
         let Some(release) = release else {
-            resolved.push(missing(&request.id, "this repo publishes no releases"));
+            resolved.push(missing(&request.id, match component {
+                Some(component) => format!("github.com/{repo} has no recent {component} release"),
+                None => "this repo publishes no releases".to_owned(),
+            }));
             continue;
         };
 
@@ -141,6 +149,16 @@ pub async fn resolve(http: &Http, requests: &[Request], flavor: &str) -> Provide
         });
     }
     Ok(resolved)
+}
+
+/// Whether a release from the list can be installed for this request. A draft
+/// is not published at all, so it is never a candidate.
+fn offered(release: &Release, component: Option<&str>, prerelease: bool) -> bool {
+    !release.draft
+        && (prerelease || !release.prerelease)
+        && component.is_none_or(|component| {
+            release.tag_name.strip_prefix(component).is_some_and(|version| version.starts_with('/'))
+        })
 }
 
 /// Why asking GitHub for `repo`'s release got nothing, in words for the user.
@@ -272,6 +290,27 @@ mod tests {
 
     fn answered(status: u16) -> NetError {
         NetError::Status { url: "https://api.github.com/x".into(), status }
+    }
+
+    #[test]
+    fn a_component_only_takes_its_own_tags() {
+        let tagged = |tag: &str, prerelease: bool| Release {
+            tag_name: tag.into(),
+            html_url: None,
+            assets: Vec::new(),
+            prerelease,
+            draft: false,
+        };
+
+        let pack = Some("quests-audio-deDE");
+        assert!(offered(&tagged("quests-audio-deDE/v1.0.1", false), pack, false));
+        assert!(!offered(&tagged("quests-audio-deDE-extra/v1.0.1", false), pack, false));
+        assert!(!offered(&tagged("spoken/v3.8.3", false), pack, false));
+
+        // Pre-releases stay behind the channel, with or without a component.
+        assert!(!offered(&tagged("quests-audio-deDE/v2-alpha", true), pack, false));
+        assert!(offered(&tagged("quests-audio-deDE/v2-alpha", true), pack, true));
+        assert!(offered(&tagged("5.22.0", true), None, true));
     }
 
     #[test]

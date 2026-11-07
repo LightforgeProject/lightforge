@@ -38,6 +38,8 @@ const WINDOWS_PROGRAM_FILES: &str = "Program Files (x86)";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layout {
     root: PathBuf,
+    /// Where the prefix was moved to; `None` is under the root.
+    moved_compat_data: Option<PathBuf>,
     libraries: Libraries,
     /// Each game's folder and binary as its product config named them,
     /// where known ([`crate::config::Config::layout`]).
@@ -61,6 +63,7 @@ impl Layout {
         Self {
             libraries: Libraries::new(vec![Library::main_at(games, "home")]),
             root,
+            moved_compat_data: None,
             flavors: Default::default(),
         }
     }
@@ -69,6 +72,12 @@ impl Layout {
     pub fn with_games(self, games: Option<PathBuf>) -> Self {
         let games = games.unwrap_or_else(|| self.root.join("games"));
         self.with_libraries(Libraries::new(vec![Library::main_at(games, "home")]))
+    }
+
+    /// The prefix at `compat_data` rather than under the root.
+    pub fn with_compat_data(mut self, compat_data: Option<PathBuf>) -> Self {
+        self.moved_compat_data = compat_data;
+        self
     }
 
     /// The same layout over a given set of libraries.
@@ -128,7 +137,19 @@ impl Layout {
 
     /// The Proton compat-data directory, `STEAM_COMPAT_DATA_PATH`.
     pub fn compat_data(&self) -> PathBuf {
+        self.moved_compat_data.clone().unwrap_or_else(|| self.default_compat_data())
+    }
+
+    /// Where setup puts the compat data, and a moved prefix can come back to.
+    pub fn default_compat_data(&self) -> PathBuf {
         self.root.join("prefix")
+    }
+
+    /// The prefix was moved and its folder is not there, most likely a drive
+    /// that is not mounted. Proton would quietly build a new one in its place,
+    /// on whatever is under the mount point, and Battle.net would be gone.
+    pub fn prefix_away(&self) -> bool {
+        self.moved_compat_data.as_ref().is_some_and(|dir| !dir.is_dir())
     }
 
     /// The Wine prefix itself, `prefix/pfx` (Proton's naming). Disposable:

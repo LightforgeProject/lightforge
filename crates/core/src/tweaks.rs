@@ -12,7 +12,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// What Game Settings can set for one product.
 ///
@@ -35,9 +35,9 @@ pub struct Tweaks {
     /// Render on the NVIDIA GPU of a hybrid laptop, through PRIME render
     /// offload; without it the game gets the integrated one.
     pub nvidia_gpu: bool,
-    /// DXVK-NVAPI, for Reflex and other NVIDIA-only options. Off by default,
-    /// as in Proton, which otherwise reports the card as an AMD one.
-    pub nvapi: bool,
+    /// DXVK-NVAPI, for Reflex and other NVIDIA-only options.
+    #[serde(deserialize_with = "nvapi_setting")]
+    pub nvapi: Nvapi,
     /// The user's own environment variables for the launch.
     pub env: BTreeMap<String, String>,
 }
@@ -59,8 +59,11 @@ impl Tweaks {
             env.push(("__VK_LAYER_NV_optimus".into(), "NVIDIA_only".into()));
             env.push(("__GLX_VENDOR_LIBRARY_NAME".into(), "nvidia".into()));
         }
-        if self.nvapi && tools.nvidia.is_some() {
-            env.push(("PROTON_ENABLE_NVAPI".into(), "1".into()));
+        match self.nvapi {
+            Nvapi::On if tools.nvidia.is_some() => env.push(("PROTON_ENABLE_NVAPI".into(), "1".into())),
+            // Whatever the driver: on NVK this is the switch worth having.
+            Nvapi::Off => env.push(("PROTON_DISABLE_NVAPI".into(), "1".into())),
+            Nvapi::On | Nvapi::Proton => {}
         }
         // The user's own overrides go last so they win over anything above.
         for (key, value) in &self.env {
@@ -86,6 +89,48 @@ impl Tweaks {
 
 /// Which optional tools this machine actually has.
 ///
+/// Whether a game gets DXVK-NVAPI. Proton decides unless told: GE-Proton 11
+/// turns it on for every game (its `proton` script sets `DXVK_ENABLE_NVAPI`
+/// unless `disablenvapi`), Valve's Proton only for the games it lists.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Nvapi {
+    #[default]
+    Proton,
+    On,
+    Off,
+}
+
+impl Nvapi {
+    pub const ALL: [Nvapi; 3] = [Nvapi::Proton, Nvapi::On, Nvapi::Off];
+}
+
+impl std::fmt::Display for Nvapi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Proton => "Proton's choice",
+            Self::On => "On",
+            Self::Off => "Off",
+        })
+    }
+}
+
+/// [`Nvapi`], or the switch it was up to 1.0.0-beta.10, whose `false` set
+/// nothing and so left it to Proton.
+fn nvapi_setting<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Nvapi, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        Switch(bool),
+        Choice(Nvapi),
+    }
+    Ok(match Stored::deserialize(deserializer)? {
+        Stored::Switch(true) => Nvapi::On,
+        Stored::Switch(false) => Nvapi::Proton,
+        Stored::Choice(choice) => choice,
+    })
+}
+
 /// Detected, so the panel can say what is missing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HostTools {
@@ -97,6 +142,8 @@ pub struct HostTools {
     pub wayland: bool,
     /// The proprietary NVIDIA driver's major version, when it is loaded.
     pub nvidia: Option<u32>,
+    /// An NVIDIA card on any driver, nouveau's included.
+    pub nvidia_card: bool,
     /// That driver beside an Intel or AMD GPU: a laptop that renders on the
     /// integrated one unless told otherwise.
     pub hybrid: bool,
@@ -111,6 +158,7 @@ impl HostTools {
             nvidia: crate::debug::nvidia_version()
                 .and_then(|version| version.split('.').next()?.parse().ok()),
             hybrid: is_hybrid(&crate::debug::cards()),
+            nvidia_card: crate::debug::cards().iter().any(|card| is_nvidia(card)),
         }
     }
 
@@ -119,6 +167,12 @@ impl HostTools {
     pub fn nvidia_lacks_explicit_sync(&self) -> bool {
         self.nvidia.is_some_and(|major| major < 555)
     }
+}
+
+/// Whether a card as [`crate::debug::cards`] lists it, `nouveau 10de:2503`,
+/// is NVIDIA's.
+fn is_nvidia(card: &str) -> bool {
+    card.split_whitespace().nth(1).is_some_and(|id| id.starts_with("10de:"))
 }
 
 /// Whether `cards` (as [`crate::debug::cards`] lists them) pair the
@@ -288,14 +342,44 @@ mod tests {
     }
 
     #[test]
-    fn nvapi_needs_the_nvidia_driver() {
-        let tweaks = Tweaks { nvapi: true, ..Tweaks::default() };
+    fn nvapi_on_needs_the_nvidia_driver() {
+        let tweaks = Tweaks { nvapi: Nvapi::On, ..Tweaks::default() };
         assert!(tweaks.environment(&HostTools::default()).is_empty());
         let nvidia = HostTools { nvidia: Some(580), ..HostTools::default() };
         assert_eq!(
             tweaks.environment(&nvidia),
             vec![(OsString::from("PROTON_ENABLE_NVAPI"), OsString::from("1"))]
         );
+    }
+
+    #[test]
+    fn nvapi_off_is_said_out_loud_on_any_driver_and_left_to_proton_by_default() {
+        let off = Tweaks { nvapi: Nvapi::Off, ..Tweaks::default() };
+        let nouveau = HostTools { nvidia_card: true, ..HostTools::default() };
+        assert_eq!(
+            off.environment(&nouveau),
+            vec![(OsString::from("PROTON_DISABLE_NVAPI"), OsString::from("1"))]
+        );
+        let nvidia = HostTools { nvidia: Some(580), ..HostTools::default() };
+        assert!(Tweaks::default().environment(&nvidia).is_empty());
+    }
+
+    #[test]
+    fn the_old_switch_loads_without_changing_any_launch() {
+        let read = |toml: &str| toml::from_str::<Tweaks>(toml).unwrap().nvapi;
+        assert_eq!(read("nvapi = false"), Nvapi::Proton, "false never set anything");
+        assert_eq!(read("nvapi = true"), Nvapi::On);
+        assert_eq!(read(""), Nvapi::Proton);
+
+        let off = Tweaks { nvapi: Nvapi::Off, ..Tweaks::default() };
+        assert_eq!(toml::from_str::<Tweaks>(&toml::to_string(&off).unwrap()).unwrap(), off);
+    }
+
+    #[test]
+    fn a_card_on_nouveau_is_still_an_nvidia_card() {
+        assert!(is_nvidia("nouveau 10de:2503"));
+        assert!(is_nvidia("nvidia 10de:28e0"));
+        assert!(!is_nvidia("amdgpu 1002:1435"));
     }
 
     #[test]

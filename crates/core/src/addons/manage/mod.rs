@@ -52,7 +52,7 @@ pub struct Options {
 pub enum Event {
     Resolving { count: usize },
     Resolved { ok: usize, unavailable: usize },
-    Downloading { name: String },
+    Downloading { name: String, bytes: Option<u64> },
     Installed { name: String, folders: Vec<String> },
     /// Already at this version; nothing fetched.
     UpToDate { name: String },
@@ -123,7 +123,7 @@ pub enum ManageError {
     #[error("could not back up the game's settings first, so nothing was replaced")]
     Backup(#[from] BackupError),
 
-    #[error("the settings backup stopped unexpectedly: {0}")]
+    #[error("the background step installing it stopped unexpectedly: {0}")]
     Join(String),
 }
 

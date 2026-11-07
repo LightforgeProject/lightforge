@@ -45,6 +45,11 @@ pub(crate) enum Command {
     },
     /// Create or repair only the game symlink, without running Proton.
     PrefixLink,
+    /// Move the prefix, and Battle.net in it, into a folder or to another drive.
+    PrefixMove {
+        /// The folder to put it in. The Blizzard root moves it back.
+        folder: PathBuf,
+    },
     /// Download Battle.net-Setup.exe into the cache.
     BattlenetFetch,
     /// Install Battle.net unattended, then apply registry and config defaults.

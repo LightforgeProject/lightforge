@@ -104,6 +104,9 @@ pub(crate) fn proton_runner(
     use lightforge_core::prefix::ProtonRunner;
     use lightforge_core::proton;
 
+    if layout.prefix_away() {
+        return Err(lightforge_core::prefix::PrefixError::Away(layout.compat_data()).into());
+    }
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let steam = lightforge_core::steam::SteamRoot::discover();
     let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());

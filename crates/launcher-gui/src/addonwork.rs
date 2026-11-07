@@ -583,11 +583,20 @@ async fn run(
     let mut progress = Progress { total, ..Progress::default() };
     let on_event = move |event: Event| {
         match event {
-            Event::Resolving { count } => progress.line = format!("resolving {count} addons…"),
+            Event::Resolving { count } => {
+                // Dependencies add to the count once their addons are written.
+                progress.total = progress.done + count;
+                progress.line = format!("resolving {count} addons…");
+            }
             Event::Resolved { ok, unavailable } => {
                 progress.line = format!("{ok} available, {unavailable} not")
             }
-            Event::Downloading { name } => progress.line = format!("fetching {name}…"),
+            Event::Downloading { name, bytes } => {
+                progress.line = match bytes {
+                    Some(bytes) => format!("fetching {name}, {}…", crate::format::size_of(bytes)),
+                    None => format!("fetching {name}…"),
+                };
+            }
             Event::Installed { name, .. } => {
                 progress.done += 1;
                 progress.line = format!("installed {name}");

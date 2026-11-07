@@ -35,6 +35,7 @@ pub mod net;
 pub mod paths;
 pub mod portal;
 pub mod prefix;
+pub mod prefix_move;
 pub mod preflight;
 pub mod product;
 pub mod proton;

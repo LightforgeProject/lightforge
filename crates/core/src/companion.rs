@@ -78,6 +78,29 @@ fn walk(drive_c: &Path, dir: &Path, depth: usize, found: &mut BTreeSet<PathBuf>)
     }
 }
 
+/// Folders Wine, Proton and Battle.net fill every prefix with: never a tool
+/// of the user's. All 32 programs in a prefix with nothing else added are in
+/// one of these (GE-Proton11-7, client 17986, 2026-11-07).
+const PREFIX_OWN: [&str; 7] = [
+    "Battle.net",
+    "Battle.net_components",
+    "Common Files",
+    "Internet Explorer",
+    "Steam",
+    "Windows Media Player",
+    "Windows NT",
+];
+
+/// The programs in the prefix someone put there, not yet in `added`, for a
+/// program installed before, or for another game, to be found again.
+pub fn found_in_prefix(drive_c: &Path, added: &BTreeSet<PathBuf>) -> Vec<PathBuf> {
+    let theirs: BTreeSet<PathBuf> = programs(drive_c)
+        .into_iter()
+        .filter(|exe| !exe.components().any(|c| PREFIX_OWN.iter().any(|own| c.as_os_str().eq_ignore_ascii_case(own))))
+        .collect();
+    installed(added, &theirs)
+}
+
 /// Executables an installer drops beside the program, never the program.
 const NOT_THE_PROGRAM: [&str; 6] = ["unins", "uninstall", "update", "crashpad", "crashreport", "createdump"];
 
@@ -99,6 +122,32 @@ pub fn installed(before: &BTreeSet<PathBuf>, after: &BTreeSet<PathBuf>) -> Vec<P
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn found_in_the_prefix_is_only_what_someone_put_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let drive_c = dir.path();
+        for exe in [
+            "Program Files (x86)/Battle.net/Battle.net.17986/Battle.net.exe",
+            "ProgramData/Battle.net/Agent/Agent.9852/Agent.exe",
+            "ProgramData/Battle.net_components/battlenet_helpersvc/BlizzardHelper.exe",
+            "Program Files (x86)/Internet Explorer/iexplore.exe",
+            "Program Files/Windows NT/Accessories/wordpad.exe",
+            "Program Files (x86)/Steam/steam.exe",
+            "users/steamuser/AppData/Local/HearthstoneDeckTracker/HearthstoneDeckTracker.exe",
+            "users/steamuser/AppData/Local/HearthstoneDeckTracker/Update.exe",
+            "Program Files/Wowhead Client/Wowhead Client.exe",
+        ] {
+            std::fs::create_dir_all(drive_c.join(exe).parent().unwrap()).unwrap();
+            std::fs::write(drive_c.join(exe), b"MZ").unwrap();
+        }
+        let added: BTreeSet<PathBuf> = [PathBuf::from("Program Files/Wowhead Client/Wowhead Client.exe")].into();
+
+        assert_eq!(
+            found_in_prefix(drive_c, &added),
+            [PathBuf::from("users/steamuser/AppData/Local/HearthstoneDeckTracker/HearthstoneDeckTracker.exe")]
+        );
+    }
 
     fn touch(root: &Path, relative: &str) {
         let path = root.join(relative);

@@ -194,8 +194,12 @@ impl Lightforge {
                     Tweak::MangoHud => tweaks.mangohud = on,
                     Tweak::Wayland => tweaks.wayland = on,
                     Tweak::NvidiaGpu => tweaks.nvidia_gpu = on,
-                    Tweak::Nvapi => tweaks.nvapi = on,
                 });
+                Task::none()
+            }
+
+            Message::NvapiPicked(choice) => {
+                self.edit_tweaks(Scope::Product, |tweaks| tweaks.nvapi = choice);
                 Task::none()
             }
 

@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+use std::io::{BufReader, Read, Seek};
+
 use super::updates::{effective_channel, update_requests};
 use super::{io, Event, ManageError, Options, Report, Unavailable};
 use crate::addons::catalog::{Catalog, Request, Resolved};
@@ -22,7 +25,7 @@ pub async fn install_all(
     let mut report = Report::default();
 
     // A named file only for a picked version; otherwise the newest on the channel.
-    let requests: Vec<Request> = requests
+    let mut asking: Vec<Request> = requests
         .iter()
         .map(|r| Request {
             version_id: options.pinned.then(|| r.version_id.clone()).flatten(),
@@ -30,92 +33,121 @@ pub async fn install_all(
             ..r.clone()
         })
         .collect();
-
-    on_event(Event::Resolving { count: requests.len() });
-    tracing::info!(
-        "addons: resolving {} for {} (reinstall {}, pinned {})",
-        requests.len(),
-        options.flavor,
-        options.reinstall,
-        options.pinned
-    );
-    let resolved = resolve_everywhere(http, catalog, &requests, &options.flavor).await?;
-    let unavailable = resolved.iter().filter(|(_, r)| r.downloadable().is_none()).count();
-    on_event(Event::Resolved {
-        ok: resolved.len() - unavailable,
-        unavailable,
-    });
+    let mut seen: HashSet<(String, String)> =
+        asking.iter().map(|r| (r.provider.clone(), r.id.clone())).collect();
 
     std::fs::create_dir_all(&options.addons_dir).map_err(io(&options.addons_dir))?;
 
     let mut backup = options.backup.clone();
     let mut failed = None;
-    for (provider, entry) in &resolved {
-        let asked = requests.iter().find(|r| r.provider == *provider && r.id == entry.id);
-        let provider = provider.clone();
-        // A request naming a file reproduces an exact setup: it becomes a pin.
-        let pin = asked.and_then(|r| r.version_id.clone());
-        let name = entry.name.clone().unwrap_or_else(|| entry.id.clone());
-
-        if let Some(reason) = entry.unavailable_reason() {
-            tracing::warn!("addons: {name} ({provider}/{}) is unavailable: {reason}", entry.id);
-            on_event(Event::Unavailable { name: name.clone(), reason: reason.clone() });
-            report.unavailable.push(Unavailable {
-                name,
-                reason,
-                website_url: entry.website_url.clone(),
-                github: entry.github_repo(),
-            });
-            continue;
-        }
-        // A repair reinstalls even the right file.
-        if !options.reinstall && !ledger.needs_update(entry, &provider) {
-            on_event(Event::UpToDate { name: name.clone() });
-            report.up_to_date.push(name);
-            continue;
-        }
-
-        // Once per run, before something installed changes. No backup, no change.
-        if ledger.find(&provider, &entry.id).is_some() {
-            if let Some(plan) = backup.take() {
-                let made = tokio::task::spawn_blocking(move || plan.create(Reason::AddonUpdate))
-                    .await
-                    .map_err(|e| ManageError::Join(e.to_string()))
-                    .and_then(|made| made.map_err(ManageError::from));
-                // Stop here, still saving what was installed so far.
-                if let Err(e) = made {
-                    tracing::error!("addons: the settings backup before updating failed, stopping: {}", crate::error::chain(&e));
-                    failed = Some(e);
-                    break;
-                }
-            }
-        }
-
-        match fetch_and_install(http, entry, &provider, &name, pin.clone(), options, &mut ledger).await {
-            Ok(folders) => {
-                if let Some(record) = ledger.find(&provider, &entry.id) {
-                    written.push((record.clone(), pin));
-                }
-                tracing::info!("addons: installed {name} ({provider}/{}): {folders:?}", entry.id);
-                on_event(Event::Installed { name: name.clone(), folders });
-                report.installed.push(name);
-            }
+    // One pass for what was asked for, then one for each level of dependencies.
+    'passes: while !asking.is_empty() {
+        on_event(Event::Resolving { count: asking.len() });
+        tracing::info!(
+            "addons: resolving {} for {} (reinstall {}, pinned {})",
+            asking.len(),
+            options.flavor,
+            options.reinstall,
+            options.pinned
+        );
+        let resolved = match resolve_everywhere(http, catalog, &asking, &options.flavor).await {
+            Ok(resolved) => resolved,
+            // A later pass has installed things the ledger must still record.
             Err(e) => {
-                let reason = e.to_string();
-                tracing::error!(
-                    "addons: could not install {name} ({provider}/{}): {}",
-                    entry.id,
-                    crate::error::chain(&e)
-                );
+                failed = Some(e);
+                break;
+            }
+        };
+        let unavailable = resolved.iter().filter(|(_, r)| r.downloadable().is_none()).count();
+        on_event(Event::Resolved {
+            ok: resolved.len() - unavailable,
+            unavailable,
+        });
+
+        let mut required: Vec<Request> = Vec::new();
+        for (provider, entry) in &resolved {
+            let asked = asking.iter().find(|r| r.provider == *provider && r.id == entry.id);
+            let provider = provider.clone();
+            // A request naming a file reproduces an exact setup: it becomes a pin.
+            let pin = asked.and_then(|r| r.version_id.clone());
+            let name = entry.name.clone().unwrap_or_else(|| entry.id.clone());
+
+            if let Some(reason) = entry.unavailable_reason() {
+                tracing::warn!("addons: {name} ({provider}/{}) is unavailable: {reason}", entry.id);
                 on_event(Event::Unavailable { name: name.clone(), reason: reason.clone() });
                 report.unavailable.push(Unavailable {
                     name,
                     reason,
                     website_url: entry.website_url.clone(),
-                    github: None,
+                    github: entry.github_repo(),
                 });
+                continue;
+            }
+            // A repair reinstalls even the right file.
+            if !options.reinstall && !ledger.needs_update(entry, &provider) {
+                on_event(Event::UpToDate { name: name.clone() });
+                report.up_to_date.push(name);
+                continue;
+            }
+
+            // Once per run, before something installed changes. No backup, no change.
+            if ledger.find(&provider, &entry.id).is_some() {
+                if let Some(plan) = backup.take() {
+                    let made = tokio::task::spawn_blocking(move || plan.create(Reason::AddonUpdate))
+                        .await
+                        .map_err(|e| ManageError::Join(e.to_string()))
+                        .and_then(|made| made.map_err(ManageError::from));
+                    // Stop here, still saving what was installed so far.
+                    if let Err(e) = made {
+                        tracing::error!("addons: the settings backup before updating failed, stopping: {}", crate::error::chain(&e));
+                        failed = Some(e);
+                        break 'passes;
+                    }
+                }
+            }
+
+            on_event(Event::Downloading { name: name.clone(), bytes: entry.file_length });
+            match fetch_and_install(http, entry, &provider, &name, pin.clone(), options, &mut ledger).await {
+                Ok(folders) => {
+                    if let Some(record) = ledger.find(&provider, &entry.id) {
+                        written.push((record.clone(), pin));
+                    }
+                    tracing::info!("addons: installed {name} ({provider}/{}): {folders:?}", entry.id);
+                    on_event(Event::Installed { name: name.clone(), folders });
+                    report.installed.push(name);
+                    // Only what was just written: an addon sitting up to date
+                    // does not bring back a dependency the user removed.
+                    required.extend(entry.dependencies.iter().map(|id| Request {
+                        provider: provider.clone(),
+                        id: id.clone(),
+                        version_id: None,
+                        channel: None,
+                    }));
+                }
+                Err(e) => {
+                    let reason = e.to_string();
+                    tracing::error!(
+                        "addons: could not install {name} ({provider}/{}): {}",
+                        entry.id,
+                        crate::error::chain(&e)
+                    );
+                    on_event(Event::Unavailable { name: name.clone(), reason: reason.clone() });
+                    report.unavailable.push(Unavailable {
+                        name,
+                        reason,
+                        website_url: entry.website_url.clone(),
+                        github: None,
+                    });
+                }
             }
         }
+
+        asking = required
+            .into_iter()
+            .filter(|r| ledger.find(&r.provider, &r.id).is_none())
+            .filter(|r| seen.insert((r.provider.clone(), r.id.clone())))
+            .map(|r| Request { channel: Some(effective_channel(&ledger, &r, options)), ..r })
+            .collect();
     }
 
     tracing::info!(
@@ -210,9 +242,9 @@ async fn fetch_and_install(
     ledger: &mut Ledger,
 ) -> Result<Vec<String>, ManageError> {
     let url = entry.downloadable().ok_or(ManageError::NoDownload)?;
-    let package = http.get_bytes(url, install::MAX_PACKAGE_BYTES).await?;
-
-    verify_md5(&package, entry.md5.as_deref(), name)?;
+    // On the game's disk, not in memory: voice packs run to gigabytes.
+    let interface = options.addons_dir.parent().unwrap_or(&options.addons_dir);
+    let mut package = http.download_temp(url, interface, install::MAX_PACKAGE_BYTES).await?;
 
     // Folders an older build shipped and this one does not go too (unless
     // another record claims them), inside the extract's swap.
@@ -230,7 +262,19 @@ async fn fetch_and_install(
         .collect();
 
     // The package's folders, not the catalog's: removal deletes these.
-    let extracted = install::extract(&package, &options.addons_dir, &retire)?;
+    let extracted = {
+        let (md5, label, addons_dir) = (entry.md5.clone(), name.to_owned(), options.addons_dir.clone());
+        tokio::task::spawn_blocking(move || -> Result<install::Extracted, ManageError> {
+            let path = package.path().to_owned();
+            // The download shares this handle's position, left at the end.
+            package.rewind().map_err(io(&path))?;
+            verify_md5(BufReader::new(&mut package), &path, md5.as_deref(), &label)?;
+            package.rewind().map_err(io(&path))?;
+            Ok(install::extract(BufReader::new(&mut package), &addons_dir, &retire)?)
+        })
+        .await
+        .map_err(|e| ManageError::Join(e.to_string()))??
+    };
     // The user's choices carry over from the old record.
     let chosen = ledger.find(provider, &entry.id).cloned().unwrap_or_default();
     ledger.record(Record {
@@ -273,11 +317,18 @@ pub(super) fn pin_after_install(
 /// Check a package against a published MD5, when there is one.
 ///
 /// Only WoWInterface publishes one. A mismatch fails before anything is written.
-pub(super) fn verify_md5(package: &[u8], expected: Option<&str>, name: &str) -> Result<(), ManageError> {
+pub(super) fn verify_md5(
+    mut package: impl Read,
+    path: &std::path::Path,
+    expected: Option<&str>,
+    name: &str,
+) -> Result<(), ManageError> {
     let Some(expected) = expected else {
         return Ok(());
     };
-    let actual = format!("{:x}", md5::compute(package));
+    let mut context = md5::Context::new();
+    std::io::copy(&mut package, &mut context).map_err(io(path))?;
+    let actual = format!("{:x}", context.finalize());
     if !actual.eq_ignore_ascii_case(expected) {
         return Err(ManageError::Checksum {
             name: name.to_owned(),
