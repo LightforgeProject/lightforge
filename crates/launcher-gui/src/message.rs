@@ -201,6 +201,10 @@ pub(crate) enum Message {
     CompanionAutoStart(usize, bool),
     /// Off the list only: the program stays in the prefix.
     CompanionRemove(usize),
+    /// Look through the prefix for programs to add.
+    CompanionFind,
+    /// The program at this index now goes with another game.
+    CompanionMoved(usize, ProductCode),
     /// The play card's region dropdown: the login server a direct launch
     /// signs in to.
     LoginRegionPicked(lightforge_core::portal::Portal),

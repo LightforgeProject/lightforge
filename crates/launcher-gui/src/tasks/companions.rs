@@ -53,6 +53,16 @@ pub async fn installed_programs(layout: Layout, before: BTreeSet<PathBuf>) -> Ve
     .unwrap_or_default()
 }
 
+/// Programs already in the prefix and not on the page yet.
+pub async fn programs_in_prefix(layout: Layout, added: BTreeSet<PathBuf>) -> Vec<PathBuf> {
+    tokio::task::spawn_blocking(move || {
+        let drive_c = drive_c(&layout);
+        companion::found_in_prefix(&drive_c, &added).into_iter().map(|exe| drive_c.join(exe)).collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
 /// Start a companion beside whatever runs in the prefix; not waited on.
 pub async fn launch_companion(layout: Layout, companion: Companion) -> Result<String, Problem> {
     tokio::task::spawn_blocking(move || {

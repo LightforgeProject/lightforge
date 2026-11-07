@@ -98,6 +98,26 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::CompanionFind => {
+                let drive_c = self.layout.prefix().join("drive_c");
+                let added = self
+                    .config
+                    .companions
+                    .iter()
+                    .map(|c| c.path(&drive_c).strip_prefix(&drive_c).map(Path::to_path_buf).unwrap_or_else(|_| c.exe.clone()))
+                    .collect();
+                self.companion_install = Some(CompanionInstall { game: self.companion_target(), stage: CompanionStage::Looking });
+                Task::perform(tasks::programs_in_prefix(self.layout.clone(), added), Message::CompanionCandidates)
+            }
+
+            Message::CompanionMoved(at, game) => {
+                if let Some(companion) = self.config.companions.get_mut(at) {
+                    companion.game = game;
+                    self.save_config();
+                }
+                Task::none()
+            }
+
             Message::CompanionRemove(at) => {
                 if at < self.config.companions.len() {
                     let gone = self.config.companions.remove(at);
