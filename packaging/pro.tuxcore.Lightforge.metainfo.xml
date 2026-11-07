@@ -78,6 +78,17 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.0.0-beta.11" date="2026-11-07">
+      <description>
+        <p>
+          A fix update from GitHub issues and bug reports: addons now install
+          the addons they need, big voice packs install, and downloads no
+          longer write beside Battle.net. Adds moving the Wine prefix to
+          another drive and a Battle.net repair that keeps your games.
+        </p>
+      </description>
+      <url>https://github.com/LightforgeProject/lightforge/blob/main/RELEASES.md</url>
+    </release>
     <release version="1.0.0-beta.10" date="2026-11-04">
       <description>
         <p>

@@ -3,7 +3,7 @@
 # The one line a release edits is `upstream_version`: `Version` is derived from
 # it, because rpm orders `1.0.0-beta.5` after `1.0.0` and `1.0.0~beta.5`
 # before it. `make check-spec` fails while the two disagree with Cargo.toml.
-%global upstream_version 1.0.0-beta.10
+%global upstream_version 1.0.0-beta.11
 
 # Fedora's CFLAGS carry `-flto=auto`, and `ring` and `zstd-sys` compile C of
 # their own: the objects come out as GCC bitcode and the link fails with a
@@ -95,6 +95,9 @@ cargo test --release --locked --workspace
 %{_datadir}/icons/hicolor/*/apps/pro.tuxcore.Lightforge.*
 
 %changelog
+* Sat Nov 07 2026 Kenny <onlyusemycontroler@gmail.com> - 1.0.0~beta.11-1
+- Lightforge 1.0.0-beta.11; release notes are in RELEASES.md
+
 * Wed Nov 04 2026 Kenny <onlyusemycontroler@gmail.com> - 1.0.0~beta.10-1
 - Lightforge 1.0.0-beta.10; release notes are in RELEASES.md
 

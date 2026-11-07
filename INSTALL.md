@@ -11,12 +11,12 @@ Everything below installs the same two binaries, the menu entry and the icons.
 
 Download `lightforge_<version>_amd64.deb` from the
 [releases page](https://github.com/LightforgeProject/lightforge/releases).
-The file name says `1.0.0.beta.10` because GitHub doesn't allow a `~` in an
+The file name says `1.0.0.beta.11` because GitHub doesn't allow a `~` in an
 asset name. The version inside the package, which `apt` reads and sorts by,
-is `1.0.0~beta.10`:
+is `1.0.0~beta.11`:
 
 ```bash
-sudo apt install ./lightforge_1.0.0.beta.10-1_amd64.deb
+sudo apt install ./lightforge_1.0.0.beta.11-1_amd64.deb
 ```
 
 It needs glibc 2.35 or newer: Ubuntu 22.04, Debian 12 or anything later.
@@ -42,7 +42,7 @@ Without the repository, download `lightforge-<version>.x86_64.rpm` from the
 and install it by hand. You then download each new release yourself:
 
 ```bash
-sudo dnf install ./lightforge-1.0.0.beta.10-1.x86_64.rpm
+sudo dnf install ./lightforge-1.0.0.beta.11-1.x86_64.rpm
 ```
 
 The same file installs on openSUSE with `sudo zypper install`. Like the
