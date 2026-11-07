@@ -332,9 +332,12 @@ pub fn query_from_url(input: &str) -> Option<(Provider, String)> {
         },
         // github.com/<owner>/<repo>, `.git` from a clone URL stripped.
         "github.com" => match segments.as_slice() {
-            [owner, repo, ..] => {
+            [owner, repo, rest @ ..] => {
                 let repo = repo.strip_suffix(".git").unwrap_or(repo);
-                Some((Provider::GitHub, format!("{owner}/{repo}")))
+                Some((Provider::GitHub, match github_component(rest, params) {
+                    Some(component) => format!("{owner}/{repo}@{component}"),
+                    None => format!("{owner}/{repo}"),
+                }))
             }
             _ => None,
         },
@@ -358,23 +361,43 @@ pub fn query_from_url(input: &str) -> Option<(Provider, String)> {
     }
 }
 
-/// `owner/repo` typed exactly, offered as a direct GitHub result.
+/// Which of a repository's addons a link past `owner/repo` names, where one
+/// repository ships several, each tagged `<component>/<version>`
+/// (`rusty-key/spoken-wow`: `quests-audio-deDE/v1.0.1`).
+fn github_component<'a>(rest: &[&'a str], params: &'a str) -> Option<&'a str> {
+    match rest {
+        ["releases", "tag", component, _, ..] | ["releases", "download", component, _, _, ..] => Some(component),
+        ["releases"] => params
+            .split('&')
+            .find_map(|param| param.strip_prefix("q="))
+            .map(|q| q.split_once('/').map_or(q, |(component, _version)| component))
+            .filter(|q| !q.is_empty() && q.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))),
+        _ => None,
+    }
+}
+
+/// `owner/repo` or `owner/repo@component` typed exactly, offered as a direct
+/// GitHub result.
 fn github_direct(query: &str) -> Option<Listing> {
     let (owner, repo) = query.split_once('/')?;
+    let (repo, component) = match repo.split_once('@') {
+        Some((repo, component)) => (repo, Some(component)),
+        None => (repo, None),
+    };
     let ok = |part: &str| {
         !part.is_empty()
             && part
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
     };
-    (ok(owner) && ok(repo)).then(|| Listing {
+    (ok(owner) && ok(repo) && component.is_none_or(ok)).then(|| Listing {
         provider: Provider::GitHub,
         id: query.to_owned(),
         name: query.to_owned(),
         author: Some(owner.to_owned()),
         version: None,
         downloads: 0,
-        website_url: Some(format!("https://github.com/{query}")),
+        website_url: Some(format!("https://github.com/{owner}/{repo}")),
         opted_out: false,
         github: None,
     })
@@ -509,6 +532,25 @@ mod tests {
             at("https://github.com/Stanzilla/AdvancedInterfaceOptions.git"),
             Some((Provider::GitHub, "Stanzilla/AdvancedInterfaceOptions".to_owned()))
         );
+
+        // One addon of a repository that ships several.
+        let spoken = Some((Provider::GitHub, "rusty-key/spoken-wow@quests-audio-deDE".to_owned()));
+        assert_eq!(at("https://github.com/rusty-key/spoken-wow/releases?q=quests-audio-deDE"), spoken);
+        assert_eq!(at("https://github.com/rusty-key/spoken-wow/releases/tag/quests-audio-deDE/v1.0.1"), spoken);
+        assert_eq!(
+            at("https://github.com/rusty-key/spoken-wow/releases/download/quests-audio-deDE/v1.0.1/a.zip"),
+            spoken
+        );
+        // A plain tag, a file in one, or a search that is not a name are the repository.
+        for plain in [
+            "https://github.com/WeakAuras/WeakAuras2/releases/tag/5.22.1",
+            "https://github.com/WeakAuras/WeakAuras2/releases/download/5.22.1/a.zip",
+            "https://github.com/WeakAuras/WeakAuras2/releases?q=two+words",
+            "https://github.com/WeakAuras/WeakAuras2/releases",
+            "https://github.com/WeakAuras/WeakAuras2/tree/main",
+        ] {
+            assert_eq!(at(plain), Some((Provider::GitHub, "WeakAuras/WeakAuras2".to_owned())), "{plain}");
+        }
 
         // The title in a WoWInterface URL is decoration and changes; the id
         // does not.

@@ -68,6 +68,7 @@ async fn resolve_parses_every_outcome() {
         "ids are strings on the wire, including the numeric ones"
     );
     assert_eq!(ok.file_length, Some(1_234_567), "needed to show a size");
+    assert_eq!(ok.dependencies, ["14328"], "the projects to install beside it");
     assert_eq!(
         ok.md5.as_deref(),
         Some("0123456789abcdef0123456789abcdef"),

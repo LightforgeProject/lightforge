@@ -3,6 +3,9 @@
     {
       "author_url": "https://curseforge.example/members/author-one",
       "channel": "stable",
+      "dependencies": [
+        "14328"
+      ],
       "download_url": "https://edge.forgecdn.example/BigWigs.zip",
       "file_date": "2026-09-01T00:00:00Z",
       "file_id": "800800",

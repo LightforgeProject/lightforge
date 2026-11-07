@@ -537,7 +537,7 @@ fn print_addon_event(event: &lightforge_core::addons::manage::Event) {
         Event::Resolved { ok, unavailable } => {
             println!("resolved        {ok} available, {unavailable} not\n")
         }
-        Event::Downloading { name } => println!("  fetching {name}"),
+        Event::Downloading { name, .. } => println!("  fetching {name}"),
         Event::Installed { name, folders } => {
             println!("ok  {:<44} {}", truncate(name, 44), folders.join(", "))
         }

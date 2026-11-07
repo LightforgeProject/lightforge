@@ -10,7 +10,7 @@
 //! 2. **Only what the ledger records is ever deleted.**
 
 use std::ffi::OsString;
-use std::io::{Cursor, Read};
+use std::io::{Read, Seek};
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -18,11 +18,13 @@ use serde::{Deserialize, Serialize};
 use super::catalog::Resolved;
 use crate::product::ProductCode;
 
-/// Refuse a package that expands beyond this (zip bombs); no real addon comes close.
-pub const MAX_UNCOMPRESSED: u64 = 512 * 1024 * 1024;
+/// Refuse a package that expands beyond this (zip bombs). Voice packs are the
+/// real ceiling and their audio barely compresses.
+pub const MAX_UNCOMPRESSED: u64 = 8 * 1024 * 1024 * 1024;
 
 /// Refuse a package download past this, half of [`MAX_UNCOMPRESSED`].
-pub const MAX_PACKAGE_BYTES: usize = 256 * 1024 * 1024;
+/// `YAVO_Data_Forever`, the largest seen on 2026-11-07, is 1752 MiB.
+pub const MAX_PACKAGE_BYTES: usize = 4 * 1024 * 1024 * 1024;
 
 /// What Lightforge installed, so it can be updated and removed again. Kept in
 /// Lightforge's data directory, out of the game's.
@@ -260,19 +262,18 @@ pub struct Extracted {
 /// Replaces whole folders (a stale `.lua` still loads); `retire` names extra
 /// folders to remove. Staged beside `AddOns`, then swapped in by rename, so a
 /// full disk leaves the old addon and a failed rename is undone.
-pub fn extract(package: &[u8], addons_dir: &Path, retire: &[String]) -> Result<Extracted, InstallError> {
+pub fn extract(package: impl Read + Seek, addons_dir: &Path, retire: &[String]) -> Result<Extracted, InstallError> {
     extract_within(package, addons_dir, retire, MAX_UNCOMPRESSED)
 }
 
 /// [`extract`] with the size limit as a parameter, for tests.
 fn extract_within(
-    package: &[u8],
+    package: impl Read + Seek,
     addons_dir: &Path,
     retire: &[String],
     limit: u64,
 ) -> Result<Extracted, InstallError> {
-    let mut archive =
-        zip::ZipArchive::new(Cursor::new(package)).map_err(InstallError::Archive)?;
+    let mut archive = zip::ZipArchive::new(package).map_err(InstallError::Archive)?;
 
     // Validate everything before writing anything.
     let mut planned: Vec<(usize, PathBuf, String)> = Vec::new();
@@ -566,6 +567,7 @@ mod tests {
     }
 
     use super::*;
+    use std::io::Cursor;
     use std::io::Write;
     use zip::write::SimpleFileOptions;
 
@@ -610,7 +612,7 @@ mod tests {
 
         // The declared total is 2 bytes, well under the limit; only the
         // bytes actually written can catch this.
-        let result = extract_within(&package, &addons, &[], 4 * 1024);
+        let result = extract_within(Cursor::new(&package), &addons, &[], 4 * 1024);
         assert!(matches!(result, Err(InstallError::TooLarge { limit: 4096 })), "{result:?}");
         assert!(!addons.join("Bomb").exists(), "nothing half-written is left installed");
     }
@@ -632,7 +634,7 @@ mod tests {
         ]);
         let dir = tmpdir("multi");
 
-        let extracted = extract(&package, &dir, &[]).unwrap();
+        let extracted = extract(Cursor::new(&package), &dir, &[]).unwrap();
         assert_eq!(extracted.folders, vec!["BigWigs", "BigWigs_Options"]);
         assert_eq!(extracted.files, 3);
         assert!(dir.join("BigWigs/BigWigs.toc").is_file());
@@ -646,7 +648,7 @@ mod tests {
         std::fs::write(dir.join("BigWigs/old.lua"), b"-- old").unwrap();
         let package = zip_with(&[("bigwigs/bigwigs.toc", b"## Title: BigWigs")]);
 
-        let extracted = extract(&package, &dir, &[]).unwrap();
+        let extracted = extract(Cursor::new(&package), &dir, &[]).unwrap();
 
         assert_eq!(extracted.folders, ["bigwigs"]);
         let names: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
@@ -662,7 +664,7 @@ mod tests {
             ("bigwigs/core.lua", b"-- core"),
         ]);
 
-        let extracted = extract(&package, &dir, &[]).unwrap();
+        let extracted = extract(Cursor::new(&package), &dir, &[]).unwrap();
 
         assert_eq!(extracted.folders, ["BigWigs"]);
         assert!(dir.join("BigWigs/BigWigs.toc").is_file());
@@ -678,7 +680,7 @@ mod tests {
             ("../../../evil.txt", b"pwned"),
         ]);
 
-        let err = extract(&package, &dir, &[]).unwrap_err();
+        let err = extract(Cursor::new(&package), &dir, &[]).unwrap_err();
         assert!(
             matches!(err, InstallError::UnsafePath(_)),
             "expected a path refusal, got {err:?}"
@@ -691,12 +693,12 @@ mod tests {
     #[test]
     fn an_update_replaces_a_folder_rather_than_merging_into_it() {
         let dir = tmpdir("replace");
-        extract(&zip_with(&[("Addon/old.lua", b"old"), ("Addon/keep.toc", b"v1")]), &dir, &[]).unwrap();
+        extract(Cursor::new(zip_with(&[("Addon/old.lua", b"old"), ("Addon/keep.toc", b"v1")])), &dir, &[]).unwrap();
         assert!(dir.join("Addon/old.lua").is_file());
 
         // The new version dropped old.lua. A stale file left behind is worse
         // than a missing one: it still loads.
-        extract(&zip_with(&[("Addon/keep.toc", b"v2")]), &dir, &[]).unwrap();
+        extract(Cursor::new(zip_with(&[("Addon/keep.toc", b"v2")])), &dir, &[]).unwrap();
         assert!(!dir.join("Addon/old.lua").exists());
         assert_eq!(std::fs::read(dir.join("Addon/keep.toc")).unwrap(), b"v2");
     }
@@ -719,12 +721,12 @@ mod tests {
     #[test]
     fn a_failed_write_leaves_the_installed_addon_untouched() {
         let dir = addons_dir("failed-write");
-        extract(&zip_with(&[("Addon/Addon.toc", b"v1"), ("Addon/core.lua", b"v1")]), &dir, &[]).unwrap();
+        extract(Cursor::new(zip_with(&[("Addon/Addon.toc", b"v1"), ("Addon/core.lua", b"v1")])), &dir, &[]).unwrap();
 
         // `x` as a file and then as a folder: the second write fails halfway
         // through the package, the way a full disk would.
         let broken = zip_with(&[("Addon/Addon.toc", b"v2"), ("Addon/x", b"file"), ("Addon/x/y", b"dir")]);
-        assert!(matches!(extract(&broken, &dir, &[]), Err(InstallError::Io { .. })));
+        assert!(matches!(extract(Cursor::new(&broken), &dir, &[]), Err(InstallError::Io { .. })));
 
         assert_eq!(std::fs::read(dir.join("Addon/Addon.toc")).unwrap(), b"v1");
         assert_eq!(std::fs::read(dir.join("Addon/core.lua")).unwrap(), b"v1");
@@ -736,7 +738,7 @@ mod tests {
         let client = tmpdir("no-game").join("_retail_");
         let dir = client.join("Interface").join("AddOns");
 
-        let result = extract(&zip_with(&[("Addon/Addon.toc", b"v1")]), &dir, &[]);
+        let result = extract(Cursor::new(zip_with(&[("Addon/Addon.toc", b"v1")])), &dir, &[]);
 
         assert!(matches!(result, Err(InstallError::GameNotInstalled(_))));
         assert!(!client.exists());
@@ -745,12 +747,12 @@ mod tests {
     #[test]
     fn a_retired_folder_goes_in_the_same_swap() {
         let dir = addons_dir("retire");
-        extract(&zip_with(&[("Main/Main.toc", b"v1"), ("Main_Old/Main_Old.toc", b"v1")]), &dir, &[])
+        extract(Cursor::new(zip_with(&[("Main/Main.toc", b"v1"), ("Main_Old/Main_Old.toc", b"v1")])), &dir, &[])
             .unwrap();
         std::fs::create_dir_all(dir.join("Someone_Else")).unwrap();
 
         let retire = ["Main".to_owned(), "Main_Old".to_owned()];
-        extract(&zip_with(&[("Main/Main.toc", b"v2")]), &dir, &retire).unwrap();
+        extract(Cursor::new(zip_with(&[("Main/Main.toc", b"v2")])), &dir, &retire).unwrap();
 
         assert_eq!(std::fs::read(dir.join("Main/Main.toc")).unwrap(), b"v2");
         assert!(!dir.join("Main_Old").exists());
@@ -763,7 +765,7 @@ mod tests {
         let dir = addons_dir("retire-unsafe");
         let package = zip_with(&[("Main/Main.toc", b"v1")]);
         for bad in ["../Elsewhere", "Main/Sub"] {
-            let err = extract(&package, &dir, &[bad.to_owned()]).unwrap_err();
+            let err = extract(Cursor::new(&package), &dir, &[bad.to_owned()]).unwrap_err();
             assert!(matches!(err, InstallError::UnsafePath(_)), "{bad}: {err:?}");
         }
         assert!(!dir.join("Main").exists());
@@ -773,13 +775,13 @@ mod tests {
     fn a_package_with_only_top_level_files_has_no_addon_to_install() {
         let dir = tmpdir("flat");
         let package = zip_with(&[("readme.txt", b"hello")]);
-        assert!(matches!(extract(&package, &dir, &[]), Err(InstallError::NoAddonFolders)));
+        assert!(matches!(extract(Cursor::new(&package), &dir, &[]), Err(InstallError::NoAddonFolders)));
     }
 
     #[test]
     fn removal_deletes_only_what_the_ledger_recorded() {
         let dir = tmpdir("remove");
-        extract(&zip_with(&[("Mine/Mine.toc", b"x"), ("Mine_Extra/Mine_Extra.toc", b"y")]), &dir, &[])
+        extract(Cursor::new(zip_with(&[("Mine/Mine.toc", b"x"), ("Mine_Extra/Mine_Extra.toc", b"y")])), &dir, &[])
             .unwrap();
         std::fs::create_dir_all(dir.join("HandInstalled")).unwrap();
         std::fs::write(dir.join("HandInstalled/thing.toc"), b"not ours").unwrap();
