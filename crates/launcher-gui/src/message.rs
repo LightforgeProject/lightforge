@@ -253,8 +253,11 @@ pub(crate) enum Message {
     Tweak(Scope, Tweak, bool),
     /// The environment-variable editor was typed in.
     EnvEdit(Scope, iced::widget::text_editor::Action),
-    /// Typing in the env editor paused; the number says after which edit.
+    /// Typing in the env editor or the launch options paused; the number says
+    /// after which edit.
     EnvSettled(u64),
+    /// The launch options in Game Settings were typed in.
+    LaunchOptionsTyped(String),
     /// Typing in the folder to move the Wine prefix to.
     PrefixFolderTyped(String),
     BrowsePrefixFolder,

@@ -140,7 +140,13 @@ impl Lightforge {
                         // Minimized only now, not when the hand-off started: the
                         // client's window and its sign-in are meant to be seen.
                         // The client stays up, so the prefix is not settled after.
-                        Task::batch([self.game_up(game, None), self.minimize_if_asked()])
+                        // Battle.net started the game, so the launch options
+                        // cannot go around it: they run beside it, `%command%`
+                        // waiting for it. Read before `game_up` takes the code.
+                        let code = self.launching.clone().unwrap_or_else(|| self.selected.code.clone());
+                        let line = self.config.product(&code).map(|p| p.profile.launch_options.clone()).unwrap_or_default();
+                        let beside = Task::future(tasks::run_beside(line, code, game.clone())).discard();
+                        Task::batch([self.game_up(game, None), self.minimize_if_asked(), beside])
                     }
                     // Closed while signing in: nothing to hand off to.
                     Ok(tasks::Handoff::ClientClosed) => {

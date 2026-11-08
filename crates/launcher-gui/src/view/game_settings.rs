@@ -16,6 +16,7 @@ impl Lightforge {
             section("Performance", self.performance_group()),
             section("Graphics", self.graphics_group(settings)),
             section("Environment", self.environment_group(Scope::Product)),
+            section("Launch options", self.launch_options_group()),
             section("Game", self.game_group(settings)),
             section("Proton", self.proton_group(settings)),
             section("Addons", self.addons_group()),
@@ -270,6 +271,44 @@ impl Lightforge {
                  with # are ignored.",
             )
             .map(Element::from),
+        );
+
+        setting_card(body)
+    }
+
+    /// Steam-style launch options: one line, `%command%` where the game goes.
+    fn launch_options_group(&self) -> Element<'_, Message> {
+        use lightforge_core::launch_options::script;
+
+        let line = self.config.product(&self.selected.code).map_or("", |p| p.profile.launch_options.as_str());
+        // Said whatever the hints: that the line runs beside such a game, not
+        // around it, is the surprise here.
+        let battle_net = match self.kind_of(&self.selected.code) {
+            Kind::HandOff => "Battle.net starts this game, so the line runs once the game is up and \
+                              %command% waits for it to exit.",
+            Kind::Managed => "When Battle.net starts the game, the line runs once the game is up and \
+                              %command% waits for it to exit.",
+        };
+
+        let mut body = column![
+            muted("A command line around the game, as on Steam: %command% is the game.".to_owned(), theme::LABEL),
+            clickable(
+                "launch options",
+                text_input("kcalc & %command%; pkill -x kcalc", line)
+                    .on_input(Message::LaunchOptionsTyped)
+                    .style(theme::field)
+                    .size(theme::BODY)
+                    .padding(theme::SM),
+            ),
+        ]
+        .spacing(theme::SM);
+
+        if !line.trim().is_empty() && script(line).is_none() {
+            body = body.push(text("Not used: it needs %command% where the game goes").size(theme::LABEL).color(theme::ERROR));
+        }
+        body = body.push(muted(battle_net.to_owned(), theme::LABEL)).extend(
+            self.hint("Runs through sh on this computer, not in the game's prefix, around every wrapper of Lightforge's own.")
+                .map(Element::from),
         );
 
         setting_card(body)
