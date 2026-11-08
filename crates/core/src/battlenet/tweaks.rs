@@ -315,6 +315,26 @@ pub fn configure_accounts(
     Ok(changed)
 }
 
+/// Whether closing the client's window sends it to the tray rather than
+/// quitting it: `HideOnClose` in every account config, as the client last
+/// wrote them. None exist before the first sign-in, and the client's default
+/// is to quit.
+pub fn closes_to_tray(layout: &Layout, user: &str) -> bool {
+    let Some(entries) = layout.battle_net_config(user).parent().and_then(|dir| std::fs::read_dir(dir).ok()) else {
+        return false;
+    };
+    let configs = account_configs(entries);
+    !configs.is_empty()
+        && configs.iter().all(|path| {
+            std::fs::read_to_string(path)
+                .ok()
+                .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+                .is_some_and(|config| {
+                    config["User"]["Client"]["HideOnClose"].as_str().is_some_and(|value| value.eq_ignore_ascii_case("true"))
+                })
+        })
+}
+
 /// Every `<hash>.config` in the directory, excluding the global config.
 fn account_configs(entries: std::fs::ReadDir) -> Vec<PathBuf> {
     entries

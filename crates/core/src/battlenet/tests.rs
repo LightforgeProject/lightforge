@@ -227,6 +227,51 @@ fn the_session_log_is_the_one_that_signed_in_not_the_second_invocation() {
 }
 
 #[test]
+fn a_launch_cut_off_before_the_exe_started_is_told_apart() {
+    let dir = scratch("cut-off-launch");
+    let layout = Layout::with_root(&dir);
+    let logs = layout.battle_net_logs("steamuser");
+    std::fs::create_dir_all(&logs).unwrap();
+    let client = logs.join("battle.net-20261108T091218.950084.log");
+    std::fs::write(&client, format!("I [BNLogin] {SIGNED_IN}.\r\n")).unwrap();
+    let session = SessionLog::find(&layout, "steamuser").unwrap();
+
+    // GlitchTip #43 stopped here: taken, then the client was gone.
+    let mut text = std::fs::read_to_string(&client).unwrap();
+    text.push_str("I 2026-11-08 09:12:30.349562 [GameLaunchController] {Main} LaunchBinary: uid=wowf selectedRegion=EU binaryType=game\r\n");
+    std::fs::write(&client, text).unwrap();
+    assert!(session.launch_taken(Duration::ZERO));
+    assert!(!session.game_launched());
+
+    let mut text = std::fs::read_to_string(&client).unwrap();
+    text.push_str("I 2026-11-08 09:12:30.730179 [InstallManager] {Main} Launched H:/World of Warcraft/_forever_/Wow.exe with args: -launcherlogin -uid wowf, pid: 1752\r\n");
+    std::fs::write(&client, text).unwrap();
+    assert!(session.game_launched());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn closing_goes_to_the_tray_only_where_every_account_hides_on_close() {
+    let dir = scratch("closes-to-tray");
+    let layout = Layout::with_root(&dir);
+    let bnet = layout.battle_net_config("steamuser").parent().unwrap().to_path_buf();
+    std::fs::create_dir_all(&bnet).unwrap();
+    std::fs::write(layout.battle_net_config("steamuser"), r#"{"Client":{"AutoLogin":"true"}}"#).unwrap();
+
+    // Before the first sign-in there is no account config, and the client quits.
+    assert!(!closes_to_tray(&layout, "steamuser"));
+
+    std::fs::write(bnet.join("1c858370.config"), r#"{"User":{"Client":{"HideOnClose":"true"}}}"#).unwrap();
+    assert!(closes_to_tray(&layout, "steamuser"));
+
+    std::fs::write(bnet.join("beef0001.config"), r#"{"User":{"Client":{"HideOnClose":"false"}}}"#).unwrap();
+    assert!(!closes_to_tray(&layout, "steamuser"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn game_uids_are_client_family_ids_not_tact_codes() {
     use super::*;
 

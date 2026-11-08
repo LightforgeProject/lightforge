@@ -269,7 +269,9 @@ pub(crate) fn start_client(
 ) -> Result<std::time::SystemTime, Problem> {
     use lightforge_core::battlenet::{self, Launch};
 
-    let _ = battlenet::configure(layout, user, &battlenet::window_state_tweaks(in_tray));
+    if let Err(e) = battlenet::configure(layout, user, &battlenet::window_state_tweaks(in_tray)) {
+        tracing::warn!("Battle.net may not start {}: {}", if in_tray { "in the tray" } else { "as a window" }, chain(&e));
+    }
     // The preference is only read on an autostart.
     let how = match in_tray {
         true => Launch::Autostart,
@@ -340,11 +342,14 @@ pub async fn launch_via_battle_net(
         }
 
         // The client raises its window for the command until the game is up;
-        // one nobody could see before goes straight back to the tray.
-        let tray = match battlenet::ClientWindows::connect(preflight::client_pids(&layout)) {
-            Ok(windows) if windows.any_shown().is_ok_and(|shown| !shown) => Some(windows),
-            Ok(_) => None,
-            Err(e) => {
+        // one nobody could see before goes straight back to the tray. Only
+        // with `HideOnClose` as the client last wrote it: without, the close
+        // quits the client in the middle of the launch (GlitchTip #43).
+        let closes_to_tray = battlenet::closes_to_tray(&layout, &user);
+        let tray = match closes_to_tray.then(|| battlenet::ClientWindows::connect(preflight::client_pids(&layout))) {
+            Some(Ok(windows)) if windows.any_shown().is_ok_and(|shown| !shown) => Some(windows),
+            Some(Ok(_)) | None => None,
+            Some(Err(e)) => {
                 tracing::info!("Battle.net's window stays as the client leaves it: {}", chain(&e));
                 None
             }
@@ -375,11 +380,18 @@ pub async fn launch_via_battle_net(
             });
         }
 
-        let handoff = match preflight::wait_for_game_start(&layout, &before, HANDOFF_TIMEOUT) {
+        // The client exits by itself once the game is up, but only after
+        // logging the exe it started. Gone without that, it died mid-launch.
+        let cut_off = || !preflight::client_running(&layout) && session.as_ref().is_some_and(|log| !log.game_launched());
+        let handoff = match preflight::wait_for_game_start(&layout, &before, HANDOFF_TIMEOUT, cut_off) {
             Some(game) => Handoff::Playing(game),
+            None if cut_off() => Handoff::ClientClosed,
             None => Handoff::NothingStarted,
         };
         match &handoff {
+            Handoff::ClientClosed => {
+                tracing::warn!("Battle.net hand-off for {}: the client quit before it started the game", code.as_str());
+            }
             Handoff::NothingStarted => {
                 tracing::warn!("Battle.net hand-off for {}: no game started within {HANDOFF_TIMEOUT:?}", code.as_str());
             }
@@ -411,7 +423,9 @@ pub async fn install_via_battle_net(
 
         // Normal window, whatever a launch would have chosen: the next thing
         // that happens is a person choosing where to install.
-        let _ = battlenet::configure(&layout, &user, &battlenet::window_state_tweaks(false));
+        if let Err(e) = battlenet::configure(&layout, &user, &battlenet::window_state_tweaks(false)) {
+            tracing::warn!("Battle.net may not start as a window: {}", chain(&e));
+        }
 
         let child = battlenet::launch(&runner, &layout, &Launch::InstallFlow { uid })
             .map_err(|e| Problem::of(&e))?;
@@ -431,7 +445,8 @@ pub enum Handoff {
     /// The client never reported signing in. Someone has to look at it,
     /// which means being told where it is when it was started minimized.
     NeedsAttention { minimized: bool },
-    /// It was there and then it was not, closed while we waited.
+    /// It was there and then it was not: closed while we waited, or quit
+    /// after taking the launch but before starting the game.
     ClientClosed,
     /// It quit on the launch to switch to a version it had just updated to.
     ClientUpdated,
@@ -596,7 +611,9 @@ pub async fn open_battle_net(
 
         let runner = client_runner(&layout, &code)?;
         // A normal window: the client itself was asked for.
-        let _ = battlenet::configure(&layout, &user, &battlenet::window_state_tweaks(false));
+        if let Err(e) = battlenet::configure(&layout, &user, &battlenet::window_state_tweaks(false)) {
+            tracing::warn!("Battle.net may not start as a window: {}", chain(&e));
+        }
         reap_later(battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| Problem::of(&e))?);
         Ok("Battle.net opening".to_owned())
     })

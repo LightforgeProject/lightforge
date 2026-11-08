@@ -10,8 +10,10 @@ use crate::paths::Layout;
 use crate::product::ProductCode;
 use crate::proton::ProtonRelease;
 
-/// Where crash dumps and error logs land inside a WoW install.
-const ERROR_DIRS: &[&str] = &["Errors", "Logs", "Crashes"];
+/// Where crash dumps and error reports land inside a WoW install. Not
+/// `Logs`: the client writes `Connection.log` and others there every session,
+/// and a clean one was reported as the crash (GlitchTip #40, #43).
+const ERROR_DIRS: &[&str] = &["Errors", "Crashes"];
 
 /// Everything the bundle reports about one machine.
 #[derive(Debug, Clone, Default)]
@@ -444,9 +446,9 @@ mod tests {
         let dir = std::env::temp_dir().join("lightforge-debug-logs");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("Errors")).unwrap();
-        std::fs::create_dir_all(dir.join("Logs")).unwrap();
+        std::fs::create_dir_all(dir.join("Crashes")).unwrap();
 
-        std::fs::write(dir.join("Logs/old.log"), "old\n").unwrap();
+        std::fs::write(dir.join("Crashes/old.dmp"), "old\n").unwrap();
         let body: String = (0..100).map(|i| format!("line {i}\n")).collect();
         std::fs::write(dir.join("Errors/crash.txt"), &body).unwrap();
 
@@ -456,6 +458,16 @@ mod tests {
         assert_eq!(log.tail.lines().count(), TAIL_LINES);
         assert!(log.tail.contains("line 99"));
         assert!(!log.tail.contains("line 10\n"));
+    }
+
+    #[test]
+    fn a_session_log_is_not_a_crash_log() {
+        let dir = std::env::temp_dir().join("lightforge-debug-session-log");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Logs")).unwrap();
+        std::fs::write(dir.join("Logs/Connection.log"), "[N][Connection] Client disconnected\n").unwrap();
+
+        assert!(newest_log(&dir).is_none());
     }
 
     #[test]

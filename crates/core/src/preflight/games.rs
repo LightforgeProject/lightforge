@@ -176,11 +176,13 @@ pub fn stop_game(layout: &Layout, pid: u32, grace: Duration) -> Option<Stopped> 
 /// `before` is [`games_running`] from before the hand-off, so a game already
 /// playing does not count. `None` means nothing started in time, usually a
 /// client at its login screen. Needed because the client usually exits once
-/// the game is up (`GameLaunchWindowBehavior: 2`).
+/// the game is up (`GameLaunchWindowBehavior: 2`). `cut_off` ends the wait
+/// early, asked once per poll after the scan.
 pub fn wait_for_game_start(
     layout: &Layout,
     before: &[GameProcess],
     appear_within: Duration,
+    cut_off: impl Fn() -> bool,
 ) -> Option<GameProcess> {
     let known: HashSet<u32> = before.iter().map(|p| p.pid).collect();
     let deadline = Instant::now() + appear_within;
@@ -189,7 +191,7 @@ pub fn wait_for_game_start(
         if let Some(found) = games_running(layout).into_iter().find(|p| !known.contains(&p.pid)) {
             return Some(found);
         }
-        if Instant::now() >= deadline {
+        if cut_off() || Instant::now() >= deadline {
             return None;
         }
         std::thread::sleep(HANDOFF_POLL);

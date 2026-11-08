@@ -121,6 +121,10 @@ pub(super) const GAME_STOPPED: &str = "Game is no longer running: ";
 /// What the client logs on taking a launch.
 pub(super) const LAUNCHING: &str = "[GameLaunchController] {Main} LaunchBinary: uid=";
 
+/// What the client logs once it has started the game's exe, 200 to 380 ms
+/// after [`LAUNCHING`] (wowf, 2026-11-05 to 11-08).
+pub(super) const LAUNCHED: &str = "[InstallManager] {Main} Launched ";
+
 /// What the client logs when it has updated itself. It then quits on the next
 /// command it gets, to switch to the new version, and does not come back
 /// (build 17952 to 17986, 2026-11-04).
@@ -257,6 +261,12 @@ impl SessionLog {
     pub fn update_state(&self, uid: &str) -> UpdateState {
         let text = std::fs::read_to_string(&self.path).unwrap_or_default();
         update_state(&text, uid)
+    }
+
+    /// Whether the client started a game's exe since [`SessionLog::find`]. A
+    /// client gone without it quit in the middle of the launch.
+    pub fn game_launched(&self) -> bool {
+        std::fs::read_to_string(&self.path).is_ok_and(|text| text.get(self.from..).is_some_and(|sent| sent.contains(LAUNCHED)))
     }
 
     /// Whether the client took a launch sent after [`SessionLog::find`].

@@ -142,7 +142,7 @@ impl Lightforge {
                         // The client stays up, so the prefix is not settled after.
                         Task::batch([self.game_up(game, None), self.minimize_if_asked()])
                     }
-                    // Closed while signing in: nothing to hand off to.
+                    // Closed while signing in, or quit in the middle of the launch.
                     Ok(tasks::Handoff::ClientClosed) => {
                         self.launch_failed("Battle.net closed before the game could start — press Play again")
                     }
