@@ -32,10 +32,11 @@ pub(crate) fn play(ctx: Ctx, code: ProductCode, proton: Option<String>, dry_run:
 
     // The same per-product settings Game Settings writes. A launcher that honoured them from one entry point and
     // not the other would make every measurement unreproducible.
-    let tweaks = Config::load_or_default(&dirs.config_file())
+    let profile = Config::load_or_default(&dirs.config_file())
         .ok()
-        .and_then(|config| config.product(&code).map(|p| p.profile.tweaks.clone()))
+        .and_then(|config| config.product(&code).map(|p| p.profile.clone()))
         .unwrap_or_default();
+    let tweaks = &profile.tweaks;
     let tools = lightforge_core::tweaks::HostTools::detect();
     for (key, value) in tweaks.environment(&tools) {
         runner = runner.with_env(key, value);
@@ -50,6 +51,9 @@ pub(crate) fn play(ctx: Ctx, code: ProductCode, proton: Option<String>, dry_run:
             wrappers.iter().map(|w| w.display().to_string()).collect();
         println!("through  {}", names.join(" "));
     }
+    if lightforge_core::launch_options::script(&profile.launch_options).is_some() {
+        println!("options  {}", profile.launch_options.trim());
+    }
     if dry_run {
         return Ok(());
     }
@@ -61,9 +65,9 @@ pub(crate) fn play(ctx: Ctx, code: ProductCode, proton: Option<String>, dry_run:
         .context("pre-flight cleanup")?;
     print_preflight(&report);
 
-    let status = lightforge_core::tweaks::wrapped(
-        runner.command("run", &exe, Vec::<String>::new()),
-        &wrappers,
+    let status = lightforge_core::launch_options::wrap(
+        lightforge_core::tweaks::wrapped(runner.command("run", &exe, Vec::<String>::new()), &wrappers),
+        &profile.launch_options,
     )
     .status()
     .context("launching the game")?;

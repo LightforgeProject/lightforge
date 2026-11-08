@@ -562,6 +562,10 @@ pub struct ProductProfile {
     pub cdn_override: Option<String>,
     /// Launch settings for this product: wrappers and environment.
     pub tweaks: crate::tweaks::Tweaks,
+    /// Steam-style launch options, `%command%` where the game goes; see
+    /// [`crate::launch_options`]. Empty for none.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub launch_options: String,
     /// Optional content opted in to, by tag name, e.g. `HighRes`.
     pub optional_content: Vec<String>,
     /// What the last plan said this product offers: a cache, not a setting.

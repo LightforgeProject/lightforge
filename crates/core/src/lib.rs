@@ -28,6 +28,7 @@ pub mod families;
 pub(crate) mod fsutil;
 #[cfg(fuzzing)]
 pub mod fuzzing;
+pub mod launch_options;
 pub mod library;
 pub mod logging;
 pub mod migrate;
