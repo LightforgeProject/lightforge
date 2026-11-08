@@ -2,7 +2,7 @@
 
 use crate::*;
 
-/// How long the env editor waits after the last keystroke before saving.
+/// How long a typed edit waits after the last keystroke before saving.
 const ENV_SAVE_AFTER: std::time::Duration = std::time::Duration::from_millis(750);
 
 impl Lightforge {
@@ -216,14 +216,14 @@ impl Lightforge {
                 // The lines that parse apply as typed; bad ones show under it.
                 let (env, _) = lightforge_core::tweaks::parse_env(&editor.text());
                 self.change_tweaks(scope, |tweaks| tweaks.env = env);
-                // On disk once typing pauses: a save is a full rewrite with
-                // two fsyncs, on this thread.
-                self.env_edits += 1;
-                self.env_unsaved = true;
-                let edit = self.env_edits;
-                Task::perform(async { tokio::time::sleep(ENV_SAVE_AFTER).await }, move |()| {
-                    Message::EnvSettled(edit)
-                })
+                self.save_once_typing_pauses()
+            }
+
+            Message::LaunchOptionsTyped(line) => {
+                if let Some(product) = self.config.product_mut(&self.selected.code) {
+                    product.profile.launch_options = line;
+                }
+                self.save_once_typing_pauses()
             }
 
             Message::EnvSettled(edit) => {
@@ -259,6 +259,15 @@ impl Lightforge {
     }
 
     /// Optional downloads such as the high-resolution textures: sizing, adding, removing.
+    /// Save a typed edit, of the environment or the launch options, once typing
+    /// pauses: a save is a full rewrite with two fsyncs, on this thread.
+    fn save_once_typing_pauses(&mut self) -> Task<Message> {
+        self.env_edits += 1;
+        self.env_unsaved = true;
+        let edit = self.env_edits;
+        Task::perform(async { tokio::time::sleep(ENV_SAVE_AFTER).await }, move |()| Message::EnvSettled(edit))
+    }
+
     fn update_optional_content(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
             Message::OptionalSized(code, result) => {

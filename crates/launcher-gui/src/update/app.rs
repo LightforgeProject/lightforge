@@ -18,7 +18,7 @@ impl Lightforge {
             }
 
             Message::CloseRequested(id) => {
-                // An env edit still waiting for typing to pause.
+                // A typed edit still waiting for typing to pause.
                 if self.env_unsaved {
                     self.save_config();
                 }
