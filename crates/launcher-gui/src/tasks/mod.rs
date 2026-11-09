@@ -54,6 +54,15 @@ pub(crate) use companions::*;
 pub(crate) use client::*;
 pub(crate) use upgrade::{Prepared, Stamp};
 
+/// Held across every check-then-act that starts or stops something in the
+/// shared prefix: the warm-up, a pre-flight, a launch, making way for the store.
+static PREFIX: Mutex<()> = Mutex::new(());
+
+/// Poisoned only by a panic in a holder, which must not wedge every launch after it.
+pub(crate) fn hold_prefix() -> std::sync::MutexGuard<'static, ()> {
+    PREFIX.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 
 /// An error on its way to the screen: what went wrong, and what to do about
 /// it when that is known.

@@ -32,6 +32,26 @@ pub(crate) fn take_client_owed() -> bool {
     CLIENT_OWED.swap(false, Ordering::SeqCst)
 }
 
+/// Set while the client updates a game for us: [`make_way`] leaves it be,
+/// or the update dies with it.
+static CLIENT_UPDATING: AtomicBool = AtomicBool::new(false);
+
+/// Clears [`CLIENT_UPDATING`] on every way out of the update.
+struct Updating;
+
+impl Updating {
+    fn start() -> Self {
+        CLIENT_UPDATING.store(true, Ordering::SeqCst);
+        Updating
+    }
+}
+
+impl Drop for Updating {
+    fn drop(&mut self) {
+        CLIENT_UPDATING.store(false, Ordering::SeqCst);
+    }
+}
+
 /// What came of starting the client out of sight.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Warmed {
@@ -43,8 +63,15 @@ pub enum Warmed {
     NotStarted,
 }
 
-pub async fn warm_battle_net(layout: Layout, user: String) -> Result<Warmed, Problem> {
+/// `preflights_seen` is [`preflights`] when the warm-up was asked for.
+pub async fn warm_battle_net(layout: Layout, user: String, preflights_seen: u64) -> Result<Warmed, Problem> {
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
+        let prefix = hold_prefix();
+        if preflights() != preflights_seen {
+            tracing::info!("Battle.net waits in the background: a launch got to the prefix first");
+            owe_client();
+            return Ok(Warmed::NotStarted);
+        }
         // Without a saved sign-in this would be a form nobody can see.
         if preflight::client_running(&layout)
             || !preflight::games_running(&layout).is_empty()
@@ -69,6 +96,7 @@ pub async fn warm_battle_net(layout: Layout, user: String) -> Result<Warmed, Pro
             .map_err(|e| Problem::of(&e))?;
 
         let started = start_client(&in_tls_container(runner)?, &layout, &user, true)?;
+        drop(prefix);
         Ok(match battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT) {
             Readiness::SignedIn => Warmed::Ready,
             Readiness::NeedsAttention => Warmed::NeedsSignIn { started },
@@ -110,6 +138,8 @@ pub async fn update_through_client(
     use lightforge_core::battlenet::{SessionLog, UpdateState};
 
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
+        let _updating = Updating::start();
+        let prefix = hold_prefix();
         if let Some(game) = preflight::games_running(&layout).first() {
             return Err(format!("close {} first — Battle.net has to restart for this update", game.name).into());
         }
@@ -122,6 +152,7 @@ pub async fn update_through_client(
         LAUNCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         let started = start_client(&in_tls_container(runner)?, &layout, &user, true)?;
+        drop(prefix);
         if battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT) == Readiness::NeedsAttention {
             return Err("Battle.net needs you to sign in — press its button, then try the update again".into());
         }
@@ -187,6 +218,13 @@ fn close_if_idle(layout: &Layout) -> Result<bool, Problem> {
 /// written over with the old one (GlitchTip #40: every hand-off after
 /// Lightforge updated Forever asked for an update).
 pub(crate) fn make_way(layout: &Layout) -> bool {
+    let _prefix = hold_prefix();
+    // Before the scan: between its restart and the update the client is
+    // briefly not up at all.
+    if CLIENT_UPDATING.load(Ordering::SeqCst) {
+        tracing::debug!("Battle.net stays up for work on the game files: it is updating a game");
+        return false;
+    }
     let up = preflight::scan(layout)
         .iter()
         .any(|p| matches!(p.kind, preflight::ProcKind::BattleNet | preflight::ProcKind::Agent));
@@ -233,6 +271,7 @@ pub async fn note_self_update(layout: Layout, user: String) {
 /// file on exit. One that stays up keeps them off until it next exits.
 pub async fn close_background_client(layout: Layout, user: String) -> Result<String, Problem> {
     tokio::task::spawn_blocking(move || {
+        let _prefix = hold_prefix();
         if preflight::client_running(&layout) && !close_if_idle(&layout)? {
             return Ok("Battle.net stays open: a game or its window is using it".to_owned());
         }
@@ -255,6 +294,7 @@ pub fn stop_background_client_at_exit() {
         return;
     }
     let Ok(layout) = config.layout() else { return };
+    let _prefix = hold_prefix();
     if !preflight::client_running(&layout) {
         return;
     }
@@ -262,5 +302,17 @@ pub fn stop_background_client_at_exit() {
         Ok(true) => tracing::info!("closed the background Battle.net on exit"),
         Ok(false) => tracing::info!("left Battle.net running on exit: a game or its window is using it"),
         Err(e) => tracing::warn!("could not close the background Battle.net on exit: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn make_way_leaves_a_client_that_is_updating_a_game() {
+        let scratch = tempfile::tempdir().unwrap();
+        let _updating = Updating::start();
+        assert!(!make_way(&Layout::with_root(scratch.path())));
     }
 }

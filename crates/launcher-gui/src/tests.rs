@@ -1892,8 +1892,12 @@ fn switching_seamless_mode_off_closes_the_client_when_later_is_chosen() {
     assert!(app.quitting_client);
 }
 
+/// `CLIENT_OWED` is one flag for the whole process: tests that read it take turns.
+static CLIENT_OWED_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn a_client_that_gave_way_returns_once_nothing_needs_the_prefix() {
+    let _owed = CLIENT_OWED_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (mut app, _scratch) = test_app();
     app.dirs = None;
     app.config.battle_net_in_background = true;
@@ -1907,6 +1911,28 @@ fn a_client_that_gave_way_returns_once_nothing_needs_the_prefix() {
     app.scanning = false;
     let _ = app.update(Message::ClientSeen(false));
     assert_eq!(app.client_phase, ClientPhase::SigningIn);
+}
+
+#[test]
+fn the_background_client_waits_for_a_running_download() {
+    let _owed = CLIENT_OWED_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.battle_net_in_background = true;
+    app.queue.push(Download {
+        code: ProductCode::Retail,
+        label: String::new(),
+        stage: Stage::Running { rx: tokio::sync::watch::channel(TransferState::default()).1, cancel: Cancel::new() },
+        sample: TransferState::default(),
+        rate: Rate::default(),
+        job: Job::default(),
+        pre_download: false,
+    });
+    let _ = tasks::take_client_owed();
+
+    let _ = app.warm_client();
+    assert_eq!(app.client_phase, ClientPhase::Settled);
+    assert!(tasks::take_client_owed(), "the client poll brings it back once the download is done");
 }
 
 #[test]

@@ -109,9 +109,17 @@ impl Lightforge {
         {
             return Task::none();
         }
+        // Agent would start over a store being written (GlitchTip #41), or
+        // beside a game starting under another build. The client poll brings
+        // it back after. A hand-off waiting on the client is what it is for.
+        let launch_without_client = self.in_play() && self.launch_after_client.is_none();
+        if self.store_writer().is_some() || launch_without_client {
+            tasks::owe_client();
+            return Task::none();
+        }
         self.client_phase = ClientPhase::SigningIn;
         Task::perform(
-            tasks::warm_battle_net(self.layout.clone(), self.config.prefix_user.clone()),
+            tasks::warm_battle_net(self.layout.clone(), self.config.prefix_user.clone(), tasks::preflights()),
             Message::BackgroundClient,
         )
     }
