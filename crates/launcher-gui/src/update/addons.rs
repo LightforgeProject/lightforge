@@ -420,8 +420,8 @@ impl Lightforge {
                 }
 
                 // Whoever was waiting on this can go now.
-                if let Some(what) = self.launch_after_addons.take() {
-                    tasks.push(self.preflight(what));
+                if let Some((what, code)) = self.launch_after_addons.take() {
+                    tasks.push(self.preflight_for(what, code));
                 }
                 Task::batch(tasks)
             }

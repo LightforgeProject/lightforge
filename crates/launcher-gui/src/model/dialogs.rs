@@ -159,6 +159,7 @@ pub(crate) struct CancelDialog {
 pub(crate) struct DowngradeDialog {
     /// Held until it is answered, then started unchanged.
     pub(crate) what: Launch,
+    pub(crate) code: ProductCode,
     /// The build the launch would run under.
     pub(crate) pick: String,
     /// The build that last created or upgraded the prefix.

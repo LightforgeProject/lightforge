@@ -94,8 +94,9 @@ impl Lightforge {
                     "Games that start through Battle.net open without waiting for it to sign in.",
                     self.hint(
                         "It starts hidden with Lightforge and closes with it, unless a game \
-                         or its window is open. Needs a saved sign-in. Its notifications stay \
-                         off, and games it starts use its Proton build. World of Warcraft never goes through it, so it starts no \
+                         or its window is open. Needs a saved sign-in. Its notifications and game \
+                         updates stay off until you switch this off, which puts your own settings back. \
+                         Games it starts use its Proton build. World of Warcraft never goes through it, so it starts no \
                          faster, and Play closes it for a build of its own.",
                     ),
                     switch("battle.net in background", self.config.battle_net_in_background, Message::BattleNetInBackground),

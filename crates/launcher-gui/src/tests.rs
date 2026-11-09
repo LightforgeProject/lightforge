@@ -1738,12 +1738,26 @@ fn a_hand_off_waits_while_the_background_client_signs_in() {
     app.client_phase = ClientPhase::SigningIn;
 
     let _ = app.preflight(Launch::BattleNet);
-    assert_eq!(app.launch_after_client, Some(Launch::BattleNet));
+    assert_eq!(app.launch_after_client, Some((Launch::BattleNet, app.selected.code.clone())));
     assert!(app.busy, "the button is held while it waits");
 
     let _ = app.update(Message::BackgroundClient(Ok(tasks::Warmed::Ready)));
     assert_eq!(app.client_phase, ClientPhase::Settled);
     assert_eq!(app.launch_after_client, None);
+}
+
+#[test]
+fn a_hand_off_held_for_sign_in_starts_the_game_it_was_for() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.client_phase = ClientPhase::SigningIn;
+    let hearthstone = ProductCode::Custom("hs_beta".to_owned());
+    app.selected.code = hearthstone.clone();
+    let _ = app.preflight(Launch::BattleNet);
+
+    app.selected.code = ProductCode::Retail;
+    let _ = app.update(Message::BackgroundClient(Ok(tasks::Warmed::Ready)));
+    assert_eq!(app.launching, Some(hearthstone));
 }
 
 #[test]
@@ -1944,7 +1958,7 @@ fn a_launch_that_found_the_client_updating_itself_is_sent_again() {
     app.busy = true;
 
     let _ = app.update(Message::HandoffStarted(Ok(tasks::Handoff::ClientUpdated)));
-    assert_eq!(app.launch_after_client, Some(Launch::BattleNet));
+    assert_eq!(app.launch_after_client, Some((Launch::BattleNet, app.selected.code.clone())));
     assert_eq!(app.client_phase, ClientPhase::SigningIn);
     assert!(app.busy, "the button stays held for the second try");
 }

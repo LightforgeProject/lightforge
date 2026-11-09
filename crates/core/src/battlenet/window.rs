@@ -27,6 +27,13 @@ const POLL: Duration = Duration::from_millis(20);
 /// friends list, are left alone.
 const MAIN_TITLE: &[u8] = b"Battle.net";
 
+/// `WM_STATE`'s first field for a minimized window (ICCCM 4.1.3.1). A window
+/// sent to the tray is withdrawn instead, and the window manager drops the
+/// property or sets it to `WithdrawnState`. `_NET_WM_STATE_HIDDEN` is not read:
+/// a manager may leave it on a withdrawn window, and a tray client would then
+/// never be closed for a download.
+const ICONIC_STATE: u32 = 3;
+
 #[derive(Debug, thiserror::Error)]
 pub enum WindowError {
     #[error("no X display to reach Battle.net's window on")]
@@ -43,9 +50,17 @@ pub struct ClientWindows {
     root: Window,
     client_list: u32,
     wm_pid: u32,
+    wm_state: u32,
     wm_protocols: u32,
     wm_delete: u32,
     pids: Vec<u32>,
+}
+
+/// How one of the client's main windows sits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Showing {
+    OnScreen,
+    Minimized,
 }
 
 impl ClientWindows {
@@ -59,14 +74,15 @@ impl ClientWindows {
         };
         let client_list = atom(b"_NET_CLIENT_LIST")?;
         let wm_pid = atom(b"_NET_WM_PID")?;
+        let wm_state = atom(b"WM_STATE")?;
         let wm_protocols = atom(b"WM_PROTOCOLS")?;
         let wm_delete = atom(b"WM_DELETE_WINDOW")?;
-        Ok(Self { conn, root, client_list, wm_pid, wm_protocols, wm_delete, pids })
+        Ok(Self { conn, root, client_list, wm_pid, wm_state, wm_protocols, wm_delete, pids })
     }
 
-    /// Whether a main window is on screen.
-    pub fn any_shown(&self) -> Result<bool, WindowError> {
-        Ok(!self.shown()?.is_empty())
+    /// Whether someone has a main window open: on screen, or minimized.
+    pub fn any_open(&self) -> Result<bool, WindowError> {
+        Ok(!self.main_windows()?.is_empty())
     }
 
     /// Close every main window that maps until `until`, the way its X button
@@ -75,8 +91,8 @@ impl ClientWindows {
     pub fn keep_closed(&self, until: Instant) -> Result<usize, WindowError> {
         let mut asked = HashSet::new();
         while Instant::now() < until {
-            for window in self.shown()? {
-                if asked.insert(window) {
+            for (window, showing) in self.main_windows()? {
+                if showing == Showing::OnScreen && asked.insert(window) {
                     self.close(window)?;
                 }
             }
@@ -97,7 +113,7 @@ impl ClientWindows {
         Ok(())
     }
 
-    fn shown(&self) -> Result<Vec<Window>, WindowError> {
+    fn main_windows(&self) -> Result<Vec<(Window, Showing)>, WindowError> {
         // The root's children and the window manager's own list: a manager
         // that reparents into frames (GNOME) only names the client in the
         // latter, one without EWMH only has the former.
@@ -124,15 +140,50 @@ impl ClientWindows {
             }
         }
 
-        let mut shown = Vec::new();
+        let mut main = Vec::new();
         for window in ours {
             let title = self.conn.get_property(false, window, AtomEnum::WM_NAME, AtomEnum::ANY, 0, 64)?;
             let attributes = self.conn.get_window_attributes(window)?;
+            let state = self.conn.get_property(false, window, self.wm_state, AtomEnum::ANY, 0, 1)?;
             let (Ok(title), Ok(attributes)) = (title.reply(), attributes.reply()) else { continue };
-            if attributes.map_state == MapState::VIEWABLE && title.value == MAIN_TITLE {
-                shown.push(window);
+            if title.value != MAIN_TITLE {
+                continue;
+            }
+            let wm_state = state.reply().ok().and_then(|reply| reply.value32().and_then(|mut v| v.next()));
+            if let Some(showing) = showing(attributes.map_state, wm_state) {
+                main.push((window, showing));
             }
         }
-        Ok(shown)
+        Ok(main)
+    }
+}
+
+fn showing(map_state: MapState, wm_state: Option<u32>) -> Option<Showing> {
+    match (map_state, wm_state) {
+        (MapState::VIEWABLE, _) => Some(Showing::OnScreen),
+        (_, Some(ICONIC_STATE)) => Some(Showing::Minimized),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_minimized_window_counts_as_open() {
+        assert_eq!(showing(MapState::UNMAPPED, Some(ICONIC_STATE)), Some(Showing::Minimized));
+    }
+
+    #[test]
+    fn a_window_in_the_tray_does_not() {
+        // Withdrawn: the property gone, or set to `WithdrawnState`.
+        assert_eq!(showing(MapState::UNMAPPED, None), None);
+        assert_eq!(showing(MapState::UNMAPPED, Some(0)), None);
+    }
+
+    #[test]
+    fn a_mapped_window_is_on_screen_whatever_its_state_says() {
+        assert_eq!(showing(MapState::VIEWABLE, Some(ICONIC_STATE)), Some(Showing::OnScreen));
     }
 }

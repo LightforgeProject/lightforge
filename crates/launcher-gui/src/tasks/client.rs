@@ -196,12 +196,16 @@ pub async fn update_pending(layout: Layout, user: String, uid: String) -> bool {
 }
 
 /// Close the client unless something is using it: a game, or a window someone
-/// opened. `false` when it was left up.
+/// opened. `false` when it was left up, as it is when its windows cannot be
+/// read: closing one in use loses what someone was doing in it.
 fn close_if_idle(layout: &Layout) -> Result<bool, Problem> {
-    let shown = ClientWindows::connect(preflight::client_pids(layout))
-        .and_then(|windows| windows.any_shown())
-        .unwrap_or(false);
-    if shown || !preflight::games_running(layout).is_empty() {
+    let open = ClientWindows::connect(preflight::client_pids(layout))
+        .and_then(|windows| windows.any_open())
+        .unwrap_or_else(|e| {
+            tracing::warn!("Battle.net's windows cannot be read, so it stays up: {}", chain(&e));
+            true
+        });
+    if open || !preflight::games_running(layout).is_empty() {
         return Ok(false);
     }
     let runner = lone_client_runner(layout)?;
@@ -267,17 +271,19 @@ pub async fn note_self_update(layout: Layout, user: String) {
 }
 
 /// For the setting being switched off: a client nobody is using goes with it,
-/// and its notifications come back. After it has closed, since it rewrites the
-/// file on exit. One that stays up keeps them off until it next exits.
+/// and the settings the mode overwrote come back. After it has closed, since it
+/// rewrites its files on exit. One that stays up gets them back at the next
+/// pre-flight.
 pub async fn close_background_client(layout: Layout, user: String) -> Result<String, Problem> {
     tokio::task::spawn_blocking(move || {
         let _prefix = hold_prefix();
         if preflight::client_running(&layout) && !close_if_idle(&layout)? {
             return Ok("Battle.net stays open: a game or its window is using it".to_owned());
         }
-        battlenet::configure_accounts(&layout, &user, &[battlenet::toasts_tweak(true)])
-            .map_err(|e| Problem::of(&e))?;
-        Ok("Battle.net closed, its notifications are back on".to_owned())
+        Ok(match battlenet::restore_overrides(&layout, &user).map_err(|e| Problem::of(&e))? {
+            true => "Battle.net closed, its own settings are back".to_owned(),
+            false => "Battle.net closed".to_owned(),
+        })
     })
     .await
     .map_err(|e| Problem::of(&e))?

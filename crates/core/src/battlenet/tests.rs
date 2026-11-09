@@ -788,3 +788,48 @@ fn provisioning_refuses_to_run_before_the_prefix_exists() {
         Err(BattleNetError::PrefixNotReady(_))
     ));
 }
+
+#[test]
+fn switching_the_background_mode_off_puts_back_what_it_overwrote() {
+    let dir = scratch("overrides-round-trip");
+    let layout = Layout::with_root(&dir);
+    let global = layout.battle_net_config("steamuser");
+    let account = global.parent().unwrap().join("1c858370.config");
+    std::fs::create_dir_all(global.parent().unwrap()).unwrap();
+    std::fs::write(&global, r#"{"Games":{"hs_beta":{"AutoUpdate":"true"},"pro":{}}}"#).unwrap();
+    std::fs::write(&account, r#"{"User":{"Client":{}}}"#).unwrap();
+
+    let tweaks = [auto_update_tweak("hs_beta", false), auto_update_tweak("pro", false)];
+    // Twice: the second pass finds Lightforge's values and must not note them.
+    for _ in 0..2 {
+        record_overrides(&layout, "steamuser", &tweaks, &account_tweaks(true)).unwrap();
+        configure(&layout, "steamuser", &tweaks).unwrap();
+        configure_accounts(&layout, "steamuser", &account_tweaks(true)).unwrap();
+    }
+    assert!(restore_overrides(&layout, "steamuser").unwrap());
+
+    let read = |path: &Path| serde_json::from_str::<Value>(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let global_now = read(&global);
+    assert_eq!(global_now["Games"]["hs_beta"]["AutoUpdate"], json!("true"));
+    assert!(global_now["Games"]["pro"].get("AutoUpdate").is_none(), "absent before, absent again");
+    let account_now = read(&account);
+    assert!(account_now["User"]["Client"].get("ToastsEnabled").is_none());
+    assert!(account_now["User"]["Client"].get("HideOnClose").is_none());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_restored_record_is_forgotten() {
+    let dir = scratch("overrides-forgotten");
+    let layout = Layout::with_root(&dir);
+    let global = layout.battle_net_config("steamuser");
+    std::fs::create_dir_all(global.parent().unwrap()).unwrap();
+    std::fs::write(&global, "{}").unwrap();
+    record_overrides(&layout, "steamuser", &[auto_update_tweak("hs_beta", false)], &[]).unwrap();
+
+    assert!(restore_overrides(&layout, "steamuser").unwrap());
+    assert!(!restore_overrides(&layout, "steamuser").unwrap());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

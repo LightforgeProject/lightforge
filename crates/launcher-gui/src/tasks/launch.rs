@@ -367,7 +367,7 @@ pub async fn launch_via_battle_net(
         // quits the client in the middle of the launch (GlitchTip #43).
         let closes_to_tray = battlenet::closes_to_tray(&layout, &user);
         let tray = match closes_to_tray.then(|| battlenet::ClientWindows::connect(preflight::client_pids(&layout))) {
-            Some(Ok(windows)) if windows.any_shown().is_ok_and(|shown| !shown) => Some(windows),
+            Some(Ok(windows)) if windows.any_open().is_ok_and(|open| !open) => Some(windows),
             Some(Ok(_)) | None => None,
             Some(Err(e)) => {
                 tracing::info!("Battle.net's window stays as the client leaves it: {}", chain(&e));

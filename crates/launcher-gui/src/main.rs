@@ -292,8 +292,9 @@ struct Lightforge {
     client_menu_open: bool,
     /// What the background client is doing, beyond running.
     client_phase: ClientPhase,
-    /// A launch through the client, waiting for it to finish signing in.
-    launch_after_client: Option<Launch>,
+    /// A launch through the client, waiting for it to finish signing in,
+    /// with the game it was for: the tile shown may have changed since.
+    launch_after_client: Option<(Launch, ProductCode)>,
     /// The game the client holds back for an update, of those asked about.
     update_pending: Option<ProductCode>,
     /// The update being followed.
@@ -510,7 +511,7 @@ struct Lightforge {
     /// when it has not run or had nothing to do, "0 addons updated" is noise.
     addon_auto_note: Option<String>,
     /// A launch waiting for that pass: the game reads AddOns at login.
-    launch_after_addons: Option<Launch>,
+    launch_after_addons: Option<(Launch, ProductCode)>,
     /// Which tab the standing report belongs to: import, or update.
     addon_report_tab: AddonTab,
     /// Counts keystrokes in the search box, so a debounced search runs only

@@ -20,7 +20,7 @@ pub struct Tweak {
 }
 
 impl Tweak {
-    fn new(path: &str, value: Value, reason: &'static str) -> Self {
+    pub(super) fn new(path: &str, value: Value, reason: &'static str) -> Self {
         Self {
             path: path.split('.').map(str::to_owned).collect(),
             value,
@@ -336,7 +336,7 @@ pub fn closes_to_tray(layout: &Layout, user: &str) -> bool {
 }
 
 /// Every `<hash>.config` in the directory, excluding the global config.
-fn account_configs(entries: std::fs::ReadDir) -> Vec<PathBuf> {
+pub(super) fn account_configs(entries: std::fs::ReadDir) -> Vec<PathBuf> {
     entries
         .flatten()
         .map(|e| e.path())
@@ -349,7 +349,7 @@ fn account_configs(entries: std::fs::ReadDir) -> Vec<PathBuf> {
 }
 
 /// Delete one dotted key. A missing file or key counts as success.
-fn remove_key(path: &Path, key: &str) -> Result<(), BattleNetError> {
+pub(super) fn remove_key(path: &Path, key: &str) -> Result<(), BattleNetError> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return Ok(());
     };
@@ -382,7 +382,7 @@ fn remove_key(path: &Path, key: &str) -> Result<(), BattleNetError> {
 
 /// Read, merge and atomically rewrite one config. With `seed` a missing file
 /// starts empty; without it, the file is the client's to create.
-fn merge_file(path: &Path, tweaks: &[Tweak], seed: bool) -> Result<bool, BattleNetError> {
+pub(super) fn merge_file(path: &Path, tweaks: &[Tweak], seed: bool) -> Result<bool, BattleNetError> {
     let mut config = match std::fs::read_to_string(path) {
         Ok(text) => serde_json::from_str(&text)
             .map_err(|e| BattleNetError::MalformedConfig { path: path.to_path_buf(), source: e })?,

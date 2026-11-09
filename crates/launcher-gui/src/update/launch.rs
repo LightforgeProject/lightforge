@@ -158,7 +158,8 @@ impl Lightforge {
                     // again and send the same launch. The button stays held.
                     Ok(tasks::Handoff::ClientUpdated) if self.config.battle_net_in_background => {
                         self.status = "Battle.net updated itself, starting it again…".to_owned();
-                        self.launch_after_client = Some(Launch::BattleNet);
+                        let code = self.launching.clone().unwrap_or_else(|| self.selected.code.clone());
+                        self.launch_after_client = Some((Launch::BattleNet, code));
                         self.warm_client()
                     }
                     Ok(tasks::Handoff::ClientUpdated) => {
@@ -341,7 +342,7 @@ impl Lightforge {
                             tracing::warn!("Battle.net did not start in the background: {e}");
                         }
                         self.client_phase = ClientPhase::Settled;
-                        let launch = waiting.map_or_else(Task::none, |what| self.preflight(what));
+                        let launch = waiting.map_or_else(Task::none, |(what, code)| self.preflight_for(what, code));
                         Task::batch([launch, self.check_client()])
                     }
                 }
@@ -461,7 +462,7 @@ impl Lightforge {
                 // Remembered before the launch, so the retry below walks
                 // straight past the guard it just answered.
                 self.downgrade_ok.insert(dialog.pick);
-                self.preflight(dialog.what)
+                self.preflight_for(dialog.what, dialog.code)
             }
             other => return Err(other),
         })
