@@ -3,6 +3,7 @@
   rustPlatform,
   pkg-config,
   udev,
+  zstd,
   vulkan-loader,
   libGL,
   wayland,
@@ -53,7 +54,7 @@ rustPlatform.buildRustPackage {
   cargoLock.lockFile = ../../Cargo.lock;
 
   nativeBuildInputs = [ pkg-config ];
-  buildInputs = [ udev ];
+  buildInputs = [ udev zstd ];
 
   postInstall = ''
     install -Dm644 packaging/pro.tuxcore.Lightforge.desktop -t $out/share/applications
