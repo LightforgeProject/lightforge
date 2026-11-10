@@ -232,8 +232,8 @@ impl Lightforge {
         // pause-while-playing off, another product's download is meant to
         // keep running beside the game.
         if self.launch_when_quiet.is_some() && !self.launch_must_wait() {
-            let what = self.launch_when_quiet.take().expect("checked above");
-            return self.start_launch(what);
+            let (what, cleared) = self.launch_when_quiet.take().expect("checked above");
+            return self.start_launch(what, cleared);
         }
         // A deep scan reads the store a transfer would write, and maintenance
         // rewrites it. Neither refuses the download, they hold it: the queue

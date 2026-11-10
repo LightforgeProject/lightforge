@@ -461,7 +461,7 @@ struct Lightforge {
     /// A launch whose pre-flight is done, held until the download it paused
     /// has finished winding down: the client and a still-checkpointing
     /// downloader would share one store.
-    launch_when_quiet: Option<Launch>,
+    launch_when_quiet: Option<(Launch, tasks::Cleared)>,
     report_dialog: Option<ReportDialog>,
     /// Filled in once, shortly after startup. `None` until then, and a report
     /// sent in that window simply says so instead of blocking on it.

@@ -1,6 +1,6 @@
 //! The Battle.net client kept ready in the background.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
 use lightforge_core::battlenet::{self, ClientWindows, Readiness};
@@ -19,49 +19,96 @@ const UPDATE_STARTS_WITHIN: Duration = Duration::from_secs(60);
 /// The log gets a progress line about every 1.5 s.
 const UPDATE_POLL: Duration = Duration::from_millis(500);
 
-/// The background client went away for a reason that passes, and is owed a
-/// restart once nothing needs the prefix. A static because the work that
-/// closes it runs far from the app's state; the client poll reads it.
-#[cfg(not(test))]
-static CLIENT_OWED: AtomicBool = AtomicBool::new(false);
-
-#[cfg(not(test))]
-fn client_owed<T>(use_flag: impl FnOnce(&AtomicBool) -> T) -> T {
-    use_flag(&CLIENT_OWED)
-}
-
-/// One per test thread: the tests run in parallel, each with an app of its own.
-#[cfg(test)]
-fn client_owed<T>(use_flag: impl FnOnce(&AtomicBool) -> T) -> T {
-    thread_local!(static CLIENT_OWED: AtomicBool = const { AtomicBool::new(false) });
-    CLIENT_OWED.with(use_flag)
-}
-
-pub(crate) fn owe_client() {
-    client_owed(|owed| owed.store(true, Ordering::SeqCst));
-}
-
-pub(crate) fn take_client_owed() -> bool {
-    client_owed(|owed| owed.swap(false, Ordering::SeqCst))
-}
-
-/// Set while the client updates a game for us: [`make_way`] leaves it be,
-/// or the update dies with it.
-static CLIENT_UPDATING: AtomicBool = AtomicBool::new(false);
-
-/// Clears [`CLIENT_UPDATING`] on every way out of the update.
+/// Clears [`Prefix::updating`] on every way out of the update.
 struct Updating;
 
 impl Updating {
     fn start() -> Self {
-        CLIENT_UPDATING.store(true, Ordering::SeqCst);
+        prefix().updating.store(true, Ordering::SeqCst);
         Updating
     }
 }
 
 impl Drop for Updating {
     fn drop(&mut self) {
-        CLIENT_UPDATING.store(false, Ordering::SeqCst);
+        prefix().updating.store(false, Ordering::SeqCst);
+    }
+}
+
+/// What the background client's paths read from the prefix and do to it, so
+/// their races can be scripted in tests. The client's log stays a real file.
+pub(crate) trait ClientDriver {
+    fn client_running(&self) -> bool;
+    /// The client or Agent, which outlives a client that handed a game off.
+    fn client_or_agent_running(&self) -> bool;
+    fn games_running(&self) -> Vec<GameProcess>;
+    /// Whether one of its windows is open, on screen or minimized. `true` when
+    /// they cannot be read: closing one in use loses what someone was doing in it.
+    fn window_open(&self) -> bool;
+    fn signs_in_by_itself(&self) -> bool;
+    /// Pre-flight's sweep, for a client starting on its own.
+    fn clear(&self) -> Result<(), Problem>;
+    /// Start it in the tray. Returns the moment after which its log answers
+    /// for this start.
+    fn start(&self) -> Result<SystemTime, Problem>;
+    fn quit(&self) -> Result<(), Problem>;
+}
+
+struct Live<'a> {
+    layout: &'a Layout,
+    user: &'a str,
+}
+
+impl ClientDriver for Live<'_> {
+    fn client_running(&self) -> bool {
+        preflight::client_running(self.layout)
+    }
+
+    fn client_or_agent_running(&self) -> bool {
+        preflight::scan(self.layout)
+            .iter()
+            .any(|p| matches!(p.kind, preflight::ProcKind::BattleNet | preflight::ProcKind::Agent))
+    }
+
+    fn games_running(&self) -> Vec<GameProcess> {
+        preflight::games_running(self.layout)
+    }
+
+    fn window_open(&self) -> bool {
+        ClientWindows::connect(preflight::client_pids(self.layout))
+            .and_then(|windows| windows.any_open())
+            .unwrap_or_else(|e| {
+                tracing::warn!("Battle.net's windows cannot be read, so it stays up: {}", chain(&e));
+                true
+            })
+    }
+
+    fn signs_in_by_itself(&self) -> bool {
+        battlenet::signs_in_by_itself(self.layout, self.user)
+    }
+
+    fn clear(&self) -> Result<(), Problem> {
+        let managed = AppDirs::discover()
+            .ok()
+            .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
+            .map(|config| config.managed_products())
+            .unwrap_or_default();
+        Preflight::new(self.user.to_owned())
+            .with_managed(managed)
+            .with_background_client(true)
+            .run(&lone_client_runner(self.layout)?, self.layout, None, &mut NoDownloads)
+            .map_err(|e| Problem::of(&e))?;
+        Ok(())
+    }
+
+    fn start(&self) -> Result<SystemTime, Problem> {
+        start_client(&in_tls_container(lone_client_runner(self.layout)?)?, self.layout, self.user, true)
+    }
+
+    fn quit(&self) -> Result<(), Problem> {
+        preflight::quit_client(&lone_client_runner(self.layout)?, self.layout, STOP_GRACE)
+            .map_err(|e| Problem::of(&e))?;
+        Ok(())
     }
 }
 
@@ -87,51 +134,49 @@ pub async fn warm_battle_net(
     preflights_seen: u64,
     cancel: Cancel,
 ) -> Result<Warmed, Problem> {
-    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
-        let prefix = hold_prefix();
-        if cancel.is_cancelled() {
-            return Ok(Warmed::NotStarted);
-        }
-        if preflights() != preflights_seen {
-            tracing::info!("Battle.net waits in the background: a launch got to the prefix first");
-            owe_client();
-            return Ok(Warmed::NotStarted);
-        }
-        // Owed again: the client poll brings it back once the game is gone.
-        if !preflight::games_running(&layout).is_empty() {
-            owe_client();
-            return Ok(Warmed::NotStarted);
-        }
-        // Without a saved sign-in this would be a form nobody can see.
-        if preflight::client_running(&layout) || !battlenet::signs_in_by_itself(&layout, &user) {
-            return Ok(Warmed::NotStarted);
-        }
-        tracing::info!("starting Battle.net in the background");
-        // Counted, so a pending wind-down leaves this start alone.
-        LAUNCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-        let runner = lone_client_runner(&layout)?;
-        let managed = AppDirs::discover()
-            .ok()
-            .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
-            .map(|config| config.managed_products())
-            .unwrap_or_default();
-        Preflight::new(user.clone())
-            .with_managed(managed)
-            .with_background_client(true)
-            .run(&runner, &layout, None, &mut NoDownloads)
-            .map_err(|e| Problem::of(&e))?;
-
-        let started = start_client(&in_tls_container(runner)?, &layout, &user, true)?;
-        drop(prefix);
-        Ok(match battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT, || preflight::client_running(&layout)) {
-            Readiness::SignedIn => Warmed::Ready,
-            Readiness::NeedsAttention => Warmed::NeedsSignIn { started },
-            Readiness::Exited => Warmed::Exited,
-        })
+    tokio::task::spawn_blocking(move || {
+        warm(&Live { layout: &layout, user: &user }, &layout, &user, preflights_seen, &cancel)
     })
     .await
     .map_err(|e| Problem::of(&e))?
+}
+
+fn warm(
+    client: &impl ClientDriver,
+    layout: &Layout,
+    user: &str,
+    preflights_seen: u64,
+    cancel: &Cancel,
+) -> Result<Warmed, Problem> {
+    let mut prefix = hold_prefix();
+    if cancel.is_cancelled() {
+        return Ok(Warmed::NotStarted);
+    }
+    if preflights() != preflights_seen {
+        tracing::info!("Battle.net waits in the background: a launch got to the prefix first");
+        owe_client();
+        return Ok(Warmed::NotStarted);
+    }
+    // Owed again: the client poll brings it back once the game is gone.
+    if !client.games_running().is_empty() {
+        owe_client();
+        return Ok(Warmed::NotStarted);
+    }
+    // Without a saved sign-in this would be a form nobody can see.
+    if client.client_running() || !client.signs_in_by_itself() {
+        return Ok(Warmed::NotStarted);
+    }
+    tracing::info!("starting Battle.net in the background");
+    // Counted, so a pending wind-down leaves this start alone.
+    prefix.launches += 1;
+    client.clear()?;
+    let started = client.start()?;
+    drop(prefix);
+    Ok(match battlenet::wait_until_ready(layout, user, started, SIGN_IN_TIMEOUT, || client.client_running()) {
+        Readiness::SignedIn => Warmed::Ready,
+        Readiness::NeedsAttention => Warmed::NeedsSignIn { started },
+        Readiness::Exited => Warmed::Exited,
+    })
 }
 
 /// Wait for someone to sign in the client that [`warm_battle_net`] gave up on.
@@ -173,7 +218,7 @@ pub fn update_through_client(
     async move {
         tokio::task::spawn_blocking(move || -> Result<_, Problem> {
             let _updating = updating;
-            let prefix = hold_prefix();
+            let mut prefix = hold_prefix();
             if let Some(game) = preflight::games_running(&layout).first() {
                 return Err(format!("close {} first — Battle.net has to restart for this update", game.name).into());
             }
@@ -183,7 +228,7 @@ pub fn update_through_client(
             battlenet::configure(&layout, &user, &[battlenet::auto_update_tweak(&uid, true)])
                 .map_err(|e| Problem::of(&e))?;
             tracing::info!("asking Battle.net to update {uid}");
-            LAUNCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            prefix.launches += 1;
 
             let started = start_client(&in_tls_container(runner)?, &layout, &user, true)?;
             drop(prefix);
@@ -235,20 +280,12 @@ pub async fn update_pending(layout: Layout, user: String, uid: String) -> bool {
 }
 
 /// Close the client unless something is using it: a game, or a window someone
-/// opened. `false` when it was left up, as it is when its windows cannot be
-/// read: closing one in use loses what someone was doing in it.
-fn close_if_idle(layout: &Layout) -> Result<bool, Problem> {
-    let open = ClientWindows::connect(preflight::client_pids(layout))
-        .and_then(|windows| windows.any_open())
-        .unwrap_or_else(|e| {
-            tracing::warn!("Battle.net's windows cannot be read, so it stays up: {}", chain(&e));
-            true
-        });
-    if open || !preflight::games_running(layout).is_empty() {
+/// opened. `false` when it was left up.
+fn close_if_idle(client: &impl ClientDriver) -> Result<bool, Problem> {
+    if client.window_open() || !client.games_running().is_empty() {
         return Ok(false);
     }
-    let runner = lone_client_runner(layout)?;
-    preflight::quit_client(&runner, layout, STOP_GRACE).map_err(|e| Problem::of(&e))?;
+    client.quit()?;
     Ok(true)
 }
 
@@ -261,24 +298,22 @@ fn close_if_idle(layout: &Layout) -> Result<bool, Problem> {
 /// written over with the old one (GlitchTip #40: every hand-off after
 /// Lightforge updated Forever asked for an update).
 pub(crate) fn make_way(layout: &Layout) -> bool {
+    let config = AppDirs::discover().ok().and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok()).unwrap_or_default();
+    give_way(&Live { layout, user: &config.prefix_user }, config.battle_net_in_background)
+}
+
+fn give_way(client: &impl ClientDriver, background: bool) -> bool {
     let _prefix = hold_prefix();
     // Before the scan: between its restart and the update the client is
     // briefly not up at all.
-    if CLIENT_UPDATING.load(Ordering::SeqCst) {
+    if prefix().updating.load(Ordering::SeqCst) {
         tracing::debug!("Battle.net stays up for work on the game files: it is updating a game");
         return false;
     }
-    let up = preflight::scan(layout)
-        .iter()
-        .any(|p| matches!(p.kind, preflight::ProcKind::BattleNet | preflight::ProcKind::Agent));
-    if !up {
+    if !client.client_or_agent_running() {
         return true;
     }
-    let background = AppDirs::discover()
-        .ok()
-        .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
-        .is_some_and(|config| config.battle_net_in_background);
-    match close_if_idle(layout) {
+    match close_if_idle(client) {
         Ok(true) => {
             tracing::info!("closed Battle.net for work on the game files");
             if background {
@@ -309,6 +344,7 @@ pub async fn note_self_update(layout: Layout, user: String) {
     .await;
 }
 
+
 /// For the setting being switched off: a client nobody is using goes with it,
 /// and the settings the mode overwrote come back. After it has closed, since it
 /// rewrites its files on exit. One that stays up gets them back at the next
@@ -316,7 +352,8 @@ pub async fn note_self_update(layout: Layout, user: String) {
 pub async fn close_background_client(layout: Layout, user: String) -> Result<String, Problem> {
     tokio::task::spawn_blocking(move || {
         let _prefix = hold_prefix();
-        if preflight::client_running(&layout) && !close_if_idle(&layout)? {
+        let client = Live { layout: &layout, user: &user };
+        if client.client_running() && !close_if_idle(&client)? {
             return Ok("Battle.net stays open: a game or its window is using it".to_owned());
         }
         Ok(match battlenet::restore_overrides(&layout, &user).map_err(|e| Problem::of(&e))? {
@@ -340,10 +377,11 @@ pub fn stop_background_client_at_exit() {
     }
     let Ok(layout) = config.layout() else { return };
     let _prefix = hold_prefix();
-    if !preflight::client_running(&layout) {
+    let client = Live { layout: &layout, user: &config.prefix_user };
+    if !client.client_running() {
         return;
     }
-    match close_if_idle(&layout) {
+    match close_if_idle(&client) {
         Ok(true) => tracing::info!("closed the background Battle.net on exit"),
         Ok(false) => tracing::info!("left Battle.net running on exit: a game or its window is using it"),
         Err(e) => tracing::warn!("could not close the background Battle.net on exit: {e}"),
@@ -352,12 +390,141 @@ pub fn stop_background_client_at_exit() {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
+
     use super::*;
+
+    /// A prefix the test scripts: what runs in it, and what was done to it.
+    #[derive(Default)]
+    struct Scripted {
+        client: Cell<bool>,
+        agent: bool,
+        window: bool,
+        games: Vec<GameProcess>,
+        signs_in: bool,
+        /// How many more times a started client answers as running before it dies.
+        lives_for: Option<Cell<u32>>,
+        done: RefCell<Vec<&'static str>>,
+    }
+
+    impl ClientDriver for Scripted {
+        fn client_running(&self) -> bool {
+            if let Some(left) = self.lives_for.as_ref().filter(|_| self.client.get()) {
+                match left.get() {
+                    0 => self.client.set(false),
+                    n => left.set(n - 1),
+                }
+            }
+            self.client.get()
+        }
+
+        fn client_or_agent_running(&self) -> bool {
+            self.client.get() || self.agent
+        }
+
+        fn games_running(&self) -> Vec<GameProcess> {
+            self.games.clone()
+        }
+
+        fn window_open(&self) -> bool {
+            self.window
+        }
+
+        fn signs_in_by_itself(&self) -> bool {
+            self.signs_in
+        }
+
+        fn clear(&self) -> Result<(), Problem> {
+            self.done.borrow_mut().push("clear");
+            Ok(())
+        }
+
+        fn start(&self) -> Result<SystemTime, Problem> {
+            self.done.borrow_mut().push("start");
+            self.client.set(true);
+            Ok(SystemTime::now())
+        }
+
+        fn quit(&self) -> Result<(), Problem> {
+            self.done.borrow_mut().push("quit");
+            self.client.set(false);
+            Ok(())
+        }
+    }
+
+    fn warm_up(client: &Scripted, preflights_seen: u64, cancel: &Cancel) -> Warmed {
+        let scratch = tempfile::tempdir().unwrap();
+        warm(client, &Layout::with_root(scratch.path()), "steamuser", preflights_seen, cancel).unwrap()
+    }
+
+    #[test]
+    fn a_warm_up_stands_down_for_a_launch_that_got_to_the_prefix_first() {
+        let client = Scripted { signs_in: true, ..Default::default() };
+        let asked = preflights();
+        prefix().preflights.fetch_add(1, Ordering::SeqCst);
+
+        assert_eq!(warm_up(&client, asked, &Cancel::new()), Warmed::NotStarted);
+        assert!(client.done.borrow().is_empty());
+        assert!(take_client_owed(), "it comes back after the launch");
+    }
+
+    #[test]
+    fn a_warm_up_beside_a_running_game_waits_for_it() {
+        let client = Scripted {
+            signs_in: true,
+            games: vec![GameProcess { pid: 4242, name: "Wow.exe".to_owned() }],
+            ..Default::default()
+        };
+        assert_eq!(warm_up(&client, preflights(), &Cancel::new()), Warmed::NotStarted);
+        assert!(client.done.borrow().is_empty());
+        assert!(take_client_owed());
+    }
+
+    #[test]
+    fn a_client_that_dies_while_signing_in_ends_the_warm_up() {
+        let client = Scripted { signs_in: true, lives_for: Some(Cell::new(1)), ..Default::default() };
+        assert_eq!(warm_up(&client, preflights(), &Cancel::new()), Warmed::Exited);
+        assert_eq!(*client.done.borrow(), ["clear", "start"]);
+    }
+
+    #[test]
+    fn switching_the_mode_off_before_the_warm_up_starts_leaves_the_client_down() {
+        let client = Scripted { signs_in: true, ..Default::default() };
+        let cancel = Cancel::new();
+        cancel.cancel();
+        assert_eq!(warm_up(&client, preflights(), &cancel), Warmed::NotStarted);
+        assert!(client.done.borrow().is_empty());
+        assert!(!take_client_owed());
+    }
+
+    #[test]
+    fn make_way_closes_an_idle_background_client_and_owes_it() {
+        let client = Scripted { client: Cell::new(true), ..Default::default() };
+        assert!(give_way(&client, true));
+        assert_eq!(*client.done.borrow(), ["quit"]);
+        assert!(take_client_owed());
+    }
+
+    #[test]
+    fn make_way_closes_an_agent_a_hand_off_left_without_owing_a_client() {
+        let client = Scripted { agent: true, ..Default::default() };
+        assert!(give_way(&client, false));
+        assert_eq!(*client.done.borrow(), ["quit"]);
+        assert!(!take_client_owed());
+    }
+
+    #[test]
+    fn make_way_leaves_a_client_whose_window_is_open() {
+        let client = Scripted { client: Cell::new(true), window: true, ..Default::default() };
+        assert!(!give_way(&client, true));
+        assert!(client.done.borrow().is_empty());
+    }
 
     #[test]
     fn make_way_leaves_a_client_that_is_updating_a_game() {
-        let scratch = tempfile::tempdir().unwrap();
+        let client = Scripted { client: Cell::new(true), ..Default::default() };
         let _updating = Updating::start();
-        assert!(!make_way(&Layout::with_root(scratch.path())));
+        assert!(!give_way(&client, true));
+        assert!(client.done.borrow().is_empty());
     }
 }

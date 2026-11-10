@@ -142,7 +142,7 @@ pub(crate) enum Message {
     /// the branch was on offer but not configured.
     BranchSelected(BranchChoice),
     /// Pre-flight finished; `Launch` says what it was clearing the way for.
-    PreflightDone(Launch, Result<(), Problem>),
+    PreflightDone(Launch, Result<tasks::Cleared, Problem>),
     /// Diagnostic only: subscribed to solely under `LIGHTFORGE_TRACE=frames`.
     ResizeTraced(iced::Size),
     /// The optimistic, cache-only paint that precedes [`Message::Themed`].

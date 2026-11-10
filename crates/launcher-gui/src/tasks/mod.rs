@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -54,13 +55,88 @@ pub(crate) use companions::*;
 pub(crate) use client::*;
 pub(crate) use upgrade::{Prepared, Stamp};
 
-/// Held across every check-then-act that starts or stops something in the
-/// shared prefix: the warm-up, a pre-flight, a launch, making way for the store.
-static PREFIX: Mutex<()> = Mutex::new(());
+/// What every user of the shared prefix goes through. The flags sit outside
+/// the lock: the GUI thread reads them, and a pre-flight holds it for seconds.
+pub(crate) struct Prefix {
+    /// Held across every check-then-act that starts or stops something in
+    /// the prefix: the warm-up, a pre-flight, a launch, making way for the store.
+    lock: Mutex<PrefixState>,
+    /// The background client went away for a reason that passes, and is owed
+    /// a restart once nothing needs the prefix. The client poll reads it.
+    owed: AtomicBool,
+    /// The client updates a game for us: [`make_way`] leaves it be, or the
+    /// update dies with it.
+    updating: AtomicBool,
+    /// Launch pre-flights run. A warm-up that finds one ran since it was asked
+    /// stands down: the client may be meant to run under another build.
+    preflights: AtomicU64,
+}
+
+pub(crate) struct PrefixState {
+    /// Launches started, so a wind-down can tell whether a newer one owns
+    /// the prefix: a game not yet in the process table looks like an empty one.
+    pub(crate) launches: u64,
+    /// Times the lock was taken, so a spawn can tell whether anyone came
+    /// between it and its pre-flight.
+    holds: u64,
+}
+
+/// The prefix as a pre-flight left it, for the spawn it cleared the way for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cleared(u64);
+
+impl PrefixState {
+    pub(crate) fn cleared(&self) -> Cleared {
+        Cleared(self.holds)
+    }
+
+    /// Whether this hold is the first since `cleared`'s.
+    pub(crate) fn follows(&self, cleared: Cleared) -> bool {
+        self.holds == cleared.0 + 1
+    }
+}
+
+impl Prefix {
+    const fn new() -> Self {
+        Self {
+            lock: Mutex::new(PrefixState { launches: 0, holds: 0 }),
+            owed: AtomicBool::new(false),
+            updating: AtomicBool::new(false),
+            preflights: AtomicU64::new(0),
+        }
+    }
+}
+
+#[cfg(not(test))]
+fn prefix() -> &'static Prefix {
+    static PREFIX: Prefix = Prefix::new();
+    &PREFIX
+}
+
+/// One per test thread: the tests run in parallel, each with an app of its own.
+#[cfg(test)]
+fn prefix() -> &'static Prefix {
+    thread_local!(static PREFIX: &'static Prefix = Box::leak(Box::new(Prefix::new())));
+    PREFIX.with(|prefix| *prefix)
+}
 
 /// Poisoned only by a panic in a holder, which must not wedge every launch after it.
-pub(crate) fn hold_prefix() -> std::sync::MutexGuard<'static, ()> {
-    PREFIX.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+pub(crate) fn hold_prefix() -> std::sync::MutexGuard<'static, PrefixState> {
+    let mut state = prefix().lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    state.holds += 1;
+    state
+}
+
+pub(crate) fn owe_client() {
+    prefix().owed.store(true, Ordering::SeqCst);
+}
+
+pub(crate) fn take_client_owed() -> bool {
+    prefix().owed.swap(false, Ordering::SeqCst)
+}
+
+pub(crate) fn preflights() -> u64 {
+    prefix().preflights.load(Ordering::SeqCst)
 }
 
 
@@ -285,4 +361,22 @@ pub fn open_path(path: PathBuf) -> Result<(), String> {
 /// Open a URL in the default browser.
 pub fn open_url(url: &str) -> Result<(), String> {
     open::that_detached(url).map_err(|e| format!("{url}: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_spawn_right_after_its_pre_flight_finds_the_prefix_as_left() {
+        let cleared = hold_prefix().cleared();
+        assert!(hold_prefix().follows(cleared));
+    }
+
+    #[test]
+    fn a_spawn_sees_anyone_who_held_the_prefix_after_its_pre_flight() {
+        let cleared = hold_prefix().cleared();
+        drop(hold_prefix());
+        assert!(!hold_prefix().follows(cleared));
+    }
 }

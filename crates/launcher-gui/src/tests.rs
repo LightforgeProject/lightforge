@@ -992,8 +992,9 @@ fn a_launch_waits_for_its_paused_download_to_come_to_rest() {
     app.launching = Some(code.clone());
 
     // Pre-flight tripped the token and returned; the run has not stopped.
-    let _ = app.update(Message::PreflightDone(Launch::Game, Ok(())));
-    assert_eq!(app.launch_when_quiet, Some(Launch::Game));
+    let cleared = tasks::hold_prefix().cleared();
+    let _ = app.update(Message::PreflightDone(Launch::Game, Ok(cleared)));
+    assert_eq!(app.launch_when_quiet, Some((Launch::Game, cleared)));
 
     let _ = app.update(Message::Downloaded(code.clone(), stopped(true)));
     assert_eq!(app.launch_when_quiet, None, "started once the run stopped");

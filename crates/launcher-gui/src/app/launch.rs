@@ -304,7 +304,7 @@ impl Lightforge {
     }
 
     /// Start what a finished pre-flight cleared the way for.
-    pub(crate) fn start_launch(&mut self, what: Launch) -> Task<Message> {
+    pub(crate) fn start_launch(&mut self, what: Launch, cleared: tasks::Cleared) -> Task<Message> {
         let code = self.launching.clone().unwrap_or_else(|| self.selected.code.clone());
         if what != Launch::Game {
             // Kept if one is running: its timestamp is still the last read.
@@ -317,7 +317,7 @@ impl Lightforge {
                 self.status = "starting the game…".to_owned();
                 Task::batch([
                     Task::perform(
-                        tasks::start_game(self.layout.clone(), code.clone()),
+                        tasks::start_game(self.layout.clone(), code.clone(), (cleared, self.downloads.clone())),
                         Message::GameStarted,
                     ),
                     self.minimize_if_asked(),
@@ -334,6 +334,7 @@ impl Lightforge {
                         self.family_of(&code),
                         self.install_uid_of(&code),
                         self.config.battle_net_minimized,
+                        (cleared, self.downloads.clone()),
                     ),
                     Message::HandoffStarted,
                 )
@@ -347,6 +348,7 @@ impl Lightforge {
                         self.config.prefix_user.clone(),
                         self.install_uid_of(&code),
                         self.label_of(&code),
+                        (cleared, self.downloads.clone()),
                     ),
                     Message::Launched,
                 )
@@ -358,6 +360,7 @@ impl Lightforge {
                         self.layout.clone(),
                         code.clone(),
                         self.config.prefix_user.clone(),
+                        Some((cleared, self.downloads.clone())),
                     ),
                     Message::Launched,
                 )
