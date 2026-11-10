@@ -49,22 +49,7 @@ pub async fn download(
             let mut held = false;
             while !make_way(&layout) {
                 if cancel.is_cancelled() {
-                    let _ = done_tx.send(Ok(Summary {
-                        outcome: lightforge_core::tact::download::Outcome { cancelled: true, ..Default::default() },
-                        store: lightforge_core::tact::writer::Summary {
-                            data_dir: layout.wow_install(&code),
-                            archives: 0,
-                            files: 0,
-                            bytes: 0,
-                            indices: Vec::new(),
-                        },
-                        missing: 0,
-                        complete: false,
-                        reasons: Vec::new(),
-                        version: None,
-                        flavor: String::new(),
-                        executable: None,
-                    }));
+                    let _ = done_tx.send(Ok(Summary::cancelled(layout.wow_install(&code))));
                     return;
                 }
                 if !held {
@@ -233,7 +218,7 @@ pub(crate) fn describe(event: &Event) -> String {
         }
         Event::Progress(_) => String::new(),
         Event::InstallFile { path, .. } => format!("extracting {}", path.display()),
-        Event::Extracted { files, .. } => format!("extracted {files} install files"),
+        Event::Extracted { files, unchanged, .. } => format!("extracted {files} install files, {unchanged} already in place"),
         Event::BuildInfo { version, .. } => format!("finished — {version}"),
         Event::Staged { version } => format!("pre-downloaded {version}"),
         Event::ProductDb { .. } => "writing .product.db".to_owned(),

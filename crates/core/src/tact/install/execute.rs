@@ -1,6 +1,9 @@
 //! Running a prepared plan into the store, and `.build.info` after it.
 
 use std::path::Path;
+use std::pin::pin;
+
+use futures_util::future::{self, Either};
 
 use super::prepare::{prepare, Prepared};
 use super::{io, Event, InstallError, Options, Summary};
@@ -69,7 +72,7 @@ pub async fn execute(
             |e| on_event(Event::InstallFile { path: e.path.clone(), bytes: e.bytes }),
         )
         .await?;
-        on_event(Event::Extracted { files: report.written.len(), bytes: report.bytes() });
+        on_event(Event::Extracted { files: report.written.len(), bytes: report.bytes(), unchanged: report.unchanged });
         install_complete = report.is_complete();
         for (path, reason) in &report.failed {
             tracing::warn!("install file {path} failed: {reason}");
@@ -227,7 +230,15 @@ pub async fn run(
         on_event(event);
     };
     let result = async {
-        let prepared = prepare(http, dest, code, options, &mut on_event).await?;
+        // Planning fetches the manifests, two minutes on a slow link (wowf,
+        // 2026-11-10), and a pause must not wait on it. Its writes are atomic.
+        let prepared = {
+            let planning = pin!(prepare(http, dest, code, options, &mut on_event));
+            match future::select(planning, pin!(download::cancelled(cancel))).await {
+                Either::Left((prepared, _)) => prepared?,
+                Either::Right(_) => return Ok(Summary::cancelled(dest.to_path_buf())),
+            }
+        };
         execute(http, dest, code, options, prepared, cancel, &mut on_event).await
     }
     .await;

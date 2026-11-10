@@ -63,7 +63,7 @@ impl Cancel {
 
 /// Resolves once `cancel` trips. Polled: `Cancel` is a plain flag shared with
 /// synchronous code.
-async fn cancelled(cancel: &Cancel) {
+pub(crate) async fn cancelled(cancel: &Cancel) {
     while !cancel.is_cancelled() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }

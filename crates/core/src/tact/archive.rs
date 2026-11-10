@@ -134,7 +134,7 @@ pub struct Loose {
 /// The build's file index (`file-index` in the CDN config): the ~25k keys in
 /// no archive, the only content a plain GET fetches. Its footer declares
 /// `offset_bytes = 0`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileIndex {
     entries: Vec<Loose>,
 }

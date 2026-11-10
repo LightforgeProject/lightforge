@@ -216,6 +216,7 @@ pub enum Event {
     Extracted {
         files: usize,
         bytes: u64,
+        unchanged: usize,
     },
     BuildInfo {
         path: PathBuf,
@@ -259,6 +260,22 @@ pub struct Summary {
     /// config said: what the front end records for the paths to use.
     pub flavor: String,
     pub executable: Option<String>,
+}
+
+impl Summary {
+    /// A run stopped before it stored anything.
+    pub fn cancelled(data_dir: PathBuf) -> Self {
+        Self {
+            outcome: download::Outcome { cancelled: true, ..Default::default() },
+            store: StoreSummary { data_dir, archives: 0, files: 0, bytes: 0, indices: Vec::new() },
+            missing: 0,
+            complete: false,
+            reasons: vec!["cancelled".to_owned()],
+            version: None,
+            flavor: String::new(),
+            executable: None,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

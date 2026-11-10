@@ -21,6 +21,8 @@ pub struct Extracted {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InstallReport {
     pub written: Vec<Extracted>,
+    /// Already on disk with the right content, so left as they were.
+    pub unchanged: usize,
     pub failed: Vec<(String, String)>,
 }
 
@@ -57,6 +59,18 @@ pub async fn extract_install(
         let fail = |report: &mut InstallReport, reason: String| {
             report.failed.push((entry.path.clone(), reason));
         };
+
+        let Some(relative) = entry.relative_path() else {
+            fail(&mut report, "the install manifest names a path outside the install".into());
+            continue;
+        };
+        let path = resolve_windows_path(dest, &relative);
+        // Otherwise every repair and update fetches them all again, one at a
+        // time: 275 files, 340 MB, three minutes for wowf (2026-11-10).
+        if std::fs::read(&path).is_ok_and(|on_disk| *md5::compute(&on_disk) == entry.ckey) {
+            report.unchanged += 1;
+            continue;
+        }
 
         let Some(ekey) = encoding.ekey_for(&entry.ckey) else {
             fail(&mut report, format!("encoding does not list content key {}", hex(&entry.ckey)));
@@ -103,11 +117,6 @@ pub async fn extract_install(
             continue;
         }
 
-        let Some(relative) = entry.relative_path() else {
-            fail(&mut report, "the install manifest names a path outside the install".into());
-            continue;
-        };
-        let path = resolve_windows_path(dest, &relative);
         match crate::fsutil::write_atomic_with_mode(&path, &decoded, 0o644) {
             Ok(()) => {
                 let written = Extracted { path, bytes: decoded.len() as u64 };
