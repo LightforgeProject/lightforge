@@ -335,11 +335,11 @@ pub async fn launch_via_battle_net(
             }
         };
         if let Some((started, minimize)) = cold {
-            if battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT)
-                == Readiness::NeedsAttention
-            {
+            match battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT, || preflight::client_running(&layout)) {
+                Readiness::SignedIn => {}
                 // Left to the user, who is told where the client is.
-                return Ok(Handoff::NeedsAttention { minimized: minimize });
+                Readiness::NeedsAttention => return Ok(Handoff::NeedsAttention { minimized: minimize }),
+                Readiness::Exited => return Ok(Handoff::ClientClosed),
             }
         }
 
@@ -557,11 +557,11 @@ pub async fn stop_game(layout: Layout, game: GameProcess) -> Result<String, Prob
     }
 }
 
-/// Whether the Battle.net client is up in the prefix.
-pub async fn client_running(layout: Layout) -> bool {
-    tokio::task::spawn_blocking(move || lightforge_core::preflight::client_running(&layout))
+/// Whether the Battle.net client is up in the prefix, and whether a game is.
+pub async fn prefix_seen(layout: Layout) -> (bool, bool) {
+    tokio::task::spawn_blocking(move || lightforge_core::preflight::client_and_games(&layout))
         .await
-        .unwrap_or(false)
+        .unwrap_or((false, false))
 }
 
 /// The games running in the prefix, by name, whoever started them.

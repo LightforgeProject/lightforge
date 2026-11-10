@@ -295,6 +295,14 @@ struct Lightforge {
     /// A launch through the client, waiting for it to finish signing in,
     /// with the game it was for: the tile shown may have changed since.
     launch_after_client: Option<(Launch, ProductCode)>,
+    /// Counts warm-ups, so the answer of one that was overtaken is dropped.
+    client_generation: u64,
+    /// Tripped when the mode goes off before the running warm-up starts the client.
+    warming: Option<Cancel>,
+    /// The mode went off during a launch: the client goes once it is over.
+    close_client_after_play: bool,
+    /// Hand-offs sent again in a row because the client updated itself.
+    client_update_retries: u8,
     /// The game the client holds back for an update, of those asked about.
     update_pending: Option<ProductCode>,
     /// The update being followed.

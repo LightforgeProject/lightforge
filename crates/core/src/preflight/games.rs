@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use sysinfo::{Signal, System};
 
 use super::scan::{
-    belongs_to, executable_name, is_cef_child_arg, is_windows_exe, owned_prefixes, refresh, scan,
+    belongs_to, collect, executable_name, is_cef_child_arg, is_windows_exe, owned_prefixes, refresh, scan,
     ProcKind,
 };
 use super::shutdown::{signal_all, Disposition};
@@ -60,6 +60,15 @@ pub fn client_pids(layout: &Layout) -> Vec<u32> {
 /// launch command directly.
 pub fn client_running(layout: &Layout) -> bool {
     scan(layout).iter().any(|p| p.kind == ProcKind::BattleNet)
+}
+
+/// [`client_running`], and whether [`games_running`] would find any, from one
+/// scan: for a poll that wants both.
+pub fn client_and_games(layout: &Layout) -> (bool, bool) {
+    let mut system = System::new();
+    refresh(&mut system);
+    let client = collect(&system, layout).iter().any(|p| p.kind == ProcKind::BattleNet);
+    (client, !collect_games(&system, layout).is_empty())
 }
 
 /// Processes in the prefix that are not Battle.net's and not Wine's own.

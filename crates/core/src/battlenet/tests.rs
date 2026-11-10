@@ -80,7 +80,7 @@ fn readiness_is_read_from_the_log_this_start_wrote() {
 
     let since = SystemTime::now() + Duration::from_secs(60);
     assert_eq!(
-        wait_until_ready(&layout, "steamuser", since, Duration::from_millis(1)),
+        wait_until_ready(&layout, "steamuser", since, Duration::from_millis(1), || true),
         Readiness::NeedsAttention,
         "a log older than this start says nothing about it"
     );
@@ -92,8 +92,40 @@ fn readiness_is_read_from_the_log_this_start_wrote() {
             "steamuser",
             SystemTime::UNIX_EPOCH,
             Duration::from_millis(1),
+            || true,
         ),
         Readiness::SignedIn
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_client_that_dies_while_signing_in_ends_the_wait() {
+    let dir = scratch("exited");
+    let layout = Layout::with_root(&dir);
+    let polls = std::cell::Cell::new(0);
+    let alive = || {
+        polls.set(polls.get() + 1);
+        polls.get() <= 2
+    };
+
+    let since = SystemTime::now();
+    let readiness = wait_until_ready(&layout, "steamuser", since, Duration::from_secs(60), alive);
+    assert_eq!(readiness, Readiness::Exited);
+    assert!(polls.get() < 20, "well before the timeout");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_client_not_yet_in_the_process_table_is_waited_for() {
+    let dir = scratch("not-yet-up");
+    let layout = Layout::with_root(&dir);
+    let since = SystemTime::now();
+    assert_eq!(
+        wait_until_ready(&layout, "steamuser", since, Duration::from_millis(1500), || false),
+        Readiness::NeedsAttention
     );
 
     let _ = std::fs::remove_dir_all(&dir);

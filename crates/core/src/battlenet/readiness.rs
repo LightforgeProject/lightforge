@@ -38,6 +38,8 @@ pub enum Readiness {
     /// Still not signed in when the wait ran out: two-factor, an outage or a
     /// client update, all of which need a person.
     NeedsAttention,
+    /// The client was up and went away before it signed in.
+    Exited,
 }
 
 /// The line the client writes once it is signed in.
@@ -67,6 +69,10 @@ pub(super) fn client_ready(log: &str, signed_in_for: Duration) -> bool {
 /// How often the log is re-read while waiting.
 const READY_POLL: Duration = Duration::from_millis(250);
 
+/// Polls in a row the client must be missing for before it counts as gone,
+/// about a second, so one scan that misses it does not end the wait.
+const GONE_AFTER: u32 = 4;
+
 /// Wait until the client says it is signed in and has its games.
 ///
 /// Reads the newest log in [`Layout::battle_net_logs`] written after `since`,
@@ -78,16 +84,23 @@ const READY_POLL: Duration = Duration::from_millis(250);
 /// ```
 ///
 /// About 5.5 s from process start on a cold Proton start.
+///
+/// `alive` says whether the client is in the process table. It only ends the
+/// wait once the client has been seen: a cold Proton start takes seconds to
+/// put it there.
 pub fn wait_until_ready(
     layout: &Layout,
     user: &str,
     since: SystemTime,
     within: Duration,
+    alive: impl Fn() -> bool,
 ) -> Readiness {
     let dir = layout.battle_net_logs(user);
     let deadline = Instant::now() + within;
     // When the sign-in line was first seen, to time the grace from.
     let mut signed_in_at: Option<Instant> = None;
+    let mut seen = false;
+    let mut missing = 0;
 
     loop {
         if let Some(path) = newest_log_after(&dir, since) {
@@ -100,6 +113,20 @@ pub fn wait_until_ready(
                     }
                 }
             }
+        }
+        match alive() {
+            true => {
+                seen = true;
+                missing = 0;
+            }
+            false if seen => {
+                missing += 1;
+                if missing >= GONE_AFTER {
+                    tracing::warn!("Battle.net exited before it signed in; logs in {}", dir.display());
+                    return Readiness::Exited;
+                }
+            }
+            false => {}
         }
         if Instant::now() >= deadline {
             tracing::warn!(

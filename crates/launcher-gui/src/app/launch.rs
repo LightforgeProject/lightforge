@@ -58,7 +58,7 @@ impl Lightforge {
 
     /// Ask the process table whether the Battle.net client is up.
     pub(crate) fn check_client(&self) -> Task<Message> {
-        Task::perform(tasks::client_running(self.layout.clone()), Message::ClientSeen)
+        Task::perform(tasks::prefix_seen(self.layout.clone()), |(up, game)| Message::ClientSeen { up, game })
     }
 
     /// Ask the client's log about the selected game, for the button's word.
@@ -118,9 +118,13 @@ impl Lightforge {
             return Task::none();
         }
         self.client_phase = ClientPhase::SigningIn;
+        self.client_generation += 1;
+        let generation = self.client_generation;
+        let cancel = Cancel::new();
+        self.warming = Some(cancel.clone());
         Task::perform(
-            tasks::warm_battle_net(self.layout.clone(), self.config.prefix_user.clone(), tasks::preflights()),
-            Message::BackgroundClient,
+            tasks::warm_battle_net(self.layout.clone(), self.config.prefix_user.clone(), tasks::preflights(), cancel),
+            move |result| Message::BackgroundClient(generation, result),
         )
     }
 
@@ -137,6 +141,7 @@ impl Lightforge {
             && self.client_phase == ClientPhase::Settled
             && !self.busy
             && !self.quitting_client
+            && self.client_update.is_none()
             && !self.in_play()
             && self.store_writer().is_none()
             && !removing_textures
@@ -144,7 +149,15 @@ impl Lightforge {
 
     /// The setting was switched off: a client nobody is using goes with it.
     pub(crate) fn close_background_client(&mut self) -> Task<Message> {
-        if self.busy || self.quitting_client {
+        if let Some(warming) = self.warming.take() {
+            warming.cancel();
+        }
+        // The launch may be the one starting the client; after it, then.
+        if self.busy {
+            self.close_client_after_play = true;
+            return Task::none();
+        }
+        if self.quitting_client {
             return Task::none();
         }
         self.quitting_client = true;
@@ -185,8 +198,13 @@ impl Lightforge {
                 self.queue[at].stage = Stage::Queued;
             }
         }
+        let close_client = match std::mem::take(&mut self.close_client_after_play) {
+            true if !self.config.battle_net_in_background => self.close_background_client(),
+            _ => Task::none(),
+        };
         // The session may have filled the catalogue cache; 25 ms to re-read.
         Task::batch([
+            close_client,
             self.pump(),
             self.check_client(),
             self.reload(self.selected.code.clone()),
@@ -209,6 +227,7 @@ impl Lightforge {
     /// Clear the way for a launch of the selected game, then let
     /// [`Message::PreflightDone`] start it.
     pub(crate) fn preflight(&mut self, what: Launch) -> Task<Message> {
+        self.client_update_retries = 0;
         self.preflight_for(what, self.selected.code.clone())
     }
 

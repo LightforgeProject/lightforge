@@ -1714,13 +1714,13 @@ fn battle_net_running_offers_show_and_quit_and_closes_the_menu_when_it_goes() {
     app.patch_notes = None;
     app.screen = Screen::Dashboard;
 
-    let _ = app.update(Message::ClientSeen(true));
+    let _ = app.update(Message::ClientSeen { up: true, game: false });
     let _ = app.update(Message::ToggleClientMenu);
     assert!(app.client_menu_open && app.panel_open());
     // Drawn with its dot, chevron and menu.
     let _ = app.view();
 
-    let _ = app.update(Message::ClientSeen(false));
+    let _ = app.update(Message::ClientSeen { up: false, game: false });
     assert!(!app.client_up && !app.client_menu_open);
 }
 
@@ -1741,7 +1741,7 @@ fn a_hand_off_waits_while_the_background_client_signs_in() {
     assert_eq!(app.launch_after_client, Some((Launch::BattleNet, app.selected.code.clone())));
     assert!(app.busy, "the button is held while it waits");
 
-    let _ = app.update(Message::BackgroundClient(Ok(tasks::Warmed::Ready)));
+    let _ = app.update(Message::BackgroundClient(app.client_generation, Ok(tasks::Warmed::Ready)));
     assert_eq!(app.client_phase, ClientPhase::Settled);
     assert_eq!(app.launch_after_client, None);
 }
@@ -1756,7 +1756,7 @@ fn a_hand_off_held_for_sign_in_starts_the_game_it_was_for() {
     let _ = app.preflight(Launch::BattleNet);
 
     app.selected.code = ProductCode::Retail;
-    let _ = app.update(Message::BackgroundClient(Ok(tasks::Warmed::Ready)));
+    let _ = app.update(Message::BackgroundClient(app.client_generation, Ok(tasks::Warmed::Ready)));
     assert_eq!(app.launching, Some(hearthstone));
 }
 
@@ -1778,14 +1778,14 @@ fn a_client_that_needs_signing_in_releases_the_launch_waiting_on_it() {
     let _ = app.preflight(Launch::BattleNet);
 
     let started = std::time::SystemTime::now();
-    let _ = app.update(Message::BackgroundClient(Ok(tasks::Warmed::NeedsSignIn { started })));
+    let _ = app.update(Message::BackgroundClient(app.client_generation, Ok(tasks::Warmed::NeedsSignIn { started })));
     assert_eq!(app.client_phase, ClientPhase::NeedsSignIn);
     assert!(!app.busy, "nobody can sign in behind a held button");
 
     // Drawn with its warning dot.
     let _ = app.view();
 
-    let _ = app.update(Message::ClientSeen(false));
+    let _ = app.update(Message::ClientSeen { up: false, game: false });
     assert_eq!(app.client_phase, ClientPhase::Settled, "it was quit, so it no longer needs anything");
 }
 
@@ -1825,7 +1825,7 @@ fn the_button_says_update_while_the_client_holds_the_game_back() {
     assert_eq!(app.handoff_act(), HandoffAct::Update);
     assert_eq!(app.handoff_act().label(), "Update via Battle.net");
 
-    let _ = app.update(Message::ClientSeen(false));
+    let _ = app.update(Message::ClientSeen { up: false, game: false });
     assert_eq!(app.handoff_act(), HandoffAct::Play, "no client, nothing known about it");
 }
 
@@ -1919,11 +1919,11 @@ fn a_client_that_gave_way_returns_once_nothing_needs_the_prefix() {
     tasks::owe_client();
 
     app.scanning = true;
-    let _ = app.update(Message::ClientSeen(false));
+    let _ = app.update(Message::ClientSeen { up: false, game: false });
     assert_eq!(app.client_phase, ClientPhase::Settled, "not during a scan");
 
     app.scanning = false;
-    let _ = app.update(Message::ClientSeen(false));
+    let _ = app.update(Message::ClientSeen { up: false, game: false });
     assert_eq!(app.client_phase, ClientPhase::SigningIn);
 }
 
@@ -1961,6 +1961,111 @@ fn a_launch_that_found_the_client_updating_itself_is_sent_again() {
     assert_eq!(app.launch_after_client, Some((Launch::BattleNet, app.selected.code.clone())));
     assert_eq!(app.client_phase, ClientPhase::SigningIn);
     assert!(app.busy, "the button stays held for the second try");
+}
+
+#[test]
+fn a_client_that_keeps_updating_itself_stops_being_retried() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.battle_net_in_background = true;
+    app.busy = true;
+
+    for _ in 0..2 {
+        let _ = app.update(Message::HandoffStarted(Ok(tasks::Handoff::ClientUpdated)));
+        assert!(app.busy && app.error.is_none());
+        app.client_phase = ClientPhase::Settled;
+    }
+    let _ = app.update(Message::HandoffStarted(Ok(tasks::Handoff::ClientUpdated)));
+    assert!(!app.busy);
+    assert!(app.error.as_ref().is_some_and(|e| e.message.contains("keeps restarting")));
+}
+
+#[test]
+fn a_retry_with_no_client_to_wait_for_goes_straight_to_the_hand_off() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.battle_net_in_background = true;
+    app.config.battle_net_declined = true;
+    app.busy = true;
+
+    let _ = app.update(Message::HandoffStarted(Ok(tasks::Handoff::ClientUpdated)));
+    assert_eq!(app.launch_after_client, None, "nothing would ever release it");
+    assert!(app.busy, "the hand-off's pre-flight is under way");
+}
+
+#[test]
+fn an_overtaken_warm_up_is_not_listened_to() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.client_phase = ClientPhase::SigningIn;
+    app.client_generation = 2;
+
+    let started = std::time::SystemTime::now();
+    let _ = app.update(Message::BackgroundClient(1, Ok(tasks::Warmed::NeedsSignIn { started })));
+    assert_eq!(app.client_phase, ClientPhase::SigningIn);
+}
+
+#[test]
+fn switching_the_mode_off_during_a_launch_closes_the_client_after_it() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.busy = true;
+
+    let _ = app.close_background_client();
+    assert!(!app.quitting_client, "the launch may be starting it");
+
+    let _ = app.update(Message::Launched(Ok(String::new())));
+    assert!(app.quitting_client);
+}
+
+#[test]
+fn switching_the_mode_off_cancels_a_warm_up_that_has_not_started_the_client() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.battle_net_in_background = true;
+    let _ = app.warm_client();
+    let warming = app.warming.clone().expect("a warm-up is running");
+
+    let _ = app.close_background_client();
+    assert!(warming.is_cancelled());
+}
+
+#[test]
+fn a_game_updating_through_battle_net_lets_paused_downloads_go_on() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.battle_net_in_background = true;
+    app.queue.clear();
+    app.queue.push(Download {
+        code: ProductCode::Retail,
+        label: String::new(),
+        stage: Stage::Paused(state::Progress::default()),
+        sample: TransferState::default(),
+        rate: Rate::default(),
+        job: Job::default(),
+        pre_download: false,
+    });
+    app.resume_after_play.push(ProductCode::Retail);
+    let hearthstone = ProductCode::Custom("hs_beta".to_owned());
+    app.launching = Some(hearthstone.clone());
+    app.busy = true;
+
+    let _ = app.update(Message::HandoffStarted(Ok(tasks::Handoff::NeedsUpdate)));
+    assert!(app.resume_after_play.is_empty());
+    assert!(!matches!(app.queue[0].stage, Stage::Paused(_)));
+}
+
+#[test]
+fn a_client_owed_while_a_game_runs_waits_for_the_game() {
+    let _owed = CLIENT_OWED_TESTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.battle_net_in_background = true;
+    tasks::owe_client();
+
+    let _ = app.update(Message::ClientSeen { up: false, game: true });
+    assert_eq!(app.client_phase, ClientPhase::Settled);
+    assert!(tasks::take_client_owed(), "still owed for when the game is gone");
 }
 
 #[test]

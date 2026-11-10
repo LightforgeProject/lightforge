@@ -44,6 +44,10 @@ impl Lightforge {
                 }
             }
 
+            // A second one does not wait for the checkpoint.
+            Message::StopSignal if self.closing.is_some() => iced::exit(),
+            Message::StopSignal => iced::window::oldest().and_then(|id| Task::done(Message::CloseRequested(id))),
+
             Message::SplashDone(count) => {
                 // The wizard counts off this same fetch.
                 if let Some(wizard) = self.wizard.as_mut() {

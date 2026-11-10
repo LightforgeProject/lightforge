@@ -61,22 +61,36 @@ pub enum Warmed {
     NeedsSignIn { started: SystemTime },
     /// Already up, beside a game, or without a saved sign-in.
     NotStarted,
+    /// It came up and went away again before it signed in.
+    Exited,
 }
 
 /// `preflights_seen` is [`preflights`] when the warm-up was asked for.
-pub async fn warm_battle_net(layout: Layout, user: String, preflights_seen: u64) -> Result<Warmed, Problem> {
+/// `cancel` is tripped when the mode is switched off: checked under the lock,
+/// which a close holds for its whole check-and-close.
+pub async fn warm_battle_net(
+    layout: Layout,
+    user: String,
+    preflights_seen: u64,
+    cancel: Cancel,
+) -> Result<Warmed, Problem> {
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         let prefix = hold_prefix();
+        if cancel.is_cancelled() {
+            return Ok(Warmed::NotStarted);
+        }
         if preflights() != preflights_seen {
             tracing::info!("Battle.net waits in the background: a launch got to the prefix first");
             owe_client();
             return Ok(Warmed::NotStarted);
         }
+        // Owed again: the client poll brings it back once the game is gone.
+        if !preflight::games_running(&layout).is_empty() {
+            owe_client();
+            return Ok(Warmed::NotStarted);
+        }
         // Without a saved sign-in this would be a form nobody can see.
-        if preflight::client_running(&layout)
-            || !preflight::games_running(&layout).is_empty()
-            || !battlenet::signs_in_by_itself(&layout, &user)
-        {
+        if preflight::client_running(&layout) || !battlenet::signs_in_by_itself(&layout, &user) {
             return Ok(Warmed::NotStarted);
         }
         tracing::info!("starting Battle.net in the background");
@@ -97,9 +111,10 @@ pub async fn warm_battle_net(layout: Layout, user: String, preflights_seen: u64)
 
         let started = start_client(&in_tls_container(runner)?, &layout, &user, true)?;
         drop(prefix);
-        Ok(match battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT) {
+        Ok(match battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT, || preflight::client_running(&layout)) {
             Readiness::SignedIn => Warmed::Ready,
             Readiness::NeedsAttention => Warmed::NeedsSignIn { started },
+            Readiness::Exited => Warmed::Exited,
         })
     })
     .await
@@ -109,9 +124,10 @@ pub async fn warm_battle_net(layout: Layout, user: String, preflights_seen: u64)
 /// Wait for someone to sign in the client that [`warm_battle_net`] gave up on.
 pub async fn await_sign_in(layout: Layout, user: String, started: SystemTime) -> Result<Warmed, Problem> {
     tokio::task::spawn_blocking(move || {
-        match battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_PATIENCE) {
+        match battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_PATIENCE, || preflight::client_running(&layout)) {
             Readiness::SignedIn => Warmed::Ready,
             Readiness::NeedsAttention => Warmed::NeedsSignIn { started },
+            Readiness::Exited => Warmed::Exited,
         }
     })
     .await
@@ -128,62 +144,72 @@ pub enum ClientUpdated {
 
 /// Have the client update `uid`, and follow it. Battle.net owns this game's
 /// files; Lightforge only starts the client so that it updates, and reads its log.
-pub async fn update_through_client(
+///
+/// [`make_way`] leaves the client be from the call on, not from when the task
+/// first runs: downloads resumed in the same message would get there first.
+pub fn update_through_client(
     layout: Layout,
     user: String,
     uid: String,
     progress: Arc<Mutex<lightforge_core::state::Progress>>,
     stop: Cancel,
-) -> Result<ClientUpdated, Problem> {
+) -> impl std::future::Future<Output = Result<ClientUpdated, Problem>> {
     use lightforge_core::battlenet::{SessionLog, UpdateState};
 
-    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
-        let _updating = Updating::start();
-        let prefix = hold_prefix();
-        if let Some(game) = preflight::games_running(&layout).first() {
-            return Err(format!("close {} first — Battle.net has to restart for this update", game.name).into());
-        }
-        let runner = lone_client_runner(&layout)?;
-        // Read when it starts, and written back when it exits.
-        preflight::quit_client(&runner, &layout, STOP_GRACE).map_err(|e| Problem::of(&e))?;
-        battlenet::configure(&layout, &user, &[battlenet::auto_update_tweak(&uid, true)])
-            .map_err(|e| Problem::of(&e))?;
-        tracing::info!("asking Battle.net to update {uid}");
-        LAUNCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-        let started = start_client(&in_tls_container(runner)?, &layout, &user, true)?;
-        drop(prefix);
-        if battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT) == Readiness::NeedsAttention {
-            return Err("Battle.net needs you to sign in — press its button, then try the update again".into());
-        }
-        let log = SessionLog::find(&layout, &user)
-            .ok_or_else(|| Problem::from("Battle.net's log cannot be read"))?;
-
-        let began = Instant::now();
-        loop {
-            if stop.is_cancelled() {
-                return Ok(ClientUpdated::StoppedWatching);
+    let updating = Updating::start();
+    async move {
+        tokio::task::spawn_blocking(move || -> Result<_, Problem> {
+            let _updating = updating;
+            let prefix = hold_prefix();
+            if let Some(game) = preflight::games_running(&layout).first() {
+                return Err(format!("close {} first — Battle.net has to restart for this update", game.name).into());
             }
-            match log.update_state(&uid) {
-                UpdateState::Completed => return Ok(ClientUpdated::Completed),
-                UpdateState::Running(now) => {
-                    if let Ok(mut shown) = progress.lock() {
-                        *shown = now;
+            let runner = lone_client_runner(&layout)?;
+            // Read when it starts, and written back when it exits.
+            preflight::quit_client(&runner, &layout, STOP_GRACE).map_err(|e| Problem::of(&e))?;
+            battlenet::configure(&layout, &user, &[battlenet::auto_update_tweak(&uid, true)])
+                .map_err(|e| Problem::of(&e))?;
+            tracing::info!("asking Battle.net to update {uid}");
+            LAUNCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+            let started = start_client(&in_tls_container(runner)?, &layout, &user, true)?;
+            drop(prefix);
+            match battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT, || preflight::client_running(&layout)) {
+                Readiness::SignedIn => {}
+                Readiness::NeedsAttention => {
+                    return Err("Battle.net needs you to sign in — press its button, then try the update again".into());
+                }
+                Readiness::Exited => return Err("Battle.net closed before it signed in".into()),
+            }
+            let log = SessionLog::find(&layout, &user)
+                .ok_or_else(|| Problem::from("Battle.net's log cannot be read"))?;
+
+            let began = Instant::now();
+            loop {
+                if stop.is_cancelled() {
+                    return Ok(ClientUpdated::StoppedWatching);
+                }
+                match log.update_state(&uid) {
+                    UpdateState::Completed => return Ok(ClientUpdated::Completed),
+                    UpdateState::Running(now) => {
+                        if let Ok(mut shown) = progress.lock() {
+                            *shown = now;
+                        }
                     }
+                    UpdateState::NotStarted if began.elapsed() >= UPDATE_STARTS_WITHIN => {
+                        return Err("Battle.net did not start the update — open Battle.net to see why".into());
+                    }
+                    UpdateState::NotStarted => {}
                 }
-                UpdateState::NotStarted if began.elapsed() >= UPDATE_STARTS_WITHIN => {
-                    return Err("Battle.net did not start the update — open Battle.net to see why".into());
+                if !preflight::client_running(&layout) {
+                    return Err("Battle.net closed during the update".into());
                 }
-                UpdateState::NotStarted => {}
+                std::thread::sleep(UPDATE_POLL);
             }
-            if !preflight::client_running(&layout) {
-                return Err("Battle.net closed during the update".into());
-            }
-            std::thread::sleep(UPDATE_POLL);
-        }
-    })
-    .await
-    .map_err(|e| Problem::of(&e))?
+        })
+        .await
+        .map_err(|e| Problem::of(&e))?
+    }
 }
 
 /// Whether the client holds `uid` back for an update, from its log.

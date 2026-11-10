@@ -153,6 +153,8 @@ pub(crate) enum Message {
     /// logind's answer to [`tasks::keep_awake`].
     KeptAwake(Result<Arc<std::os::fd::OwnedFd>, String>),
     CloseRequested(iced::window::Id),
+    /// SIGTERM, SIGINT or SIGHUP.
+    StopSignal,
     /// A launch ended without a game of its own to watch: the client was
     /// opened, the hand-off came to nothing, or it failed.
     Launched(Result<String, Problem>),
@@ -168,7 +170,8 @@ pub(crate) enum Message {
     GameStopped(ProductCode, Result<String, Problem>),
     /// Every few seconds: is the Battle.net client up?
     ClientWatch,
-    ClientSeen(bool),
+    /// The poll's answer: the client up, and a game in the prefix.
+    ClientSeen { up: bool, game: bool },
     /// The menu beside a running Battle.net's button.
     ToggleClientMenu,
     /// Bring a running client's window up, without restarting it.
@@ -381,8 +384,8 @@ pub(crate) enum Message {
     ModeRestart,
     /// Not now: the mode just switched applies without a restart.
     ModeRestartLater,
-    /// What came of starting it out of sight.
-    BackgroundClient(Result<tasks::Warmed, Problem>),
+    /// What came of starting it out of sight, for the warm-up counted.
+    BackgroundClient(u64, Result<tasks::Warmed, Problem>),
     /// Whether the client holds this game back for an update.
     ClientUpdatePending(ProductCode, bool),
     /// Stop following a game's update. The client carries on.
