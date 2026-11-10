@@ -280,7 +280,8 @@ impl Lightforge {
                 if !up {
                     self.update_pending = None;
                 }
-                if !game && self.client_may_return() && tasks::take_client_owed() {
+                // `|`, not `||`: both are taken, or one answers again next poll.
+                if !game && self.client_may_return() && (tasks::take_client_owed() | self.take_cli_owed()) {
                     return Ok(self.warm_client());
                 }
                 // Not during a launch, which reads the same log itself.

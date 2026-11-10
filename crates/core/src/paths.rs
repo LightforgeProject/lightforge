@@ -494,6 +494,26 @@ impl AppDirs {
         self.config.join("config.toml")
     }
 
+    /// `lightforge-<id>.<ext>` in `$XDG_RUNTIME_DIR`, or the cache directory
+    /// without one: the GUI's single-instance lock and the files beside it.
+    /// `<id>` comes from the config directory, so a run with its own
+    /// `XDG_CONFIG_HOME` (a sandbox) is an instance of its own.
+    pub fn instance_file(&self, ext: &str) -> PathBuf {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(|| self.cache.clone(), PathBuf::from);
+        let id = crate::text::hex(&md5::compute(self.config.as_os_str().as_bytes()).0[..4]);
+        dir.join(format!("lightforge-{id}.{ext}"))
+    }
+
+    /// Whether a GUI holds this configuration's instance lock. Taken shared
+    /// and let go at once; a GUI starting in that moment waits it out.
+    pub fn gui_running(&self) -> bool {
+        let Ok(lock) = std::fs::File::open(self.instance_file("lock")) else {
+            return false;
+        };
+        matches!(lock.try_lock_shared(), Err(std::fs::TryLockError::WouldBlock))
+    }
+
     /// The launcher's own log files, see [`crate::logging`].
     pub fn log_dir(&self) -> PathBuf {
         self.data.join("logs")
@@ -580,6 +600,14 @@ pub enum Repaired {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn another_configuration_is_an_instance_of_its_own() {
+        let real = super::AppDirs::with_dirs("/home/a/.config/lightforge", "/c", "/d");
+        let sandbox = super::AppDirs::with_dirs("/tmp/sandbox/config/lightforge", "/c", "/d");
+        assert_ne!(real.instance_file("lock"), sandbox.instance_file("lock"));
+        assert_eq!(real.instance_file("lock").parent(), real.instance_file("owed").parent());
+    }
+
     /// A directory writable through its subdirectories that refuses a file
     /// of its own: an install root from another tool.
     #[test]

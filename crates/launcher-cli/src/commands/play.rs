@@ -1,10 +1,11 @@
 //! Starting a game, and the pre-flight in front of it.
 
-use super::{managed_products, print_preflight, proton_runner};
+use super::{beside_gui, managed_products, owe_gui_client, print_preflight, proton_runner};
 use crate::*;
 
 pub(crate) fn play(ctx: Ctx, code: ProductCode, proton: Option<String>, dry_run: bool) -> Result<()> {
     let Ctx { layout, config } = ctx;
+    let config = beside_gui(config);
     use lightforge_core::config::Config;
     use lightforge_core::preflight::{NoDownloads, Preflight};
 
@@ -60,6 +61,7 @@ pub(crate) fn play(ctx: Ctx, code: ProductCode, proton: Option<String>, dry_run:
         .run(&runner, &layout, Some(&code), &mut NoDownloads)
         .context("pre-flight cleanup")?;
     print_preflight(&report);
+    owe_gui_client(&config, &report);
 
     let status = lightforge_core::tweaks::wrapped(
         runner.command("run", &exe, Vec::<String>::new()),
@@ -76,6 +78,7 @@ pub(crate) fn play(ctx: Ctx, code: ProductCode, proton: Option<String>, dry_run:
 
 pub(crate) fn preflight(ctx: Ctx, proton: Option<String>, code: Option<ProductCode>, dry_run: bool, grace: u64) -> Result<()> {
     let Ctx { layout, config } = ctx;
+    let config = beside_gui(config);
     use lightforge_core::preflight::{self, NoDownloads, Preflight};
 
     if dry_run {
@@ -103,5 +106,6 @@ pub(crate) fn preflight(ctx: Ctx, proton: Option<String>, code: Option<ProductCo
         .run(&runner, &layout, code.as_ref(), &mut NoDownloads)
         .context("pre-flight cleanup")?;
     print_preflight(&report);
+    owe_gui_client(&config, &report);
     Ok(())
 }

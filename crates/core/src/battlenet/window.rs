@@ -16,12 +16,20 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{AtomEnum, ClientMessageEvent, ConnectionExt, EventMask, MapState, Window};
+use x11rb::protocol::xproto::{
+    AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConnectionExt, EventMask, MapState, Window,
+};
 use x11rb::rust_connection::RustConnection;
-use x11rb::CURRENT_TIME;
+use x11rb::{CURRENT_TIME, NONE};
 
-/// How often the window list is read while watching.
+use super::LaunchStage;
+
+/// How often the watch looks for news: X events, and the client's log.
 const POLL: Duration = Duration::from_millis(20);
+
+/// How often the window list is read with no event saying it changed, for a
+/// window manager that announces nothing.
+const RESCAN: Duration = Duration::from_millis(500);
 
 /// The main window's title. The client's other top-levels, toasts and the
 /// friends list, are left alone.
@@ -86,15 +94,35 @@ impl ClientWindows {
     }
 
     /// Close every main window that maps until `until`, the way its X button
-    /// does. Each is asked once: Wine makes a new X window for every showing.
-    /// Returns how many were closed.
-    pub fn keep_closed(&self, until: Instant) -> Result<usize, WindowError> {
+    /// does, while `stage` says the client has taken the launch. Not before:
+    /// a window shown for a launch it has not taken may be a prompt, and one
+    /// after an error is for the user. Done once the game runs, when the client
+    /// puts the window away itself. Each is asked once: Wine makes a new X
+    /// window for every showing. Returns how many were closed.
+    pub fn keep_closed(&self, until: Instant, mut stage: impl FnMut() -> LaunchStage) -> Result<usize, WindowError> {
+        // A new top-level, a frame mapped for one, or the manager's list changing.
+        let watch = ChangeWindowAttributesAux::new().event_mask(EventMask::SUBSTRUCTURE_NOTIFY | EventMask::PROPERTY_CHANGE);
+        self.conn.change_window_attributes(self.root, &watch)?.check()?;
         let mut asked = HashSet::new();
+        let mut changed = true;
+        let mut scanned = Instant::now();
         while Instant::now() < until {
-            for (window, showing) in self.main_windows()? {
-                if showing == Showing::OnScreen && asked.insert(window) {
-                    self.close(window)?;
+            while self.conn.poll_for_event()?.is_some() {
+                changed = true;
+            }
+            match stage() {
+                LaunchStage::Sent => {}
+                LaunchStage::Taken if changed || scanned.elapsed() >= RESCAN => {
+                    for (window, showing) in self.main_windows()? {
+                        if showing == Showing::OnScreen && asked.insert(window) {
+                            self.close(window)?;
+                        }
+                    }
+                    changed = false;
+                    scanned = Instant::now();
                 }
+                LaunchStage::Taken => {}
+                LaunchStage::Failed | LaunchStage::Running => break,
             }
             std::thread::sleep(POLL);
         }
@@ -156,6 +184,22 @@ impl ClientWindows {
         }
         Ok(main)
     }
+}
+
+/// Whether the display has a tray Wine can dock the client's icon in: an owner
+/// of the XEmbed `_NET_SYSTEM_TRAY_S<screen>` selection, which is what Wine
+/// looks for. KDE's xembedsniproxy is one; GNOME without its AppIndicator
+/// extension and gamescope have none, and a client hidden there is unreachable.
+pub fn tray_present() -> bool {
+    let Ok((conn, screen)) = x11rb::connect(None) else {
+        return false;
+    };
+    let name = format!("_NET_SYSTEM_TRAY_S{screen}");
+    conn.intern_atom(false, name.as_bytes())
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .and_then(|atom| conn.get_selection_owner(atom.atom).ok()?.reply().ok())
+        .is_some_and(|owner| owner.owner != NONE)
 }
 
 fn showing(map_state: MapState, wm_state: Option<u32>) -> Option<Showing> {

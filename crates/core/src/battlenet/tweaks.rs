@@ -179,15 +179,23 @@ pub fn auto_update_tweak(uid: &str, on: bool) -> Tweak {
 
 /// Defaults for a per-account `<hash>.config`. The client stores window
 /// behaviour per account and ignores these keys in `Battle.net.config`.
-pub fn account_tweaks(background: bool) -> Vec<Tweak> {
+///
+/// `tray` is [`super::tray_present`]: without one, a client closed to the tray
+/// is one nobody can bring back.
+pub fn account_tweaks(background: bool, tray: bool) -> Vec<Tweak> {
     let mut tweaks = vec![
-        match background {
-            true => Tweak::new(
+        match (background, tray) {
+            (true, true) => Tweak::new(
                 "User.Client.HideOnClose",
                 json!("true"),
                 "closing the window sends it to the tray, where it waits for the next hand-off",
             ),
-            false => Tweak::new(
+            (true, false) => Tweak::new(
+                "User.Client.HideOnClose",
+                json!("false"),
+                "this desktop has no tray to bring it back from, so closing the window quits",
+            ),
+            (false, _) => Tweak::new(
                 "User.Client.HideOnClose",
                 json!("false"),
                 "closing the window quits — no tray icon, no lingering background client",

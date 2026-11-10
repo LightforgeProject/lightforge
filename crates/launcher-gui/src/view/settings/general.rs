@@ -96,6 +96,7 @@ impl Lightforge {
                         "It starts hidden with Lightforge and closes with it, unless a game \
                          or its window is open. Needs a saved sign-in. Its notifications and game \
                          updates stay off until you switch this off, which puts your own settings back. \
+                         On a desktop with no tray, closing its window quits it. \
                          Games it starts use its Proton build. World of Warcraft never goes through it, so it starts no \
                          faster, and Play closes it for a build of its own.",
                     ),

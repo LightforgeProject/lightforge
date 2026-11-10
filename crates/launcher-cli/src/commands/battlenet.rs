@@ -1,6 +1,6 @@
 //! Battle.net: installing, configuring and running it, and Agent's registry.
 
-use super::{default_install, managed_products, print_preflight, proton_runner, windows_wow_path};
+use super::{beside_gui, default_install, managed_products, print_preflight, proton_runner, windows_wow_path};
 use crate::*;
 
 pub(crate) async fn battlenet_fetch() -> Result<()> {
@@ -83,6 +83,7 @@ pub(crate) fn battlenet_setup(ctx: Ctx, proton: Option<String>, locale: String, 
 
 pub(crate) fn battlenet_config(ctx: Ctx) -> Result<()> {
     let Ctx { layout, config } = ctx;
+    let config = beside_gui(config);
     use lightforge_core::battlenet;
     use lightforge_core::config::Config;
 
@@ -97,7 +98,8 @@ pub(crate) fn battlenet_config(ctx: Ctx) -> Result<()> {
     println!("{}", path.display());
     print_tweaks(&tweaks);
 
-    let account_tweaks = battlenet::account_tweaks(config.battle_net_in_background);
+    let background = config.battle_net_in_background;
+    let account_tweaks = battlenet::account_tweaks(background, background && battlenet::tray_present());
     let accounts = battlenet::configure_accounts(&layout, &user, &account_tweaks)
         .context("writing the per-account config")?;
     if accounts.is_empty() {
@@ -114,6 +116,7 @@ pub(crate) fn battlenet_config(ctx: Ctx) -> Result<()> {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<ProductCode>, exec: Option<String>, uri: Option<String>, install_game: Option<String>, skip_preflight: bool) -> Result<()> {
     let Ctx { layout, config } = ctx;
+    let config = beside_gui(config);
     use lightforge_core::battlenet::{self, Launch};
     use lightforge_core::config::Config;
     use lightforge_core::preflight::{DownloadGuard, NoDownloads, Preflight};

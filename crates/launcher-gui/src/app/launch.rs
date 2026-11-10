@@ -128,6 +128,12 @@ impl Lightforge {
         )
     }
 
+    /// Whether a CLI run closed the background client, which it says with a
+    /// file beside the instance lock. Taken on reading.
+    pub(crate) fn take_cli_owed(&self) -> bool {
+        self.dirs.as_ref().is_some_and(|dirs| std::fs::remove_file(dirs.instance_file("owed")).is_ok())
+    }
+
     /// Whether a background client that gave way can come back: nothing is
     /// using the prefix or writing the game files. A download counts: Agent
     /// rewrites `product.db` from memory, over the record the install leaves.

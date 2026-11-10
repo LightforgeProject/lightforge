@@ -38,6 +38,31 @@ pub(crate) fn windows_wow_path(layout: &Layout, code: &ProductCode) -> String {
         .unwrap_or_else(|| lightforge_core::paths::WINDOWS_WOW_PATH.to_owned())
 }
 
+/// The settings as a run from here honours them. Battle.net stays in the
+/// background only beside a running GUI, the one thing that closes it again:
+/// without one, a client left in the tray stays there.
+pub(crate) fn beside_gui(mut config: Config) -> Config {
+    config.battle_net_in_background &= AppDirs::discover().is_ok_and(|dirs| dirs.gui_running());
+    config
+}
+
+/// A pre-flight that closed the GUI's background client leaves word for it to
+/// start one again, as the GUI's own pre-flights do.
+pub(crate) fn owe_gui_client(config: &Config, report: &lightforge_core::preflight::Report) {
+    use lightforge_core::preflight::ProcKind;
+
+    let closed = report.processes.iter().any(|outcome| outcome.process.kind == ProcKind::BattleNet);
+    if !config.battle_net_in_background || !closed {
+        return;
+    }
+    let Ok(owed) = AppDirs::discover().map(|dirs| dirs.instance_file("owed")) else {
+        return;
+    };
+    if let Err(e) = std::fs::write(&owed, "") {
+        eprintln!("warning: Lightforge will not start Battle.net again by itself: {}: {e}", owed.display());
+    }
+}
+
 /// Render what a pre-flight pass did, one aligned line per fact.
 pub(crate) fn print_preflight(report: &lightforge_core::preflight::Report) {
     use lightforge_core::preflight::Disposition;

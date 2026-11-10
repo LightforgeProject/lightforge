@@ -22,14 +22,27 @@ const UPDATE_POLL: Duration = Duration::from_millis(500);
 /// The background client went away for a reason that passes, and is owed a
 /// restart once nothing needs the prefix. A static because the work that
 /// closes it runs far from the app's state; the client poll reads it.
+#[cfg(not(test))]
 static CLIENT_OWED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(not(test))]
+fn client_owed<T>(use_flag: impl FnOnce(&AtomicBool) -> T) -> T {
+    use_flag(&CLIENT_OWED)
+}
+
+/// One per test thread: the tests run in parallel, each with an app of its own.
+#[cfg(test)]
+fn client_owed<T>(use_flag: impl FnOnce(&AtomicBool) -> T) -> T {
+    thread_local!(static CLIENT_OWED: AtomicBool = const { AtomicBool::new(false) });
+    CLIENT_OWED.with(use_flag)
+}
+
 pub(crate) fn owe_client() {
-    CLIENT_OWED.store(true, Ordering::SeqCst);
+    client_owed(|owed| owed.store(true, Ordering::SeqCst));
 }
 
 pub(crate) fn take_client_owed() -> bool {
-    CLIENT_OWED.swap(false, Ordering::SeqCst)
+    client_owed(|owed| owed.swap(false, Ordering::SeqCst))
 }
 
 /// Set while the client updates a game for us: [`make_way`] leaves it be,
@@ -288,7 +301,7 @@ pub(crate) fn make_way(layout: &Layout) -> bool {
 /// to a version it had just updated to.
 pub async fn note_self_update(layout: Layout, user: String) {
     let _ = tokio::task::spawn_blocking(move || {
-        if battlenet::SessionLog::find(&layout, &user).is_some_and(|log| log.updated_itself()) {
+        if battlenet::SessionLog::find(&layout, &user).is_some_and(|log| log.quit_to_update()) {
             tracing::info!("Battle.net quit to switch to the version it updated to");
             owe_client();
         }

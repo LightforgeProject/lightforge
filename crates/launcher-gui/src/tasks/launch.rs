@@ -385,8 +385,8 @@ pub async fn launch_via_battle_net(
         }
         reap_later(battlenet::launch(&runner, &layout, &launch).map_err(|e| Problem::of(&e))?);
         drop(prefix);
-        if let Some(windows) = tray {
-            std::thread::spawn(move || match windows.keep_closed(Instant::now() + KEEP_IN_TRAY) {
+        if let Some((windows, mut watch)) = tray.zip(session.as_ref().map(|log| log.follow(&install_uid))) {
+            std::thread::spawn(move || match windows.keep_closed(Instant::now() + KEEP_IN_TRAY, || watch.stage()) {
                 Ok(0) => {}
                 Ok(closed) => tracing::info!("sent Battle.net's window back to the tray {closed} time(s)"),
                 Err(e) => tracing::warn!("stopped keeping Battle.net in the tray: {}", chain(&e)),

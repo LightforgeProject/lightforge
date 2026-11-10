@@ -145,7 +145,7 @@ impl Preflight {
             let known = battlenet::known_product_codes(layout, &self.user);
             tweaks.extend(known.iter().map(|uid| battlenet::auto_update_tweak(uid, false)));
         }
-        let account = battlenet::account_tweaks(self.background);
+        let account = battlenet::account_tweaks(self.background, self.background && battlenet::tray_present());
         // What is there before the first background pass is the user's own,
         // and comes back when the mode goes. Keys both modes write are
         // written again just below.
