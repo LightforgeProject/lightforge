@@ -134,11 +134,10 @@ pub async fn warm_battle_net(
     preflights_seen: u64,
     cancel: Cancel,
 ) -> Result<Warmed, Problem> {
-    tokio::task::spawn_blocking(move || {
+    off_runtime("warm-up", move || {
         warm(&Live { layout: &layout, user: &user }, &layout, &user, preflights_seen, &cancel)
     })
-    .await
-    .map_err(|e| Problem::of(&e))?
+    .await?
 }
 
 fn warm(
@@ -181,7 +180,7 @@ fn warm(
 
 /// Wait for someone to sign in the client that [`warm_battle_net`] gave up on.
 pub async fn await_sign_in(layout: Layout, user: String, started: SystemTime) -> Result<Warmed, Problem> {
-    tokio::task::spawn_blocking(move || {
+    off_runtime("sign-in", move || {
         match battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_PATIENCE, || preflight::client_running(&layout)) {
             Readiness::SignedIn => Warmed::Ready,
             Readiness::NeedsAttention => Warmed::NeedsSignIn { started },
@@ -189,7 +188,6 @@ pub async fn await_sign_in(layout: Layout, user: String, started: SystemTime) ->
         }
     })
     .await
-    .map_err(|e| Problem::of(&e))
 }
 
 /// What came of following an update through the client.
@@ -216,7 +214,7 @@ pub fn update_through_client(
 
     let updating = Updating::start();
     async move {
-        tokio::task::spawn_blocking(move || -> Result<_, Problem> {
+        off_runtime("client-update", move || -> Result<_, Problem> {
             let _updating = updating;
             let mut prefix = hold_prefix();
             if let Some(game) = preflight::games_running(&layout).first() {
@@ -265,8 +263,7 @@ pub fn update_through_client(
                 std::thread::sleep(UPDATE_POLL);
             }
         })
-        .await
-        .map_err(|e| Problem::of(&e))?
+        .await?
     }
 }
 

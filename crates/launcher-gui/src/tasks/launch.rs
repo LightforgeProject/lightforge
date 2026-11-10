@@ -136,7 +136,7 @@ pub async fn start_game(
     code: ProductCode,
     cleared: (Cleared, SharedDownloads),
 ) -> Result<Started, Problem> {
-    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
+    off_runtime("game-start", move || -> Result<_, Problem> {
         // The native path, not the `C:` symlink, so Wine puts the game on its
         // own drive ([`Layout::wow_drive`]) and the shop's browser keeps its
         // GPU child. Verified 2026-10-02, a full checkout.
@@ -200,8 +200,7 @@ pub async fn start_game(
             }
         }
     })
-    .await
-    .map_err(|e| Problem::of(&e))?
+    .await?
 }
 
 /// What [`watch_for`] saw.
@@ -326,7 +325,7 @@ pub async fn launch_via_battle_net(
     minimized: bool,
     cleared: (Cleared, SharedDownloads),
 ) -> Result<Handoff, Problem> {
-    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
+    off_runtime("hand-off", move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch, Readiness};
         use lightforge_core::preflight;
 
@@ -445,8 +444,7 @@ pub async fn launch_via_battle_net(
         }
         Ok(handoff)
     })
-    .await
-    .map_err(|e| Problem::of(&e))?
+    .await?
 }
 
 /// Open the client's install flow for a game, dialog and all.
@@ -538,7 +536,7 @@ pub async fn await_game_exit(
     game: GameProcess,
     settle_after: Option<u64>,
 ) -> Result<String, Problem> {
-    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
+    off_runtime("game-exit", move || -> Result<_, Problem> {
         if let Err(e) = lightforge_core::preflight::wait_for_exit(game.pid) {
             tracing::warn!("no pidfd for {} (pid {}), polling instead: {e}", game.name, game.pid);
             while lightforge_core::preflight::games_running(&layout).iter().any(|p| p.pid == game.pid) {
@@ -554,8 +552,7 @@ pub async fn await_game_exit(
         }
         Ok(format!("{} exited", game.name))
     })
-    .await
-    .map_err(|e| Problem::of(&e))?
+    .await?
 }
 
 /// How long a game gets to close on `SIGTERM` before it is killed outright.

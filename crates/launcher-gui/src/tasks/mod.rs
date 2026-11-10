@@ -139,6 +139,24 @@ pub(crate) fn preflights() -> u64 {
     prefix().preflights.load(Ordering::SeqCst)
 }
 
+/// Run a wait on the game or the client on a thread of its own, not tokio's
+/// blocking pool: closing the window drops the runtime, which waits for every
+/// blocking task, and a game's exit watch kept Lightforge open for as long as
+/// the game ran. A thread of its own ends with the process.
+pub(crate) async fn off_runtime<T: Send + 'static>(
+    name: &str,
+    wait: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, Problem> {
+    let (answer, answered) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(move || {
+            let _ = answer.send(wait());
+        })
+        .map_err(|e| Problem::of(&e))?;
+    answered.await.map_err(|_| Problem::from(format!("the {name} thread stopped without an answer")))
+}
+
 
 /// An error on its way to the screen: what went wrong, and what to do about
 /// it when that is known.
@@ -371,6 +389,22 @@ mod tests {
     fn a_spawn_right_after_its_pre_flight_finds_the_prefix_as_left() {
         let cleared = hold_prefix().cleared();
         assert!(hold_prefix().follows(cleared));
+    }
+
+    #[test]
+    fn a_wait_on_the_game_does_not_hold_the_runtime_open() {
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let (started, has_started) = std::sync::mpsc::channel();
+        let (_game, game_exited) = std::sync::mpsc::channel::<()>();
+        let waiting = runtime.spawn(off_runtime("test-wait", move || {
+            let _ = started.send(());
+            let _ = game_exited.recv();
+        }));
+        runtime.block_on(async { while !waiting.is_finished() && has_started.try_recv().is_err() { tokio::task::yield_now().await } });
+
+        let closing = Instant::now();
+        drop(runtime);
+        assert!(closing.elapsed() < Duration::from_secs(1));
     }
 
     #[test]
