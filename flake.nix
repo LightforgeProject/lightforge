@@ -13,11 +13,17 @@
       overlays.default = final: _prev: {
         lightforge-unwrapped = final.callPackage ./packaging/nix/package.nix { };
         lightforge = final.callPackage ./packaging/nix/fhs.nix { };
+        lightforge-cli = final.callPackage ./packaging/nix/fhs.nix {
+          lightforge-unwrapped = final.lightforge-unwrapped.override { withGui = false; };
+        };
       };
 
       packages = forAllSystems (_: pkgs: rec {
         lightforge-unwrapped = pkgs.callPackage ./packaging/nix/package.nix { };
         lightforge = pkgs.callPackage ./packaging/nix/fhs.nix { inherit lightforge-unwrapped; };
+        lightforge-cli = pkgs.callPackage ./packaging/nix/fhs.nix {
+          lightforge-unwrapped = lightforge-unwrapped.override { withGui = false; };
+        };
         default = lightforge;
       });
 

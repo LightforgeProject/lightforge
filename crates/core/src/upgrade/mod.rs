@@ -215,7 +215,11 @@ pub fn lasting_exe() -> std::io::Result<PathBuf> {
     if let Some(appimage) = appimage::running() {
         return Ok(appimage);
     }
-    let exe = std::env::current_exe()?;
+    // Set by the flake's wrapper, which starts this binary through steam-run.
+    let exe = match std::env::var_os("LIGHTFORGE_WRAPPER") {
+        Some(wrapper) => PathBuf::from(wrapper),
+        None => std::env::current_exe()?,
+    };
     if !exe.starts_with(NIX_STORE) {
         return Ok(exe);
     }

@@ -146,6 +146,12 @@ any ARM machine, tell me how it went, with the output of `lightforge doctor`.
 nix run github:LightforgeProject/lightforge
 ```
 
+For the command line only, without the launcher:
+
+```bash
+nix run github:LightforgeProject/lightforge#lightforge-cli
+```
+
 The flake starts Lightforge through `steam-run-free`, because Proton needs a
 32-bit loader in the standard paths and NixOS has none. Keep
 `hardware.graphics.enable32Bit = true;` set for Battle.net's 32-bit graphics.
