@@ -147,12 +147,17 @@ pub async fn start_game(
 
         back_up_before_launch(&layout, &code);
 
-        let (tweaks, tools) = tweaks_for(&code);
+        let (profile, tools) = profile_for(&code);
 
         let runner = runner_for(&layout, &code, Runs::Game)?;
-        let mut launch = lightforge_core::tweaks::wrapped(
-            runner.command("run", &exe, Vec::<String>::new()),
-            &tweaks.wrappers(&tools),
+        // The user's launch options outermost, as Steam puts them: around
+        // every wrapper of our own.
+        let mut launch = lightforge_core::launch_options::wrap(
+            lightforge_core::tweaks::wrapped(
+                runner.command("run", &exe, Vec::<String>::new()),
+                &profile.tweaks.wrappers(&tools),
+            ),
+            &profile.launch_options,
         );
 
         let mut prefix = hold_for_spawn(&layout, &code, Runs::Game, cleared)?;
@@ -524,6 +529,13 @@ pub(crate) const KEEP_IN_TRAY: Duration = Duration::from_secs(8);
 /// How long a handed-off game gets to appear before the launcher stops
 /// claiming a launch is in progress.
 pub(crate) const HANDOFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Start a game's launch options beside it, for a game Battle.net started.
+///
+/// Never fails a launch: launch options that cannot start are only logged.
+pub async fn run_beside(line: String, code: ProductCode, game: GameProcess) {
+    let _ = tokio::task::spawn_blocking(move || lightforge_core::launch_options::run_beside(&line, &code, &game)).await;
+}
 
 /// Block until a game exits, by pid: a title that re-execs itself ends the
 /// session early instead of hanging.

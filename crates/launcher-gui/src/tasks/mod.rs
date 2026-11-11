@@ -22,7 +22,7 @@ use lightforge_core::families::Families;
 use lightforge_core::{library, migrate};
 use lightforge_core::paths::{AppDirs, Layout};
 use lightforge_core::preflight::{DownloadGuard, GameProcess, Preflight, PreflightError};
-use lightforge_core::product::ProductCode;
+use lightforge_core::product::{ProductCode, ProductProfile};
 use lightforge_core::state::Local;
 use lightforge_core::tact::download::{Cancel, Downloads, Progress};
 use lightforge_core::tact::install::{self, Event, Options as InstallOptions, Summary};
@@ -350,14 +350,14 @@ fn config_tweaks() -> Tweaks {
         .unwrap_or_default()
 }
 
-/// One product's performance settings, and what this machine can honour.
-fn tweaks_for(code: &ProductCode) -> (Tweaks, HostTools) {
-    let tweaks = AppDirs::discover()
+/// One product's launch settings, and what this machine can honour.
+fn profile_for(code: &ProductCode) -> (ProductProfile, HostTools) {
+    let profile = AppDirs::discover()
         .ok()
         .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
-        .and_then(|config| config.product(code).map(|p| p.profile.tweaks.clone()))
+        .and_then(|config| config.product(code).map(|p| p.profile.clone()))
         .unwrap_or_default();
-    (tweaks, HostTools::detect())
+    (profile, HostTools::detect())
 }
 
 /// The Proton build that would be used, for the debug bundle.

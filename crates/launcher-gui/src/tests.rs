@@ -1560,6 +1560,35 @@ fn an_env_edit_still_waiting_is_saved_when_the_window_closes() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// The launch options share the env editor's save-on-pause, and belong to
+// the game the panel shows, not to every game.
+#[test]
+fn launch_options_are_the_shown_games_and_saved_once_typing_pauses() {
+    let dir = std::env::temp_dir().join(format!("lightforge-optionsave-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let dirs = AppDirs::with_dirs(dir.join("config"), dir.join("cache"), dir.join("data"));
+    std::fs::create_dir_all(dirs.config_dir()).unwrap();
+
+    let (mut app, _scratch) = test_app();
+    app.dirs = Some(dirs.clone());
+    app.config_error = None;
+    let shown = app.selected.code.clone();
+
+    for line in ["~", "~/.local/bin/wow.sh %command%"] {
+        let _ = app.update(Message::LaunchOptionsTyped(line.to_owned()));
+    }
+    assert!(!dirs.config_file().exists(), "nothing written while typing");
+
+    let _ = app.update(Message::EnvSettled(app.env_edits));
+    let saved = Config::load_or_default(&dirs.config_file()).unwrap();
+    assert_eq!(saved.product(&shown).unwrap().profile.launch_options, "~/.local/bin/wow.sh %command%");
+    assert!(
+        saved.products.iter().filter(|p| p.code != shown).all(|p| p.profile.launch_options.is_empty()),
+        "no other game got them"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn paused_pre_download(code: ProductCode) -> Download {
     Download {
         code,

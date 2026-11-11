@@ -8,7 +8,7 @@
 //! wrapper and environment variables.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -257,10 +257,11 @@ fn is_executable(path: &Path) -> bool {
     path.is_file()
 }
 
-/// Rebuild `cmd` to run under `wrappers`, outermost first.
+/// Rebuild `cmd` to run under `wrappers`, outermost first: programs, or a
+/// program and its arguments, as `sh -c <script>` is for the launch options.
 ///
 /// [`Command`] cannot be wrapped in place, so it is rebuilt.
-pub fn wrapped(cmd: Command, wrappers: &[PathBuf]) -> Command {
+pub fn wrapped(cmd: Command, wrappers: &[impl AsRef<OsStr>]) -> Command {
     let Some((outer, rest)) = wrappers.split_first() else {
         return cmd;
     };
@@ -286,7 +287,6 @@ pub fn wrapped(cmd: Command, wrappers: &[PathBuf]) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsStr;
 
     #[test]
     fn a_default_profile_asks_for_nothing() {
@@ -429,7 +429,7 @@ mod tests {
         let mut inner = Command::new("/proton/proton");
         inner.arg("run").arg("/games/Wow.exe").env("STEAM_COMPAT_DATA_PATH", "/compat");
 
-        let outer = wrapped(inner, &["/usr/bin/game-performance".into()]);
+        let outer = wrapped(inner, &["/usr/bin/game-performance"]);
         assert_eq!(outer.get_program(), "/usr/bin/game-performance");
         let args: Vec<_> = outer.get_args().collect();
         assert_eq!(args, ["/proton/proton", "run", "/games/Wow.exe"]);
@@ -442,7 +442,7 @@ mod tests {
     fn no_wrappers_leaves_the_command_untouched() {
         let mut inner = Command::new("/proton/proton");
         inner.arg("run");
-        let outer = wrapped(inner, &[]);
+        let outer = wrapped(inner, &[] as &[PathBuf]);
         assert_eq!(outer.get_program(), "/proton/proton");
     }
 

@@ -486,9 +486,10 @@ struct Lightforge {
     /// The environment-variable editors: Game Settings' and Battle.net's.
     env_editor: iced::widget::text_editor::Content,
     bnet_env_editor: iced::widget::text_editor::Content,
-    /// Counts env edits, so only the save scheduled by the last one runs.
+    /// Counts typed edits, of the environment or the launch options, so only
+    /// the save scheduled by the last one runs.
     env_edits: u64,
-    /// An env edit is in the config but not yet on disk.
+    /// A typed edit is in the config but not yet on disk.
     env_unsaved: bool,
     /// Editable copies of the selected product's numeric tweaks, and the two
     /// fields of the environment escape hatch.
