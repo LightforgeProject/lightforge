@@ -65,12 +65,10 @@ sudo zypper install ./lightforge-*.x86_64.rpm
 
 ### Arch Linux, CachyOS, EndeavourOS, Manjaro, Omarchy
 
-There's a PKGBUILD in the repository (AUR registrations are closed, so it isn't
-on the AUR yet):
+It's on the AUR, as prebuilt binaries or built from source:
 
 ```bash
-git clone https://github.com/LightforgeProject/lightforge.git
-cd lightforge/packaging/aur/lightforge-bin && makepkg -si
+yay -S lightforge-bin   # or: yay -S lightforge
 ```
 
 ### SteamOS, Bazzite and everything else
@@ -123,10 +121,10 @@ package Battle.net's installer needs, and how to remove Lightforge again.
 
 | Distro | Status | Notes |
 | --- | :---: | --- |
-| CachyOS | 🟢 | PKGBUILD, Lightforge was developed on CachyOS |
-| Arch Linux | 🟢 | PKGBUILD, Tested on hardware |
-| Omarchy | 🟢 | PKGBUILD, works |
-| EndeavourOS | 🟠 | Not tested yet but PKGBUILD should work |
+| CachyOS | 🟢 | AUR, Lightforge was developed on CachyOS |
+| Arch Linux | 🟢 | AUR, Tested on hardware |
+| Omarchy | 🟢 | AUR, works |
+| EndeavourOS | 🟠 | Not tested yet but the AUR package should work |
 | Manjaro | 🟠 | Same as EndeavourOS |
 | Fedora | 🟢 | COPR repo / RPM install, Tested on hardware |
 | Bazzite | 🟢 | dnf5 copr, Desktop and ROG Ally X, reported by players. |
@@ -214,7 +212,7 @@ version is in [RELEASES.md](RELEASES.md).
 
 I work on this in my spare time, so there are no dates:
 
-- A Flatpak, and the AUR once registrations reopen.
+- A Flatpak.
 - Adding your games to Steam's library.
 
 If something is missing for you, tell me in [Discord](https://discord.gg/vtTgmUV9Bq).
