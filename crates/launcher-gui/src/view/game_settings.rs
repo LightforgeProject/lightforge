@@ -12,17 +12,19 @@ impl Lightforge {
         // the padding.
         const SECTIONS_MAX: f32 = 560.0;
 
-        let sections = column![
+        let mut sections = column![
             section("Performance", self.performance_group()),
             section("Graphics", self.graphics_group(settings)),
             section("Environment", self.environment_group(Scope::Product)),
             section("Launch options", self.launch_options_group()),
             section("Game", self.game_group(settings)),
             section("Proton", self.proton_group(settings)),
-            section("Addons", self.addons_group()),
-            section("Backups", self.backups_group(settings)),
         ]
         .spacing(theme::LG);
+        if self.config.addon_manager {
+            sections = sections.push(section("Addons", self.addons_group()));
+        }
+        sections = sections.push(section("Backups", self.backups_group(settings)));
 
         let actions = row![
             Space::new().width(Length::Fill),

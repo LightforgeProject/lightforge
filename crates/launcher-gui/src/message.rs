@@ -551,6 +551,8 @@ pub(crate) enum Message {
     FamiliesRead(Box<lightforge_core::families::Families>),
     /// Fetch one addon again and replace what it wrote.
     ReinstallAddon(String, String),
+    /// Turn the addon manager on or off, from setup or Settings.
+    AddonManager(bool),
     /// Whether addons update themselves unless they say otherwise.
     AddonAutoUpdateDefault(bool),
     /// Update whatever updates itself, for the product on screen.

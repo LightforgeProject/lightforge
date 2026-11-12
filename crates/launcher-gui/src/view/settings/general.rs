@@ -6,9 +6,22 @@ use iced::widget::column;
 impl Lightforge {
     /// The Addons section: what every addon follows unless it says otherwise.
     pub(crate) fn addons_section(&self) -> Element<'_, Message> {
-        let choices: Vec<ChannelChoice> = Channel::ALL.map(ChannelChoice).to_vec();
+        let manager = setting(
+            "Addon Manager (Experimental)",
+            "Install and update addons for each game from Lightforge.",
+            self.hint(
+                "Off hides Manage Addons and stops the update pass before you play. \
+                 Addons already installed stay in the game's AddOns folder.",
+            ),
+            switch("addon manager", self.config.addon_manager, Message::AddonManager),
+        );
+        if !self.config.addon_manager {
+            return setting_group([manager]);
+        }
 
+        let choices: Vec<ChannelChoice> = Channel::ALL.map(ChannelChoice).to_vec();
         setting_group([
+            manager,
             setting(
                 "Update channel",
                 "The newest kind of build an addon may update to. An addon can choose its own.",

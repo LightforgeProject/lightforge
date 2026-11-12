@@ -407,17 +407,17 @@ impl Lightforge {
             .style(theme::ghost)
             .padding(theme::tap([theme::XS, theme::SM]))
         };
-        let mut links = row![
+        let mut links = row![].spacing(theme::XS).align_y(Alignment::Center);
+        if self.config.addon_manager {
             // Disabled until there is an install.
-            self.ring(
+            let manage = self.local.version.is_some().then_some(Message::Show(Screen::Addons));
+            links = links.push(self.ring(
                 focus::Target::Addons,
-                self.local.version.is_some().then_some(Message::Show(Screen::Addons)),
-                link(
-                    package_icon(),
-                    "Manage Addons",
-                    self.local.version.is_some().then_some(Message::Show(Screen::Addons)),
-                ),
-            ),
+                manage.clone(),
+                link(package_icon(), "Manage Addons", manage),
+            ));
+        }
+        links = links.extend([
             self.ring(
                 focus::Target::GameSettings,
                 Some(Message::OpenGameSettings),
@@ -428,10 +428,7 @@ impl Lightforge {
                 Some(Message::ManageSubscription),
                 link(card_icon(), "Manage Subscription", Some(Message::ManageSubscription)),
             ),
-        ]
-        // Each link carries its own air.
-        .spacing(theme::XS)
-        .align_y(Alignment::Center);
+        ]);
 
         // A direct launch's login server; Battle.net has its own picker.
         if self.local.version.is_some() && self.kind_of(&self.selected.code) == Kind::Managed {
