@@ -350,6 +350,9 @@ pub enum UpgradeError {
     #[error("{0} does not look like a Lightforge release")]
     NotARelease(PathBuf),
 
+    #[error(transparent)]
+    Archive(#[from] crate::archive::ArchiveError),
+
     #[error("no terminal to run the update in was found")]
     NoTerminal,
 

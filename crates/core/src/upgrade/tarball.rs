@@ -5,13 +5,16 @@
 //! Each binary is renamed over the old one; the running process keeps its
 //! file until it exits, so a restart finishes the job.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use super::{fetch_asset, io, UpgradeError};
 use crate::net::Http;
 
 /// The menu entry's file name, which is also the app id.
 const ENTRY: &str = "pro.tuxcore.Lightforge.desktop";
+
+/// beta.11 unpacks to 39 MB.
+const MAX_UNPACKED: u64 = 512 << 20;
 
 /// What every release tarball holds at its top.
 const BINARIES: [&str; 2] = ["lightforge-gui", "lightforge"];
@@ -73,12 +76,11 @@ fn put_in_place(archive: &Path, bin_dir: &Path, data_dir: &Path) -> Result<(), U
 fn unpack(archive: &Path, into: &Path) -> Result<PathBuf, UpgradeError> {
     let file = std::fs::File::open(archive).map_err(io(archive))?;
     let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    // Files only, so making the binaries executable follows no link.
+    let mut admission = crate::archive::Admission::files_only(MAX_UNPACKED);
     for entry in tar.entries().map_err(io(archive))? {
         let mut entry = entry.map_err(io(archive))?;
-        let path = entry.path().map_err(io(archive))?.into_owned();
-        if path.is_absolute() || path.components().any(|c| c == Component::ParentDir) {
-            return Err(UpgradeError::NotARelease(archive.to_path_buf()));
-        }
+        admission.check(&entry)?;
         entry.unpack_in(into).map_err(io(archive))?;
     }
 

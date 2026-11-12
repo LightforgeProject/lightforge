@@ -150,7 +150,10 @@ impl Pipeline {
     fn cached_asset(&self, asset: &AssetRef, slot: Slot) -> Option<Asset> {
         let path = match &self.origin {
             Origin::Dir(dir) => resolve_fixture(dir, &asset.url, slot).ok()?,
-            Origin::Http(base) => self.store.path_for(&join(base, &asset.url)),
+            Origin::Http(base) => {
+                asset.sha256.as_ref()?;
+                self.store.path_for(&join(base, &asset.url))
+            }
         };
         verify(&read(&path).ok()?, asset, slot, &asset.url).ok()?;
         Some(Asset { path, fetched: false, height: asset.height })
@@ -172,6 +175,11 @@ impl Pipeline {
             }
             Origin::Http(base) => {
                 let url = join(base, &asset.url);
+                // The hash is all that stands between a file changed on the
+                // server and the cache; a fixture is the user's own folder.
+                if asset.sha256.is_none() {
+                    return Err(AssetError::Unhashed { slot, url });
+                }
                 let cache = self.store.cache_for(&url);
                 let path = self.store.path_for(&url);
 

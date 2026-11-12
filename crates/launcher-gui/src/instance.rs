@@ -13,6 +13,7 @@
 
 use std::fs::{File, TryLockError};
 use std::io;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::OnceLock;
@@ -82,7 +83,13 @@ fn claim_in(lock: &Path, socket: &Path, wait: Duration) -> io::Result<Option<Ins
     if let Some(dir) = lock.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let lock = File::create(lock)?;
+    // Without `XDG_RUNTIME_DIR` this is in the cache folder, where another
+    // user's planted symlink must not make us truncate or lock its target.
+    let lock = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(lock)?;
 
     let deadline = Instant::now() + wait;
     loop {
@@ -166,6 +173,18 @@ mod tests {
         });
         assert!(claim_in(&lock, &socket, RESTART_WAIT).unwrap().is_some());
         exiting.join().unwrap();
+    }
+
+    #[test]
+    fn a_symlink_planted_at_the_lock_is_not_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (lock, socket) = paths(&dir);
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "keep me").unwrap();
+        std::os::unix::fs::symlink(&victim, &lock).unwrap();
+
+        assert!(claim_in(&lock, &socket, PROBE_WAIT).is_err());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
     }
 
     #[test]

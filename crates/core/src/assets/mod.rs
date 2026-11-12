@@ -62,6 +62,9 @@ pub enum AssetError {
         actual: String,
     },
 
+    #[error("{slot} at {url} has no sha256 in the manifest")]
+    Unhashed { slot: Slot, url: String },
+
     #[error("fixture manifest points {slot} at the network ({url})")]
     RemoteInFixture { slot: Slot, url: String },
 

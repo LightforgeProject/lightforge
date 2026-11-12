@@ -12,6 +12,7 @@
 
 pub mod addons;
 pub mod advice;
+pub mod archive;
 pub mod assets;
 pub mod backup;
 pub mod battlenet;
