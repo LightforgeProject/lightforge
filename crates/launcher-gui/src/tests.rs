@@ -1985,6 +1985,8 @@ fn a_client_the_cli_closed_comes_back() {
     app.config.battle_net_in_background = true;
     // Beside the instance lock, named after this test's own config folder.
     let owed = app.dirs.as_ref().unwrap().instance_file("owed");
+    // Without XDG_RUNTIME_DIR (Nix builds, CI) that is the cache folder, which the GUI's lock creates.
+    std::fs::create_dir_all(owed.parent().unwrap()).unwrap();
     std::fs::write(&owed, "").unwrap();
 
     let _ = app.update(Message::ClientSeen { up: false, game: false });
