@@ -106,15 +106,24 @@ pub(crate) fn print_preflight(report: &lightforge_core::preflight::Report) {
     }
 }
 
-/// Products Lightforge patches, read fresh from `config.toml`.
+/// Say so when the build about to run is older than the one that built the
+/// prefix every product shares.
 ///
-/// Read per call, so the list is never stale.
-pub(crate) fn managed_products() -> Vec<lightforge_core::product::ProductCode> {
-    AppDirs::discover()
-        .ok()
-        .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
-        .map(|config| config.managed_products())
-        .unwrap_or_default()
+/// A line on stderr, not a refusal: `--proton` is how one tries an older build.
+pub(crate) fn warn_on_downgrade(layout: &Layout, build: &lightforge_core::proton::ProtonRelease) {
+    use lightforge_core::proton;
+
+    let built_by = proton::prefix_build(&layout.compat_data());
+    if let proton::PrefixFit::Older { built_by } =
+        proton::prefix_fit(&build.version, built_by.as_deref())
+    {
+        eprintln!(
+            "warning: {} is older than {built_by}, which last upgraded this prefix.\n\
+             \x20        Proton migrates a prefix forward only; the shared prefix may not \
+             survive it.",
+            build.version,
+        );
+    }
 }
 
 /// Resolve the Proton build to run against the shared prefix, and a runner for

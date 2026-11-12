@@ -259,28 +259,7 @@ fn runner_for(
     code: &ProductCode,
     runs: Runs,
 ) -> Result<lightforge_core::prefix::ProtonRunner, String> {
-    use lightforge_core::prefix::ProtonRunner;
-    use lightforge_core::proton;
-
-    if layout.prefix_away() {
-        return Err(chain(&lightforge_core::prefix::PrefixError::Away(layout.compat_data())));
-    }
     let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
-    let steam = lightforge_core::steam::SteamRoot::discover();
-    let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());
-    let build = proton::select(&builds, runs.pin(config, code))
-        .ok_or_else(|| "no supported Proton-GE build installed".to_owned())?;
-
-    let target =
-        std::fs::read_link(layout.wow_symlink()).unwrap_or_else(|_| layout.wow_install(code));
-    let shaders = dirs.shader_cache_dir(code);
-    let mut runner =
-        ProtonRunner::new(build, layout, ProtonRunner::steam_client_path(steam.as_ref(), &dirs))
-            .with_compat_mount(&target)
-            // The prefix is shared, so pooling the shader cache would mean one
-            // product's Proton swap discarding another's shaders.
-            .with_shader_cache(shaders);
-
     // Two profiles, because they are two different questions. A direct
     // launch is this product's own; a Battle.net launch is the client's and
     // therefore every game the client starts, the one environment all of
@@ -290,10 +269,9 @@ fn runner_for(
         Runs::Game => config.product(code).map(|p| p.profile.tweaks.clone()).unwrap_or_default(),
         Runs::BattleNet => config.battle_net_tweaks.clone(),
     };
-    for (key, value) in tweaks.environment(&HostTools::detect()) {
-        runner = runner.with_env(key, value);
-    }
-    Ok(runner)
+    lightforge_core::launch::runner(layout, &dirs, code, runs.pin(config, code), &tweaks, &HostTools::detect())
+        .map(|(runner, _)| runner)
+        .map_err(|e| chain(&e))
 }
 
 /// [`runner_for`] Battle.net itself, inside Steam's runtime where the host has

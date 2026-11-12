@@ -36,20 +36,34 @@ pub(crate) fn write_atomic_with_mode(path: &Path, bytes: &[u8], mode: u32) -> io
     Ok(())
 }
 
+fn at(path: &Path) -> impl FnOnce(io::Error) -> (PathBuf, io::Error) + '_ {
+    move |e| (path.to_path_buf(), e)
+}
+
 /// Copy every file under `from` into the same place under `to`, modes
-/// included. The error names the path it failed on.
+/// included, and on disk when this returns: callers delete `from` next. The
+/// error names the path it failed on.
 ///
 /// Symlinks stay links with the same target text: a `WTF` or `AddOns` linked
 /// to a shared folder must not become a second copy of it.
 pub(crate) fn copy_tree(from: &Path, to: &Path) -> Result<(), (PathBuf, io::Error)> {
-    fn at(path: &Path) -> impl FnOnce(io::Error) -> (PathBuf, io::Error) + '_ {
-        move |e| (path.to_path_buf(), e)
+    copy_entries(from, to)?;
+    // One flush for the whole filesystem: an fsync per file costs seconds
+    // on a prefix's tens of thousands.
+    let dir = std::fs::File::open(to).map_err(at(to))?;
+    // SAFETY: `dir` is an open descriptor for the whole call.
+    match unsafe { libc::syncfs(std::os::fd::AsRawFd::as_raw_fd(&dir)) } {
+        0 => Ok(()),
+        _ => Err((to.to_path_buf(), io::Error::last_os_error())),
     }
+}
+
+fn copy_entries(from: &Path, to: &Path) -> Result<(), (PathBuf, io::Error)> {
     std::fs::create_dir_all(to).map_err(at(to))?;
     for entry in std::fs::read_dir(from).map_err(at(from))?.filter_map(Result::ok) {
         let (source, target) = (entry.path(), to.join(entry.file_name()));
         match entry.file_type().map_err(at(&source))? {
-            kind if kind.is_dir() => copy_tree(&source, &target)?,
+            kind if kind.is_dir() => copy_entries(&source, &target)?,
             kind if kind.is_file() => {
                 std::fs::copy(&source, &target).map_err(at(&target))?;
             }

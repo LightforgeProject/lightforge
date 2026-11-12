@@ -170,12 +170,8 @@ pub async fn copy(
         }
     }
 
-    // Executables, WTF, AddOns, screenshots: the folder as it is.
-    let renamed = same_filesystem && src_flavor.is_dir();
-    match renamed {
-        true => std::fs::rename(&src_flavor, &dst_flavor).map_err(io(&dst_flavor))?,
-        false => crate::fsutil::copy_tree(&src_flavor, &dst_flavor)
-            .map_err(|(path, source)| MoveError::Io { path, source })?,
+    if src_flavor.is_dir() {
+        carry_game_folder(&src_flavor, &dest, &dst_flavor)?;
     }
 
     let pairs: Vec<(&str, &str)> = row.iter().map(|(column, value)| (column.as_str(), value.as_str())).collect();
@@ -187,14 +183,28 @@ pub async fn copy(
         Ok(())
     };
     if let Err(e) = commit() {
-        // The source is still the game; give it its folder back.
-        if renamed {
-            let _ = std::fs::rename(&dst_flavor, &src_flavor);
+        // The source is still the game. Without its row the copy would only
+        // stop the next attempt as "already there".
+        if let Err(left) = std::fs::remove_dir_all(&dst_flavor) {
+            tracing::warn!("could not remove the uncommitted {}: {left}", dst_flavor.display());
         }
         return Err(e);
     }
     tracing::info!("copied {} into {}: {} files, {bytes} B", code.as_str(), dest.display(), copied);
     Ok(Moved::Copied { files: copied, bytes })
+}
+
+/// Executables, WTF, AddOns, screenshots: the game's folder as it is, copied
+/// even on the same filesystem. Renamed, it left the source without it when
+/// the run died before the commit, and the next attempt refused the half-moved
+/// game. Staged, a dead run leaves only a hidden folder, and the copy takes
+/// its name when whole and on disk, since [`release`] deletes the source.
+fn carry_game_folder(src_flavor: &Path, dest: &Path, dst_flavor: &Path) -> Result<(), MoveError> {
+    std::fs::create_dir_all(dest).map_err(io(dest))?;
+    let staging = crate::staging::create_in(dest).map_err(io(dest))?;
+    let staged = staging.path().join("game");
+    crate::fsutil::copy_tree(src_flavor, &staged).map_err(|(path, source)| MoveError::Io { path, source })?;
+    std::fs::rename(&staged, dst_flavor).map_err(io(dst_flavor))
 }
 
 /// The store half of [`copy`]: every entry `code`'s build needs that the
@@ -438,6 +448,37 @@ mod tests {
 
         assert!(matches!(refused, Err(MoveError::AlreadyThere { .. })));
         assert!(layout.wow_install_in(&from).join("_classic_era_/WowClassic.exe").is_file());
+    }
+
+    #[test]
+    fn a_carried_game_folder_leaves_the_source_whole() {
+        let root = tempfile::tempdir().unwrap();
+        let (src, dest) = (root.path().join("a/_classic_era_"), root.path().join("b"));
+        std::fs::create_dir_all(src.join("WTF")).unwrap();
+        std::fs::write(src.join("WTF/Config.wtf"), b"SET portal \"EU\"").unwrap();
+
+        carry_game_folder(&src, &dest, &dest.join("_classic_era_")).unwrap();
+
+        assert_eq!(std::fs::read(dest.join("_classic_era_/WTF/Config.wtf")).unwrap(), b"SET portal \"EU\"");
+        assert!(src.join("WTF/Config.wtf").is_file());
+        let hidden = std::fs::read_dir(&dest).unwrap().flatten().filter(|e| e.file_name() != "_classic_era_").count();
+        assert_eq!(hidden, 0, "the staging folder is gone");
+    }
+
+    /// What a run that died mid-copy leaves: a staging folder, which does not
+    /// stop the next attempt.
+    #[test]
+    fn a_dead_run_s_staging_folder_does_not_stop_the_next_carry() {
+        let root = tempfile::tempdir().unwrap();
+        let (src, dest) = (root.path().join("a/_classic_era_"), root.path().join("b"));
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("WowClassic.exe"), b"MZ").unwrap();
+        let dead = dest.join(format!("{}dead", crate::staging::PREFIX));
+        std::fs::create_dir_all(dead.join("game")).unwrap();
+
+        carry_game_folder(&src, &dest, &dest.join("_classic_era_")).unwrap();
+
+        assert!(dest.join("_classic_era_/WowClassic.exe").is_file());
     }
 
     #[test]

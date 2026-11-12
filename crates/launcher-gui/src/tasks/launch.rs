@@ -1,5 +1,7 @@
 //! Starting games: directly, through Battle.net, and the pre-flight before both.
 
+use lightforge_core::launch::DirectLaunch;
+
 use super::*;
 
 /// Everything that must be settled before a launch: no stale processes in the
@@ -137,29 +139,11 @@ pub async fn start_game(
     cleared: (Cleared, SharedDownloads),
 ) -> Result<Started, Problem> {
     off_runtime("game-start", move || -> Result<_, Problem> {
-        // The native path, not the `C:` symlink, so Wine puts the game on its
-        // own drive ([`Layout::wow_drive`]) and the shop's browser keeps its
-        // GPU child. Verified 2026-10-02, a full checkout.
-        let exe = layout.wow_exe(&code);
-        if !exe.is_file() {
-            return Err(format!("no game at {}", exe.display()).into());
-        }
-
+        let dirs = AppDirs::discover().map_err(|e| Problem::of(&e))?;
+        let planned = DirectLaunch::plan(&config, &layout, &dirs, &code, None).map_err(|e| Problem::of(&e))?;
         back_up_before_launch(&layout, &code);
-
-        let profile = config.product(&code).map(|p| p.profile.clone()).unwrap_or_default();
-        let tools = HostTools::detect();
-
-        let runner = runner_for(&config, &layout, &code, Runs::Game)?;
-        // The user's launch options outermost, as Steam puts them: around
-        // every wrapper of our own.
-        let mut launch = lightforge_core::launch_options::wrap(
-            lightforge_core::tweaks::wrapped(
-                runner.command("run", &exe, Vec::<String>::new()),
-                &profile.tweaks.wrappers(&tools),
-            ),
-            &profile.launch_options,
-        );
+        let exe = &planned.exe;
+        let mut launch = planned.command();
 
         let mut prefix = hold_for_spawn(&config, &layout, &code, Runs::Game, cleared)?;
         prefix.launches += 1;
