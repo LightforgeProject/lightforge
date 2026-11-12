@@ -225,7 +225,8 @@ pub struct OsRelease {
     pub id_like: String,
     pub pretty_name: String,
     /// Booted from an OSTree image (Silverblue, Bazzite...), which
-    /// `/etc/os-release` reports as plain `fedora`.
+    /// `/etc/os-release` reports as plain `fedora`, or from a read-only root
+    /// (openSUSE MicroOS, Aeon, Kalpa).
     pub atomic: bool,
 }
 
@@ -238,7 +239,8 @@ impl OsRelease {
             .unwrap_or_else(|| "/etc/os-release".into());
         Self {
             // OSTree writes it at boot; rpm-ostree checks it too.
-            atomic: std::path::Path::new("/run/ostree-booted").exists(),
+            atomic: std::path::Path::new("/run/ostree-booted").exists()
+                || crate::fsutil::read_only(std::path::Path::new("/")),
             ..Self::parse(&std::fs::read_to_string(path).unwrap_or_default())
         }
     }
@@ -278,6 +280,10 @@ impl OsRelease {
 
     fn is_fedora(&self) -> bool {
         self.is("fedora")
+    }
+
+    fn is_suse(&self) -> bool {
+        self.is("suse") || self.is("opensuse")
     }
 
     /// Whether this system is, or is derived from, `family`.
@@ -333,6 +339,17 @@ pub fn remedy_for(os: &OsRelease) -> Remedy {
                     .to_owned(),
             ),
         )
+    } else if os.atomic && os.is_suse() {
+        // UNVERIFIED. MicroOS, Aeon and Kalpa install into a new snapshot.
+        (
+            Some("sudo transactional-update pkg install wine-32bit".to_owned()),
+            Some(
+                "This system installs packages into a new snapshot: restart \
+                 before setting Lightforge up again. `zypper install` cannot \
+                 work on it"
+                    .to_owned(),
+            ),
+        )
     } else if os.atomic {
         // Another image-based system: no command we can name with confidence.
         (
@@ -374,7 +391,7 @@ pub fn remedy_for(os: &OsRelease) -> Remedy {
         // freetype.i686 passes our checks but not the installer. `wine.i686`
         // pulls the whole closure.
         (Some("sudo dnf install wine.i686".to_owned()), None)
-    } else if os.is("suse") || os.is("opensuse") {
+    } else if os.is_suse() {
         // UNVERIFIED.
         (Some("sudo zypper install wine-32bit".to_owned()), None)
     } else {
@@ -398,8 +415,19 @@ pub fn nvidia_remedy_for(os: &OsRelease, driver: &str) -> Remedy {
     };
 
     // All UNVERIFIED: no NVIDIA machine has run them yet.
+    // openSUSE names the driver series: G05 is 470, G06 everything since.
+    let suse_series = match major.parse::<u32>() {
+        Ok(major) if major < 500 => "G05",
+        _ => "G06",
+    };
     let (command, note) = if os.id == "nixos" {
         (None, Some("set `hardware.graphics.enable32Bit = true;` and rebuild".to_owned()))
+    } else if os.is_suse() {
+        let tool = if os.atomic { "sudo transactional-update pkg" } else { "sudo zypper" };
+        (
+            Some(format!("{tool} install nvidia-gl-{suse_series}-32bit")),
+            Some("from the NVIDIA repository, where the driver itself comes from".to_owned()),
+        )
     } else if os.atomic {
         (
             None,
@@ -461,6 +489,25 @@ mod remedy_tests {
     fn a_plain_fedora_still_uses_dnf() {
         let command = remedy_for(&os("fedora", "")).command.unwrap();
         assert!(command.starts_with("sudo dnf install"), "{command}");
+    }
+
+    /// MicroOS, Aeon and Kalpa: a read-only root that `zypper` cannot write.
+    #[test]
+    fn an_opensuse_image_installs_into_a_snapshot() {
+        let image = atomic("opensuse-microos", "suse opensuse opensuse-tumbleweed microos");
+        let remedy = remedy_for(&image);
+        assert_eq!(remedy.command.as_deref(), Some("sudo transactional-update pkg install wine-32bit"));
+        assert!(remedy.note.unwrap().contains("restart"));
+        let nvidia = nvidia_remedy_for(&image, "580.82.07").command.unwrap();
+        assert_eq!(nvidia, "sudo transactional-update pkg install nvidia-gl-G06-32bit");
+    }
+
+    #[test]
+    fn opensuse_names_the_nvidia_driver_series() {
+        let tumbleweed = os("opensuse-tumbleweed", "opensuse suse");
+        let command = |driver| nvidia_remedy_for(&tumbleweed, driver).command.unwrap();
+        assert_eq!(command("580.82.07"), "sudo zypper install nvidia-gl-G06-32bit");
+        assert_eq!(command("470.256.02"), "sudo zypper install nvidia-gl-G05-32bit");
     }
 
     #[test]

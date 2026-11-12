@@ -86,6 +86,25 @@ fn copy_entries(from: &Path, to: &Path) -> Result<(), (PathBuf, io::Error)> {
     Ok(())
 }
 
+/// Whether `path`'s filesystem is mounted read-only, as an image-based
+/// system's root is. `false` when it cannot be asked.
+pub(crate) fn read_only(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `c_path` is NUL-terminated and `stat` is a correctly sized
+    // out-parameter that statvfs fills on success.
+    if unsafe { libc::statvfs(c_path.as_ptr(), stat.as_mut_ptr()) } != 0 {
+        return false;
+    }
+    // SAFETY: statvfs returned 0, so the struct is initialised.
+    let stat = unsafe { stat.assume_init() };
+    stat.f_flag & libc::ST_RDONLY != 0
+}
+
 /// Recursive size, best-effort: an unreadable entry counts as nothing rather
 /// than failing the whole report.
 ///

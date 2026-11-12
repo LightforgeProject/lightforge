@@ -44,6 +44,8 @@ Requires:       fontconfig
 # Proton's launcher is a Python script.
 Requires:       python3
 Requires:       hicolor-icon-theme
+# The file and folder pickers.
+Recommends:     xdg-desktop-portal
 # The Battle.net installer is the one 32-bit binary in the whole flow.
 Suggests:       wine.i686
 Suggests:       mangohud

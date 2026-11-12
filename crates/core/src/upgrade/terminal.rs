@@ -69,10 +69,23 @@ pub async fn prepare(
             let rpm = fetch_asset(http, version, ".x86_64.rpm", work, on_progress).await?;
             format!("sudo dnf install {}", quote(&rpm))
         }
+        // Unsigned, so zypper would stop to ask; its SHA256SUMS line was
+        // checked on the way in.
+        Package::Zypper { transactional } => {
+            let rpm = fetch_asset(http, version, ".x86_64.rpm", work, on_progress).await?;
+            let tool = if *transactional { "sudo transactional-update pkg" } else { "sudo zypper" };
+            format!("{tool} install --allow-unsigned-rpm {}", quote(&rpm))
+        }
+    };
+    let done = match package {
+        Package::Zypper { transactional: true } => {
+            format!("Done. Restart the computer to use {version}: it went into a new snapshot.")
+        }
+        _ => format!("Done. Close this window and restart Lightforge to use {version}."),
     };
 
     let script = work.join(SCRIPT);
-    std::fs::write(&script, script_text(work, version, &command)).map_err(io(&script))?;
+    std::fs::write(&script, script_text(work, version, &command, &done)).map_err(io(&script))?;
     Ok((script, command))
 }
 
@@ -118,13 +131,13 @@ fn terminal(path: &std::ffi::OsStr, chosen: Option<&std::ffi::OsStr>) -> Option<
 }
 
 /// The script: run `command`, say how it went, and wait for Enter.
-fn script_text(work: &Path, version: &str, command: &str) -> String {
+fn script_text(work: &Path, version: &str, command: &str, done: &str) -> String {
     format!(
         "#!/bin/sh\n\
          cd {work} || exit 1\n\
          printf '\\n==> Updating Lightforge to {version}\\n\\n'\n\
          if {command}; then\n    \
-             printf '\\nDone. Close this window and restart Lightforge to use {version}.\\n'\n\
+             printf '\\n{done}\\n'\n\
          else\n    \
              printf '\\nThe update did not finish; the lines above say why.\\n'\n\
          fi\n\
@@ -180,7 +193,8 @@ mod tests {
 
     #[test]
     fn the_script_waits_for_enter_whatever_happened() {
-        let script = script_text(Path::new("/home/u/.cache/lightforge/upgrade"), "1.0.0-beta.7", "makepkg -si --noconfirm");
+        let work = Path::new("/home/u/.cache/lightforge/upgrade");
+        let script = script_text(work, "1.0.0-beta.7", "makepkg -si --noconfirm", "Done.");
         assert!(script.contains("cd '/home/u/.cache/lightforge/upgrade' || exit 1"), "{script}");
         assert!(script.contains("if makepkg -si --noconfirm; then"), "{script}");
         // After the `fi`, so a failure waits as well.

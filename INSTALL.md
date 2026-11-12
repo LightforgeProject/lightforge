@@ -205,6 +205,11 @@ desktop app needs is loaded at runtime.
 built in. Every normal desktop has them. A minimal container doesn't, and
 shows blank labels.
 
+**A desktop portal.** The file and folder pickers go through
+`xdg-desktop-portal` and a backend for it. Every desktop environment ships
+one; on a bare window manager (sway, i3), install `xdg-desktop-portal-gtk` or
+`xdg-desktop-portal-wlr`, or Browse does nothing.
+
 **A GPU driver.** The launcher uses Vulkan and falls back to software
 rendering by itself if Vulkan doesn't work, so it starts almost anywhere. If
 your GPU gives it trouble, force software rendering:
