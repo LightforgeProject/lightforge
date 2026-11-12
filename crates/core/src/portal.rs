@@ -6,6 +6,10 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 
+use crate::paths::Layout;
+use crate::product::ProductCode;
+use crate::tact::version::Region;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Portal {
     Eu,
@@ -44,6 +48,18 @@ pub fn set(config_wtf: &Path, portal: Portal) -> io::Result<()> {
     crate::cvars::set(config_wtf, &[("portal", portal.cvar())])
 }
 
+/// Whose build a game is checked and updated against: the region it logs
+/// into, else `configured`. Blizzard rolls a build out region by region, and
+/// a client behind its login region's build cannot log in: wowf 1.60.1.70888
+/// went to NA on 2026-11-10 and to EU a day later (GlitchTip #46).
+pub fn build_region(layout: &Layout, code: &ProductCode, configured: Region) -> Region {
+    match read(&layout.wtf_dir(code).join("Config.wtf")) {
+        Some(Portal::Eu) => Region::Eu,
+        Some(Portal::Us) => Region::Us,
+        None => configured,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,5 +79,20 @@ mod tests {
         let file = dir.path().join("Config.wtf");
         std::fs::write(&file, "SET portal \"KR\"\n").unwrap();
         assert_eq!(read(&file), None);
+    }
+
+    #[test]
+    fn a_game_that_logs_into_na_is_checked_against_na() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::with_root(dir.path());
+        set(&layout.wtf_dir(&ProductCode::Forever).join("Config.wtf"), Portal::Us).unwrap();
+        assert_eq!(build_region(&layout, &ProductCode::Forever, Region::Eu), Region::Us);
+    }
+
+    #[test]
+    fn a_game_without_a_login_region_is_checked_against_the_configured_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::with_root(dir.path());
+        assert_eq!(build_region(&layout, &ProductCode::Forever, Region::Kr), Region::Kr);
     }
 }

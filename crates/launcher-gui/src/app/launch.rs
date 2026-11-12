@@ -518,7 +518,7 @@ impl Lightforge {
             tasks::offerings(
                 self.http.clone(),
                 code.clone(),
-                self.config.region,
+                self.build_region(&code),
                 Vec::new(),
                 Some(self.layout.wow_install(&code)),
             ),

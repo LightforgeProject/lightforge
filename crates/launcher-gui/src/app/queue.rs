@@ -3,6 +3,11 @@
 use crate::*;
 
 impl Lightforge {
+    /// The region `code` is checked and updated against: the one it logs into.
+    pub(crate) fn build_region(&self, code: &ProductCode) -> lightforge_core::tact::version::Region {
+        lightforge_core::portal::build_region(&self.layout, code, self.config.region)
+    }
+
     /// Re-read the disk, the version service, and the theme for one product.
     pub(crate) fn reload(&self, code: ProductCode) -> Task<Message> {
         Task::batch([
@@ -11,7 +16,7 @@ impl Lightforge {
                     self.http.clone(),
                     self.layout.clone(),
                     code.clone(),
-                    self.config.region,
+                    self.build_region(&code),
                     self.kind_of(&code) == Kind::Managed,
                 ),
                 {
@@ -273,7 +278,7 @@ impl Lightforge {
             tasks::download(
                 self.layout.clone(),
                 code.clone(),
-                self.config.region,
+                self.build_region(&code),
                 self.config.locale_for(&code).to_owned(),
                 self.config.download_limit_bytes(),
                 self.opted_optional(&code),
@@ -344,7 +349,7 @@ impl Lightforge {
                 self.http.clone(),
                 self.layout.clone(),
                 code.clone(),
-                self.config.region,
+                self.build_region(&code),
             ),
             move |result| Message::CancelCleaned(code.clone(), result),
         )

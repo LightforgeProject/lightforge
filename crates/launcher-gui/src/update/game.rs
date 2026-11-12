@@ -141,7 +141,8 @@ impl Lightforge {
                     Ok(()) => self.local.portal = Some(portal),
                     Err(e) => self.error = Some(format!("{}: {e}", file.display()).into()),
                 }
-                Task::none()
+                // The region's own build may differ during a rollout.
+                self.reload(code)
             }
 
             Message::OpenGameSettings => {
@@ -168,7 +169,7 @@ impl Lightforge {
                         tasks::offerings(
                             self.http.clone(),
                             code.clone(),
-                            self.config.region,
+                            self.build_region(&code),
                             self.opted_optional(&code),
                             None,
                         ),
