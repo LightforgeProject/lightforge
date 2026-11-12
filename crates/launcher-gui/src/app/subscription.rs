@@ -90,7 +90,7 @@ impl Lightforge {
             false => Subscription::none(),
         };
         let upgrade = self.upgrade_watch();
-        // A scan is about 60 ms, cheap at this pace.
+        // A scan is about 2 ms (release build, 300 processes, 2026-11-12).
         let client = match self.config.battle_net_declined {
             true => Subscription::none(),
             false => iced::time::every(CLIENT_POLL).map(|_| Message::ClientWatch),

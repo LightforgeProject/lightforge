@@ -43,7 +43,7 @@ pub fn shutdown(
 }
 
 /// [`shutdown`], stamping how long each stage took into `timings` (a scan is
-/// 60 ms, a signal grace up to five seconds).
+/// about 2 ms, a signal grace up to five seconds).
 pub(super) fn shutdown_timed(
     runner: &ProtonRunner,
     layout: &Layout,

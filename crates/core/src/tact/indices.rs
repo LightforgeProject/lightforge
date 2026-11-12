@@ -85,22 +85,29 @@ impl IndexCache {
         }
     }
 
-    /// Whether a copy of `hash` is cached and every checksum in it holds:
-    /// a damaged copy of the right size is fetched again.
-    pub fn holds(&self, hash: &str, expect_size: Option<u64>) -> bool {
-        self.is_cached(hash, expect_size)
-            && std::fs::read(self.path_of(hash)).is_ok_and(|bytes| super::archive::verify(&bytes, hash).is_ok())
+    /// A cached copy of `hash`, read once: at its declared size, named by its
+    /// footer, and parsed by `parse`, which walks every checksum. `None` for
+    /// one missing or damaged: fetch it again. Checked and then loaded, it was
+    /// a second 119 MiB read and hashing pass on every prepare of retail.
+    pub fn cached<T>(
+        &self,
+        hash: &str,
+        expect_size: Option<u64>,
+        parse: impl FnOnce(&[u8]) -> Result<T, super::archive::ArchiveError>,
+    ) -> Option<T> {
+        if !self.is_cached(hash, expect_size) {
+            return None;
+        }
+        let bytes = std::fs::read(self.path_of(hash)).ok()?;
+        super::archive::check_name(&bytes, hash).ok()?;
+        parse(&bytes).ok()
     }
 
-    pub fn load_archive(&self, hash: &str) -> Result<ArchiveIndex, IndexError> {
-        let path = self.path_of(hash);
-        let bytes = std::fs::read(&path).map_err(io(&path))?;
-        ArchiveIndex::parse(&bytes, hash).map_err(|source| IndexError::Parse { path, source })
-    }
-
-    /// Fetch every index in `wanted` (from
-    /// [`super::config::CdnConfig::archive_indices`]) not already cached.
-    /// `progress` is called per index. Failures are listed, not fatal.
+    /// Every index in `wanted` (from
+    /// [`super::config::CdnConfig::archive_indices`]), from the cache or
+    /// fetched, handed to `absorb` in that order, so a key two archives hold
+    /// is always located in the same one. `progress` is called per index.
+    /// Failures are listed, not fatal.
     pub async fn ensure(
         &self,
         http: &Http,
@@ -108,6 +115,7 @@ impl IndexCache {
         wanted: &[(&str, Option<u64>)],
         concurrency: usize,
         mut progress: impl FnMut(Step),
+        mut absorb: impl FnMut(ArchiveIndex),
     ) -> Result<Report, IndexError> {
         std::fs::create_dir_all(&self.dir).map_err(io(&self.dir))?;
 
@@ -117,20 +125,28 @@ impl IndexCache {
 
         let mut stream = stream::iter(wanted.iter().copied())
             .map(|(hash, size)| async move {
-                if self.holds(hash, size) {
-                    return (hash, Fetched::Cached);
+                if let Some(index) = self.cached(hash, size, |bytes| ArchiveIndex::parse(bytes, hash)) {
+                    return (hash, Fetched::Cached, Some(index));
                 }
-                match client.fetch_index(http, hash, size).await {
-                    Ok(bytes) => match self.store(hash, &bytes) {
-                        Ok(()) => (hash, Fetched::Downloaded { bytes: bytes.len() as u64 }),
-                        Err(e) => (hash, Fetched::Failed { detail: e.to_string() }),
-                    },
-                    Err(e) => (hash, Fetched::Failed { detail: e.to_string() }),
+                let failed = |detail: String| (hash, Fetched::Failed { detail }, None);
+                let bytes = match client.fetch_index(http, hash, size).await {
+                    Ok(bytes) => bytes,
+                    Err(e) => return failed(e.to_string()),
+                };
+                if let Err(e) = self.store(hash, &bytes) {
+                    return failed(e.to_string());
+                }
+                match ArchiveIndex::parse(&bytes, hash) {
+                    Ok(index) => (hash, Fetched::Downloaded { bytes: bytes.len() as u64 }, Some(index)),
+                    Err(e) => failed(e.to_string()),
                 }
             })
-            .buffer_unordered(concurrency.max(1));
+            .buffered(concurrency.max(1));
 
-        while let Some((hash, outcome)) = stream.next().await {
+        while let Some((hash, outcome, index)) = stream.next().await {
+            if let Some(index) = index {
+                absorb(index);
+            }
             done += 1;
             match &outcome {
                 Fetched::Cached => report.cached += 1,
@@ -312,47 +328,38 @@ mod tests {
     }
 
     #[test]
-    fn a_damaged_cached_index_of_the_right_size_is_not_held() {
+    fn a_damaged_cached_index_of_the_right_size_is_fetched_again() {
         let dir = scratch("damaged");
         let cache = IndexCache::new(&dir);
         let mut bytes = index_bytes(&[(key(1), 100, 30)]);
         let name = super::super::archive::seal(&mut bytes);
         cache.store(&name, &bytes).unwrap();
-        assert!(cache.holds(&name, Some(bytes.len() as u64)));
+        let size = Some(bytes.len() as u64);
+        assert!(cache.cached(&name, size, |b| ArchiveIndex::parse(b, &name)).is_some());
 
         bytes[20] ^= 0xff;
         cache.store(&name, &bytes).unwrap();
-        assert!(cache.is_cached(&name, Some(bytes.len() as u64)), "the size alone still matches");
-        assert!(!cache.holds(&name, Some(bytes.len() as u64)));
+        assert!(cache.is_cached(&name, size), "the size alone still matches");
+        assert!(cache.cached(&name, size, |b| ArchiveIndex::parse(b, &name)).is_none());
     }
 
     #[test]
     fn an_index_round_trips_through_the_cache_under_agents_own_name() {
         let dir = scratch("roundtrip");
         let cache = IndexCache::new(&dir);
-        let bytes = index_bytes(&[(key(1), 100, 30), (key(2), 200, 130)]);
-        cache.store("deadbeef", &bytes).unwrap();
+        let mut bytes = index_bytes(&[(key(1), 100, 30), (key(2), 200, 130)]);
+        let name = super::super::archive::seal(&mut bytes);
+        cache.store(&name, &bytes).unwrap();
 
-        assert_eq!(cache.path_of("deadbeef"), dir.join("deadbeef.index"));
-        let index = cache.load_archive("deadbeef").unwrap();
-        assert_eq!(index.archive(), "deadbeef");
+        assert_eq!(cache.path_of(&name), dir.join(format!("{name}.index")));
+        let index = cache.cached(&name, None, |b| ArchiveIndex::parse(b, &name)).unwrap();
+        assert_eq!(index.archive(), name);
         assert_eq!(index.len(), 2);
         assert_eq!(index.lookup(&key(2)).unwrap().offset, 130);
 
         // Nothing but the index is left behind.
         let left: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(left.len(), 1);
-    }
-
-    #[test]
-    fn a_corrupt_index_is_an_error_naming_the_file() {
-        let dir = scratch("corrupt");
-        let cache = IndexCache::new(&dir);
-        std::fs::write(cache.path_of("bad"), vec![0u8; 4096]).unwrap();
-
-        let err = cache.load_archive("bad").unwrap_err();
-        assert!(matches!(err, IndexError::Parse { .. }));
-        assert!(err.to_string().contains("bad.index"));
     }
 
     #[test]

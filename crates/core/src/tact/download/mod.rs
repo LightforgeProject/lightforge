@@ -28,7 +28,9 @@ mod tests;
 
 pub use downloader::Downloader;
 pub use guard::Downloads;
-pub use install_files::{extract_install, write_flavor_info, Catalog, Extracted, InstallReport};
+pub use install_files::{
+    extract_install, locate_install, write_flavor_info, Catalog, Extracted, InstallFile, InstallReport,
+};
 pub use rate::RateLimit;
 
 use std::sync::atomic::{AtomicBool, Ordering};

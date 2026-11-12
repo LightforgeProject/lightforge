@@ -455,10 +455,10 @@ mod extracting {
         let client = Client::new(vec![Endpoint { origin: "http://127.0.0.1:9".into(), path: "tpr/wow".into() }]).unwrap();
         let entry = InstallEntry { path: "Wow.exe".into(), ckey: *md5::compute(wanted), size: wanted.len() as u32 };
         let (encoding, locations, loose) = (Encoding::default(), Locations::default(), FileIndex::default());
+        let files = locate_install(&[&entry], Catalog { encoding: &encoding, locations: &locations, loose: &loose });
         extract_install(
             Source { http: &http, client: &client },
-            &[&entry],
-            Catalog { encoding: &encoding, locations: &locations, loose: &loose },
+            &files,
             dest,
             &Cancel::new(),
             |_| {},

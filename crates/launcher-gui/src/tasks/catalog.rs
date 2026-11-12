@@ -198,7 +198,7 @@ pub async fn installed_versions(layout: Layout) -> HashMap<String, String> {
 
 /// When Agent's registry last changed, and, when asked, whether the
 /// Battle.net client is up. Polled while [`RegistryWatch`] runs: a stat is
-/// nothing, the process scan is ~60 ms, so the caller asks for it rarely.
+/// nothing, the process scan about 2 ms, so the caller still asks for it less.
 ///
 /// [`RegistryWatch`]: crate::RegistryWatch
 pub async fn registry_probe(

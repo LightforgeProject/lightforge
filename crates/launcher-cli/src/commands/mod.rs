@@ -100,7 +100,7 @@ pub(crate) fn print_preflight(report: &lightforge_core::preflight::Report) {
         println!("download        paused for the session");
     }
 
-    // Last: where the time went (a scan is 60 ms, a signal grace 5 s).
+    // Last: where the time went (a scan is about 2 ms, a signal grace 5 s).
     for timing in &report.timings {
         println!("timing          {:<18} {:>6} ms", timing.stage, timing.took.as_millis());
     }

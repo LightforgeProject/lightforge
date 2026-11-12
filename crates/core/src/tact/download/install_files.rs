@@ -36,22 +36,57 @@ impl InstallReport {
     }
 }
 
+/// An install-manifest file and where the CDN has its bytes, worked out
+/// before the download: the encoding table and the indices it takes are
+/// hundreds of MB, not to be held through an hours-long run.
+pub struct InstallFile {
+    entry: crate::tact::manifest::InstallEntry,
+    /// Why it cannot be fetched, when it cannot.
+    from: Result<OnCdn, String>,
+}
+
+enum OnCdn {
+    /// Range-requested out of an archive, as the plan does.
+    Archive { archive: String, range: String },
+    /// Fetched whole.
+    Loose(crate::tact::storage::EKey),
+}
+
+/// Where each of `entries` comes from, by `catalog`.
+pub fn locate_install(entries: &[&crate::tact::manifest::InstallEntry], catalog: Catalog<'_>) -> Vec<InstallFile> {
+    let Catalog { encoding, locations, loose } = catalog;
+    let locate = |entry: &crate::tact::manifest::InstallEntry| {
+        let ekey = encoding
+            .ekey_for(&entry.ckey)
+            .ok_or_else(|| format!("encoding does not list content key {}", hex(&entry.ckey)))?;
+        if let Some((archive, located)) = locations.get(&ekey) {
+            let range = located
+                .range()
+                .ok_or_else(|| format!("encoding key {} has size 0 in archive {archive}", hex(&ekey)))?;
+            return Ok(OnCdn::Archive { archive: archive.to_owned(), range });
+        }
+        match loose.contains(&ekey) {
+            true => Ok(OnCdn::Loose(ekey)),
+            false => Err(format!("encoding key {} is in no index", hex(&ekey))),
+        }
+    };
+    entries.iter().map(|entry| InstallFile { entry: (*entry).clone(), from: locate(entry) }).collect()
+}
+
 /// Write the install manifest's files (`Wow.exe`, `wow_loader.dll`, CEF) as
 /// plain files into `dest`, the flavor directory (`<install>/_retail_`),
 /// each verified against its content key.
 pub async fn extract_install(
     source: Source<'_>,
-    entries: &[&crate::tact::manifest::InstallEntry],
-    catalog: Catalog<'_>,
+    files: &[InstallFile],
     dest: &std::path::Path,
     cancel: &Cancel,
     mut progress: impl FnMut(&Extracted),
 ) -> Result<InstallReport, DownloadError> {
     let Source { http, client } = source;
-    let Catalog { encoding, locations, loose } = catalog;
     let mut report = InstallReport::default();
 
-    for entry in entries {
+    for InstallFile { entry, from } in files {
         if cancel.is_cancelled() {
             break;
         }
@@ -72,23 +107,13 @@ pub async fn extract_install(
             continue;
         }
 
-        let Some(ekey) = encoding.ekey_for(&entry.ckey) else {
-            fail(&mut report, format!("encoding does not list content key {}", hex(&entry.ckey)));
-            continue;
-        };
-
-        // As the plan does: archived keys by range request, loose ones whole.
-        let encoded = if let Some((archive, located)) = locations.get(&ekey) {
-            let Some(range) = located.range() else {
-                fail(&mut report, format!("encoding key {} has size 0 in archive {archive}", hex(&ekey)));
+        let encoded = match from {
+            Ok(OnCdn::Archive { archive, range }) => client.fetch_range(http, archive, range).await,
+            Ok(OnCdn::Loose(ekey)) => client.fetch(http, crate::tact::cdn::Kind::Data, &hex(ekey)).await,
+            Err(reason) => {
+                fail(&mut report, reason.clone());
                 continue;
-            };
-            client.fetch_range(http, archive, &range).await
-        } else if loose.contains(&ekey) {
-            client.fetch(http, crate::tact::cdn::Kind::Data, &hex(&ekey)).await
-        } else {
-            fail(&mut report, format!("encoding key {} is in no index", hex(&ekey)));
-            continue;
+            }
         };
 
         let encoded = match encoded {

@@ -12,7 +12,7 @@ use crate::net::Http;
 use crate::product::ProductCode;
 use crate::text::hex;
 use crate::tact::download::{
-    self, extract_install, Cancel, Catalog, Downloader, Options as DownloadOptions, Source,
+    self, extract_install, locate_install, Cancel, Catalog, Downloader, Options as DownloadOptions, Source,
 };
 use crate::tact::writer::StoreWriter;
 
@@ -28,8 +28,25 @@ pub async fn execute(
 ) -> Result<Summary, InstallError> {
     let Prepared {
         plan, remote, cdn, client, encoding, encoding_key, encoding_blte, install, locations, loose, tags,
-        tag_column, flavor, executable, ..
+        tag_column, flavor, executable, optional, download, wanted, probe,
     } = prepared;
+    // Planning's, dropped here: the rest of `prepared` would otherwise live
+    // until the run ends.
+    drop((optional, download, wanted, probe));
+
+    // A staged build is only data: its install files would replace the
+    // executable of the build that is being played.
+    let install_files = options.install_files && !options.stage;
+    // Located now, so the encoding table and the indices go before the
+    // download instead of after it.
+    let to_extract = match install_files {
+        true => locate_install(
+            &install.select(&tags),
+            Catalog { encoding: &encoding, locations: &locations, loose: &loose },
+        ),
+        false => Vec::new(),
+    };
+    drop((encoding, locations, loose, install));
 
     // Before a byte is fetched: the run ends by writing `.build.info` into
     // the install root, and a root that refuses it would fail hours in. Its
@@ -55,18 +72,12 @@ pub async fn execute(
         .run(source, &plan, &mut writer, cancel, |p| on_event(Event::Progress(p)))
         .await?;
 
-    // A staged build is only data: its install files would replace the
-    // executable of the build that is being played.
-    let install_files = options.install_files && !options.stage;
     let mut install_complete = true;
     let mut install_failed: Vec<(String, String)> = Vec::new();
     if install_files {
-        let selected = install.select(&tags);
-        let catalog = Catalog { encoding: &encoding, locations: &locations, loose: &loose };
         let report = extract_install(
             source,
-            &selected,
-            catalog,
+            &to_extract,
             &dest.join(&flavor),
             cancel,
             |e| on_event(Event::InstallFile { path: e.path.clone(), bytes: e.bytes }),

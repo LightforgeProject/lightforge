@@ -74,7 +74,9 @@ impl Http {
     pub fn new() -> Result<Self, NetError> {
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)
-            .connect_timeout(Duration::from_secs(15))
+            // Blizzard's CDN hosts fail over, and a dead one is rested
+            // (`tact::cdn`): this is what the first request to one costs.
+            .connect_timeout(Duration::from_secs(5))
             // No overall timeout (a slow link is fine); this one resets per
             // chunk and catches a server that goes silent.
             .read_timeout(READ_TIMEOUT)

@@ -99,7 +99,7 @@ fn hold_for_spawn(
 /// Generous: a cold start on a hard drive compiling pipelines still counts.
 pub(crate) const GAME_APPEAR_WITHIN: Duration = Duration::from_secs(180);
 
-/// How often the prefix is re-scanned while waiting for the game (60 ms a scan).
+/// How often the prefix is re-scanned while waiting for the game (about 2 ms a scan).
 pub(crate) const WATCH_POLL: Duration = Duration::from_millis(500);
 
 /// How often it is re-scanned once the game is up, where no pidfd can be
