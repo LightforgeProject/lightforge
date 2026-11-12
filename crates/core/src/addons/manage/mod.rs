@@ -96,6 +96,27 @@ pub fn ledger_path(
     Ledger::path_for(data_dir, addons_dir, code)
 }
 
+/// Take `code`'s ledger along when its AddOns folder changed path, by a move
+/// to another library or the library turning up at a new mount point. Keyed
+/// by the path, a ledger left behind shows every addon as unmanaged and none
+/// is updated again. It replaces one at the new path: that is a stale ledger
+/// from a move before this one.
+pub fn carry_ledger(
+    data_dir: &Path,
+    code: &crate::product::ProductCode,
+    from_addons: &Path,
+    to_addons: &Path,
+) -> std::io::Result<()> {
+    let (from, to) = (ledger_path(data_dir, from_addons, code), ledger_path(data_dir, to_addons, code));
+    if from == to {
+        return Ok(());
+    }
+    match std::fs::rename(&from, &to) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        done => done,
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ManageError {
     #[error(transparent)]

@@ -219,9 +219,15 @@ pub(crate) async fn move_game(ctx: Ctx, code: ProductCode, to: String, yes: bool
         .context("the product is not in the config")?
         .profile
         .library = Some(target.id.clone());
-    config.save(&AppDirs::discover()?.config_file())?;
+    let dirs = AppDirs::discover()?;
+    config.save(&dirs.config_file())?;
+    let moved_to = config.layout()?;
+    let (from, to) = (layout.addons_dir(&code), moved_to.addons_dir(&code));
+    if let Err(e) = lightforge_core::addons::manage::carry_ledger(dirs.data_dir(), &code, &from, &to) {
+        eprintln!("warning: the addon ledger stayed at the old path, so the addons show as unmanaged: {e}");
+    }
 
-    let freed = migrate::release(&http, &config.layout()?, &code, &source).await?;
+    let freed = migrate::release(&http, &moved_to, &code, &source).await?;
     println!("freed           {freed} bytes in {}", source.label);
     Ok(())
 }

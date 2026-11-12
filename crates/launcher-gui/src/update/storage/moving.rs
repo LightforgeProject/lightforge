@@ -91,7 +91,7 @@ impl Lightforge {
                     }
                     return Ok(self.pump());
                 }
-                self.rebuild_layout();
+                self.follow_games();
                 Task::perform(
                     tasks::move_release(self.config.clone(), self.http.clone(), self.layout.clone(), code.clone(), from),
                     move |result| Message::GameMoved(code.clone(), result),

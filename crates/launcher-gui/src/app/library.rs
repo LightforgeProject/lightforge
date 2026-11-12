@@ -123,6 +123,21 @@ impl Lightforge {
         }
     }
 
+    /// [`Self::rebuild_layout`] after games changed place on disk, by a move or
+    /// a library found at a new mount point. Their addon ledgers go along;
+    /// see [`manage::carry_ledger`].
+    pub(crate) fn follow_games(&mut self) {
+        let before = self.layout.clone();
+        self.rebuild_layout();
+        let Some(dirs) = self.dirs.as_ref() else { return };
+        for code in self.config.products.iter().map(|p| &p.code) {
+            let (from, to) = (before.addons_dir(code), self.layout.addons_dir(code));
+            if let Err(e) = manage::carry_ledger(dirs.data_dir(), code, &from, &to) {
+                tracing::warn!("{}'s addon ledger stayed at {}: {e}", code.as_str(), from.display());
+            }
+        }
+    }
+
     /// Re-read the mount table: which partitions could be added, and whether a
     /// library that was absent has come back somewhere else.
     ///
@@ -141,7 +156,7 @@ impl Lightforge {
         }
         if moved {
             self.save_config();
-            self.rebuild_layout();
+            self.follow_games();
         }
         self.partitions = library::partitions(&self.config.libraries);
         self.check_drives();

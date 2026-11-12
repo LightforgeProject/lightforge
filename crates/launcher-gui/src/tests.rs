@@ -1687,6 +1687,32 @@ fn a_committed_copy_points_the_config_at_the_new_library_first() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Keyed by the AddOns folder's path, a ledger left behind would show every
+/// addon of the moved game as unmanaged.
+#[test]
+fn a_committed_copy_takes_the_addon_ledger_along() {
+    use lightforge_core::addons::{manage, Ledger};
+
+    let (mut app, scratch) = test_app();
+    app.track_selected();
+    let code = app.selected.code.clone();
+    let mut move_ = moving(code.clone());
+    move_.from = library::Library::main_at(scratch.path().join("a/games"), "A");
+    move_.to = library::Library::adopted(scratch.path().join("b/games"), "B");
+    app.config.libraries = vec![move_.from.clone(), move_.to.clone()];
+    app.config.product_mut(&code).unwrap().profile.library = Some(move_.from.id.clone());
+    app.rebuild_layout();
+    let data = app.dirs.as_ref().unwrap().data_dir().to_path_buf();
+    let before = manage::ledger_path(&data, &app.layout.addons_dir(&code), &code);
+    Ledger::default().save(&before).unwrap();
+    app.moving = Some(move_);
+
+    let _ = app.update(Message::GameCopied(code.clone(), Ok(lightforge_core::migrate::Moved::Copied { files: 1, bytes: 1 })));
+
+    assert!(!before.exists());
+    assert!(manage::ledger_path(&data, &app.layout.addons_dir(&code), &code).is_file());
+}
+
 /// Releasing now would delete the copy the config on disk still points at.
 #[test]
 fn a_copy_whose_config_cannot_be_saved_keeps_the_old_one() {
