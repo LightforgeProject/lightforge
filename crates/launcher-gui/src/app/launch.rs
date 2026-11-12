@@ -295,6 +295,7 @@ impl Lightforge {
                         self.family_of(&code),
                         self.install_uid_of(&code),
                         self.config.battle_net_minimized,
+                        self.config.battle_net_in_background,
                     ),
                     Message::HandoffStarted,
                 )

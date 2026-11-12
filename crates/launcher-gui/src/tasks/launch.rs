@@ -290,8 +290,11 @@ pub async fn launch_via_battle_net(
     family: Option<String>,
     install_uid: String,
     minimized: bool,
+    background: bool,
 ) -> Result<Handoff, Problem> {
-    tokio::task::spawn_blocking(move || -> Result<_, Problem> {
+    let wait_layout = layout.clone();
+    let wait_code = code.clone();
+    let sent = tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch, Readiness};
         use lightforge_core::preflight;
 
@@ -317,13 +320,13 @@ pub async fn launch_via_battle_net(
                 == Readiness::NeedsAttention
             {
                 // Left to the user, who is told where the client is.
-                return Ok(Handoff::NeedsAttention { minimized: minimize });
+                return Ok(Sent::Done(Handoff::NeedsAttention { minimized: minimize }));
             }
         }
 
         // Closed meanwhile: sending now would start a cold client that drops it.
         if !preflight::client_running(&layout) {
-            return Ok(Handoff::ClientClosed);
+            return Ok(Sent::Done(Handoff::ClientClosed));
         }
 
         // A game that just exited is still running to the client for a few
@@ -332,7 +335,7 @@ pub async fn launch_via_battle_net(
         if let Some(log) = &session {
             if log.pending_update(&install_uid) {
                 tracing::info!("Battle.net holds {install_uid} back for an update; not sending the launch");
-                return Ok(Handoff::NeedsUpdate);
+                return Ok(Sent::Done(Handoff::NeedsUpdate));
             }
             if !log.wait_until_closed(&install_uid, GAME_GONE_WITHIN) {
                 tracing::warn!("Battle.net still counts {install_uid} as running; sending the launch anyway");
@@ -340,14 +343,20 @@ pub async fn launch_via_battle_net(
         }
 
         // The client raises its window for the command until the game is up;
-        // one nobody could see before goes straight back to the tray.
-        let tray = match battlenet::ClientWindows::connect(preflight::client_pids(&layout)) {
-            Ok(windows) if windows.any_shown().is_ok_and(|shown| !shown) => Some(windows),
-            Ok(_) => None,
-            Err(e) => {
-                tracing::info!("Battle.net's window stays as the client leaves it: {}", chain(&e));
-                None
-            }
+        // one nobody could see before goes straight back to the tray. Only
+        // where closing hides it: otherwise the close is a quit, and the
+        // client exits with the launch still in flight (35 ms after
+        // `GameLaunching=1`, before the game's process exists).
+        let tray = match battlenet::close_hides_window(background) {
+            false => None,
+            true => match battlenet::ClientWindows::connect(preflight::client_pids(&layout)) {
+                Ok(windows) if windows.any_shown().is_ok_and(|shown| !shown) => Some(windows),
+                Ok(_) => None,
+                Err(e) => {
+                    tracing::info!("Battle.net's window stays as the client leaves it: {}", chain(&e));
+                    None
+                }
+            },
         };
 
         // Over IPC to the running client, with the family the panel resolved.
@@ -366,29 +375,79 @@ pub async fn launch_via_battle_net(
         if session.as_ref().is_some_and(|log| !log.launch_taken(TAKEN_WITHIN)) {
             if preflight::client_running(&layout) {
                 tracing::warn!("Battle.net hand-off for {}: the client did not take the launch", code.as_str());
-                return Ok(Handoff::Ignored);
+                return Ok(Sent::Done(Handoff::Ignored));
             }
             tracing::warn!("Battle.net hand-off for {}: the client closed instead", code.as_str());
-            return Ok(match session.is_some_and(|log| log.updated_itself()) {
+            return Ok(Sent::Done(match session.is_some_and(|log| log.updated_itself()) {
                 true => Handoff::ClientUpdated,
                 false => Handoff::ClientClosed,
-            });
+            }));
         }
 
-        let handoff = match preflight::wait_for_game_start(&layout, &before, HANDOFF_TIMEOUT) {
-            Some(game) => Handoff::Playing(game),
-            None => Handoff::NothingStarted,
-        };
-        match &handoff {
-            Handoff::NothingStarted => {
-                tracing::warn!("Battle.net hand-off for {}: no game started within {HANDOFF_TIMEOUT:?}", code.as_str());
-            }
-            _ => tracing::info!("Battle.net hand-off for {}: game started", code.as_str()),
-        }
-        Ok(handoff)
+        Ok(Sent::Waiting(before))
     })
     .await
-    .map_err(|e| Problem::of(&e))?
+    .map_err(|e| Problem::of(&e))??;
+
+    match sent {
+        Sent::Done(handoff) => Ok(handoff),
+        Sent::Waiting(before) => wait_for_handoff(wait_layout, wait_code, before).await,
+    }
+}
+
+/// How far a hand-off got on the blocking side.
+enum Sent {
+    /// It ended before the launch went out, or the client never took it.
+    Done(Handoff),
+    /// Sent and taken; these are the games that were already running.
+    Waiting(Vec<lightforge_core::preflight::GameProcess>),
+}
+
+/// Wait for the handed-off game, one blocking scan at a time.
+///
+/// Awaited, not slept on a blocking thread: the runtime waits for every
+/// `spawn_blocking` task when it shuts down, so a window closed during a
+/// three-minute wait stayed on screen, unresponsive, until the wait ran out.
+/// A client that is gone with no new game ends the wait early: nothing is
+/// left that could start one.
+async fn wait_for_handoff(
+    layout: Layout,
+    code: ProductCode,
+    before: Vec<lightforge_core::preflight::GameProcess>,
+) -> Result<Handoff, Problem> {
+    use lightforge_core::preflight;
+
+    let deadline = Instant::now() + HANDOFF_TIMEOUT;
+    // The client exits right after the game is up (`GameLaunchWindowBehavior: 2`):
+    // one look more after it is seen gone, so a game that won the race counts.
+    let mut client_gone = false;
+    loop {
+        let scan_layout = layout.clone();
+        let known = before.clone();
+        let (started, client_up) = tokio::task::spawn_blocking(move || {
+            (
+                preflight::game_started(&scan_layout, &known),
+                preflight::client_running(&scan_layout),
+            )
+        })
+        .await
+        .map_err(|e| Problem::of(&e))?;
+
+        if let Some(game) = started {
+            tracing::info!("Battle.net hand-off for {}: game started", code.as_str());
+            return Ok(Handoff::Playing(game));
+        }
+        if !client_up && client_gone {
+            tracing::warn!("Battle.net hand-off for {}: the client exited and no game started", code.as_str());
+            return Ok(Handoff::ClientClosed);
+        }
+        client_gone = !client_up;
+        if Instant::now() >= deadline {
+            tracing::warn!("Battle.net hand-off for {}: no game started within {HANDOFF_TIMEOUT:?}", code.as_str());
+            return Ok(Handoff::NothingStarted);
+        }
+        tokio::time::sleep(preflight::HANDOFF_POLL).await;
+    }
 }
 
 /// Open the client's install flow for a game, dialog and all.

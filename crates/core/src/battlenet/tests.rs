@@ -449,6 +449,14 @@ fn a_background_client_hides_on_close() {
 }
 
 #[test]
+fn only_a_background_client_survives_its_window_being_closed() {
+    // A hand-off sends `WM_DELETE_WINDOW` to keep the window in the tray. Sent
+    // to a client without `HideOnClose`, that quits it mid-launch.
+    assert!(close_hides_window(true));
+    assert!(!close_hides_window(false));
+}
+
+#[test]
 fn only_a_background_client_has_its_notifications_switched_off() {
     let mut config = json!({ "User": { "Client": { "ToastsEnabled": "false" } } });
     apply_tweaks(&mut config, &account_tweaks(false));

@@ -12,7 +12,7 @@ use crate::paths::Layout;
 
 /// How often the prefix is re-scanned while waiting for a handed-off game to
 /// start. Slower than [`super::POLL`]: a cold client takes most of a minute.
-const HANDOFF_POLL: Duration = Duration::from_millis(500);
+pub const HANDOFF_POLL: Duration = Duration::from_millis(500);
 
 /// Wine's own processes, in every prefix and nobody's game. The
 /// before-snapshot catches most, but Wine starts services on demand too.
@@ -182,11 +182,10 @@ pub fn wait_for_game_start(
     before: &[GameProcess],
     appear_within: Duration,
 ) -> Option<GameProcess> {
-    let known: HashSet<u32> = before.iter().map(|p| p.pid).collect();
     let deadline = Instant::now() + appear_within;
 
     loop {
-        if let Some(found) = games_running(layout).into_iter().find(|p| !known.contains(&p.pid)) {
+        if let Some(found) = game_started(layout, before) {
             return Some(found);
         }
         if Instant::now() >= deadline {
@@ -194,4 +193,12 @@ pub fn wait_for_game_start(
         }
         std::thread::sleep(HANDOFF_POLL);
     }
+}
+
+/// One look for a game that is not in `before`: [`wait_for_game_start`]
+/// without the wait, for a caller that sleeps between looks itself (the GUI,
+/// whose async runtime can then drop the wait when the window closes).
+pub fn game_started(layout: &Layout, before: &[GameProcess]) -> Option<GameProcess> {
+    let known: HashSet<u32> = before.iter().map(|p| p.pid).collect();
+    games_running(layout).into_iter().find(|p| !known.contains(&p.pid))
 }

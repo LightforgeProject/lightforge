@@ -205,6 +205,16 @@ pub fn account_tweaks(background: bool) -> Vec<Tweak> {
     tweaks
 }
 
+/// Whether closing the client's window puts it in the tray, under the
+/// [`account_tweaks`] for `background`. Without `HideOnClose` the X button,
+/// or a `WM_DELETE_WINDOW` sent for it, quits the client outright, and with
+/// `DisplayExitPrompt` off there is no countdown to stop it.
+pub fn close_hides_window(background: bool) -> bool {
+    account_tweaks(background)
+        .iter()
+        .any(|tweak| tweak.key() == "User.Client.HideOnClose" && tweak.value == json!("true"))
+}
+
 /// The settings checkbox "Launch Battle.net minimized to the system tray".
 /// Read from `Battle.net.config` only: the same key in the per-account file
 /// is ignored, and so is the Qt `WindowState` there (client 2.53.6, measured
