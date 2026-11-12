@@ -388,9 +388,9 @@ impl Lightforge {
                 // show. A second invocation hands it the request over IPC.
                 Task::perform(
                     tasks::open_battle_net(
+                        self.config.clone(),
                         self.layout.clone(),
                         self.selected.code.clone(),
-                        self.config.prefix_user.clone(),
                         None,
                     ),
                     Message::BattleNetShown,

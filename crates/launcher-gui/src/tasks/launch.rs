@@ -8,6 +8,7 @@ use super::*;
 /// Split from the launch: seconds against a whole session. The spawn hands
 /// the returned [`Cleared`] to [`hold_for_spawn`].
 pub async fn preflight(
+    config: Config,
     layout: Layout,
     code: ProductCode,
     downloads: SharedDownloads,
@@ -15,12 +16,12 @@ pub async fn preflight(
 ) -> Result<Cleared, Problem> {
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         // The launch's own build, or the shared prefix gets upgraded in between.
-        let runner = runner_for(&layout, &code, runs)?;
+        let runner = runner_for(&config, &layout, &code, runs)?;
         let mut guard = downloads;
         let started = Instant::now();
         tracing::info!("preflight for {} ({runs:?})", code.as_str());
         let prefix = hold_prefix();
-        let report = clear(&runner, &layout, &code, runs, &mut guard)?;
+        let report = clear(&config, &runner, &layout, &code, runs, &mut guard)?;
         // The stage timings say where a launch that feels stuck sits.
         tracing::info!(
             "preflight done in {} ms, {} process(es) found: {}",
@@ -48,16 +49,13 @@ pub async fn preflight(
 
 /// Pre-flight's sweep, run with the prefix held.
 fn clear(
+    config: &Config,
     runner: &lightforge_core::prefix::ProtonRunner,
     layout: &Layout,
     code: &ProductCode,
     runs: Runs,
     downloads: &mut SharedDownloads,
 ) -> Result<lightforge_core::preflight::Report, Problem> {
-    let config = AppDirs::discover()
-        .ok()
-        .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
-        .unwrap_or_default();
     prefix().preflights.fetch_add(1, Ordering::SeqCst);
     let report = Preflight::new(config.prefix_user.clone())
         .with_managed(config.managed_products())
@@ -79,6 +77,7 @@ fn clear(
 /// pre-flight paused. Anyone who held it since may have started or stopped
 /// something there, so the sweep runs again.
 fn hold_for_spawn(
+    config: &Config,
     layout: &Layout,
     code: &ProductCode,
     runs: Runs,
@@ -87,7 +86,7 @@ fn hold_for_spawn(
     let prefix = hold_prefix();
     if !prefix.follows(cleared) {
         tracing::info!("the prefix was used after pre-flight for {}; clearing it again", code.as_str());
-        clear(&runner_for(layout, code, runs)?, layout, code, runs, &mut downloads)?;
+        clear(config, &runner_for(config, layout, code, runs)?, layout, code, runs, &mut downloads)?;
     }
     Ok(prefix)
 }
@@ -132,6 +131,7 @@ pub enum Started {
 /// The exe is watched by name: the game is not reliably a descendant of the
 /// Proton child. If it never appears, the child's exit status is reported.
 pub async fn start_game(
+    config: Config,
     layout: Layout,
     code: ProductCode,
     cleared: (Cleared, SharedDownloads),
@@ -147,9 +147,10 @@ pub async fn start_game(
 
         back_up_before_launch(&layout, &code);
 
-        let (profile, tools) = profile_for(&code);
+        let profile = config.product(&code).map(|p| p.profile.clone()).unwrap_or_default();
+        let tools = HostTools::detect();
 
-        let runner = runner_for(&layout, &code, Runs::Game)?;
+        let runner = runner_for(&config, &layout, &code, Runs::Game)?;
         // The user's launch options outermost, as Steam puts them: around
         // every wrapper of our own.
         let mut launch = lightforge_core::launch_options::wrap(
@@ -160,7 +161,7 @@ pub async fn start_game(
             &profile.launch_options,
         );
 
-        let mut prefix = hold_for_spawn(&layout, &code, Runs::Game, cleared)?;
+        let mut prefix = hold_for_spawn(&config, &layout, &code, Runs::Game, cleared)?;
         prefix.launches += 1;
         let generation = prefix.launches;
 
@@ -298,14 +299,14 @@ pub(crate) fn reap_later(mut child: std::process::Child) {
 /// Start a client, in the tray or as a window. Returns the moment after which
 /// its log answers for this start.
 pub(crate) fn start_client(
+    config: &Config,
     runner: &lightforge_core::prefix::ProtonRunner,
     layout: &Layout,
-    user: &str,
     in_tray: bool,
 ) -> Result<std::time::SystemTime, Problem> {
     use lightforge_core::battlenet::{self, Launch};
 
-    if let Err(e) = battlenet::configure(layout, user, &battlenet::window_state_tweaks(in_tray)) {
+    if let Err(e) = battlenet::configure(layout, &config.prefix_user, &battlenet::window_state_tweaks(in_tray)) {
         tracing::warn!("Battle.net may not start {}: {}", if in_tray { "in the tray" } else { "as a window" }, chain(&e));
     }
     // The preference is only read on an autostart.
@@ -315,33 +316,33 @@ pub(crate) fn start_client(
     };
     let started = std::time::SystemTime::now();
     // Wrappers here only: this invocation becomes the client.
-    let wrappers = config_tweaks().wrappers(&HostTools::detect());
+    let wrappers = config.battle_net_tweaks.wrappers(&HostTools::detect());
     let client = battlenet::launch_wrapped(runner, layout, &how, &wrappers).map_err(|e| Problem::of(&e))?;
     reap_later(client);
     Ok(started)
 }
 
 pub async fn launch_via_battle_net(
+    config: Config,
     layout: Layout,
     code: ProductCode,
-    user: String,
     family: Option<String>,
     install_uid: String,
-    minimized: bool,
     cleared: (Cleared, SharedDownloads),
 ) -> Result<Handoff, Problem> {
     off_runtime("hand-off", move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch, Readiness};
         use lightforge_core::preflight;
 
+        let user = &config.prefix_user;
         tracing::info!("hand-off to Battle.net for {} (family {family:?})", code.as_str());
-        let runner = client_runner(&layout, &code)?;
+        let runner = client_runner(&config, &layout, &code)?;
         back_up_before_launch(&layout, &code);
 
         // Two phases: a cold client ignores `--exec=launch` (measured: signed
         // in at 5 s, game at 53 s). A second invocation hands it over IPC.
         let (before, cold) = {
-            let mut prefix = hold_for_spawn(&layout, &code, Runs::BattleNet, cleared)?;
+            let mut prefix = hold_for_spawn(&config, &layout, &code, Runs::BattleNet, cleared)?;
             // Counted, so a pending wind-down leaves this launch alone.
             prefix.launches += 1;
             // Taken before the client is told anything, so a game that was
@@ -351,14 +352,14 @@ pub async fn launch_via_battle_net(
                 true => None,
                 false => {
                     // Minimized only where it signs itself in.
-                    let minimize = minimized && battlenet::signs_in_by_itself(&layout, &user);
-                    Some((start_client(&runner, &layout, &user, minimize)?, minimize))
+                    let minimize = config.battle_net_minimized && battlenet::signs_in_by_itself(&layout, user);
+                    Some((start_client(&config, &runner, &layout, minimize)?, minimize))
                 }
             };
             (before, cold)
         };
         if let Some((started, minimize)) = cold {
-            match battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT, || preflight::client_running(&layout)) {
+            match battlenet::wait_until_ready(&layout, user, started, SIGN_IN_TIMEOUT, || preflight::client_running(&layout)) {
                 Readiness::SignedIn => {}
                 // Left to the user, who is told where the client is.
                 Readiness::NeedsAttention => return Ok(Handoff::NeedsAttention { minimized: minimize }),
@@ -373,7 +374,7 @@ pub async fn launch_via_battle_net(
 
         // A game that just exited is still running to the client for a few
         // seconds, and a launch then only selects its tile.
-        let session = battlenet::SessionLog::find(&layout, &user);
+        let session = battlenet::SessionLog::find(&layout, user);
         if let Some(log) = &session {
             if log.pending_update(&install_uid) {
                 tracing::info!("Battle.net holds {install_uid} back for an update; not sending the launch");
@@ -388,7 +389,7 @@ pub async fn launch_via_battle_net(
         // one nobody could see before goes straight back to the tray. Only
         // with `HideOnClose` as the client last wrote it: without, the close
         // quits the client in the middle of the launch (GlitchTip #43).
-        let closes_to_tray = battlenet::closes_to_tray(&layout, &user);
+        let closes_to_tray = battlenet::closes_to_tray(&layout, user);
         let tray = match closes_to_tray.then(|| battlenet::ClientWindows::connect(preflight::client_pids(&layout))) {
             Some(Ok(windows)) if windows.any_open().is_ok_and(|open| !open) => Some(windows),
             Some(Ok(_)) | None => None,
@@ -459,9 +460,9 @@ pub async fn launch_via_battle_net(
 /// `--game=<uid> --install` has a view of its own, with the path picker, so
 /// it shows. A running client takes it over IPC; otherwise this starts one.
 pub async fn install_via_battle_net(
+    config: Config,
     layout: Layout,
     code: ProductCode,
-    user: String,
     uid: String,
     label: String,
     cleared: (Cleared, SharedDownloads),
@@ -469,15 +470,15 @@ pub async fn install_via_battle_net(
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch};
 
-        let runner = client_runner(&layout, &code)?;
+        let runner = client_runner(&config, &layout, &code)?;
 
         // Normal window, whatever a launch would have chosen: the next thing
         // that happens is a person choosing where to install.
-        if let Err(e) = battlenet::configure(&layout, &user, &battlenet::window_state_tweaks(false)) {
+        if let Err(e) = battlenet::configure(&layout, &config.prefix_user, &battlenet::window_state_tweaks(false)) {
             tracing::warn!("Battle.net may not start as a window: {}", chain(&e));
         }
 
-        let _prefix = hold_for_spawn(&layout, &code, Runs::BattleNet, cleared)?;
+        let _prefix = hold_for_spawn(&config, &layout, &code, Runs::BattleNet, cleared)?;
         let child = battlenet::launch(&runner, &layout, &Launch::InstallFlow { uid })
             .map_err(|e| Problem::of(&e))?;
         reap_later(child);
@@ -543,6 +544,7 @@ pub async fn run_beside(line: String, code: ProductCode, game: GameProcess) {
 /// `settle_after` is a direct launch's [`Started::Up`] generation: the prefix is
 /// put to rest after it, unless something else still runs there.
 pub async fn await_game_exit(
+    config: Config,
     layout: Layout,
     code: ProductCode,
     game: GameProcess,
@@ -558,7 +560,7 @@ pub async fn await_game_exit(
         crate::trace::mark(format!("launch: {} has exited", game.name));
         // Best effort: the next pre-flight does the same work.
         if let Some(generation) = settle_after {
-            if let Ok(runner) = runner_for(&layout, &code, Runs::Game) {
+            if let Ok(runner) = runner_for(&config, &layout, &code, Runs::Game) {
                 settle(&layout, &runner, generation);
             }
         }
@@ -604,11 +606,11 @@ pub async fn running_games(layout: Layout) -> Vec<String> {
 }
 
 /// Close Battle.net and its Agent, leaving any game running.
-pub async fn quit_battle_net(layout: Layout, code: ProductCode) -> Result<String, Problem> {
+pub async fn quit_battle_net(config: Config, layout: Layout, code: ProductCode) -> Result<String, Problem> {
     use lightforge_core::preflight::{self, Disposition};
 
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
-        let runner = client_runner(&layout, &code)?;
+        let runner = client_runner(&config, &layout, &code)?;
         let _prefix = hold_prefix();
         let outcomes = preflight::quit_client(&runner, &layout, STOP_GRACE).map_err(|e| Problem::of(&e))?;
         let stuck: Vec<String> = outcomes
@@ -661,21 +663,21 @@ pub async fn set_battle_net_limit(
 /// After a pre-flight, `cleared` and the downloads it paused: a stale
 /// wineserver breaks Battle.net too. `None` for a client up to take the request.
 pub async fn open_battle_net(
+    config: Config,
     layout: Layout,
     code: ProductCode,
-    user: String,
     cleared: Option<(Cleared, SharedDownloads)>,
 ) -> Result<String, Problem> {
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
         use lightforge_core::battlenet::{self, Launch};
 
-        let runner = client_runner(&layout, &code)?;
+        let runner = client_runner(&config, &layout, &code)?;
         // A normal window: the client itself was asked for.
-        if let Err(e) = battlenet::configure(&layout, &user, &battlenet::window_state_tweaks(false)) {
+        if let Err(e) = battlenet::configure(&layout, &config.prefix_user, &battlenet::window_state_tweaks(false)) {
             tracing::warn!("Battle.net may not start as a window: {}", chain(&e));
         }
         let _prefix = match cleared {
-            Some(cleared) => hold_for_spawn(&layout, &code, Runs::BattleNet, cleared)?,
+            Some(cleared) => hold_for_spawn(&config, &layout, &code, Runs::BattleNet, cleared)?,
             None => hold_prefix(),
         };
         reap_later(battlenet::launch(&runner, &layout, &Launch::Client).map_err(|e| Problem::of(&e))?);

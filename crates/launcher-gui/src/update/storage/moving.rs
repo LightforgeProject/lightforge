@@ -38,6 +38,7 @@ impl Lightforge {
                     releasing: false,
                 };
                 let task = tasks::move_copy(
+                    self.config.clone(),
                     self.http.clone(),
                     self.layout.clone(),
                     code.clone(),
@@ -92,7 +93,7 @@ impl Lightforge {
                 }
                 self.rebuild_layout();
                 Task::perform(
-                    tasks::move_release(self.http.clone(), self.layout.clone(), code.clone(), from),
+                    tasks::move_release(self.config.clone(), self.http.clone(), self.layout.clone(), code.clone(), from),
                     move |result| Message::GameMoved(code.clone(), result),
                 )
             }
@@ -158,7 +159,7 @@ impl Lightforge {
                     releasing: true,
                 });
                 Task::perform(
-                    tasks::move_release(self.http.clone(), self.layout.clone(), code.clone(), from),
+                    tasks::move_release(self.config.clone(), self.http.clone(), self.layout.clone(), code.clone(), from),
                     move |result| Message::GameMoved(code.clone(), result),
                 )
             }

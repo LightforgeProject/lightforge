@@ -25,6 +25,7 @@ pub struct TransferState {
 // here would only move the same list one level out.
 #[allow(clippy::too_many_arguments)]
 pub async fn download(
+    config: Config,
     layout: Layout,
     code: ProductCode,
     region: Region,
@@ -47,7 +48,7 @@ pub async fn download(
             // corrupt both (GlitchTip #41). Held rather than refused, and
             // asked again each round: Agent outlives a hand-off by itself.
             let mut held = false;
-            while !make_way(&layout) {
+            while !make_way(&config, &layout) {
                 if cancel.is_cancelled() {
                     let _ = done_tx.send(Ok(Summary::cancelled(layout.wow_install(&code))));
                     return;
@@ -274,6 +275,7 @@ impl DownloadGuard for SharedDownloads {
 /// this build wants. The build comes from the version service, so offline
 /// the files stay.
 pub async fn discard_download(
+    config: Config,
     http: Option<Http>,
     layout: Layout,
     code: ProductCode,
@@ -284,7 +286,7 @@ pub async fn discard_download(
     // The same gate a repair and an uninstall go through.
     let alive = layout.clone();
     let busy = tokio::task::spawn_blocking(move || {
-        make_way(&alive);
+        make_way(&config, &alive);
         lightforge_core::preflight::scan(&alive)
     })
         .await

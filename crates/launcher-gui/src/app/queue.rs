@@ -276,6 +276,7 @@ impl Lightforge {
 
         Task::perform(
             tasks::download(
+                self.config.clone(),
                 self.layout.clone(),
                 code.clone(),
                 self.build_region(&code),
@@ -346,6 +347,7 @@ impl Lightforge {
         self.discarding = Some(code.clone());
         Task::perform(
             tasks::discard_download(
+                self.config.clone(),
                 self.http.clone(),
                 self.layout.clone(),
                 code.clone(),

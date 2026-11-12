@@ -98,8 +98,8 @@ pub async fn repair_battle_net(
     tx: tokio::sync::watch::Sender<Progress>,
 ) -> Result<setup::Repaired, Problem> {
     let dirs = AppDirs::discover().map_err(|e| Problem::of(&e))?;
-    let quiet = layout.clone();
-    let _ = tokio::task::spawn_blocking(move || crate::tasks::make_way(&quiet)).await;
+    let (quiet, settings) = (layout.clone(), config.clone());
+    let _ = tokio::task::spawn_blocking(move || crate::tasks::make_way(&settings, &quiet)).await;
     setup::repair_battle_net(&layout, &dirs, &config, proton_version.as_deref(), reporter(tx))
         .await
         .map_err(|e| Problem::of(&e))

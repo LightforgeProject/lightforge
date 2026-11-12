@@ -47,10 +47,10 @@ impl Lightforge {
             .companions
             .iter()
             .filter(|c| c.game == code && c.start_with_game)
-            .map(|c| Task::perform(tasks::launch_companion(self.layout.clone(), c.clone()), Message::CompanionStarted))
+            .map(|c| Task::perform(tasks::launch_companion(self.config.clone(), self.layout.clone(), c.clone()), Message::CompanionStarted))
             .collect();
         let watch = Task::perform(
-            tasks::await_game_exit(self.layout.clone(), code.clone(), game, settle_after),
+            tasks::await_game_exit(self.config.clone(), self.layout.clone(), code.clone(), game, settle_after),
             move |result| Message::GameExited(code.clone(), result),
         );
         Task::batch(companions.into_iter().chain(std::iter::once(watch)))
@@ -82,7 +82,7 @@ impl Lightforge {
         self.client_update = Some(ClientUpdate { code: code.clone(), progress: progress.clone(), stop: stop.clone() });
         let uid = self.install_uid_of(&code);
         Task::perform(
-            tasks::update_through_client(self.layout.clone(), self.config.prefix_user.clone(), uid, progress, stop),
+            tasks::update_through_client(self.config.clone(), self.layout.clone(), uid, progress, stop),
             move |result| Message::ClientUpdateDone(code.clone(), result),
         )
     }
@@ -123,7 +123,7 @@ impl Lightforge {
         let cancel = Cancel::new();
         self.warming = Some(cancel.clone());
         Task::perform(
-            tasks::warm_battle_net(self.layout.clone(), self.config.prefix_user.clone(), tasks::preflights(), cancel),
+            tasks::warm_battle_net(self.config.clone(), self.layout.clone(), tasks::preflights(), cancel),
             move |result| Message::BackgroundClient(generation, result),
         )
     }
@@ -168,7 +168,7 @@ impl Lightforge {
         }
         self.quitting_client = true;
         Task::perform(
-            tasks::close_background_client(self.layout.clone(), self.config.prefix_user.clone()),
+            tasks::close_background_client(self.config.clone(), self.layout.clone()),
             Message::BattleNetQuit,
         )
     }
@@ -182,7 +182,7 @@ impl Lightforge {
         self.quitting_client = true;
         self.status = "closing Battle.net…".to_owned();
         Task::perform(
-            tasks::quit_battle_net(self.layout.clone(), self.selected.code.clone()),
+            tasks::quit_battle_net(self.config.clone(), self.layout.clone(), self.selected.code.clone()),
             Message::BattleNetQuit,
         )
     }
@@ -293,6 +293,7 @@ impl Lightforge {
         }
         Task::perform(
             tasks::preflight(
+                self.config.clone(),
                 self.layout.clone(),
                 code,
                 self.downloads.clone(),
@@ -317,7 +318,7 @@ impl Lightforge {
                 self.status = "starting the game…".to_owned();
                 Task::batch([
                     Task::perform(
-                        tasks::start_game(self.layout.clone(), code.clone(), (cleared, self.downloads.clone())),
+                        tasks::start_game(self.config.clone(), self.layout.clone(), code.clone(), (cleared, self.downloads.clone())),
                         Message::GameStarted,
                     ),
                     self.minimize_if_asked(),
@@ -328,12 +329,11 @@ impl Lightforge {
                 self.status = "handing off to Battle.net…".to_owned();
                 Task::perform(
                     tasks::launch_via_battle_net(
+                        self.config.clone(),
                         self.layout.clone(),
                         code.clone(),
-                        self.config.prefix_user.clone(),
                         self.family_of(&code),
                         self.install_uid_of(&code),
-                        self.config.battle_net_minimized,
                         (cleared, self.downloads.clone()),
                     ),
                     Message::HandoffStarted,
@@ -343,9 +343,9 @@ impl Lightforge {
                 self.status = "opening Battle.net…".to_owned();
                 Task::perform(
                     tasks::install_via_battle_net(
+                        self.config.clone(),
                         self.layout.clone(),
                         code.clone(),
-                        self.config.prefix_user.clone(),
                         self.install_uid_of(&code),
                         self.label_of(&code),
                         (cleared, self.downloads.clone()),
@@ -357,9 +357,9 @@ impl Lightforge {
                 self.status = "opening Battle.net…".to_owned();
                 Task::perform(
                     tasks::open_battle_net(
+                        self.config.clone(),
                         self.layout.clone(),
                         code.clone(),
-                        self.config.prefix_user.clone(),
                         Some((cleared, self.downloads.clone())),
                     ),
                     Message::Launched,
@@ -375,7 +375,7 @@ impl Lightforge {
         use lightforge_core::proton::PrefixFit;
 
         let runs = Self::runs_for(what);
-        let (pick, fit) = tasks::prefix_fit(&self.layout, code, runs);
+        let (pick, fit) = tasks::prefix_fit(&self.config, &self.layout, code, runs);
         let (pick, built_by) = match (pick, fit) {
             (Some(pick), PrefixFit::Older { built_by }) => (pick, built_by),
             _ => return None,

@@ -29,7 +29,7 @@ impl Lightforge {
                 let game = self.companion_target();
                 self.companion_install = Some(CompanionInstall { game: game.clone(), stage: CompanionStage::Starting });
                 Task::perform(
-                    tasks::start_installer(self.layout.clone(), game, installer),
+                    tasks::start_installer(self.config.clone(), self.layout.clone(), game, installer),
                     Message::CompanionInstallerStarted,
                 )
             }
@@ -79,7 +79,7 @@ impl Lightforge {
             Message::CompanionLaunch(at) => {
                 let Some(companion) = self.config.companions.get(at).cloned() else { return Ok(Task::none()) };
                 self.status = format!("starting {}…", companion.name);
-                Task::perform(tasks::launch_companion(self.layout.clone(), companion), Message::CompanionStarted)
+                Task::perform(tasks::launch_companion(self.config.clone(), self.layout.clone(), companion), Message::CompanionStarted)
             }
 
             Message::CompanionStarted(result) => {

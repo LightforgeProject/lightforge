@@ -55,8 +55,8 @@ pub(crate) trait ClientDriver {
 }
 
 struct Live<'a> {
+    config: &'a Config,
     layout: &'a Layout,
-    user: &'a str,
 }
 
 impl ClientDriver for Live<'_> {
@@ -84,29 +84,24 @@ impl ClientDriver for Live<'_> {
     }
 
     fn signs_in_by_itself(&self) -> bool {
-        battlenet::signs_in_by_itself(self.layout, self.user)
+        battlenet::signs_in_by_itself(self.layout, &self.config.prefix_user)
     }
 
     fn clear(&self) -> Result<(), Problem> {
-        let managed = AppDirs::discover()
-            .ok()
-            .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
-            .map(|config| config.managed_products())
-            .unwrap_or_default();
-        Preflight::new(self.user.to_owned())
-            .with_managed(managed)
+        Preflight::new(self.config.prefix_user.clone())
+            .with_managed(self.config.managed_products())
             .with_background_client(true)
-            .run(&lone_client_runner(self.layout)?, self.layout, None, &mut NoDownloads)
+            .run(&lone_client_runner(self.config, self.layout)?, self.layout, None, &mut NoDownloads)
             .map_err(|e| Problem::of(&e))?;
         Ok(())
     }
 
     fn start(&self) -> Result<SystemTime, Problem> {
-        start_client(&in_tls_container(lone_client_runner(self.layout)?)?, self.layout, self.user, true)
+        start_client(self.config, &in_tls_container(lone_client_runner(self.config, self.layout)?)?, self.layout, true)
     }
 
     fn quit(&self) -> Result<(), Problem> {
-        preflight::quit_client(&lone_client_runner(self.layout)?, self.layout, STOP_GRACE)
+        preflight::quit_client(&lone_client_runner(self.config, self.layout)?, self.layout, STOP_GRACE)
             .map_err(|e| Problem::of(&e))?;
         Ok(())
     }
@@ -129,13 +124,13 @@ pub enum Warmed {
 /// `cancel` is tripped when the mode is switched off: checked under the lock,
 /// which a close holds for its whole check-and-close.
 pub async fn warm_battle_net(
+    config: Config,
     layout: Layout,
-    user: String,
     preflights_seen: u64,
     cancel: Cancel,
 ) -> Result<Warmed, Problem> {
     off_runtime("warm-up", move || {
-        warm(&Live { layout: &layout, user: &user }, &layout, &user, preflights_seen, &cancel)
+        warm(&Live { config: &config, layout: &layout }, &layout, &config.prefix_user, preflights_seen, &cancel)
     })
     .await?
 }
@@ -204,8 +199,8 @@ pub enum ClientUpdated {
 /// [`make_way`] leaves the client be from the call on, not from when the task
 /// first runs: downloads resumed in the same message would get there first.
 pub fn update_through_client(
+    config: Config,
     layout: Layout,
-    user: String,
     uid: String,
     progress: Arc<Mutex<lightforge_core::state::Progress>>,
     stop: Cancel,
@@ -220,24 +215,25 @@ pub fn update_through_client(
             if let Some(game) = preflight::games_running(&layout).first() {
                 return Err(format!("close {} first — Battle.net has to restart for this update", game.name).into());
             }
-            let runner = lone_client_runner(&layout)?;
+            let user = &config.prefix_user;
+            let runner = lone_client_runner(&config, &layout)?;
             // Read when it starts, and written back when it exits.
             preflight::quit_client(&runner, &layout, STOP_GRACE).map_err(|e| Problem::of(&e))?;
-            battlenet::configure(&layout, &user, &[battlenet::auto_update_tweak(&uid, true)])
+            battlenet::configure(&layout, user, &[battlenet::auto_update_tweak(&uid, true)])
                 .map_err(|e| Problem::of(&e))?;
             tracing::info!("asking Battle.net to update {uid}");
             prefix.launches += 1;
 
-            let started = start_client(&in_tls_container(runner)?, &layout, &user, true)?;
+            let started = start_client(&config, &in_tls_container(runner)?, &layout, true)?;
             drop(prefix);
-            match battlenet::wait_until_ready(&layout, &user, started, SIGN_IN_TIMEOUT, || preflight::client_running(&layout)) {
+            match battlenet::wait_until_ready(&layout, user, started, SIGN_IN_TIMEOUT, || preflight::client_running(&layout)) {
                 Readiness::SignedIn => {}
                 Readiness::NeedsAttention => {
                     return Err("Battle.net needs you to sign in — press its button, then try the update again".into());
                 }
                 Readiness::Exited => return Err("Battle.net closed before it signed in".into()),
             }
-            let log = SessionLog::find(&layout, &user)
+            let log = SessionLog::find(&layout, user)
                 .ok_or_else(|| Problem::from("Battle.net's log cannot be read"))?;
 
             let began = Instant::now();
@@ -294,9 +290,8 @@ fn close_if_idle(client: &impl ClientDriver) -> Result<bool, Problem> {
 /// and keeps its registry in memory, so a download's new version can be
 /// written over with the old one (GlitchTip #40: every hand-off after
 /// Lightforge updated Forever asked for an update).
-pub(crate) fn make_way(layout: &Layout) -> bool {
-    let config = AppDirs::discover().ok().and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok()).unwrap_or_default();
-    give_way(&Live { layout, user: &config.prefix_user }, config.battle_net_in_background)
+pub(crate) fn make_way(config: &Config, layout: &Layout) -> bool {
+    give_way(&Live { config, layout }, config.battle_net_in_background)
 }
 
 fn give_way(client: &impl ClientDriver, background: bool) -> bool {
@@ -346,14 +341,14 @@ pub async fn note_self_update(layout: Layout, user: String) {
 /// and the settings the mode overwrote come back. After it has closed, since it
 /// rewrites its files on exit. One that stays up gets them back at the next
 /// pre-flight.
-pub async fn close_background_client(layout: Layout, user: String) -> Result<String, Problem> {
+pub async fn close_background_client(config: Config, layout: Layout) -> Result<String, Problem> {
     tokio::task::spawn_blocking(move || {
         let _prefix = hold_prefix();
-        let client = Live { layout: &layout, user: &user };
+        let client = Live { config: &config, layout: &layout };
         if client.client_running() && !close_if_idle(&client)? {
             return Ok("Battle.net stays open: a game or its window is using it".to_owned());
         }
-        Ok(match battlenet::restore_overrides(&layout, &user).map_err(|e| Problem::of(&e))? {
+        Ok(match battlenet::restore_overrides(&layout, &config.prefix_user).map_err(|e| Problem::of(&e))? {
             true => "Battle.net closed, its own settings are back".to_owned(),
             false => "Battle.net closed".to_owned(),
         })
@@ -374,7 +369,7 @@ pub fn stop_background_client_at_exit() {
     }
     let Ok(layout) = config.layout() else { return };
     let _prefix = hold_prefix();
-    let client = Live { layout: &layout, user: &config.prefix_user };
+    let client = Live { config: &config, layout: &layout };
     if !client.client_running() {
         return;
     }

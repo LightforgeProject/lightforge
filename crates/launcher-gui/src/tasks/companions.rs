@@ -26,12 +26,13 @@ pub async fn pick_program() -> Option<PathBuf> {
 /// empty, and an installer often starts what it installed. The user says
 /// when it is done.
 pub async fn start_installer(
+    config: Config,
     layout: Layout,
     game: ProductCode,
     installer: PathBuf,
 ) -> Result<BTreeSet<PathBuf>, Problem> {
     tokio::task::spawn_blocking(move || {
-        let runner = companion_runner(&layout, &game)?;
+        let runner = companion_runner(&config, &layout, &game)?;
         let before = companion::programs(&drive_c(&layout));
         tracing::info!("running a companion installer for {}: {}", game.as_str(), installer.display());
         let child = runner.command("run", &installer, Vec::<String>::new()).spawn().map_err(|e| Problem::of(&e))?;
@@ -64,13 +65,13 @@ pub async fn programs_in_prefix(layout: Layout, added: BTreeSet<PathBuf>) -> Vec
 }
 
 /// Start a companion beside whatever runs in the prefix; not waited on.
-pub async fn launch_companion(layout: Layout, companion: Companion) -> Result<String, Problem> {
+pub async fn launch_companion(config: Config, layout: Layout, companion: Companion) -> Result<String, Problem> {
     tokio::task::spawn_blocking(move || {
         let exe = companion.path(&drive_c(&layout));
         if !exe.is_file() {
             return Err(format!("{} is no longer at {}", companion.name, exe.display()).into());
         }
-        let runner = companion_runner(&layout, &companion.game)?;
+        let runner = companion_runner(&config, &layout, &companion.game)?;
         tracing::info!("starting companion {} for {}", companion.name, companion.game.as_str());
         let child = runner.command("run", &exe, Vec::<String>::new()).spawn().map_err(|e| Problem::of(&e))?;
         reap_later(child);
@@ -86,13 +87,13 @@ fn drive_c(layout: &Layout) -> PathBuf {
 
 /// The game's own Proton build: a companion shares the prefix's wineserver
 /// with the game, and two builds cannot share one.
-fn companion_runner(layout: &Layout, game: &ProductCode) -> Result<lightforge_core::prefix::ProtonRunner, Problem> {
+fn companion_runner(config: &Config, layout: &Layout, game: &ProductCode) -> Result<lightforge_core::prefix::ProtonRunner, Problem> {
     let runs = match Kind::of(game) {
         Kind::Managed => Runs::Game,
         Kind::HandOff => Runs::BattleNet,
     };
     // The game's MangoHud setting is for the game, not a companion's window.
-    let runner = runner_for(layout, game, runs)?.with_env("MANGOHUD", "0");
+    let runner = runner_for(config, layout, game, runs)?.with_env("MANGOHUD", "0");
     if !lightforge_core::preflight::served_by(&runner, layout) {
         return Err("the prefix is running under another Proton build; close what runs there first".to_owned().into());
     }

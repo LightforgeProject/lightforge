@@ -361,7 +361,7 @@ impl Lightforge {
                 }
                 settings.note = None;
                 settings.textures = TexturesStep::Removing;
-                Task::perform(tasks::optional_remove(layout, code, *plan), Message::OptionalRemoved)
+                Task::perform(tasks::optional_remove(self.config.clone(), layout, code, *plan), Message::OptionalRemoved)
             }
 
             Message::OptionalRemoved(result) => {

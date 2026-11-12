@@ -18,7 +18,7 @@ impl Lightforge {
                     &self.layout,
                     &self.selected.code,
                     &format!("{action:?}"),
-                    tasks::proton_for(&self.selected.code).as_ref(),
+                    tasks::proton_for(&self.config, &self.selected.code).as_ref(),
                 );
                 self.status = "debug info copied".to_owned();
                 iced::clipboard::write(info.render())
@@ -74,7 +74,7 @@ impl Lightforge {
                             &self.layout,
                             &self.selected.code,
                             &format!("{action:?}"),
-                            tasks::proton_for(&self.selected.code).as_ref(),
+                            tasks::proton_for(&self.config, &self.selected.code).as_ref(),
                         );
                         // What the renderer picked is the one thing core
                         // cannot know, so the GUI fills it in here.

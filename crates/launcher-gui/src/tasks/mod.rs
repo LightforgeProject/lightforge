@@ -22,12 +22,12 @@ use lightforge_core::families::Families;
 use lightforge_core::{library, migrate};
 use lightforge_core::paths::{AppDirs, Layout};
 use lightforge_core::preflight::{DownloadGuard, GameProcess, Preflight, PreflightError};
-use lightforge_core::product::{ProductCode, ProductProfile};
+use lightforge_core::product::ProductCode;
 use lightforge_core::state::Local;
 use lightforge_core::tact::download::{Cancel, Downloads, Progress};
 use lightforge_core::tact::install::{self, Event, Options as InstallOptions, Summary};
 use lightforge_core::tact::version::{self, Region, Version};
-use lightforge_core::tweaks::{HostTools, Tweaks};
+use lightforge_core::tweaks::HostTools;
 
 use crate::art::Art;
 
@@ -232,6 +232,7 @@ impl Runs {
 /// rewrote is the one way this arrangement breaks. The caller decides what to
 /// do about it. Nothing here refuses a launch.
 pub fn prefix_fit(
+    config: &Config,
     layout: &Layout,
     code: &ProductCode,
     runs: Runs,
@@ -241,10 +242,9 @@ pub fn prefix_fit(
     let Ok(dirs) = AppDirs::discover() else {
         return (None, proton::PrefixFit::Unknown);
     };
-    let config = Config::load_or_default(&dirs.config_file()).unwrap_or_default();
     let steam = lightforge_core::steam::SteamRoot::discover();
     let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());
-    let Some(build) = proton::select(&builds, runs.pin(&config, code)) else {
+    let Some(build) = proton::select(&builds, runs.pin(config, code)) else {
         return (None, proton::PrefixFit::Unknown);
     };
     let built_by = proton::prefix_build(&layout.compat_data());
@@ -254,6 +254,7 @@ pub fn prefix_fit(
 
 /// The Proton build a product launches under, with its per-product caches.
 fn runner_for(
+    config: &Config,
     layout: &Layout,
     code: &ProductCode,
     runs: Runs,
@@ -265,10 +266,9 @@ fn runner_for(
         return Err(chain(&lightforge_core::prefix::PrefixError::Away(layout.compat_data())));
     }
     let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
-    let config = Config::load_or_default(&dirs.config_file()).unwrap_or_default();
     let steam = lightforge_core::steam::SteamRoot::discover();
     let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());
-    let build = proton::select(&builds, runs.pin(&config, code))
+    let build = proton::select(&builds, runs.pin(config, code))
         .ok_or_else(|| "no supported Proton-GE build installed".to_owned())?;
 
     let target =
@@ -300,10 +300,11 @@ fn runner_for(
 /// no 32-bit gnutls. Only for the calls that start the client or hand it
 /// something, everything else about the prefix still runs on the host.
 fn client_runner(
+    config: &Config,
     layout: &Layout,
     code: &ProductCode,
 ) -> Result<lightforge_core::prefix::ProtonRunner, Problem> {
-    in_tls_container(runner_for(layout, code, Runs::BattleNet)?)
+    in_tls_container(runner_for(config, layout, code, Runs::BattleNet)?)
 }
 
 /// `runner` inside Steam's runtime, where the host has no 32-bit gnutls.
@@ -321,12 +322,11 @@ fn in_tls_container(
 /// [`runner_for`] Battle.net on its own, for no game: its own pin and shared
 /// profile, and no per-product shader cache, since every game it goes on to
 /// start inherits this environment.
-fn lone_client_runner(layout: &Layout) -> Result<lightforge_core::prefix::ProtonRunner, String> {
+fn lone_client_runner(config: &Config, layout: &Layout) -> Result<lightforge_core::prefix::ProtonRunner, String> {
     use lightforge_core::prefix::ProtonRunner;
     use lightforge_core::proton;
 
     let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
-    let config = Config::load_or_default(&dirs.config_file()).unwrap_or_default();
     let steam = lightforge_core::steam::SteamRoot::discover();
     let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());
     let build = proton::select(&builds, config.battle_net_proton_version())
@@ -339,33 +339,11 @@ fn lone_client_runner(layout: &Layout) -> Result<lightforge_core::prefix::Proton
     Ok(runner)
 }
 
-/// The shared profile Battle.net and its games launch under.
-///
-/// Not per product; see `Config::battle_net_tweaks`.
-fn config_tweaks() -> Tweaks {
-    AppDirs::discover()
-        .ok()
-        .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
-        .map(|config| config.battle_net_tweaks)
-        .unwrap_or_default()
-}
-
-/// One product's launch settings, and what this machine can honour.
-fn profile_for(code: &ProductCode) -> (ProductProfile, HostTools) {
-    let profile = AppDirs::discover()
-        .ok()
-        .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
-        .and_then(|config| config.product(code).map(|p| p.profile.clone()))
-        .unwrap_or_default();
-    (profile, HostTools::detect())
-}
-
 /// The Proton build that would be used, for the debug bundle.
-pub fn proton_for(code: &ProductCode) -> Option<lightforge_core::proton::ProtonRelease> {
+pub fn proton_for(config: &Config, code: &ProductCode) -> Option<lightforge_core::proton::ProtonRelease> {
     use lightforge_core::proton;
 
     let dirs = AppDirs::discover().ok()?;
-    let config = Config::load_or_default(&dirs.config_file()).unwrap_or_default();
     let steam = lightforge_core::steam::SteamRoot::discover();
     let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());
     proton::select(&builds, config.effective_proton(code)).cloned()
