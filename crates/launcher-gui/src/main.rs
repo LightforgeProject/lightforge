@@ -305,6 +305,8 @@ struct Lightforge {
     client_update_retries: u8,
     /// The game the client holds back for an update, of those asked about.
     update_pending: Option<ProductCode>,
+    /// The version service's build for the selected Battle.net game.
+    latest_build: Option<(ProductCode, String)>,
     /// The update being followed.
     client_update: Option<ClientUpdate>,
     /// Battle.net is being closed.

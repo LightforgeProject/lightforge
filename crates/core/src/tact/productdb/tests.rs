@@ -364,6 +364,7 @@ mod reading {
         message_field(&mut cached, 1, &base);
         let mut settings = Vec::new();
         string_field(&mut settings, 1, "C:/Program Files (x86)/Hearthstone");
+        string_field(&mut settings, 2, "eu");
 
         let mut record = Vec::new();
         string_field(&mut record, 1, "hs_beta");
@@ -379,6 +380,7 @@ mod reading {
         assert_eq!(found[0].product, "hs_beta");
         assert_eq!(found[0].product_code, "hsb");
         assert_eq!(found[0].version.as_deref(), Some("36.6.3.253932.253216"));
+        assert_eq!(found[0].region, "eu");
         assert!(found[0].family.is_empty(), "a single-title game has no family");
     }
 
@@ -562,6 +564,7 @@ mod reading {
             product: product.into(),
             product_code: product.into(),
             install_path: "C:/whatever".into(),
+            region: String::new(),
             version: None,
             build_key: None,
             family: String::new(),

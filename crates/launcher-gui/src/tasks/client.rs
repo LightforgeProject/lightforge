@@ -219,8 +219,11 @@ pub fn update_through_client(
             let runner = lone_client_runner(&config, &layout)?;
             // Read when it starts, and written back when it exits.
             preflight::quit_client(&runner, &layout, STOP_GRACE).map_err(|e| Problem::of(&e))?;
-            battlenet::configure(&layout, user, &[battlenet::auto_update_tweak(&uid, true)])
-                .map_err(|e| Problem::of(&e))?;
+            let auto_update = [battlenet::auto_update_tweak(&uid, true)];
+            // Noted so the next normal-mode pre-flight puts the user's own
+            // choice back; background mode turns it off again anyway.
+            battlenet::record_overrides(&layout, user, &auto_update, &[]).map_err(|e| Problem::of(&e))?;
+            battlenet::configure(&layout, user, &auto_update).map_err(|e| Problem::of(&e))?;
             tracing::info!("asking Battle.net to update {uid}");
             prefix.launches += 1;
 

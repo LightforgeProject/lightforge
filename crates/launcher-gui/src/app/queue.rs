@@ -47,9 +47,16 @@ impl Lightforge {
                     move |t| Message::Themed(code.clone(), Box::new(t))
                 },
             ),
-            Task::perform(addonwork::list(self.layout.clone(), code), |listing| {
+            Task::perform(addonwork::list(self.layout.clone(), code.clone()), |listing| {
                 Message::AddonsListed(Box::new(listing))
             }),
+            match self.kind_of(&code) {
+                Kind::HandOff => Task::perform(
+                    tasks::latest_build(self.http.clone(), self.layout.clone(), code.clone()),
+                    move |latest| Message::LatestBuild(code.clone(), latest),
+                ),
+                Kind::Managed => Task::none(),
+            },
         ])
     }
 

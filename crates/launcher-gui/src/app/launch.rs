@@ -62,10 +62,9 @@ impl Lightforge {
     }
 
     /// Ask the client's log about the selected game, for the button's word.
-    /// Only where pressing it can do something about the answer.
     pub(crate) fn check_update_pending(&self) -> Task<Message> {
         let code = self.selected.code.clone();
-        if !self.config.battle_net_in_background || Kind::of(&code) != Kind::HandOff {
+        if Kind::of(&code) != Kind::HandOff {
             return Task::none();
         }
         let uid = self.install_uid_of(&code);
@@ -430,11 +429,18 @@ impl Lightforge {
     /// What a hand-off game's button can be: without a family, only opening
     /// the client.
     pub(crate) fn handoff_act(&self) -> HandoffAct {
-        let family = self.family_of(&self.selected.code);
-        let installed = self.installed_versions.contains_key(self.selected.code.as_str());
-        match (family.is_some(), installed) {
+        let code = &self.selected.code;
+        let family = self.family_of(code);
+        let installed = self.installed_versions.get(code.as_str());
+        // Compared against the registry as it is now, so the word goes back
+        // to Play once Agent records the new build.
+        let behind = self
+            .latest_build
+            .as_ref()
+            .is_some_and(|(latest_for, latest)| latest_for == code && installed.is_some_and(|v| v != latest));
+        match (family.is_some(), installed.is_some()) {
             (false, _) => HandoffAct::OpenClient,
-            (true, true) if self.update_pending.as_ref() == Some(&self.selected.code) => HandoffAct::Update,
+            (true, true) if behind || self.update_pending.as_ref() == Some(code) => HandoffAct::Update,
             (true, true) => HandoffAct::Play,
             (true, false) => HandoffAct::Install,
         }

@@ -118,6 +118,7 @@ impl Lightforge {
             close_client_after_play: false,
             client_update_retries: 0,
             update_pending: None,
+            latest_build: None,
             client_update: None,
             quitting_client: false,
             quit_client_dialog: None,

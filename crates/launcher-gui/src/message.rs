@@ -391,6 +391,8 @@ pub(crate) enum Message {
     BackgroundClient(u64, Result<tasks::Warmed, Problem>),
     /// Whether the client holds this game back for an update.
     ClientUpdatePending(ProductCode, bool),
+    /// The build the version service ships for a Battle.net game.
+    LatestBuild(ProductCode, Option<String>),
     /// Stop following a game's update. The client carries on.
     StopWatchingClientUpdate,
     /// The update the client was running for this game ended.

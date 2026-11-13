@@ -185,17 +185,14 @@ impl Lightforge {
                     }
                     Ok(tasks::Handoff::NeedsUpdate) => {
                         let code = self.launching.clone().unwrap_or_else(|| self.selected.code.clone());
-                        match (Kind::of(&code), self.config.battle_net_in_background) {
+                        match Kind::of(&code) {
                             // Its store is ours: Agent must not patch it.
-                            (Kind::Managed, _) => {
+                            Kind::Managed => {
                                 self.launch_failed("Battle.net wants to update this game — press Play to start it here")
-                            }
-                            (Kind::HandOff, false) => {
-                                self.launch_failed("Battle.net has an update for this game — open Battle.net to install it")
                             }
                             // The lock is released: an update can take an hour,
                             // and another game can be played meanwhile.
-                            (Kind::HandOff, true) => {
+                            Kind::HandOff => {
                                 self.busy = false;
                                 self.launching = None;
                                 let update = self.start_client_update(code.clone());
@@ -308,6 +305,14 @@ impl Lightforge {
 
             Message::ClientUpdatePending(code, pending) => {
                 self.update_pending = pending.then_some(code);
+                Task::none()
+            }
+
+            Message::LatestBuild(code, latest) => {
+                if code != self.selected.code {
+                    return Ok(Task::none());
+                }
+                self.latest_build = latest.map(|latest| (code, latest));
                 Task::none()
             }
 

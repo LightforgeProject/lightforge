@@ -1886,6 +1886,47 @@ fn the_button_says_update_while_the_client_holds_the_game_back() {
 }
 
 #[test]
+fn the_button_says_update_while_the_version_service_is_ahead_of_the_registry() {
+    let (mut app, _scratch) = test_app();
+    app.selected.code = ProductCode::Forever;
+    app.installed_versions.insert("wowf".to_owned(), "1.60.1.70888".to_owned());
+
+    let _ = app.update(Message::LatestBuild(ProductCode::Forever, Some("1.60.1.70888".to_owned())));
+    assert_eq!(app.handoff_act(), HandoffAct::Play);
+
+    let _ = app.update(Message::LatestBuild(ProductCode::Forever, Some("1.60.2.71001".to_owned())));
+    assert_eq!(app.handoff_act(), HandoffAct::Update, "no client needs to be running");
+
+    app.installed_versions.insert("wowf".to_owned(), "1.60.2.71001".to_owned());
+    assert_eq!(app.handoff_act(), HandoffAct::Play, "Agent recorded the new build");
+}
+
+#[test]
+fn a_build_found_for_another_game_does_not_change_the_button() {
+    let (mut app, _scratch) = test_app();
+    app.selected.code = ProductCode::Forever;
+    app.installed_versions.insert("wowf".to_owned(), "1.60.1.70888".to_owned());
+
+    let _ = app.update(Message::LatestBuild(ProductCode::Custom("hs_beta".to_owned()), Some("37.0.2".to_owned())));
+    assert_eq!(app.handoff_act(), HandoffAct::Play);
+}
+
+#[test]
+fn a_battle_net_game_held_for_an_update_updates_without_the_background_mode() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.battle_net_in_background = false;
+    let hearthstone = ProductCode::Custom("hs_beta".to_owned());
+    app.selected.code = hearthstone.clone();
+    app.busy = true;
+    app.launching = Some(hearthstone.clone());
+
+    let _ = app.update(Message::HandoffStarted(Ok(tasks::Handoff::NeedsUpdate)));
+    assert!(app.error.is_none());
+    assert_eq!(app.client_update.as_ref().map(|u| u.code.clone()), Some(hearthstone));
+}
+
+#[test]
 fn a_battle_net_game_held_for_an_update_updates_and_leaves_the_launcher_free() {
     let (mut app, _scratch) = test_app();
     app.dirs = None;
