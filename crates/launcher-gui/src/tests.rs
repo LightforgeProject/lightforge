@@ -2131,3 +2131,57 @@ fn a_battle_net_repair_waits_for_a_running_setup() {
     let _ = app.update(Message::RepairBattleNet);
     assert!(app.error.is_some());
 }
+
+/// Exercise the real Play event without executing Proton: addon completion
+/// holds the chosen launch intent at the same boundary as a normal launch.
+#[test]
+fn play_uses_the_configured_login_path() {
+    for via_client in [false, true] {
+        let (mut app, _scratch) = test_app();
+        app.dirs = None;
+        app.queue.clear();
+        app.config.play_via_battle_net = via_client;
+        app.addon_auto_running = true;
+        app.local = Local {
+            build_key: Some("abc".to_owned()),
+            version: Some("11.2.7.65000".to_owned()),
+            executable: Some(PathBuf::from("/nowhere/Wow.exe")),
+            store_files: 12,
+            staged: None,
+            portal: None,
+        };
+        assert!(matches!(app.action(), ActionState::Play));
+        let _ = app.update(Message::Primary);
+        assert_eq!(app.launch_after_addons, Some(if via_client {
+            Launch::BattleNet
+        } else {
+            Launch::Game
+        }));
+    }
+}
+
+#[test]
+fn play_login_preference_survives_saving_and_old_configs_stay_direct() {
+    let (app, _scratch) = test_app();
+    let file = app.dirs.as_ref().unwrap().config_file();
+    let legacy = std::fs::read_to_string(&file).unwrap()
+        .replace("play_via_battle_net = false\n", "");
+    assert!(!legacy.contains("play_via_battle_net"));
+    std::fs::write(&file, legacy).unwrap();
+    assert!(!Config::load_or_default(&file).unwrap().play_via_battle_net);
+    let mut config = app.config.clone();
+    config.play_via_battle_net = true;
+    config.save(&file).unwrap();
+    assert!(Config::load_or_default(&file).unwrap().play_via_battle_net);
+}
+
+#[test]
+fn saved_login_play_does_not_offer_a_loop_when_battle_net_wants_an_update() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.config.play_via_battle_net = true;
+    let _ = app.update(Message::HandoffStarted(Ok(tasks::Handoff::NeedsUpdate)));
+    let error = app.error.as_ref().unwrap().to_string();
+    assert!(error.contains("refresh Lightforge"), "{error}");
+    assert!(!error.contains("press Play"), "{error}");
+}

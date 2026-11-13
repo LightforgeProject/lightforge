@@ -34,7 +34,14 @@ impl Lightforge {
                         self.pause(&self.selected.code.clone());
                         Task::none()
                     }
-                    ActionState::Play => self.preflight(Launch::Game),
+                    ActionState::Play => {
+                        let launch = if self.config.play_via_battle_net {
+                            Launch::BattleNet
+                        } else {
+                            Launch::Game
+                        };
+                        self.preflight(launch)
+                    },
                     ActionState::Unknown => Task::none(),
                     // Nothing to download and nothing to repair: look for the
                     // drive again, and reload the product if it came back.
@@ -169,7 +176,12 @@ impl Lightforge {
                         match (Kind::of(&code), self.config.battle_net_in_background) {
                             // Its store is ours: Agent must not patch it.
                             (Kind::Managed, _) => {
-                                self.launch_failed("Battle.net wants to update this game — press Play to start it here")
+                                let why = if self.config.play_via_battle_net {
+                                    "Battle.net requires a game update — refresh Lightforge and update the game before playing"
+                                } else {
+                                    "Battle.net wants to update this game — press Play to start it here"
+                                };
+                                self.launch_failed(why)
                             }
                             (Kind::HandOff, false) => {
                                 self.launch_failed("Battle.net has an update for this game — open Battle.net to install it")
