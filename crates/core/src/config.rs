@@ -75,6 +75,10 @@ pub struct Config {
     /// honoured only when [`crate::battlenet::signs_in_by_itself`].
     #[serde(default = "yes")]
     pub battle_net_minimized: bool,
+    /// Route the main Play button through Battle.net to reuse its saved sign-in.
+    /// Direct launches remain the default for existing installations.
+    #[serde(default)]
+    pub play_via_battle_net: bool,
     /// Whether PLAY closes a running Battle.net first. Off by default, so
     /// friends and chat stay up.
     #[serde(default)]
@@ -185,6 +189,7 @@ impl Default for Config {
             pause_downloads_while_playing: true,
             minimize_on_launch: false,
             battle_net_minimized: true,
+            play_via_battle_net: false,
             close_battle_net_on_play: false,
             battle_net_in_background: false,
             battle_net_tweaks: crate::tweaks::Tweaks::default(),
