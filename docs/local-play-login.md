@@ -6,7 +6,10 @@ Battle.net hand-off, including preflight, addon waits and game tracking.
 Install, update, pause and Stop retain their existing actions. The default
 is false; removing the setting restores direct launches.
 
-Battle.net must have a saved sign-in. Keep `battle_net_minimized = true`
+Battle.net must have a saved sign-in. Also enable
+`battle_net_in_background = true` (Seamless Battle.net Mode), so hiding its
+window during the hand-off sends it to the tray instead of quitting it.
+Keep `battle_net_minimized = true`
 to start it minimized when that saved sign-in is available. Authentication
 expiry, two-factor challenges and Battle.net outages can still require
 interaction. Lightforge does not store your password.
