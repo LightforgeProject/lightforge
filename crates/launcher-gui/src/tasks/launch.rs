@@ -370,14 +370,14 @@ pub async fn launch_via_battle_net(
         }
 
         // The client raises its window for the command until the game is up;
-        // one nobody could see before goes straight back to the tray. Only
-        // with `HideOnClose` as the client last wrote it: without, the close
-        // quits the client in the middle of the launch (GlitchTip #43).
-        let closes_to_tray = battlenet::closes_to_tray(&layout, user);
-        let tray = match closes_to_tray.then(|| battlenet::ClientWindows::connect(preflight::client_pids(&layout))) {
-            Some(Ok(windows)) if windows.any_open().is_ok_and(|open| !open) => Some(windows),
-            Some(Ok(_)) | None => None,
-            Some(Err(e)) => {
+        // one nobody could see before goes straight back out of sight. Closed
+        // only with `HideOnClose` as the client last wrote it: without, the
+        // close quits the client in the middle of the launch (GlitchTip #43).
+        let to_tray = battlenet::closes_to_tray(&layout, user);
+        let out_of_sight = match battlenet::ClientWindows::connect(preflight::client_pids(&layout)) {
+            Ok(windows) if windows.any_open().is_ok_and(|open| !open) => Some(windows),
+            Ok(_) => None,
+            Err(e) => {
                 tracing::info!("Battle.net's window stays as the client leaves it: {}", chain(&e));
                 None
             }
@@ -393,11 +393,11 @@ pub async fn launch_via_battle_net(
         }
         reap_later(battlenet::launch(&runner, &layout, &launch).map_err(|e| Problem::of(&e))?);
         drop(prefix);
-        if let Some((windows, mut watch)) = tray.zip(session.as_ref().map(|log| log.follow(&install_uid))) {
-            std::thread::spawn(move || match windows.keep_closed(Instant::now() + KEEP_IN_TRAY, || watch.stage()) {
+        if let Some((windows, mut watch)) = out_of_sight.zip(session.as_ref().map(|log| log.follow(&install_uid))) {
+            std::thread::spawn(move || match windows.keep_closed(Instant::now() + KEEP_OUT_OF_SIGHT, to_tray, || watch.stage()) {
                 Ok(0) => {}
-                Ok(closed) => tracing::info!("sent Battle.net's window back to the tray {closed} time(s)"),
-                Err(e) => tracing::warn!("stopped keeping Battle.net in the tray: {}", chain(&e)),
+                Ok(away) => tracing::info!("put Battle.net's window out of sight {away} time(s)"),
+                Err(e) => tracing::warn!("stopped keeping Battle.net's window out of sight: {}", chain(&e)),
             });
         }
 
@@ -507,9 +507,9 @@ pub(crate) const GAME_GONE_WITHIN: Duration = Duration::from_secs(15);
 /// about 15 ms.
 pub(crate) const TAKEN_WITHIN: Duration = Duration::from_secs(10);
 
-/// How long after a hand-off the client's window is sent back to the tray.
+/// How long after a hand-off the client's window is kept out of sight.
 /// It closes it itself once the game runs: 3.3 s after a cold start, measured.
-pub(crate) const KEEP_IN_TRAY: Duration = Duration::from_secs(8);
+pub(crate) const KEEP_OUT_OF_SIGHT: Duration = Duration::from_secs(8);
 
 /// How long a handed-off game gets to appear before the launcher stops
 /// claiming a launch is in progress.

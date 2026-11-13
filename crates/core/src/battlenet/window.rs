@@ -8,6 +8,12 @@
 //! the client puts itself back in the tray, so Wine's idea of the window
 //! stays its own and a later plain start shows it again.
 //!
+//! Without `HideOnClose` (no tray to go back to) that close quits the client
+//! mid-launch (GlitchTip #43), so the window is unmapped from outside instead.
+//! Measured on Hyprland 0.57, client 2.53.8, 2026-11-13: gone 21 ms after it
+//! mapped, `WM_STATE` Withdrawn, the client stays up, and the next raise maps
+//! the same window again.
+//!
 //! Wine maps each top-level as an X window (through XWayland under Wayland)
 //! carrying the process's own pid in `_NET_WM_PID`, the pid pre-flight's scan
 //! sees. That is what keeps a Battle.net in someone else's prefix untouched.
@@ -93,17 +99,25 @@ impl ClientWindows {
         Ok(!self.main_windows()?.is_empty())
     }
 
-    /// Close every main window that maps until `until`, the way its X button
-    /// does, while `stage` says the client has taken the launch. Not before:
+    /// Put away every main window that maps until `until`, while `stage` says
+    /// the client has taken the launch: closed the way its X button does when
+    /// that `to_tray`, unmapped otherwise. Not before:
     /// a window shown for a launch it has not taken may be a prompt, and one
     /// after an error is for the user. Done once the game runs, when the client
-    /// puts the window away itself. Each is asked once: Wine makes a new X
-    /// window for every showing. Returns how many were closed.
-    pub fn keep_closed(&self, until: Instant, mut stage: impl FnMut() -> LaunchStage) -> Result<usize, WindowError> {
+    /// puts the window away itself. A close is sent once per window, since the
+    /// client hides it in answer; an unmapped window Wine shows again under
+    /// the same id, so it is unmapped again. Returns how many times.
+    pub fn keep_closed(
+        &self,
+        until: Instant,
+        to_tray: bool,
+        mut stage: impl FnMut() -> LaunchStage,
+    ) -> Result<usize, WindowError> {
         // A new top-level, a frame mapped for one, or the manager's list changing.
         let watch = ChangeWindowAttributesAux::new().event_mask(EventMask::SUBSTRUCTURE_NOTIFY | EventMask::PROPERTY_CHANGE);
         self.conn.change_window_attributes(self.root, &watch)?.check()?;
         let mut asked = HashSet::new();
+        let mut unmapped = 0;
         let mut changed = true;
         let mut scanned = Instant::now();
         while Instant::now() < until {
@@ -114,8 +128,17 @@ impl ClientWindows {
                 LaunchStage::Sent => {}
                 LaunchStage::Taken if changed || scanned.elapsed() >= RESCAN => {
                     for (window, showing) in self.main_windows()? {
-                        if showing == Showing::OnScreen && asked.insert(window) {
-                            self.close(window)?;
+                        if showing != Showing::OnScreen {
+                            continue;
+                        }
+                        match to_tray {
+                            true if asked.insert(window) => self.close(window)?,
+                            true => {}
+                            false => {
+                                self.conn.unmap_window(window)?;
+                                self.conn.flush()?;
+                                unmapped += 1;
+                            }
                         }
                     }
                     changed = false;
@@ -126,7 +149,7 @@ impl ClientWindows {
             }
             std::thread::sleep(POLL);
         }
-        Ok(asked.len())
+        Ok(asked.len() + unmapped)
     }
 
     fn close(&self, window: Window) -> Result<(), WindowError> {
