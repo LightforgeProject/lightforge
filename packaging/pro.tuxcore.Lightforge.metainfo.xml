@@ -78,6 +78,17 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.0.0-beta.12" date="2026-11-13">
+      <description>
+        <p>
+          Battle.net's own games show their updates as soon as Blizzard
+          releases them, games get Steam-style launch options, and the addon
+          manager is now opt-in. Seamless Battle.net Mode is steadier, and
+          Lightforge is on the AUR.
+        </p>
+      </description>
+      <url>https://github.com/LightforgeProject/lightforge/blob/main/RELEASES.md</url>
+    </release>
     <release version="1.0.0-beta.11" date="2026-11-07">
       <description>
         <p>
