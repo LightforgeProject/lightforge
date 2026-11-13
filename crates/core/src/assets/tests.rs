@@ -153,8 +153,9 @@ fn unknown_manifest_fields_are_tolerated() {
     assert!(Manifest::parse(body.as_bytes()).is_ok());
 }
 
+/// A fixture folder is the user's own; the network's art needs one.
 #[test]
-fn missing_sha256_is_optional() {
+fn a_manifest_without_hashes_still_parses() {
     let m = manifest();
     assert!(m.theme(&ProductCode::Retail).unwrap().logo.as_ref().unwrap().sha256.is_none());
 }
@@ -581,6 +582,31 @@ fn the_cache_refuses_bytes_a_fetch_would_have_refused() {
 
     let pipeline = Pipeline::new(Origin::Dir(dir), Store::new(tmpdir("cached-checksum-c")));
     assert!(pipeline.cached(&ProductCode::Retail).is_none());
+}
+
+/// Served art is checked against the manifest's hash, so art without one is
+/// not used, not even from the cache.
+#[test]
+fn network_art_without_a_hash_is_not_used() {
+    use sha2::{Digest, Sha256};
+
+    let base = "https://assets.example/wow/";
+    let with_hashes = |hashed: bool| {
+        let store = Store::new(tmpdir(if hashed { "unhashed-control" } else { "unhashed" }));
+        let mut body = FIXTURE.to_owned();
+        for (url, bytes) in [("retail-logo.png", &b"PNG-logo"[..]), ("retail-bg.jpg", &b"JPG-bg"[..])] {
+            std::fs::write(store.path_for(&format!("{base}{url}")), bytes).unwrap();
+            if hashed {
+                let sha = crate::text::hex(&Sha256::digest(bytes));
+                body = body.replace(&format!("\"url\": \"{url}\""), &format!("\"url\": \"{url}\", \"sha256\": \"{sha}\""));
+            }
+        }
+        std::fs::write(store.dir().join(MANIFEST_FILE), body).unwrap();
+        Pipeline::new(Origin::Http(base.to_owned()), store).cached(&ProductCode::Retail)
+    };
+
+    assert!(with_hashes(true).is_some(), "the same art with hashes is used");
+    assert!(with_hashes(false).is_none());
 }
 
 #[test]

@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use sysinfo::{Signal, System};
 
 use super::scan::{
-    belongs_to, executable_name, is_cef_child_arg, is_windows_exe, owned_prefixes, refresh, scan,
+    belongs_to, collect, executable_name, is_cef_child_arg, is_windows_exe, owned_prefixes, refresh, scan,
     ProcKind,
 };
 use super::shutdown::{signal_all, Disposition};
@@ -60,6 +60,15 @@ pub fn client_pids(layout: &Layout) -> Vec<u32> {
 /// launch command directly.
 pub fn client_running(layout: &Layout) -> bool {
     scan(layout).iter().any(|p| p.kind == ProcKind::BattleNet)
+}
+
+/// [`client_running`], and whether [`games_running`] would find any, from one
+/// scan: for a poll that wants both.
+pub fn client_and_games(layout: &Layout) -> (bool, bool) {
+    let mut system = System::new();
+    refresh(&mut system);
+    let client = collect(&system, layout).iter().any(|p| p.kind == ProcKind::BattleNet);
+    (client, !collect_games(&system, layout).is_empty())
 }
 
 /// Processes in the prefix that are not Battle.net's and not Wine's own.
@@ -176,11 +185,13 @@ pub fn stop_game(layout: &Layout, pid: u32, grace: Duration) -> Option<Stopped> 
 /// `before` is [`games_running`] from before the hand-off, so a game already
 /// playing does not count. `None` means nothing started in time, usually a
 /// client at its login screen. Needed because the client usually exits once
-/// the game is up (`GameLaunchWindowBehavior: 2`).
+/// the game is up (`GameLaunchWindowBehavior: 2`). `cut_off` ends the wait
+/// early, asked once per poll after the scan.
 pub fn wait_for_game_start(
     layout: &Layout,
     before: &[GameProcess],
     appear_within: Duration,
+    cut_off: impl Fn() -> bool,
 ) -> Option<GameProcess> {
     let known: HashSet<u32> = before.iter().map(|p| p.pid).collect();
     let deadline = Instant::now() + appear_within;
@@ -189,7 +200,7 @@ pub fn wait_for_game_start(
         if let Some(found) = games_running(layout).into_iter().find(|p| !known.contains(&p.pid)) {
             return Some(found);
         }
-        if Instant::now() >= deadline {
+        if cut_off() || Instant::now() >= deadline {
             return None;
         }
         std::thread::sleep(HANDOFF_POLL);

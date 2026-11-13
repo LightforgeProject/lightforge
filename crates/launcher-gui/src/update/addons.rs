@@ -124,6 +124,21 @@ impl Lightforge {
                 )
             }
 
+            Message::AddonManager(on) => {
+                self.config.addon_manager = on;
+                self.save_config();
+                if on {
+                    return Ok(Task::done(Message::AutoUpdateAddons));
+                }
+                // Back and forward must not lead to a page that is gone.
+                self.visited.retain(|screen| *screen != Screen::Addons);
+                self.forward.retain(|screen| *screen != Screen::Addons);
+                self.addon_tab = AddonTab::Mine;
+                self.addon_detail = None;
+                self.reset_addon_screen();
+                Task::none()
+            }
+
             Message::AddonAutoUpdateDefault(on) => {
                 self.config.addon_auto_update = on;
                 self.save_config();
@@ -369,7 +384,8 @@ impl Lightforge {
             Message::AutoUpdateAddons => {
                 // Not while a game runs (the prefix is asked too) or the user's
                 // own addon work is: both write the same directory.
-                if self.addon_auto_running
+                if !self.config.addon_manager
+                    || self.addon_auto_running
                     || self.addons_busy
                     || self.in_play()
                     || self.addon_auto_done.contains(&self.selected.code)
@@ -420,8 +436,8 @@ impl Lightforge {
                 }
 
                 // Whoever was waiting on this can go now.
-                if let Some(what) = self.launch_after_addons.take() {
-                    tasks.push(self.preflight(what));
+                if let Some((what, code)) = self.launch_after_addons.take() {
+                    tasks.push(self.preflight_for(what, code));
                 }
                 Task::batch(tasks)
             }

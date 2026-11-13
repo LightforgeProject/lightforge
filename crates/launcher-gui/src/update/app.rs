@@ -18,7 +18,7 @@ impl Lightforge {
             }
 
             Message::CloseRequested(id) => {
-                // An env edit still waiting for typing to pause.
+                // A typed edit still waiting for typing to pause.
                 if self.env_unsaved {
                     self.save_config();
                 }
@@ -43,6 +43,10 @@ impl Lightforge {
                     None => iced::window::close(id),
                 }
             }
+
+            // A second one does not wait for the checkpoint.
+            Message::StopSignal if self.closing.is_some() => iced::exit(),
+            Message::StopSignal => iced::window::oldest().and_then(|id| Task::done(Message::CloseRequested(id))),
 
             Message::SplashDone(count) => {
                 // The wizard counts off this same fetch.
@@ -229,7 +233,7 @@ impl Lightforge {
                 match self.config.battle_net_in_background {
                     true => Task::done(Message::UpgradeRestart),
                     false => Task::perform(
-                        tasks::close_background_client(self.layout.clone(), self.config.prefix_user.clone()),
+                        tasks::close_background_client(self.config.clone(), self.layout.clone()),
                         |_| Message::UpgradeRestart,
                     ),
                 }

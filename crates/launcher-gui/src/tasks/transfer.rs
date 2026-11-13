@@ -25,6 +25,7 @@ pub struct TransferState {
 // here would only move the same list one level out.
 #[allow(clippy::too_many_arguments)]
 pub async fn download(
+    config: Config,
     layout: Layout,
     code: ProductCode,
     region: Region,
@@ -47,24 +48,9 @@ pub async fn download(
             // corrupt both (GlitchTip #41). Held rather than refused, and
             // asked again each round: Agent outlives a hand-off by itself.
             let mut held = false;
-            while !make_way(&layout) {
+            while !make_way(&config, &layout) {
                 if cancel.is_cancelled() {
-                    let _ = done_tx.send(Ok(Summary {
-                        outcome: lightforge_core::tact::download::Outcome { cancelled: true, ..Default::default() },
-                        store: lightforge_core::tact::writer::Summary {
-                            data_dir: layout.wow_install(&code),
-                            archives: 0,
-                            files: 0,
-                            bytes: 0,
-                            indices: Vec::new(),
-                        },
-                        missing: 0,
-                        complete: false,
-                        reasons: Vec::new(),
-                        version: None,
-                        flavor: String::new(),
-                        executable: None,
-                    }));
+                    let _ = done_tx.send(Ok(Summary::cancelled(layout.wow_install(&code))));
                     return;
                 }
                 if !held {
@@ -233,7 +219,7 @@ pub(crate) fn describe(event: &Event) -> String {
         }
         Event::Progress(_) => String::new(),
         Event::InstallFile { path, .. } => format!("extracting {}", path.display()),
-        Event::Extracted { files, .. } => format!("extracted {files} install files"),
+        Event::Extracted { files, unchanged, .. } => format!("extracted {files} install files, {unchanged} already in place"),
         Event::BuildInfo { version, .. } => format!("finished — {version}"),
         Event::Staged { version } => format!("pre-downloaded {version}"),
         Event::ProductDb { .. } => "writing .product.db".to_owned(),
@@ -289,6 +275,7 @@ impl DownloadGuard for SharedDownloads {
 /// this build wants. The build comes from the version service, so offline
 /// the files stay.
 pub async fn discard_download(
+    config: Config,
     http: Option<Http>,
     layout: Layout,
     code: ProductCode,
@@ -299,7 +286,7 @@ pub async fn discard_download(
     // The same gate a repair and an uninstall go through.
     let alive = layout.clone();
     let busy = tokio::task::spawn_blocking(move || {
-        make_way(&alive);
+        make_way(&config, &alive);
         lightforge_core::preflight::scan(&alive)
     })
         .await

@@ -113,8 +113,14 @@ impl Lightforge {
                 let mut lines = vec![say(
                     "Your package manager installs it: a terminal opens and asks for your password.",
                 )];
-                if *package == (Package::Pacman { package: "lightforge".to_owned() }) {
-                    lines.push(say("This package is built from source, which takes a few minutes."));
+                match package {
+                    Package::Pacman { package } if package == "lightforge" => {
+                        lines.push(say("This package is built from source, which takes a few minutes."));
+                    }
+                    Package::Zypper { transactional: true } => {
+                        lines.push(say("It goes into a new snapshot, so it is there after a restart."));
+                    }
+                    _ => {}
                 }
                 (lines, Some(("Update", Message::UpgradeStart)))
             }

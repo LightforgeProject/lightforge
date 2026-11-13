@@ -3,6 +3,11 @@
 use crate::*;
 
 impl Lightforge {
+    /// The region `code` is checked and updated against: the one it logs into.
+    pub(crate) fn build_region(&self, code: &ProductCode) -> lightforge_core::tact::version::Region {
+        lightforge_core::portal::build_region(&self.layout, code, self.config.region)
+    }
+
     /// Re-read the disk, the version service, and the theme for one product.
     pub(crate) fn reload(&self, code: ProductCode) -> Task<Message> {
         Task::batch([
@@ -11,7 +16,7 @@ impl Lightforge {
                     self.http.clone(),
                     self.layout.clone(),
                     code.clone(),
-                    self.config.region,
+                    self.build_region(&code),
                     self.kind_of(&code) == Kind::Managed,
                 ),
                 {
@@ -42,9 +47,16 @@ impl Lightforge {
                     move |t| Message::Themed(code.clone(), Box::new(t))
                 },
             ),
-            Task::perform(addonwork::list(self.layout.clone(), code), |listing| {
+            Task::perform(addonwork::list(self.layout.clone(), code.clone()), |listing| {
                 Message::AddonsListed(Box::new(listing))
             }),
+            match self.kind_of(&code) {
+                Kind::HandOff => Task::perform(
+                    tasks::latest_build(self.http.clone(), self.layout.clone(), code.clone()),
+                    move |latest| Message::LatestBuild(code.clone(), latest),
+                ),
+                Kind::Managed => Task::none(),
+            },
         ])
     }
 
@@ -232,8 +244,8 @@ impl Lightforge {
         // pause-while-playing off, another product's download is meant to
         // keep running beside the game.
         if self.launch_when_quiet.is_some() && !self.launch_must_wait() {
-            let what = self.launch_when_quiet.take().expect("checked above");
-            return self.start_launch(what);
+            let (what, cleared) = self.launch_when_quiet.take().expect("checked above");
+            return self.start_launch(what, cleared);
         }
         // A deep scan reads the store a transfer would write, and maintenance
         // rewrites it. Neither refuses the download, they hold it: the queue
@@ -271,9 +283,10 @@ impl Lightforge {
 
         Task::perform(
             tasks::download(
+                self.config.clone(),
                 self.layout.clone(),
                 code.clone(),
-                self.config.region,
+                self.build_region(&code),
                 self.config.locale_for(&code).to_owned(),
                 self.config.download_limit_bytes(),
                 self.opted_optional(&code),
@@ -341,10 +354,11 @@ impl Lightforge {
         self.discarding = Some(code.clone());
         Task::perform(
             tasks::discard_download(
+                self.config.clone(),
                 self.http.clone(),
                 self.layout.clone(),
                 code.clone(),
-                self.config.region,
+                self.build_region(&code),
             ),
             move |result| Message::CancelCleaned(code.clone(), result),
         )

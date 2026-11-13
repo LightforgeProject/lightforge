@@ -46,6 +46,11 @@ pub struct Config {
     /// Where themed branding is read from: a base URL, or a local directory
     /// for trying out art. Not in the UI; `None` is [`DEFAULT_ASSETS_SOURCE`].
     pub assets_source: Option<String>,
+    /// Whether the addon manager is shown and runs its update pass. Off in a
+    /// fresh config, which opts in during setup; a config from before the
+    /// setting has no line for it and keeps it on.
+    #[serde(default = "yes")]
+    pub addon_manager: bool,
     /// Base URL of the addon catalog proxy, or a local fixture directory.
     /// `None` disables addon management instead of failing at use.
     pub addon_catalog: Option<String>,
@@ -177,6 +182,7 @@ impl Default for Config {
             battle_net_proton: ProtonPin::default(),
             default_proton: ProtonPin::default(),
             assets_source: None,
+            addon_manager: false,
             addon_catalog: None,
             addon_channel: crate::addons::Channel::default(),
             addon_auto_update: true,
@@ -898,6 +904,13 @@ mod tests {
         let missing = std::env::temp_dir().join("lightforge-no-such-config.toml");
         let _ = std::fs::remove_file(&missing);
         assert_eq!(Config::load_or_default(&missing).unwrap(), Config::with_default_products());
+    }
+
+    #[test]
+    fn addon_manager_is_opt_in_for_a_fresh_config_only() {
+        assert!(!Config::with_default_products().addon_manager);
+        let older = Config::from_toml(&Config::default().to_toml().unwrap().replace("addon_manager = false\n", "")).unwrap();
+        assert!(older.addon_manager);
     }
 
     /// A stock install, with no `addon_catalog` line, once found no

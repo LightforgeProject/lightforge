@@ -38,6 +38,29 @@ const DOWNLOAD_PREFIX: &str = ".lightforge-download-";
 /// fails after [`READ_TIMEOUT`] of silence.
 const STALE_DOWNLOAD: Duration = Duration::from_secs(60 * 60);
 
+/// reqwest's own default.
+const MAX_REDIRECTS: usize = 10;
+
+/// Followed as reqwest would, except from https to plain http: that drops the
+/// TLS a request was made with, and `Battle.net-Setup.exe` is run with no
+/// hash to check it by. Blizzard's CDN is asked over http to begin with, and
+/// its content is checked by MD5, so this costs it nothing.
+fn redirect(attempt: reqwest::redirect::Attempt<'_>) -> reqwest::redirect::Action {
+    let downgrade = attempt.previous().last().is_some_and(|from| downgrades(from, attempt.url()));
+    if downgrade {
+        let refused = format!("refused a redirect from https to {}", attempt.url());
+        return attempt.error(refused);
+    }
+    match attempt.previous().len() > MAX_REDIRECTS {
+        true => attempt.error("too many redirects"),
+        false => attempt.follow(),
+    }
+}
+
+fn downgrades(from: &reqwest::Url, to: &reqwest::Url) -> bool {
+    from.scheme() == "https" && to.scheme() == "http"
+}
+
 /// Shared HTTP client, one connection pool; clone it, do not build more.
 #[derive(Debug, Clone)]
 pub struct Http {
@@ -51,10 +74,13 @@ impl Http {
     pub fn new() -> Result<Self, NetError> {
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)
-            .connect_timeout(Duration::from_secs(15))
+            // Blizzard's CDN hosts fail over, and a dead one is rested
+            // (`tact::cdn`): this is what the first request to one costs.
+            .connect_timeout(Duration::from_secs(5))
             // No overall timeout (a slow link is fine); this one resets per
             // chunk and catches a server that goes silent.
             .read_timeout(READ_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::custom(redirect))
             .build()
             .map_err(NetError::Client)?;
         Ok(Self { client })
@@ -599,6 +625,29 @@ mod tests {
 
         assert_eq!(cache.etag(), None);
         assert_eq!(cache.read().unwrap(), b"two");
+    }
+
+    #[test]
+    fn only_https_to_http_is_a_downgrade() {
+        let url = |s: &str| reqwest::Url::parse(s).unwrap();
+        assert!(downgrades(&url("https://downloader.battle.net/a"), &url("http://evil.example/b")));
+        let kept = [
+            ("http://level3.blizzard.com/a", "http://edgecast.blizzard.com/a"),
+            ("http://a/x", "https://a/x"),
+            ("https://a/x", "https://b/x"),
+        ];
+        for (from, to) in kept {
+            assert!(!downgrades(&url(from), &url(to)), "{from} -> {to}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_plain_redirect_is_still_followed() {
+        let ok = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n".to_owned();
+        let target = server(ok, b"ok".to_vec(), false);
+        let head = format!("HTTP/1.1 302 Found\r\nLocation: {target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        let moved = server(head, Vec::new(), false);
+        assert_eq!(Http::new().unwrap().get_text(&moved).await.unwrap(), "ok");
     }
 
     #[test]

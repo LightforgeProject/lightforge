@@ -103,8 +103,8 @@ pub(crate) async fn download(dest: PathBuf, code: ProductCode, region: String, l
         Event::InstallFile { path, bytes } => {
             println!("  {} ({:.1} MiB)", path.display(), bytes as f64 / 1048576.0)
         }
-        Event::Extracted { files, bytes } => println!(
-            "extracted       {files} files, {:.1} MiB",
+        Event::Extracted { files, bytes, unchanged } => println!(
+            "extracted       {files} files, {:.1} MiB, {unchanged} already in place",
             bytes as f64 / 1048576.0
         ),
         Event::BuildInfo { path, version } => {

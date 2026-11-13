@@ -142,7 +142,7 @@ pub(crate) enum Message {
     /// the branch was on offer but not configured.
     BranchSelected(BranchChoice),
     /// Pre-flight finished; `Launch` says what it was clearing the way for.
-    PreflightDone(Launch, Result<(), Problem>),
+    PreflightDone(Launch, Result<tasks::Cleared, Problem>),
     /// Diagnostic only: subscribed to solely under `LIGHTFORGE_TRACE=frames`.
     ResizeTraced(iced::Size),
     /// The optimistic, cache-only paint that precedes [`Message::Themed`].
@@ -153,6 +153,8 @@ pub(crate) enum Message {
     /// logind's answer to [`tasks::keep_awake`].
     KeptAwake(Result<Arc<std::os::fd::OwnedFd>, String>),
     CloseRequested(iced::window::Id),
+    /// SIGTERM, SIGINT or SIGHUP.
+    StopSignal,
     /// A launch ended without a game of its own to watch: the client was
     /// opened, the hand-off came to nothing, or it failed.
     Launched(Result<String, Problem>),
@@ -168,7 +170,8 @@ pub(crate) enum Message {
     GameStopped(ProductCode, Result<String, Problem>),
     /// Every few seconds: is the Battle.net client up?
     ClientWatch,
-    ClientSeen(bool),
+    /// The poll's answer: the client up, and a game in the prefix.
+    ClientSeen { up: bool, game: bool },
     /// The menu beside a running Battle.net's button.
     ToggleClientMenu,
     /// Bring a running client's window up, without restarting it.
@@ -253,8 +256,11 @@ pub(crate) enum Message {
     Tweak(Scope, Tweak, bool),
     /// The environment-variable editor was typed in.
     EnvEdit(Scope, iced::widget::text_editor::Action),
-    /// Typing in the env editor paused; the number says after which edit.
+    /// Typing in the env editor or the launch options paused; the number says
+    /// after which edit.
     EnvSettled(u64),
+    /// The launch options in Game Settings were typed in.
+    LaunchOptionsTyped(String),
     /// Typing in the folder to move the Wine prefix to.
     PrefixFolderTyped(String),
     BrowsePrefixFolder,
@@ -381,10 +387,12 @@ pub(crate) enum Message {
     ModeRestart,
     /// Not now: the mode just switched applies without a restart.
     ModeRestartLater,
-    /// What came of starting it out of sight.
-    BackgroundClient(Result<tasks::Warmed, Problem>),
+    /// What came of starting it out of sight, for the warm-up counted.
+    BackgroundClient(u64, Result<tasks::Warmed, Problem>),
     /// Whether the client holds this game back for an update.
     ClientUpdatePending(ProductCode, bool),
+    /// The build the version service ships for a Battle.net game.
+    LatestBuild(ProductCode, Option<String>),
     /// Stop following a game's update. The client carries on.
     StopWatchingClientUpdate,
     /// The update the client was running for this game ended.
@@ -545,6 +553,8 @@ pub(crate) enum Message {
     FamiliesRead(Box<lightforge_core::families::Families>),
     /// Fetch one addon again and replace what it wrote.
     ReinstallAddon(String, String),
+    /// Turn the addon manager on or off, from setup or Settings.
+    AddonManager(bool),
     /// Whether addons update themselves unless they say otherwise.
     AddonAutoUpdateDefault(bool),
     /// Update whatever updates itself, for the product on screen.

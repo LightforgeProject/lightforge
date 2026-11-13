@@ -16,6 +16,7 @@ pub struct Scanned {
 /// The prefix must be quiet: a game or Battle.net is the user's to close; any
 /// leftovers are put to rest as pre-flight does.
 pub async fn scan_and_repair(
+    config: Config,
     layout: Layout,
     code: ProductCode,
     tx: tokio::sync::watch::Sender<lightforge_core::tact::verify::Progress>,
@@ -26,7 +27,7 @@ pub async fn scan_and_repair(
 
         use lightforge_core::preflight;
 
-        make_way(&layout);
+        make_way(&config, &layout);
         if let Some(game) = preflight::games_running(&layout).first() {
             return Err(format!("close {} first — the store is in use", game.name));
         }
@@ -34,7 +35,7 @@ pub async fn scan_and_repair(
             return Err("close Battle.net first — the store is in use".to_owned());
         }
         if !preflight::scan(&layout).is_empty() {
-            let runner = runner_for(&layout, &code, Runs::Game)?;
+            let runner = runner_for(&config, &layout, &code, Runs::Game)?;
             preflight::shutdown(&runner, &layout, preflight::DEFAULT_GRACE)
                 .map_err(|e| chain(&e))?;
         }
@@ -100,12 +101,13 @@ pub enum Unrepaired {
 /// Drop what a deep scan found damaged, if nothing is using the store and it
 /// is still the store that was scanned.
 pub async fn repair(
+    config: Config,
     layout: Layout,
     code: ProductCode,
     report: lightforge_core::tact::verify::Report,
 ) -> Result<usize, Unrepaired> {
     tokio::task::spawn_blocking(move || {
-        make_way(&layout);
+        make_way(&config, &layout);
         if !lightforge_core::preflight::scan(&layout).is_empty() {
             return Err(Unrepaired::InUse);
         }
@@ -182,6 +184,7 @@ pub async fn uninstall_plan(
 /// Refuses while anything runs in the prefix. Planned afresh, the reclaim
 /// before the row goes, since the row names the build.
 pub async fn uninstall(
+    config: Config,
     http: Option<Http>,
     layout: Layout,
     code: ProductCode,
@@ -191,7 +194,7 @@ pub async fn uninstall(
 
     let alive = layout.clone();
     let busy = tokio::task::spawn_blocking(move || {
-        make_way(&alive);
+        make_way(&config, &alive);
         lightforge_core::preflight::scan(&alive)
     })
         .await
@@ -252,13 +255,14 @@ pub async fn optional_plan(
 ///
 /// Behind the same gate as repair and uninstall.
 pub async fn optional_remove(
+    config: Config,
     layout: Layout,
     code: ProductCode,
     plan: lightforge_core::tact::reclaim::Reclaim,
 ) -> Result<u64, Problem> {
     let alive = layout.clone();
     let busy = tokio::task::spawn_blocking(move || {
-        make_way(&alive);
+        make_way(&config, &alive);
         lightforge_core::preflight::scan(&alive)
     })
         .await
@@ -304,6 +308,7 @@ pub async fn unused_plan(http: Option<Http>, install: PathBuf) -> Result<Unused,
 /// uses, then compact. Planned again here, not trusted from when the
 /// page opened. Returns the bytes freed; `copied` hears the copy's progress.
 pub async fn free_unused(
+    config: Config,
     http: Option<Http>,
     layout: Layout,
     install: PathBuf,
@@ -314,7 +319,7 @@ pub async fn free_unused(
 
     let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
     let busy = tokio::task::spawn_blocking(move || {
-        make_way(&layout);
+        make_way(&config, &layout);
         lightforge_core::preflight::scan(&layout)
     })
         .await
@@ -355,11 +360,12 @@ pub async fn storage(layout: Layout, dirs: AppDirs) -> lightforge_core::storage:
 
 /// Clear what one library holds that is only a cache; returns bytes freed.
 pub async fn clear_library(
+    config: Config,
     layout: Layout,
     library: lightforge_core::library::Library,
 ) -> Result<u64, String> {
     tokio::task::spawn_blocking(move || {
-        make_way(&layout);
+        make_way(&config, &layout);
         lightforge_core::storage::clear_library(&layout, &library).map_err(|e| chain(&e))
     })
     .await
@@ -376,6 +382,7 @@ pub async fn clear_cache(dirs: AppDirs) -> Result<u64, String> {
 
 /// Copy `code` into `to` and commit it there; see [`migrate::copy`].
 pub async fn move_copy(
+    config: Config,
     http: Option<Http>,
     layout: Layout,
     code: ProductCode,
@@ -387,7 +394,7 @@ pub async fn move_copy(
     // Minutes of blocking reads and writes: off the runtime's workers.
     let runtime = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
-        make_way(&layout);
+        make_way(&config, &layout);
         runtime
             .block_on(migrate::copy(&http, &layout, &code, &to, &cancel, |p| {
                 if let Ok(mut shown) = progress.lock() {
@@ -403,6 +410,7 @@ pub async fn move_copy(
 /// Take `code` out of `from` once the config names its new library; see
 /// [`migrate::release`].
 pub async fn move_release(
+    config: Config,
     http: Option<Http>,
     layout: Layout,
     code: ProductCode,
@@ -411,7 +419,7 @@ pub async fn move_release(
     let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
     let runtime = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
-        make_way(&layout);
+        make_way(&config, &layout);
         runtime.block_on(migrate::release(&http, &layout, &code, &from)).map_err(|e| chain(&e))
     })
     .await
@@ -490,7 +498,7 @@ mod uninstall_tests {
 
         let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
         // No client: the reclaim is skipped, which is what this test isolates.
-        runtime.block_on(uninstall(None, layout.clone(), ProductCode::ClassicEra, Default::default())).unwrap();
+        runtime.block_on(uninstall(Config::default(), None, layout.clone(), ProductCode::ClassicEra, Default::default())).unwrap();
 
         assert!(!era.exists());
         assert!(

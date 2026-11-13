@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use super::locale::shipped_locale;
-use super::{io, Cpu, Event, InstallError, Options};
+use super::{Cpu, Event, InstallError, Options};
 use crate::net::Http;
 use crate::product::ProductCode;
 use crate::tact::archive::FileIndex;
@@ -285,10 +285,19 @@ pub async fn prepare(
     if let Some(limit) = options.limit_archives {
         archives.truncate(limit);
     }
+    let wanted_keys: HashSet<EKey> = wanted.iter().map(|e| e.ekey).collect();
+    let mut locations = Locations::default();
     let report = cache
-        .ensure(http, &client, &archives, options.concurrency, |step| {
-            on_event(Event::Indices(step))
-        })
+        .ensure(
+            http,
+            &client,
+            &archives,
+            options.concurrency,
+            |step| on_event(Event::Indices(step)),
+            |index| {
+                locations.absorb(&index, &wanted_keys);
+            },
+        )
         .await?;
     on_event(Event::IndicesDone {
         cached: report.cached,
@@ -300,31 +309,18 @@ pub async fn prepare(
         .file_index
         .clone()
         .ok_or(InstallError::MissingManifest("file index"))?;
-    if !cache.holds(&file_index_hash, cdn_config.file_index_size) {
-        let bytes = client
-            .fetch_index(http, &file_index_hash, cdn_config.file_index_size)
-            .await?;
-        cache.store(&file_index_hash, &bytes)?;
-    }
-    let index_path = cache.path_of(&file_index_hash);
-    let loose = FileIndex::parse(&std::fs::read(&index_path).map_err(io(&index_path))?)?;
+    let size = cdn_config.file_index_size;
+    let loose = match cache.cached(&file_index_hash, size, FileIndex::parse) {
+        Some(loose) => loose,
+        None => {
+            let bytes = client.fetch_index(http, &file_index_hash, size).await?;
+            cache.store(&file_index_hash, &bytes)?;
+            FileIndex::parse(&bytes)?
+        }
+    };
     on_event(Event::Loose { files: loose.len() });
 
-    let wanted_keys: HashSet<EKey> = wanted.iter().map(|e| e.ekey).collect();
     let ckeys = reverse_encoding(&encoding, &wanted_keys);
-    let mut locations = Locations::default();
-    for (archive, _) in &archives {
-        if !cache.is_cached(archive, None) {
-            continue;
-        }
-        // A failed index costs its own files (unlocatable), not the download.
-        match cache.load_archive(archive) {
-            Ok(index) => {
-                locations.absorb(&index, &wanted_keys);
-            }
-            Err(e) => tracing::warn!("skipping archive index {archive}: {e}"),
-        }
-    }
     on_event(Event::Located { located: locations.len(), wanted: wanted.len() });
 
     // Skip what the store holds: this is resume.

@@ -80,7 +80,7 @@ fn readiness_is_read_from_the_log_this_start_wrote() {
 
     let since = SystemTime::now() + Duration::from_secs(60);
     assert_eq!(
-        wait_until_ready(&layout, "steamuser", since, Duration::from_millis(1)),
+        wait_until_ready(&layout, "steamuser", since, Duration::from_millis(1), || true),
         Readiness::NeedsAttention,
         "a log older than this start says nothing about it"
     );
@@ -92,8 +92,40 @@ fn readiness_is_read_from_the_log_this_start_wrote() {
             "steamuser",
             SystemTime::UNIX_EPOCH,
             Duration::from_millis(1),
+            || true,
         ),
         Readiness::SignedIn
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_client_that_dies_while_signing_in_ends_the_wait() {
+    let dir = scratch("exited");
+    let layout = Layout::with_root(&dir);
+    let polls = std::cell::Cell::new(0);
+    let alive = || {
+        polls.set(polls.get() + 1);
+        polls.get() <= 2
+    };
+
+    let since = SystemTime::now();
+    let readiness = wait_until_ready(&layout, "steamuser", since, Duration::from_secs(60), alive);
+    assert_eq!(readiness, Readiness::Exited);
+    assert!(polls.get() < 20, "well before the timeout");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_client_not_yet_in_the_process_table_is_waited_for() {
+    let dir = scratch("not-yet-up");
+    let layout = Layout::with_root(&dir);
+    let since = SystemTime::now();
+    assert_eq!(
+        wait_until_ready(&layout, "steamuser", since, Duration::from_millis(1500), || false),
+        Readiness::NeedsAttention
     );
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -222,6 +254,169 @@ fn the_session_log_is_the_one_that_signed_in_not_the_second_invocation() {
     text.push_str("D 2026-11-04 01:03:09.027560 [InstallManager] {Main} Update completed: battle.net\r\n");
     std::fs::write(&client, text).unwrap();
     assert!(session.updated_itself());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The last lines of a session that switched versions, 2026-11-06.
+const SWITCHED: &str = "\
+D 2026-11-06 09:55:25.912876 [Main] {Main} SelfUpdate received by SelfUpdateEventProxy. isCriticalUpdate=true applyUpdateNow=true\r
+D 2026-11-06 09:55:25.943151 [InstallManager] {Main} Update completed: battle.net\r
+D 2026-11-06 09:55:29.966492 [GameController] {Main} Shutting down GameController\r
+D 2026-11-06 09:55:30.956832 [DIAG_BNL_Voice] {Main} {174} debug: Notification client reference removed: 0\r
+";
+
+#[test]
+fn a_client_that_quits_right_after_updating_itself_is_switching_versions() {
+    let dir = scratch("switched");
+    let layout = Layout::with_root(&dir);
+    let logs = layout.battle_net_logs("steamuser");
+    std::fs::create_dir_all(&logs).unwrap();
+    std::fs::write(logs.join("battle.net-20261106T095508.036721.log"), format!("I [BNLogin] {SIGNED_IN}.\r\n{SWITCHED}")).unwrap();
+
+    assert!(SessionLog::find(&layout, "steamuser").unwrap().quit_to_update());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_client_closed_long_after_it_updated_itself_was_closed_by_someone() {
+    let dir = scratch("closed-later");
+    let layout = Layout::with_root(&dir);
+    let logs = layout.battle_net_logs("steamuser");
+    std::fs::create_dir_all(&logs).unwrap();
+    let later = "D 2026-11-06 11:02:14.200311 [GameController] {Main} Shutting down GameController\r\n";
+    std::fs::write(logs.join("battle.net-20261106T095508.036721.log"), format!("I [BNLogin] {SIGNED_IN}.\r\n{SWITCHED}{later}")).unwrap();
+
+    assert!(!SessionLog::find(&layout, "steamuser").unwrap().quit_to_update());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_session_crossing_midnight_is_timed_across_it() {
+    let dir = scratch("midnight");
+    let layout = Layout::with_root(&dir);
+    let logs = layout.battle_net_logs("steamuser");
+    std::fs::create_dir_all(&logs).unwrap();
+    let text = "\
+D 2026-12-31 23:59:50.000000 [InstallManager] {Main} Update completed: battle.net\r
+D 2027-01-01 00:00:05.000000 [GameController] {Main} Shutting down GameController\r
+";
+    std::fs::write(logs.join("battle.net-20261231T235000.000000.log"), format!("I [BNLogin] {SIGNED_IN}.\r\n{text}")).unwrap();
+
+    assert!(SessionLog::find(&layout, "steamuser").unwrap().quit_to_update());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_window_is_only_put_away_for_a_launch_the_client_took() {
+    let dir = scratch("launch-stage");
+    let layout = Layout::with_root(&dir);
+    let logs = layout.battle_net_logs("steamuser");
+    std::fs::create_dir_all(&logs).unwrap();
+    let client = logs.join("battle.net-20261106T095530.120770.log");
+    std::fs::write(&client, format!("I [BNLogin] {SIGNED_IN}.\r\n")).unwrap();
+    let mut watch = SessionLog::find(&layout, "steamuser").unwrap().follow("wowf");
+    let append = |line: &str| {
+        let mut text = std::fs::read_to_string(&client).unwrap();
+        text.push_str(line);
+        std::fs::write(&client, text).unwrap();
+    };
+
+    assert_eq!(watch.stage(), LaunchStage::Sent);
+    append("I 2026-11-06 09:56:36.283945 [GameLaunchController] {Main} LaunchBinary: uid=wowf selectedRegion=EU binaryType=game\r\n");
+    assert_eq!(watch.stage(), LaunchStage::Taken);
+    append("D 2026-11-06 09:56:39.741982 [InstallManager] {Main} Game is running: wowf\r\n");
+    assert_eq!(watch.stage(), LaunchStage::Running);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_error_the_client_shows_is_left_on_screen() {
+    let dir = scratch("launch-error");
+    let layout = Layout::with_root(&dir);
+    let logs = layout.battle_net_logs("steamuser");
+    std::fs::create_dir_all(&logs).unwrap();
+    let client = logs.join("battle.net-20261106T095530.120770.log");
+    std::fs::write(&client, format!("I [BNLogin] {SIGNED_IN}.\r\n")).unwrap();
+    let mut watch = SessionLog::find(&layout, "steamuser").unwrap().follow("wowf");
+
+    let mut text = std::fs::read_to_string(&client).unwrap();
+    text.push_str("I 2026-11-06 09:56:36.283945 [GameLaunchController] {Main} LaunchBinary: uid=wowf selectedRegion=EU binaryType=game\r\n");
+    text.push_str("E 2026-11-06 09:56:29.306365 [ErrorManager] {Main} An error occurred: BLZBNTAGT00001393\r\n");
+    std::fs::write(&client, text).unwrap();
+    assert_eq!(watch.stage(), LaunchStage::Failed);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_line_still_being_written_is_read_once_it_ends() {
+    let dir = scratch("half-line");
+    let layout = Layout::with_root(&dir);
+    let logs = layout.battle_net_logs("steamuser");
+    std::fs::create_dir_all(&logs).unwrap();
+    let client = logs.join("battle.net-20261106T095530.120770.log");
+    std::fs::write(&client, format!("I [BNLogin] {SIGNED_IN}.\r\n")).unwrap();
+    let mut watch = SessionLog::find(&layout, "steamuser").unwrap().follow("wowf");
+
+    let line = "I 2026-11-06 09:56:36.283945 [GameLaunchController] {Main} LaunchBinary: uid=wowf selectedRegion=EU binaryType=game";
+    let mut text = std::fs::read_to_string(&client).unwrap();
+    text.push_str(&line[..60]);
+    std::fs::write(&client, &text).unwrap();
+    assert_eq!(watch.stage(), LaunchStage::Sent);
+    text.push_str(&line[60..]);
+    text.push_str("\r\n");
+    std::fs::write(&client, text).unwrap();
+    assert_eq!(watch.stage(), LaunchStage::Taken);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_launch_cut_off_before_the_exe_started_is_told_apart() {
+    let dir = scratch("cut-off-launch");
+    let layout = Layout::with_root(&dir);
+    let logs = layout.battle_net_logs("steamuser");
+    std::fs::create_dir_all(&logs).unwrap();
+    let client = logs.join("battle.net-20261108T091218.950084.log");
+    std::fs::write(&client, format!("I [BNLogin] {SIGNED_IN}.\r\n")).unwrap();
+    let session = SessionLog::find(&layout, "steamuser").unwrap();
+
+    // GlitchTip #43 stopped here: taken, then the client was gone.
+    let mut text = std::fs::read_to_string(&client).unwrap();
+    text.push_str("I 2026-11-08 09:12:30.349562 [GameLaunchController] {Main} LaunchBinary: uid=wowf selectedRegion=EU binaryType=game\r\n");
+    std::fs::write(&client, text).unwrap();
+    assert!(session.launch_taken(Duration::ZERO));
+    assert!(!session.game_launched());
+
+    let mut text = std::fs::read_to_string(&client).unwrap();
+    text.push_str("I 2026-11-08 09:12:30.730179 [InstallManager] {Main} Launched H:/World of Warcraft/_forever_/Wow.exe with args: -launcherlogin -uid wowf, pid: 1752\r\n");
+    std::fs::write(&client, text).unwrap();
+    assert!(session.game_launched());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn closing_goes_to_the_tray_only_where_every_account_hides_on_close() {
+    let dir = scratch("closes-to-tray");
+    let layout = Layout::with_root(&dir);
+    let bnet = layout.battle_net_config("steamuser").parent().unwrap().to_path_buf();
+    std::fs::create_dir_all(&bnet).unwrap();
+    std::fs::write(layout.battle_net_config("steamuser"), r#"{"Client":{"AutoLogin":"true"}}"#).unwrap();
+
+    // Before the first sign-in there is no account config, and the client quits.
+    assert!(!closes_to_tray(&layout, "steamuser"));
+
+    std::fs::write(bnet.join("1c858370.config"), r#"{"User":{"Client":{"HideOnClose":"true"}}}"#).unwrap();
+    assert!(closes_to_tray(&layout, "steamuser"));
+
+    std::fs::write(bnet.join("beef0001.config"), r#"{"User":{"Client":{"HideOnClose":"false"}}}"#).unwrap();
+    assert!(!closes_to_tray(&layout, "steamuser"));
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -443,19 +638,26 @@ fn a_client_that_exits_after_a_hand_off_keeps_its_own_restore_setting() {
 #[test]
 fn a_background_client_hides_on_close() {
     let mut config = json!({ "User": { "Client": { "HideOnClose": "false" } } });
-    apply_tweaks(&mut config, &account_tweaks(true));
+    apply_tweaks(&mut config, &account_tweaks(true, true));
     assert_eq!(config["User"]["Client"]["HideOnClose"], json!("true"));
     assert_eq!(config["User"]["Client"]["DisplayExitPrompt"], json!("false"));
 }
 
 #[test]
+fn without_a_tray_a_background_client_quits_on_close() {
+    let mut config = json!({ "User": { "Client": { "HideOnClose": "true" } } });
+    apply_tweaks(&mut config, &account_tweaks(true, false));
+    assert_eq!(config["User"]["Client"]["HideOnClose"], json!("false"));
+}
+
+#[test]
 fn only_a_background_client_has_its_notifications_switched_off() {
     let mut config = json!({ "User": { "Client": { "ToastsEnabled": "false" } } });
-    apply_tweaks(&mut config, &account_tweaks(false));
+    apply_tweaks(&mut config, &account_tweaks(false, false));
     assert_eq!(config["User"]["Client"]["ToastsEnabled"], json!("false"), "the user's own choice stands");
 
     let mut config = json!({ "User": { "Client": {} } });
-    apply_tweaks(&mut config, &account_tweaks(true));
+    apply_tweaks(&mut config, &account_tweaks(true, true));
     assert_eq!(config["User"]["Client"]["ToastsEnabled"], json!("false"));
 }
 
@@ -479,7 +681,7 @@ fn hide_on_close_is_written_to_every_account_config_but_not_the_global_one() {
     std::fs::write(bnet.join("beef0001.config"), "{}").unwrap();
 
     configure(&layout, "steamuser", &default_tweaks(&layout, false)).unwrap();
-    let changed = configure_accounts(&layout, "steamuser", &account_tweaks(false)).unwrap();
+    let changed = configure_accounts(&layout, "steamuser", &account_tweaks(false, false)).unwrap();
     assert_eq!(changed.len(), 2);
 
     for name in ["1c858370.config", "beef0001.config"] {
@@ -505,7 +707,7 @@ fn a_prefix_with_no_account_yet_is_a_no_op() {
     configure(&layout, "steamuser", &default_tweaks(&layout, false)).unwrap();
 
     // Only Battle.net.config exists before the first login.
-    assert!(configure_accounts(&layout, "steamuser", &account_tweaks(false)).unwrap().is_empty());
+    assert!(configure_accounts(&layout, "steamuser", &account_tweaks(false, false)).unwrap().is_empty());
 }
 
 #[test]
@@ -742,4 +944,49 @@ fn provisioning_refuses_to_run_before_the_prefix_exists() {
         provision(&runner, None, &layout, "steamuser", "enUS", &dir.join("setup.exe"), &[]),
         Err(BattleNetError::PrefixNotReady(_))
     ));
+}
+
+#[test]
+fn switching_the_background_mode_off_puts_back_what_it_overwrote() {
+    let dir = scratch("overrides-round-trip");
+    let layout = Layout::with_root(&dir);
+    let global = layout.battle_net_config("steamuser");
+    let account = global.parent().unwrap().join("1c858370.config");
+    std::fs::create_dir_all(global.parent().unwrap()).unwrap();
+    std::fs::write(&global, r#"{"Games":{"hs_beta":{"AutoUpdate":"true"},"pro":{}}}"#).unwrap();
+    std::fs::write(&account, r#"{"User":{"Client":{}}}"#).unwrap();
+
+    let tweaks = [auto_update_tweak("hs_beta", false), auto_update_tweak("pro", false)];
+    // Twice: the second pass finds Lightforge's values and must not note them.
+    for _ in 0..2 {
+        record_overrides(&layout, "steamuser", &tweaks, &account_tweaks(true, true)).unwrap();
+        configure(&layout, "steamuser", &tweaks).unwrap();
+        configure_accounts(&layout, "steamuser", &account_tweaks(true, true)).unwrap();
+    }
+    assert!(restore_overrides(&layout, "steamuser").unwrap());
+
+    let read = |path: &Path| serde_json::from_str::<Value>(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let global_now = read(&global);
+    assert_eq!(global_now["Games"]["hs_beta"]["AutoUpdate"], json!("true"));
+    assert!(global_now["Games"]["pro"].get("AutoUpdate").is_none(), "absent before, absent again");
+    let account_now = read(&account);
+    assert!(account_now["User"]["Client"].get("ToastsEnabled").is_none());
+    assert!(account_now["User"]["Client"].get("HideOnClose").is_none());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_restored_record_is_forgotten() {
+    let dir = scratch("overrides-forgotten");
+    let layout = Layout::with_root(&dir);
+    let global = layout.battle_net_config("steamuser");
+    std::fs::create_dir_all(global.parent().unwrap()).unwrap();
+    std::fs::write(&global, "{}").unwrap();
+    record_overrides(&layout, "steamuser", &[auto_update_tweak("hs_beta", false)], &[]).unwrap();
+
+    assert!(restore_overrides(&layout, "steamuser").unwrap());
+    assert!(!restore_overrides(&layout, "steamuser").unwrap());
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

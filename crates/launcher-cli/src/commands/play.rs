@@ -1,72 +1,52 @@
 //! Starting a game, and the pre-flight in front of it.
 
-use super::{managed_products, print_preflight, proton_runner};
+use super::{beside_gui, owe_gui_client, print_preflight, proton_runner, warn_on_downgrade};
 use crate::*;
 
 pub(crate) fn play(ctx: Ctx, code: ProductCode, proton: Option<String>, dry_run: bool) -> Result<()> {
-    let Ctx { layout, config } = ctx;
-    use lightforge_core::config::Config;
+    use lightforge_core::backup;
+    use lightforge_core::launch::{DirectLaunch, LaunchError};
     use lightforge_core::preflight::{NoDownloads, Preflight};
 
-    // Through the `C:` symlink. The GUI launches the native path instead,
-    // which the in-game shop needs (see `Layout::wow_drive`).
-    let exe = layout.wow_symlink().join(layout.wow_exe(&code).strip_prefix(layout.wow_install(&code))?);
-    if !exe.is_file() {
-        anyhow::bail!(
-            "no game at {} — is the symlink pointing at an install?",
-            exe.display()
-        );
-    }
-
-    // Whatever the symlink resolves to has to be visible inside the
-    // prefix, and it is not necessarily under the games root.
-    let target = std::fs::read_link(layout.wow_symlink())
-        .unwrap_or_else(|_| layout.wow_install(&code));
-
+    let Ctx { layout, config } = ctx;
+    let config = beside_gui(config);
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
-    let (runner, build) = proton_runner(&layout, proton.as_deref())?;
-    let mut runner = runner
-        .with_compat_mount(&target)
-        // Per product: the prefix is shared.
-        .with_shader_cache(dirs.shader_cache_dir(&code));
+    let launch = match DirectLaunch::plan(&config, &layout, &dirs, &code, proton.as_deref()) {
+        Err(e @ LaunchError::NoProton) => anyhow::bail!("{e}: run `lightforge proton-install`"),
+        planned => planned?,
+    };
 
-    // The same per-product settings Game Settings writes. A launcher that honoured them from one entry point and
-    // not the other would make every measurement unreproducible.
-    let tweaks = Config::load_or_default(&dirs.config_file())
-        .ok()
-        .and_then(|config| config.product(&code).map(|p| p.profile.tweaks.clone()))
-        .unwrap_or_default();
-    let tools = lightforge_core::tweaks::HostTools::detect();
-    for (key, value) in tweaks.environment(&tools) {
-        runner = runner.with_env(key, value);
-    }
-
-    println!("using {} ({})", build.version, build.path.display());
-    println!("install {}", target.display());
-    println!("running {}", exe.display());
-    let wrappers = tweaks.wrappers(&tools);
-    if !wrappers.is_empty() {
-        let names: Vec<String> =
-            wrappers.iter().map(|w| w.display().to_string()).collect();
+    println!("using {} ({})", launch.build.version, launch.build.path.display());
+    warn_on_downgrade(&layout, &launch.build);
+    println!("running {}", launch.exe.display());
+    if !launch.wrappers.is_empty() {
+        let names: Vec<String> = launch.wrappers.iter().map(|w| w.display().to_string()).collect();
         println!("through  {}", names.join(" "));
+    }
+    if lightforge_core::launch_options::script(&launch.launch_options).is_some() {
+        println!("options  {}", launch.launch_options.trim());
     }
     if dry_run {
         return Ok(());
     }
 
-    let report = Preflight::new(config.prefix_user.clone()).with_managed(managed_products())
+    let report = Preflight::new(config.prefix_user.clone())
+        .with_managed(config.managed_products())
         .keeping_client(config.keeps_battle_net(true))
         .with_background_client(config.battle_net_in_background)
-        .run(&runner, &layout, Some(&code), &mut NoDownloads)
+        .run(&launch.runner, &layout, Some(&code), &mut NoDownloads)
         .context("pre-flight cleanup")?;
     print_preflight(&report);
+    owe_gui_client(&config, &report);
 
-    let status = lightforge_core::tweaks::wrapped(
-        runner.command("run", &exe, Vec::<String>::new()),
-        &wrappers,
-    )
-    .status()
-    .context("launching the game")?;
+    // Never fatal, as in the GUI: the first launch on a new build gets one.
+    match backup::Plan::for_product(&layout, &dirs, &code, config.backup_keep).before_launch() {
+        Ok(Some(taken)) => println!("backup          {}", taken.path.display()),
+        Ok(None) => {}
+        Err(e) => eprintln!("warning: settings not backed up: {}", lightforge_core::error::chain(&e)),
+    }
+
+    let status = launch.command().status().context("launching the game")?;
     match status.code() {
         Some(0) | None => println!("exited"),
         Some(code) => println!("exited with code {code}"),
@@ -76,6 +56,7 @@ pub(crate) fn play(ctx: Ctx, code: ProductCode, proton: Option<String>, dry_run:
 
 pub(crate) fn preflight(ctx: Ctx, proton: Option<String>, code: Option<ProductCode>, dry_run: bool, grace: u64) -> Result<()> {
     let Ctx { layout, config } = ctx;
+    let config = beside_gui(config);
     use lightforge_core::preflight::{self, NoDownloads, Preflight};
 
     if dry_run {
@@ -97,11 +78,12 @@ pub(crate) fn preflight(ctx: Ctx, proton: Option<String>, code: Option<ProductCo
     let (runner, build) = proton_runner(&layout, proton.as_deref())?;
     println!("using {} ({})", build.version, build.path.display());
 
-    let report = Preflight::new(config.prefix_user.clone()).with_managed(managed_products())
+    let report = Preflight::new(config.prefix_user.clone()).with_managed(config.managed_products())
         .with_grace(std::time::Duration::from_secs(grace))
         .with_background_client(config.battle_net_in_background)
         .run(&runner, &layout, code.as_ref(), &mut NoDownloads)
         .context("pre-flight cleanup")?;
     print_preflight(&report);
+    owe_gui_client(&config, &report);
     Ok(())
 }

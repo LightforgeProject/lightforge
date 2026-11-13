@@ -17,6 +17,7 @@
 
 mod installer;
 mod launch;
+mod overrides;
 mod readiness;
 mod registry;
 mod tweaks;
@@ -26,14 +27,15 @@ mod tests;
 
 pub use installer::{fetch_installer, InstallOutcome, Installer, INSTALLER_FILE, INSTALLER_URL};
 pub use launch::{game_uid, game_uri, launch, launch_wrapped, resolve_game_uid, Launch};
-pub use readiness::{signs_in_by_itself, wait_until_ready, Readiness, SessionLog, UpdateState};
+pub use overrides::{record_overrides, restore_overrides};
+pub use readiness::{signs_in_by_itself, wait_until_ready, LaunchStage, LaunchWatch, Readiness, SessionLog, UpdateState};
 pub use registry::{apply_registry, registry_tweaks, RegValue};
 pub use tweaks::{
-    account_tweaks, apply_tweaks, auto_update_tweak, configure, configure_accounts, default_tweaks, download_limit,
-    known_product_codes, product_tweaks, set_download_limit, toasts_tweak, window_state_tweaks, Tweak,
+    account_tweaks, apply_tweaks, auto_update_tweak, closes_to_tray, configure, configure_accounts, default_tweaks, download_limit,
+    known_product_codes, product_tweaks, set_download_limit, window_state_tweaks, Tweak,
     AUTOSTART_MINIMIZED_KEY, DOWNLOAD_LIMIT_KEY,
 };
-pub use window::{ClientWindows, WindowError};
+pub use window::{tray_present, ClientWindows, WindowError};
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -87,7 +89,7 @@ pub fn provision(
     let mut tweaks = default_tweaks(layout, false);
     tweaks.extend(product_tweaks(managed));
     let config_path = configure(layout, user, &tweaks)?;
-    let account_configs = configure_accounts(layout, user, &account_tweaks(false))?;
+    let account_configs = configure_accounts(layout, user, &account_tweaks(false, false))?;
 
     Ok(SetupReport {
         install,

@@ -32,7 +32,7 @@ impl Lightforge {
                 let (tx, rx) = tokio::sync::watch::channel(Default::default());
                 self.scan_rx = Some(rx);
                 Task::perform(
-                    tasks::scan_and_repair(self.layout.clone(), self.selected.code.clone(), tx),
+                    tasks::scan_and_repair(self.config.clone(), self.layout.clone(), self.selected.code.clone(), tx),
                     |result| Message::Scanned(Box::new(result)),
                 )
             }
@@ -165,7 +165,7 @@ impl Lightforge {
                 }
                 // Not `busy`, which belongs to a launch.
                 self.repairing = Some(code.clone());
-                Task::perform(tasks::repair(self.layout.clone(), code, *report), Message::Repaired)
+                Task::perform(tasks::repair(self.config.clone(), self.layout.clone(), code, *report), Message::Repaired)
             }
 
             Message::Repaired(result) => {

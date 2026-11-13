@@ -228,8 +228,8 @@ pub enum ProtonError {
         actual: String,
     },
 
-    #[error("archive contains an unsafe path: {0}")]
-    UnsafeArchivePath(PathBuf),
+    #[error(transparent)]
+    Archive(#[from] crate::archive::ArchiveError),
 
     #[error("archive {0} is empty")]
     EmptyArchive(PathBuf),

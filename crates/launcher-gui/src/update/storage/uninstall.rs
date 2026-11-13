@@ -48,7 +48,7 @@ impl Lightforge {
                 let code = dialog.code.clone();
                 let http = self.http.clone();
                 Task::perform(
-                    tasks::uninstall(http, self.layout.clone(), code.clone(), dialog.copied.clone()),
+                    tasks::uninstall(self.config.clone(), http, self.layout.clone(), code.clone(), dialog.copied.clone()),
                     move |result| Message::Uninstalled(code.clone(), result),
                 )
             }

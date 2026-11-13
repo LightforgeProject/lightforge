@@ -16,6 +16,8 @@ pub struct Installed {
     pub product_code: String,
     /// Windows-visible install root, e.g. `C:/Program Files (x86)/Hearthstone`.
     pub install_path: String,
+    /// The region Agent updates it from, e.g. `eu`. Empty when omitted.
+    pub region: String,
     /// Installed version, when the record carries one.
     pub version: Option<String>,
     /// Build config hash of what is on disk: the installed key (field 14),
@@ -88,6 +90,7 @@ pub(super) fn decode_install(bytes: &[u8]) -> Option<Installed> {
     let mut product = String::new();
     let mut product_code = String::new();
     let mut install_path = String::new();
+    let mut region = String::new();
     let mut family = String::new();
     let mut version = None;
     let (mut active, mut installed) = (None, None);
@@ -98,8 +101,10 @@ pub(super) fn decode_install(bytes: &[u8]) -> Option<Installed> {
             (2, Wire::Bytes(b)) => product_code = string(b),
             (3, Wire::Bytes(settings)) => {
                 for (field, value) in Fields::new(settings) {
-                    if let (1, Wire::Bytes(b)) = (field, value) {
-                        install_path = string(b);
+                    match (field, value) {
+                        (1, Wire::Bytes(b)) => install_path = string(b),
+                        (2, Wire::Bytes(b)) => region = string(b),
+                        _ => {}
                     }
                 }
             }
@@ -128,6 +133,7 @@ pub(super) fn decode_install(bytes: &[u8]) -> Option<Installed> {
         product,
         product_code,
         install_path,
+        region,
         version,
         build_key: installed.or(active),
         family,

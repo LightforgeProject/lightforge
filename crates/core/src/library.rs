@@ -490,11 +490,14 @@ fn is_writable(path: &Path) -> bool {
 /// `games` directory.
 ///
 /// For a library offline at its recorded path. The UUID narrows the mounts
-/// searched (all of them without one); the marker decides.
+/// searched (every local one without one); the marker decides. Local only, as
+/// [`partitions`] offers: this runs on the UI thread at start, and reading a
+/// marker on a network share whose server is gone blocks until it returns.
 pub fn relocate(library: &Library) -> Option<PathBuf> {
     let uuids = by_id("/dev/disk/by-uuid");
     mounts()
         .into_iter()
+        .filter(|mount| mount.device.starts_with("/dev"))
         .filter(|mount| match (&library.uuid, mount.device.file_name()) {
             (Some(want), Some(device)) => {
                 uuids.get(device.to_string_lossy().as_ref()) == Some(want)

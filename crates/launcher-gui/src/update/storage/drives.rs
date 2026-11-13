@@ -69,7 +69,7 @@ impl Lightforge {
                 self.drive_notice = Some((id.clone(), "clearing…".to_owned()));
                 let layout = self.layout.clone();
                 Task::perform(
-                    tasks::clear_library(layout, library),
+                    tasks::clear_library(self.config.clone(), layout, library),
                     move |result| Message::DriveCleared(id.clone(), result),
                 )
             }
@@ -107,7 +107,7 @@ impl Lightforge {
                 let copied = Arc::<std::sync::atomic::AtomicU64>::default();
                 self.unused.insert(id.clone(), UnusedData::Freeing { copied: copied.clone(), total });
                 Task::perform(
-                    tasks::free_unused(self.http.clone(), self.layout.clone(), install, copied),
+                    tasks::free_unused(self.config.clone(), self.http.clone(), self.layout.clone(), install, copied),
                     move |result| Message::UnusedFreed(id.clone(), result),
                 )
             }

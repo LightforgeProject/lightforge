@@ -292,10 +292,21 @@ struct Lightforge {
     client_menu_open: bool,
     /// What the background client is doing, beyond running.
     client_phase: ClientPhase,
-    /// A launch through the client, waiting for it to finish signing in.
-    launch_after_client: Option<Launch>,
+    /// A launch through the client, waiting for it to finish signing in,
+    /// with the game it was for: the tile shown may have changed since.
+    launch_after_client: Option<(Launch, ProductCode)>,
+    /// Counts warm-ups, so the answer of one that was overtaken is dropped.
+    client_generation: u64,
+    /// Tripped when the mode goes off before the running warm-up starts the client.
+    warming: Option<Cancel>,
+    /// The mode went off during a launch: the client goes once it is over.
+    close_client_after_play: bool,
+    /// Hand-offs sent again in a row because the client updated itself.
+    client_update_retries: u8,
     /// The game the client holds back for an update, of those asked about.
     update_pending: Option<ProductCode>,
+    /// The version service's build for the selected Battle.net game.
+    latest_build: Option<(ProductCode, String)>,
     /// The update being followed.
     client_update: Option<ClientUpdate>,
     /// Battle.net is being closed.
@@ -452,7 +463,7 @@ struct Lightforge {
     /// A launch whose pre-flight is done, held until the download it paused
     /// has finished winding down: the client and a still-checkpointing
     /// downloader would share one store.
-    launch_when_quiet: Option<Launch>,
+    launch_when_quiet: Option<(Launch, tasks::Cleared)>,
     report_dialog: Option<ReportDialog>,
     /// Filled in once, shortly after startup. `None` until then, and a report
     /// sent in that window simply says so instead of blocking on it.
@@ -477,9 +488,10 @@ struct Lightforge {
     /// The environment-variable editors: Game Settings' and Battle.net's.
     env_editor: iced::widget::text_editor::Content,
     bnet_env_editor: iced::widget::text_editor::Content,
-    /// Counts env edits, so only the save scheduled by the last one runs.
+    /// Counts typed edits, of the environment or the launch options, so only
+    /// the save scheduled by the last one runs.
     env_edits: u64,
-    /// An env edit is in the config but not yet on disk.
+    /// A typed edit is in the config but not yet on disk.
     env_unsaved: bool,
     /// Editable copies of the selected product's numeric tweaks, and the two
     /// fields of the environment escape hatch.
@@ -510,7 +522,7 @@ struct Lightforge {
     /// when it has not run or had nothing to do, "0 addons updated" is noise.
     addon_auto_note: Option<String>,
     /// A launch waiting for that pass: the game reads AddOns at login.
-    launch_after_addons: Option<Launch>,
+    launch_after_addons: Option<(Launch, ProductCode)>,
     /// Which tab the standing report belongs to: import, or update.
     addon_report_tab: AddonTab,
     /// Counts keystrokes in the search box, so a debounced search runs only

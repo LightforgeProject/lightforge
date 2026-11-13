@@ -675,3 +675,28 @@ async fn a_reinstall_restores_a_dependency_that_never_arrived() {
     let report = install_all(&http, Some(&catalog), &[questie_request()], &repair, |_| {}).await.unwrap();
     assert_eq!(report.installed, ["Questie", "QuestieDB", "QuestieTrace"]);
 }
+
+#[test]
+fn a_moved_game_s_ledger_follows_its_addons_folder() {
+    let data = tempfile::tempdir().unwrap();
+    let code = crate::product::ProductCode::ClassicEra;
+    let from = Path::new("/mnt/a/World of Warcraft/_classic_era_/Interface/AddOns");
+    let to = Path::new("/mnt/b/World of Warcraft/_classic_era_/Interface/AddOns");
+    let mut ledger = Ledger::default();
+    ledger.addons.push(Record { folders: vec!["BigWigs".into()], ..Default::default() });
+    ledger.save(&ledger_path(data.path(), from, &code)).unwrap();
+    Ledger::default().save(&ledger_path(data.path(), to, &code)).unwrap();
+
+    carry_ledger(data.path(), &code, from, to).unwrap();
+
+    assert_eq!(Ledger::load(&ledger_path(data.path(), to, &code)).unwrap(), ledger, "it replaces the stale one there");
+    assert!(!ledger_path(data.path(), from, &code).exists());
+}
+
+#[test]
+fn a_game_without_a_ledger_carries_nothing() {
+    let data = tempfile::tempdir().unwrap();
+    let code = crate::product::ProductCode::ClassicEra;
+    carry_ledger(data.path(), &code, Path::new("/mnt/a/AddOns"), Path::new("/mnt/b/AddOns")).unwrap();
+    assert!(!ledger_path(data.path(), Path::new("/mnt/b/AddOns"), &code).exists());
+}

@@ -436,6 +436,18 @@ pub(super) fn games<'a>(app: &'a Lightforge) -> Element<'a, Message> {
             .direction(scrollable::Direction::Vertical(theme::scrollbar_shape()))
             .style(theme::scrollbar),
     ));
+    body = body.push(clickable(
+        "wizard addon manager",
+        crate::tick(app.config.addon_manager)
+            .label("Lightforge Addon Manager (Experimental)")
+            .on_toggle(Message::AddonManager)
+            .text_size(theme::tap_text(theme::BODY)),
+    ));
+    body = body.push(muted(
+        "Install and update addons for each game. Settings › Addons turns it on or off later."
+            .to_owned(),
+        theme::CAPTION,
+    ));
     body.into()
 }
 

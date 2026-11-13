@@ -38,6 +38,31 @@ pub(crate) fn windows_wow_path(layout: &Layout, code: &ProductCode) -> String {
         .unwrap_or_else(|| lightforge_core::paths::WINDOWS_WOW_PATH.to_owned())
 }
 
+/// The settings as a run from here honours them. Battle.net stays in the
+/// background only beside a running GUI, the one thing that closes it again:
+/// without one, a client left in the tray stays there.
+pub(crate) fn beside_gui(mut config: Config) -> Config {
+    config.battle_net_in_background &= AppDirs::discover().is_ok_and(|dirs| dirs.gui_running());
+    config
+}
+
+/// A pre-flight that closed the GUI's background client leaves word for it to
+/// start one again, as the GUI's own pre-flights do.
+pub(crate) fn owe_gui_client(config: &Config, report: &lightforge_core::preflight::Report) {
+    use lightforge_core::preflight::ProcKind;
+
+    let closed = report.processes.iter().any(|outcome| outcome.process.kind == ProcKind::BattleNet);
+    if !config.battle_net_in_background || !closed {
+        return;
+    }
+    let Ok(owed) = AppDirs::discover().map(|dirs| dirs.instance_file("owed")) else {
+        return;
+    };
+    if let Err(e) = std::fs::write(&owed, "") {
+        eprintln!("warning: Lightforge will not start Battle.net again by itself: {}: {e}", owed.display());
+    }
+}
+
 /// Render what a pre-flight pass did, one aligned line per fact.
 pub(crate) fn print_preflight(report: &lightforge_core::preflight::Report) {
     use lightforge_core::preflight::Disposition;
@@ -75,21 +100,30 @@ pub(crate) fn print_preflight(report: &lightforge_core::preflight::Report) {
         println!("download        paused for the session");
     }
 
-    // Last: where the time went (a scan is 60 ms, a signal grace 5 s).
+    // Last: where the time went (a scan is about 2 ms, a signal grace 5 s).
     for timing in &report.timings {
         println!("timing          {:<18} {:>6} ms", timing.stage, timing.took.as_millis());
     }
 }
 
-/// Products Lightforge patches, read fresh from `config.toml`.
+/// Say so when the build about to run is older than the one that built the
+/// prefix every product shares.
 ///
-/// Read per call, so the list is never stale.
-pub(crate) fn managed_products() -> Vec<lightforge_core::product::ProductCode> {
-    AppDirs::discover()
-        .ok()
-        .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
-        .map(|config| config.managed_products())
-        .unwrap_or_default()
+/// A line on stderr, not a refusal: `--proton` is how one tries an older build.
+pub(crate) fn warn_on_downgrade(layout: &Layout, build: &lightforge_core::proton::ProtonRelease) {
+    use lightforge_core::proton;
+
+    let built_by = proton::prefix_build(&layout.compat_data());
+    if let proton::PrefixFit::Older { built_by } =
+        proton::prefix_fit(&build.version, built_by.as_deref())
+    {
+        eprintln!(
+            "warning: {} is older than {built_by}, which last upgraded this prefix.\n\
+             \x20        Proton migrates a prefix forward only; the shared prefix may not \
+             survive it.",
+            build.version,
+        );
+    }
 }
 
 /// Resolve the Proton build to run against the shared prefix, and a runner for

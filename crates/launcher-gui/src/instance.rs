@@ -1,20 +1,21 @@
 //! One GUI per configuration.
 //!
-//! An `flock` on `lightforge-<id>.lock` in `$XDG_RUNTIME_DIR`, held for the
-//! life of the process. `<id>` comes from the config directory, so a run with
-//! its own `XDG_CONFIG_HOME` (a sandbox) is an instance of its own. A second
-//! launch connects to the socket beside the lock, which brings the first
-//! window forward, and exits. The CLI never takes it: the store lock already
-//! keeps the CLI and the GUI from writing at once.
+//! An `flock` on [`AppDirs::instance_file`]`("lock")`, held for the life of
+//! the process. A second launch connects to the socket beside the lock, which
+//! brings the first window forward, and exits. The CLI only looks at it, to
+//! know whether a GUI is there to look after a background Battle.net; the
+//! store lock already keeps the CLI and the GUI from writing at once.
+//!
+//! [`AppDirs::instance_file`]: lightforge_core::paths::AppDirs::instance_file
 //!
 //! The update restart starts the new binary before the old one has exited,
 //! so a launch with [`AFTER_UPDATE`] waits for the lock instead.
 
 use std::fs::{File, TryLockError};
 use std::io;
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -26,6 +27,12 @@ pub const AFTER_UPDATE: &str = "--after-update";
 /// the restart pokes the old one and exits; if that one was on its way out,
 /// no window is left.
 const RESTART_WAIT: Duration = Duration::from_secs(15);
+
+/// How long any launch waits for the lock: the CLI takes it for a moment to
+/// see whether a GUI runs ([`AppDirs::gui_running`]).
+///
+/// [`AppDirs::gui_running`]: lightforge_core::paths::AppDirs::gui_running
+const PROBE_WAIT: Duration = Duration::from_millis(300);
 
 /// Kept until the process exits, which is what releases the lock.
 static INSTANCE: OnceLock<Instance> = OnceLock::new();
@@ -49,31 +56,40 @@ pub fn claim(after_update: bool) -> bool {
             return true;
         }
     };
-    let dir = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(|| dirs.cache_dir().to_path_buf(), PathBuf::from);
-    let id = lightforge_core::text::hex(&md5::compute(dirs.config_dir().as_os_str().as_bytes()).0[..4]);
-    let wait = if after_update { RESTART_WAIT } else { Duration::ZERO };
+    let (lock, socket) = (dirs.instance_file("lock"), dirs.instance_file("sock"));
+    let wait = if after_update { RESTART_WAIT } else { PROBE_WAIT };
 
-    match claim_in(&dir, &id, wait) {
+    match claim_in(&lock, &socket, wait) {
         Ok(Some(instance)) => {
             let _ = INSTANCE.set(instance);
             true
         }
         Ok(None) => {
+            if after_update {
+                tracing::warn!("the previous Lightforge still held the lock after {}s", wait.as_secs());
+            }
             tracing::info!("Lightforge is already running; asked it to come forward");
             false
         }
         Err(e) => {
-            tracing::warn!("no single-instance lock in {}: {e}", dir.display());
+            tracing::warn!("no single-instance lock at {}: {e}", lock.display());
             true
         }
     }
 }
 
 /// `None`: another instance holds the lock, and has been poked.
-fn claim_in(dir: &Path, id: &str, wait: Duration) -> io::Result<Option<Instance>> {
-    std::fs::create_dir_all(dir)?;
-    let lock = File::create(dir.join(format!("lightforge-{id}.lock")))?;
-    let socket = dir.join(format!("lightforge-{id}.sock"));
+fn claim_in(lock: &Path, socket: &Path, wait: Duration) -> io::Result<Option<Instance>> {
+    if let Some(dir) = lock.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    // Without `XDG_RUNTIME_DIR` this is in the cache folder, where another
+    // user's planted symlink must not make us truncate or lock its target.
+    let lock = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(lock)?;
 
     let deadline = Instant::now() + wait;
     loop {
@@ -83,10 +99,7 @@ fn claim_in(dir: &Path, id: &str, wait: Duration) -> io::Result<Option<Instance>
                 std::thread::sleep(Duration::from_millis(100));
             }
             Err(TryLockError::WouldBlock) => {
-                if !wait.is_zero() {
-                    tracing::warn!("the previous Lightforge still held the lock after {}s", wait.as_secs());
-                }
-                if let Err(e) = UnixStream::connect(&socket) {
+                if let Err(e) = UnixStream::connect(socket) {
                     tracing::warn!("the running Lightforge did not answer at {}: {e}", socket.display());
                 }
                 return Ok(None);
@@ -96,8 +109,8 @@ fn claim_in(dir: &Path, id: &str, wait: Duration) -> io::Result<Option<Instance>
     }
 
     // Left by an instance that did not exit cleanly; the lock says it is gone.
-    let _ = std::fs::remove_file(&socket);
-    let listener = UnixListener::bind(&socket)
+    let _ = std::fs::remove_file(socket);
+    let listener = UnixListener::bind(socket)
         .inspect_err(|e| tracing::warn!("cannot listen at {}: {e}", socket.display()))
         .ok();
     Ok(Some(Instance { _lock: lock, listener }))
@@ -134,11 +147,16 @@ pub fn raises() -> impl Stream<Item = ()> {
 mod tests {
     use super::*;
 
+    fn paths(dir: &tempfile::TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
+        (dir.path().join("lightforge-test.lock"), dir.path().join("lightforge-test.sock"))
+    }
+
     #[test]
     fn a_second_claim_pokes_the_first_instead_of_starting() {
         let dir = tempfile::tempdir().unwrap();
-        let first = claim_in(dir.path(), "test", Duration::ZERO).unwrap().expect("the lock is free");
-        assert!(claim_in(dir.path(), "test", Duration::ZERO).unwrap().is_none());
+        let (lock, socket) = paths(&dir);
+        let first = claim_in(&lock, &socket, Duration::ZERO).unwrap().expect("the lock is free");
+        assert!(claim_in(&lock, &socket, Duration::ZERO).unwrap().is_none());
 
         first.listener.as_ref().unwrap().set_nonblocking(true).unwrap();
         assert!(first.listener.as_ref().unwrap().accept().is_ok(), "the second launch connected");
@@ -147,19 +165,39 @@ mod tests {
     #[test]
     fn a_restart_takes_the_lock_once_the_old_instance_lets_go() {
         let dir = tempfile::tempdir().unwrap();
-        let old = claim_in(dir.path(), "test", Duration::ZERO).unwrap().expect("the lock is free");
+        let (lock, socket) = paths(&dir);
+        let old = claim_in(&lock, &socket, Duration::ZERO).unwrap().expect("the lock is free");
         let exiting = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(300));
             drop(old);
         });
-        assert!(claim_in(dir.path(), "test", RESTART_WAIT).unwrap().is_some());
+        assert!(claim_in(&lock, &socket, RESTART_WAIT).unwrap().is_some());
         exiting.join().unwrap();
     }
 
     #[test]
-    fn another_configuration_is_an_instance_of_its_own() {
+    fn a_symlink_planted_at_the_lock_is_not_followed() {
         let dir = tempfile::tempdir().unwrap();
-        let _real = claim_in(dir.path(), "real", Duration::ZERO).unwrap().expect("the lock is free");
-        assert!(claim_in(dir.path(), "sandbox", Duration::ZERO).unwrap().is_some());
+        let (lock, socket) = paths(&dir);
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "keep me").unwrap();
+        std::os::unix::fs::symlink(&victim, &lock).unwrap();
+
+        assert!(claim_in(&lock, &socket, PROBE_WAIT).is_err());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
+    }
+
+    #[test]
+    fn a_launch_while_the_cli_looks_at_the_lock_still_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let (lock, socket) = paths(&dir);
+        let probe = File::create(&lock).unwrap();
+        probe.try_lock_shared().unwrap();
+        let looking = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            drop(probe);
+        });
+        assert!(claim_in(&lock, &socket, PROBE_WAIT).unwrap().is_some());
+        looking.join().unwrap();
     }
 }

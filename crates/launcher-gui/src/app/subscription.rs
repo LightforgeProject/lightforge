@@ -33,6 +33,7 @@ impl Lightforge {
         // thread of their own for the whole run; see [`pad`].
         let pads = Subscription::run(pad::inputs).map(|input| Message::Nav(NavFrom::Pad, input));
         let raises = Subscription::run(crate::instance::raises).map(|()| Message::Raise);
+        let stops = Subscription::run(stop_signals).map(|()| Message::StopSignal);
         let window_focus = iced::event::listen_with(|event, _, _| match event {
             iced::Event::Window(iced::window::Event::Focused) => Some(Message::WindowFocused(true)),
             iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::WindowFocused(false)),
@@ -42,7 +43,7 @@ impl Lightforge {
             _ => None,
         });
 
-        Subscription::batch([closing, hints, pads, raises, window_focus])
+        Subscription::batch([closing, hints, pads, raises, stops, window_focus])
     }
 
     /// The mouse, only while it means something: the ring is up, or a tile is held.
@@ -89,7 +90,7 @@ impl Lightforge {
             false => Subscription::none(),
         };
         let upgrade = self.upgrade_watch();
-        // A scan is about 60 ms, cheap at this pace.
+        // A scan is about 2 ms (release build, 300 processes, 2026-11-12).
         let client = match self.config.battle_net_declined {
             true => Subscription::none(),
             false => iced::time::every(CLIENT_POLL).map(|_| Message::ClientWatch),
@@ -116,4 +117,35 @@ impl Lightforge {
             false => Subscription::none(),
         }
     }
+}
+
+/// A logout, Steam closing its shortcut, a terminal going away: each closes
+/// the window as its X does, so a transfer checkpoints and a background
+/// client is closed after `run` returns, not left hidden in the prefix.
+fn stop_signals() -> impl futures_util::Stream<Item = ()> {
+    iced::stream::channel(1, async |mut output| {
+        use futures_util::SinkExt;
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut signals = Vec::new();
+        for kind in [SignalKind::terminate(), SignalKind::interrupt(), SignalKind::hangup()] {
+            match signal(kind) {
+                Ok(listening) => signals.push(listening),
+                Err(e) => tracing::warn!("cannot listen for signal {}: {e}", kind.as_raw_value()),
+            }
+        }
+        if signals.is_empty() {
+            return;
+        }
+        loop {
+            std::future::poll_fn(|cx| match signals.iter_mut().any(|s| s.poll_recv(cx).is_ready()) {
+                true => std::task::Poll::Ready(()),
+                false => std::task::Poll::Pending,
+            })
+            .await;
+            if output.send(()).await.is_err() {
+                return;
+            }
+        }
+    })
 }

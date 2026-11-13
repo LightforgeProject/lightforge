@@ -439,3 +439,52 @@ mod pausing {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+mod extracting {
+    use super::*;
+    use crate::tact::archive::FileIndex;
+    use crate::tact::cdn::Endpoint;
+    use crate::tact::encoding::Encoding;
+    use crate::tact::indices::Locations;
+    use crate::tact::manifest::InstallEntry;
+
+    /// Extract one entry for `Wow.exe` whose content is `wanted`, over a
+    /// catalog that knows nothing: any fetch it tried fails, without a request.
+    async fn extract_over(dest: &std::path::Path, wanted: &[u8]) -> InstallReport {
+        let http = Http::new().unwrap();
+        let client = Client::new(vec![Endpoint { origin: "http://127.0.0.1:9".into(), path: "tpr/wow".into() }]).unwrap();
+        let entry = InstallEntry { path: "Wow.exe".into(), ckey: *md5::compute(wanted), size: wanted.len() as u32 };
+        let (encoding, locations, loose) = (Encoding::default(), Locations::default(), FileIndex::default());
+        let files = locate_install(&[&entry], Catalog { encoding: &encoding, locations: &locations, loose: &loose });
+        extract_install(
+            Source { http: &http, client: &client },
+            &files,
+            dest,
+            &Cancel::new(),
+            |_| {},
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_install_file_already_in_place_is_not_fetched_again() {
+        let dest = tempfile::tempdir().unwrap();
+        std::fs::write(dest.path().join("Wow.exe"), b"this build's client").unwrap();
+
+        let report = extract_over(dest.path(), b"this build's client").await;
+        assert_eq!(report.unchanged, 1);
+        assert!(report.written.is_empty());
+        assert!(report.failed.is_empty(), "{:?}", report.failed);
+    }
+
+    #[tokio::test]
+    async fn an_install_file_from_another_build_is_fetched_again() {
+        let dest = tempfile::tempdir().unwrap();
+        std::fs::write(dest.path().join("Wow.exe"), b"last build's client").unwrap();
+
+        let report = extract_over(dest.path(), b"this build's client").await;
+        assert_eq!(report.unchanged, 0);
+        assert_eq!(report.failed.len(), 1, "it went looking for the new one");
+    }
+}

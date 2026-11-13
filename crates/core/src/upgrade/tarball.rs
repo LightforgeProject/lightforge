@@ -5,13 +5,16 @@
 //! Each binary is renamed over the old one; the running process keeps its
 //! file until it exits, so a restart finishes the job.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use super::{fetch_asset, io, UpgradeError};
 use crate::net::Http;
 
 /// The menu entry's file name, which is also the app id.
 const ENTRY: &str = "pro.tuxcore.Lightforge.desktop";
+
+/// beta.11 unpacks to 39 MB.
+const MAX_UNPACKED: u64 = 512 << 20;
 
 /// What every release tarball holds at its top.
 const BINARIES: [&str; 2] = ["lightforge-gui", "lightforge"];
@@ -57,7 +60,7 @@ fn put_in_place(archive: &Path, bin_dir: &Path, data_dir: &Path) -> Result<(), U
     let apps = data_dir.join("applications");
     std::fs::create_dir_all(&apps).map_err(io(&apps))?;
     let entry = std::fs::read_to_string(release.join(ENTRY)).map_err(io(&release.join(ENTRY)))?;
-    let entry = entry.replace("=lightforge-gui", &format!("={}", bin_dir.join("lightforge-gui").display()));
+    let entry = with_full_path(&entry, &bin_dir.join("lightforge-gui"));
     let written = staging.path().join(ENTRY);
     std::fs::write(&written, entry).map_err(io(&written))?;
     // Not a rename: the applications folder can be on another filesystem.
@@ -69,16 +72,39 @@ fn put_in_place(archive: &Path, bin_dir: &Path, data_dir: &Path) -> Result<(), U
     Ok(())
 }
 
+/// The menu entry naming `gui` by its full path, as `install.sh` writes it:
+/// `Exec` quoted the way the Desktop Entry spec asks, `TryExec` a plain
+/// string. A home folder with a space in it is the case that happens.
+fn with_full_path(entry: &str, gui: &Path) -> String {
+    let path = gui.display().to_string();
+    // Backslashes first: the other escapes add their own.
+    let quoted = path
+        .replace('\\', r"\\\\")
+        .replace('"', r#"\\""#)
+        .replace('`', r"\\`")
+        .replace('$', r"\\$")
+        .replace('%', "%%");
+    let mut written = String::with_capacity(entry.len() + 2 * path.len());
+    for line in entry.lines() {
+        match line {
+            "Exec=lightforge-gui" => written.push_str(&format!("Exec=\"{quoted}\"")),
+            "TryExec=lightforge-gui" => written.push_str(&format!("TryExec={}", path.replace('\\', r"\\"))),
+            other => written.push_str(other),
+        }
+        written.push('\n');
+    }
+    written
+}
+
 /// Extract a release tarball into `into`, returning its one top folder.
 fn unpack(archive: &Path, into: &Path) -> Result<PathBuf, UpgradeError> {
     let file = std::fs::File::open(archive).map_err(io(archive))?;
     let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    // Files only, so making the binaries executable follows no link.
+    let mut admission = crate::archive::Admission::files_only(MAX_UNPACKED);
     for entry in tar.entries().map_err(io(archive))? {
         let mut entry = entry.map_err(io(archive))?;
-        let path = entry.path().map_err(io(archive))?.into_owned();
-        if path.is_absolute() || path.components().any(|c| c == Component::ParentDir) {
-            return Err(UpgradeError::NotARelease(archive.to_path_buf()));
-        }
+        admission.check(&entry)?;
         entry.unpack_in(into).map_err(io(archive))?;
     }
 
@@ -135,6 +161,19 @@ mod tests {
     }
 
     #[test]
+    fn the_entry_quotes_a_home_folder_as_install_sh_does() {
+        let entry = "[Desktop Entry]\nExec=lightforge-gui\nTryExec=lightforge-gui\nName=Lightforge\n";
+        let written = with_full_path(entry, Path::new("/home/a b/x|y&z$q/lightforge-gui"));
+        assert_eq!(
+            written,
+            "[Desktop Entry]\n\
+             Exec=\"/home/a b/x|y&z\\\\$q/lightforge-gui\"\n\
+             TryExec=/home/a b/x|y&z$q/lightforge-gui\n\
+             Name=Lightforge\n"
+        );
+    }
+
+    #[test]
     fn a_release_replaces_both_binaries_the_entry_and_the_icons() {
         let dir = std::env::temp_dir().join(format!("lightforge-tarball-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -153,7 +192,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(bin.join("lightforge")).unwrap(), "new cli");
         let entry = std::fs::read_to_string(data.join("applications").join(ENTRY)).unwrap();
         let gui = bin.join("lightforge-gui");
-        assert!(entry.contains(&format!("Exec={}", gui.display())), "{entry}");
+        assert!(entry.contains(&format!("Exec=\"{}\"", gui.display())), "{entry}");
         assert!(entry.contains(&format!("TryExec={}", gui.display())), "{entry}");
         assert!(data.join("icons/hicolor/64x64/apps/pro.tuxcore.Lightforge.png").is_file());
         // Nothing of the unpack is left beside the binaries.

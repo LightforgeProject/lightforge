@@ -3,6 +3,7 @@
   rustPlatform,
   pkg-config,
   udev,
+  zstd,
   vulkan-loader,
   libGL,
   wayland,
@@ -13,6 +14,8 @@
   libxcursor ? xorg.libXcursor,
   libxi ? xorg.libXi,
   libxrandr ? xorg.libXrandr,
+  # Off: only the command line, `lightforge`, without the launcher.
+  withGui ? true,
 }:
 
 let
@@ -31,7 +34,7 @@ let
   ];
 in
 rustPlatform.buildRustPackage {
-  pname = "lightforge";
+  pname = if withGui then "lightforge" else "lightforge-cli";
   inherit (cargoToml.workspace.package) version;
 
   src = lib.fileset.toSource {
@@ -52,16 +55,22 @@ rustPlatform.buildRustPackage {
 
   cargoLock.lockFile = ../../Cargo.lock;
 
-  nativeBuildInputs = [ pkg-config ];
-  buildInputs = [ udev ];
+  cargoBuildFlags = lib.optionals (!withGui) [ "-p" "lightforge-cli" ];
+  cargoTestFlags = lib.optionals (!withGui) [ "-p" "lightforge-core" "-p" "lightforge-cli" ];
 
-  postInstall = ''
+  nativeBuildInputs = [ pkg-config ];
+  # zstd: Nix's Rust builds set ZSTD_SYS_USE_PKG_CONFIG, so zstd-sys links
+  # the system library instead of building its bundled copy. udev: for
+  # gamepads in the launcher.
+  buildInputs = [ zstd ] ++ lib.optionals withGui [ udev ];
+
+  postInstall = lib.optionalString withGui ''
     install -Dm644 packaging/pro.tuxcore.Lightforge.desktop -t $out/share/applications
     install -Dm644 packaging/pro.tuxcore.Lightforge.metainfo.xml -t $out/share/metainfo
     cp -r packaging/icons $out/share/icons
   '';
 
-  postFixup = ''
+  postFixup = lib.optionalString withGui ''
     patchelf --add-rpath ${lib.makeLibraryPath runtimeLibs} $out/bin/lightforge-gui
   '';
 
@@ -71,7 +80,7 @@ rustPlatform.buildRustPackage {
     description = "Install, update and play World of Warcraft on Linux, and a home for all your other Battle.net games";
     homepage = cargoToml.workspace.package.homepage;
     license = lib.licenses.gpl3Plus;
-    mainProgram = "lightforge-gui";
+    mainProgram = if withGui then "lightforge-gui" else "lightforge";
     platforms = [ "x86_64-linux" ];
   };
 }

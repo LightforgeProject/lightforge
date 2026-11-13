@@ -185,6 +185,31 @@ pub(crate) fn by_every_name(
     found
 }
 
+/// What the version service ships for a game Battle.net installed, from the
+/// region Agent updates it from. Agent's `version` is the same `VersionsName`
+/// string (`37.0.2.256589.255790` on both, Hearthstone 2026-11-13), so a
+/// difference is an update waiting, whether the client runs or not.
+pub async fn latest_build(http: Option<Http>, layout: Layout, code: ProductCode) -> Option<String> {
+    use lightforge_core::tact::productdb;
+
+    let http = http?;
+    let record = tokio::task::spawn_blocking(move || {
+        productdb::read(&layout.agent_dir().join("product.db"))
+            .ok()?
+            .into_iter()
+            .find(|i| i.product == code.as_str() || i.product_code == code.as_str())
+    })
+    .await
+    .ok()??;
+    let region: Region = record.region.parse().ok()?;
+    let tact = match record.product_code.is_empty() {
+        true => &record.product,
+        false => &record.product_code,
+    };
+    let rows = version::versions(&http, region, tact).await.ok()?;
+    version::for_region(&rows, region, |v| &v.region).map(|v| v.versions_name.clone())
+}
+
 /// What Battle.net reports as installed, keyed by product code.
 pub async fn installed_versions(layout: Layout) -> HashMap<String, String> {
     tokio::task::spawn_blocking(move || {
@@ -198,7 +223,7 @@ pub async fn installed_versions(layout: Layout) -> HashMap<String, String> {
 
 /// When Agent's registry last changed, and, when asked, whether the
 /// Battle.net client is up. Polled while [`RegistryWatch`] runs: a stat is
-/// nothing, the process scan is ~60 ms, so the caller asks for it rarely.
+/// nothing, the process scan about 2 ms, so the caller still asks for it less.
 ///
 /// [`RegistryWatch`]: crate::RegistryWatch
 pub async fn registry_probe(
@@ -226,6 +251,7 @@ mod registry_tests {
             product: product.to_owned(),
             product_code: product_code.to_owned(),
             install_path: "C:/Program Files (x86)/Whatever".to_owned(),
+            region: String::new(),
             version: version.map(str::to_owned),
             build_key: None,
             family: String::new(),

@@ -1,0 +1,34 @@
+name: Nix
+
+# The flake has no lock file, so it builds against whatever nixos-unstable is
+# that day: a nixpkgs change can break it on a commit that changed nothing
+# here. Weekly, like the glibc ceiling, to catch that ahead of a release, and
+# on the commits that change the packaging or the dependencies, where a crate
+# that wants a system library breaks it.
+on:
+  schedule:
+    - cron: "0 5 * * 1"
+  push:
+    branches: [main, dev]
+    paths:
+      - flake.nix
+      - packaging/nix/**
+      - Cargo.lock
+      - .github/workflows/nix.yml
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Flake builds on nixos-unstable
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: cachix/install-nix-action@v31
+
+      - name: Check
+        run: nix flake check
+
+      # Everything but Lightforge itself comes from cache.nixos.org.
+      - name: Build
+        run: nix build .#lightforge --print-build-logs

@@ -22,6 +22,19 @@ ENTRY=pro.tuxcore.Lightforge.desktop
 
 say() { printf '\n==> %s\n' "$*"; }
 
+# One Exec argument as the Desktop Entry spec quotes it: `\` `"` `` ` `` `$`
+# escaped for the quotes, that backslash escaped again for the string, `%`
+# doubled. A home folder with a space is the case that happens.
+desktop_quote() {
+    local s=$1
+    s=${s//\\/\\\\\\\\}
+    s=${s//\"/\\\\\"}
+    s=${s//\`/\\\\\`}
+    s=${s//\$/\\\\\$}
+    s=${s//%/%%}
+    printf '"%s"' "$s"
+}
+
 # Konsole closes the moment the script ends, so whatever was printed last
 # has to wait for the reader.
 pause() {
@@ -115,8 +128,16 @@ main() {
     install -Dm755 "$src/lightforge" "$BIN/lightforge"
     # The full path: not every desktop session has ~/.local/bin on its PATH,
     # and an entry whose TryExec is not found is hidden rather than broken.
-    install -Dm644 "$src/$ENTRY" "$APPS/$ENTRY"
-    sed -i "s|=lightforge-gui|=$BIN/lightforge-gui|" "$APPS/$ENTRY"
+    # Line by line rather than sed, so no character in $BIN means anything.
+    local gui=$BIN/lightforge-gui line
+    mkdir -p "$APPS"
+    while IFS= read -r line; do
+        case $line in
+            Exec=lightforge-gui) printf 'Exec=%s\n' "$(desktop_quote "$gui")" ;;
+            TryExec=lightforge-gui) printf 'TryExec=%s\n' "${gui//\\/\\\\}" ;;
+            *) printf '%s\n' "$line" ;;
+        esac
+    done <"$src/$ENTRY" >"$APPS/$ENTRY"
     mkdir -p "$ICONS"
     cp -r "$src/icons/hicolor" "$ICONS/"
     refresh_menu

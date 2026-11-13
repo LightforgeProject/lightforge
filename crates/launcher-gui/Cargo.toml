@@ -21,7 +21,6 @@ gilrs.workspace = true
 iced.workspace = true
 image.workspace = true
 libc.workspace = true
-md5.workspace = true
 open.workspace = true
 ashpd.workspace = true
 base64.workspace = true
@@ -30,7 +29,7 @@ sentry.workspace = true
 # screenshot it just uploaded now lives.
 serde.workspace = true
 tracing.workspace = true
-tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio = { workspace = true, features = ["rt", "signal", "sync", "time"] }
 
 # ---------------------------------------------------------------------------
 # Distribution packages.
@@ -65,10 +64,17 @@ Addons, per-game Proton pinning and graphics tuning are built in."""
 # assembled on a rolling-release machine from binaries built in a Debian 12
 # container. The floor is stated instead, and `make check-glibc` is what
 # proves the binaries honour it.
-depends = "libc6 (>= 2.35), libgcc-s1, libudev1, python3"
+# fontconfig: no font is built in, and its configuration is where the text
+# rendering finds them; Debian's pulls a font with it.
+depends = "libc6 (>= 2.35), libgcc-s1, libudev1, python3, fontconfig"
+# The file and folder pickers go through the portal; without one Browse does
+# nothing (a bare sway or i3).
+recommends = "xdg-desktop-portal"
 # Battle.net's installer is the one 32-bit binary in the sequence. WoW itself
-# never needs this, so it is a suggestion rather than a dependency.
-suggests = "wine32"
+# never needs this, so it is a suggestion rather than a dependency. Only
+# installable once the i386 architecture is enabled; `lightforge doctor`
+# names the commands.
+suggests = "wine32, mangohud"
 assets = [
     ["target/release/lightforge-gui", "usr/bin/", "755"],
     ["target/release/lightforge", "usr/bin/", "755"],
@@ -126,6 +132,18 @@ glibc = ">= 2.35"
 systemd-libs = "*"
 # Proton's launcher is a Python script.
 python3 = "*"
+# No font is built in; see the deb's `depends`.
+fontconfig = "*"
+hicolor-icon-theme = "*"
+
+[package.metadata.generate-rpm.recommends]
+# The file and folder pickers.
+xdg-desktop-portal = "*"
+
+[package.metadata.generate-rpm.suggests]
+# The Battle.net installer is the one 32-bit binary in the whole flow.
+"wine.i686" = "*"
+mangohud = "*"
 
 [dev-dependencies]
 tempfile.workspace = true

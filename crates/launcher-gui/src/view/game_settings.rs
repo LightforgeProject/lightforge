@@ -12,16 +12,19 @@ impl Lightforge {
         // the padding.
         const SECTIONS_MAX: f32 = 560.0;
 
-        let sections = column![
+        let mut sections = column![
             section("Performance", self.performance_group()),
             section("Graphics", self.graphics_group(settings)),
             section("Environment", self.environment_group(Scope::Product)),
+            section("Launch options", self.launch_options_group()),
             section("Game", self.game_group(settings)),
             section("Proton", self.proton_group(settings)),
-            section("Addons", self.addons_group()),
-            section("Backups", self.backups_group(settings)),
         ]
         .spacing(theme::LG);
+        if self.config.addon_manager {
+            sections = sections.push(section("Addons", self.addons_group()));
+        }
+        sections = sections.push(section("Backups", self.backups_group(settings)));
 
         let actions = row![
             Space::new().width(Length::Fill),
@@ -268,6 +271,36 @@ impl Lightforge {
             self.hint(
                 "Applied last, so a line here wins over the switches above. Lines starting \
                  with # are ignored.",
+            )
+            .map(Element::from),
+        );
+
+        setting_card(body)
+    }
+
+    /// Steam-style launch options: one line, `%command%` where the game goes.
+    fn launch_options_group(&self) -> Element<'_, Message> {
+        use lightforge_core::launch_options::script;
+
+        let line = self.config.product(&self.selected.code).map_or("", |p| p.profile.launch_options.as_str());
+
+        let mut body = column![clickable(
+            "launch options",
+            text_input("kcalc & %command%; pkill -x kcalc", line)
+                .on_input(Message::LaunchOptionsTyped)
+                .style(theme::field)
+                .size(theme::BODY)
+                .padding(theme::SM),
+        )]
+        .spacing(theme::SM);
+
+        if !line.trim().is_empty() && script(line).is_none() {
+            body = body.push(text("Not used: it needs %command% where the game goes").size(theme::LABEL).color(theme::ERROR));
+        }
+        body = body.extend(
+            self.hint(
+                "As on Steam, %command% is the game. Runs through sh on this computer; when Battle.net starts \
+                 the game, the line runs once it is up. Keep %command% in the foreground.",
             )
             .map(Element::from),
         );

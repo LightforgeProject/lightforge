@@ -202,7 +202,13 @@ pub async fn install_release(
         .tarball()
         .ok_or_else(|| ProtonError::NoTarball(release.tag_name.clone()))?;
 
-    let archive = scratch.join(&tarball.name);
+    // Joined to a path: a name with a folder in it would write elsewhere.
+    let name = Path::new(&tarball.name);
+    let mut parts = name.components();
+    if !matches!((parts.next(), parts.next()), (Some(std::path::Component::Normal(_)), None)) {
+        return Err(crate::archive::ArchiveError::UnsafePath(name.to_path_buf()).into());
+    }
+    let archive = scratch.join(name);
     tracing::info!(
         "installing {} from {} into {}",
         release.tag_name,
@@ -249,6 +255,9 @@ pub async fn install_release(
     installed
 }
 
+/// A GE build unpacks to about 1.6 GB.
+const MAX_UNPACKED: u64 = 8 << 30;
+
 /// Extract a `.tar.gz` or `.tar.xz` into `dest_root`, returning the build's
 /// directory. Unpacked into staging and renamed in only once it reads as a
 /// Proton build, so a failed unpack leaves nothing for discovery to list.
@@ -266,18 +275,10 @@ pub(super) fn unpack(archive: &Path, dest_root: &Path) -> Result<PathBuf, Proton
         _ => Box::new(flate2::read::GzDecoder::new(file)),
     };
     let mut tar = tar::Archive::new(decoder);
+    let mut admission = crate::archive::Admission::with_links(MAX_UNPACKED);
     for entry in tar.entries().map_err(io(archive))? {
         let mut entry = entry.map_err(io(archive))?;
-        let path = entry.path().map_err(io(archive))?.into_owned();
-
-        // No absolute paths, no `..`.
-        if path.is_absolute()
-            || path
-                .components()
-                .any(|c| c == std::path::Component::ParentDir)
-        {
-            return Err(ProtonError::UnsafeArchivePath(path));
-        }
+        admission.check(&entry)?;
         entry.unpack_in(&fresh).map_err(io(&fresh))?;
     }
 

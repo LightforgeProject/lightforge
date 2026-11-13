@@ -6,9 +6,22 @@ use iced::widget::column;
 impl Lightforge {
     /// The Addons section: what every addon follows unless it says otherwise.
     pub(crate) fn addons_section(&self) -> Element<'_, Message> {
-        let choices: Vec<ChannelChoice> = Channel::ALL.map(ChannelChoice).to_vec();
+        let manager = setting(
+            "Addon Manager (Experimental)",
+            "Install and update addons for each game from Lightforge.",
+            self.hint(
+                "Off hides Manage Addons and stops the update pass before you play. \
+                 Addons already installed stay in the game's AddOns folder.",
+            ),
+            switch("addon manager", self.config.addon_manager, Message::AddonManager),
+        );
+        if !self.config.addon_manager {
+            return setting_group([manager]);
+        }
 
+        let choices: Vec<ChannelChoice> = Channel::ALL.map(ChannelChoice).to_vec();
         setting_group([
+            manager,
             setting(
                 "Update channel",
                 "The newest kind of build an addon may update to. An addon can choose its own.",
@@ -94,8 +107,10 @@ impl Lightforge {
                     "Games that start through Battle.net open without waiting for it to sign in.",
                     self.hint(
                         "It starts hidden with Lightforge and closes with it, unless a game \
-                         or its window is open. Needs a saved sign-in. Its notifications stay \
-                         off, and games it starts use its Proton build. World of Warcraft never goes through it, so it starts no \
+                         or its window is open. Needs a saved sign-in. Its notifications and game \
+                         updates stay off until you switch this off, which puts your own settings back. \
+                         On a desktop with no tray, closing its window quits it. \
+                         Games it starts use its Proton build. World of Warcraft never goes through it, so it starts no \
                          faster, and Play closes it for a build of its own.",
                     ),
                     switch("battle.net in background", self.config.battle_net_in_background, Message::BattleNetInBackground),

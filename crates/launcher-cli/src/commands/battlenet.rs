@@ -1,6 +1,6 @@
 //! Battle.net: installing, configuring and running it, and Agent's registry.
 
-use super::{default_install, managed_products, print_preflight, proton_runner, windows_wow_path};
+use super::{beside_gui, default_install, print_preflight, proton_runner, warn_on_downgrade, windows_wow_path};
 use crate::*;
 
 pub(crate) async fn battlenet_fetch() -> Result<()> {
@@ -30,16 +30,15 @@ pub(crate) async fn battlenet_fetch() -> Result<()> {
 }
 
 pub(crate) fn battlenet_setup(ctx: Ctx, proton: Option<String>, locale: String, installer: Option<PathBuf>, timeout: u64) -> Result<()> {
-    let Ctx { layout, .. } = ctx;
+    let Ctx { layout, config } = ctx;
     use lightforge_core::battlenet::{self, Installer};
-    use lightforge_core::config::Config;
 
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let installer_path =
         installer.unwrap_or_else(|| dirs.cache_dir().join(battlenet::INSTALLER_FILE));
-    let user = Config::default().prefix_user;
+    let user = &config.prefix_user;
 
-    let (runner, build) = proton_runner(&layout, battle_net_pin(proton.as_deref(), None))?;
+    let (runner, build) = proton_runner(&layout, battle_net_pin(proton.as_deref(), &config, None))?;
     println!("using {} ({})", build.version, build.path.display());
     warn_on_downgrade(&layout, &build);
     println!("installer {}", installer_path.display());
@@ -57,11 +56,8 @@ pub(crate) fn battlenet_setup(ctx: Ctx, proton: Option<String>, locale: String, 
         println!("running setup — this takes a few minutes");
     }
 
-    let managed = Config::load_or_default(&dirs.config_file())
-        .map(|c| c.managed_products())
-        .unwrap_or_default();
     let report = battlenet::provision(
-        &runner, container.as_deref(), &layout, &user, &locale, &installer_path, &managed,
+        &runner, container.as_deref(), &layout, user, &locale, &installer_path, &config.managed_products(),
     )
     .context("setting Battle.net up")?;
     if report.install.skipped {
@@ -83,22 +79,23 @@ pub(crate) fn battlenet_setup(ctx: Ctx, proton: Option<String>, locale: String, 
 
 pub(crate) fn battlenet_config(ctx: Ctx) -> Result<()> {
     let Ctx { layout, config } = ctx;
+    let config = beside_gui(config);
     use lightforge_core::battlenet;
-    use lightforge_core::config::Config;
 
-    let user = Config::default().prefix_user;
+    let user = &config.prefix_user;
 
     // The same set setup and pre-flight write, so running this by
     // hand cannot leave a config the next launch disagrees with.
     let mut tweaks = battlenet::default_tweaks(&layout, config.battle_net_in_background);
-    tweaks.extend(battlenet::product_tweaks(&managed_products()));
-    let path = battlenet::configure(&layout, &user, &tweaks)
+    tweaks.extend(battlenet::product_tweaks(&config.managed_products()));
+    let path = battlenet::configure(&layout, user, &tweaks)
         .context("writing Battle.net.config")?;
     println!("{}", path.display());
     print_tweaks(&tweaks);
 
-    let account_tweaks = battlenet::account_tweaks(config.battle_net_in_background);
-    let accounts = battlenet::configure_accounts(&layout, &user, &account_tweaks)
+    let background = config.battle_net_in_background;
+    let account_tweaks = battlenet::account_tweaks(background, background && battlenet::tray_present());
+    let accounts = battlenet::configure_accounts(&layout, user, &account_tweaks)
         .context("writing the per-account config")?;
     if accounts.is_empty() {
         println!("\nno per-account config yet — it appears after the first login");
@@ -114,8 +111,8 @@ pub(crate) fn battlenet_config(ctx: Ctx) -> Result<()> {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<ProductCode>, exec: Option<String>, uri: Option<String>, install_game: Option<String>, skip_preflight: bool) -> Result<()> {
     let Ctx { layout, config } = ctx;
+    let config = beside_gui(config);
     use lightforge_core::battlenet::{self, Launch};
-    use lightforge_core::config::Config;
     use lightforge_core::preflight::{DownloadGuard, NoDownloads, Preflight};
 
     let launch = match (&product, &uri) {
@@ -137,7 +134,7 @@ pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<Pr
         _ => None,
     };
     let (mut runner, build) =
-        proton_runner(&layout, battle_net_pin(proton.as_deref(), for_product.as_ref()))?;
+        proton_runner(&layout, battle_net_pin(proton.as_deref(), &config, for_product.as_ref()))?;
     let (exe, args) = launch.command(&layout.battle_net_dir());
     println!("using {} ({})", build.version, build.path.display());
     warn_on_downgrade(&layout, &build);
@@ -153,7 +150,7 @@ pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<Pr
     let mut downloads = NoDownloads;
     let mut download_paused = false;
     if !skip_preflight {
-        let report = Preflight::new(config.prefix_user.clone()).with_managed(managed_products())
+        let report = Preflight::new(config.prefix_user.clone()).with_managed(config.managed_products())
             .with_background_client(config.battle_net_in_background)
             .run(&runner, &layout, code.as_ref(), &mut downloads)
             .context("pre-flight cleanup")?;
@@ -259,40 +256,11 @@ fn print_tweaks(tweaks: &[lightforge_core::battlenet::Tweak]) {
 }
 
 /// The build a Battle.net verb should use: `--proton` if given, else the pin
-/// from `config.toml`, else the newest installed.
-///
-/// A named product's own pin first, else Battle.net's. Leaks a `String`: the
-/// process is about to exit.
-fn battle_net_pin<'a>(explicit: Option<&'a str>, code: Option<&ProductCode>) -> Option<&'a str> {
-    if explicit.is_some() {
-        return explicit;
-    }
-    let dirs = AppDirs::discover().ok()?;
-    let config = Config::load_or_default(&dirs.config_file()).ok()?;
-    let version = match code {
-        Some(code) => config.handoff_proton(code)?,
-        None => config.battle_net_proton_version()?,
-    }
-    .to_owned();
-    Some(Box::leak(version.into_boxed_str()))
-}
-
-/// Say so when the build about to run is older than the one that built the
-/// prefix every product shares.
-///
-/// A line on stderr, not a refusal: `--proton` is how one tries an older build.
-fn warn_on_downgrade(layout: &Layout, build: &lightforge_core::proton::ProtonRelease) {
-    use lightforge_core::proton;
-
-    let built_by = proton::prefix_build(&layout.compat_data());
-    if let proton::PrefixFit::Older { built_by } =
-        proton::prefix_fit(&build.version, built_by.as_deref())
-    {
-        eprintln!(
-            "warning: {} is older than {built_by}, which last upgraded this prefix.\n\
-             \x20        Proton migrates a prefix forward only; the shared prefix may not \
-             survive it.",
-            build.version,
-        );
-    }
+/// from `config.toml`, else the newest installed. A named product's own pin
+/// first, else Battle.net's.
+fn battle_net_pin<'a>(explicit: Option<&'a str>, config: &'a Config, code: Option<&ProductCode>) -> Option<&'a str> {
+    explicit.or_else(|| match code {
+        Some(code) => config.handoff_proton(code),
+        None => config.battle_net_proton_version(),
+    })
 }

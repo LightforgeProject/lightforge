@@ -134,7 +134,7 @@ pub struct Loose {
 /// The build's file index (`file-index` in the CDN config): the ~25k keys in
 /// no archive, the only content a plain GET fetches. Its footer declares
 /// `offset_bytes = 0`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileIndex {
     entries: Vec<Loose>,
 }
@@ -186,12 +186,19 @@ impl FileIndex {
 
 /// Check that `bytes` is the index named `hash`, every checksum included.
 pub fn verify(bytes: &[u8], hash: &str) -> Result<(), ArchiveError> {
+    check_name(bytes, hash)?;
+    walk(bytes).map(drop)
+}
+
+/// Whether `bytes` is the index named `hash`, by the MD5 of its footer. With
+/// a parse, which walks every checksum, this is [`verify`].
+pub fn check_name(bytes: &[u8], hash: &str) -> Result<(), ArchiveError> {
     let footer = bytes.get(bytes.len().saturating_sub(FOOTER_SIZE)..).unwrap_or_default();
     let found = hex(&md5::compute(footer).0);
     if !found.eq_ignore_ascii_case(hash) {
         return Err(ArchiveError::NameMismatch { expected: hash.to_owned(), found });
     }
-    walk(bytes).map(drop)
+    Ok(())
 }
 
 fn short_md5(bytes: &[u8]) -> [u8; CHECKSUM_SIZE] {

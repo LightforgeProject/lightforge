@@ -28,7 +28,9 @@ mod tests;
 
 pub use downloader::Downloader;
 pub use guard::Downloads;
-pub use install_files::{extract_install, write_flavor_info, Catalog, Extracted, InstallReport};
+pub use install_files::{
+    extract_install, locate_install, write_flavor_info, Catalog, Extracted, InstallFile, InstallReport,
+};
 pub use rate::RateLimit;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -63,7 +65,7 @@ impl Cancel {
 
 /// Resolves once `cancel` trips. Polled: `Cancel` is a plain flag shared with
 /// synchronous code.
-async fn cancelled(cancel: &Cancel) {
+pub(crate) async fn cancelled(cancel: &Cancel) {
     while !cancel.is_cancelled() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }

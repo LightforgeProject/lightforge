@@ -106,7 +106,7 @@ Options:
 ```text
 Launch the game directly under Proton, the `[ PLAY ]` path.
 
-Runs pre-flight first, then starts `Wow.exe` through the prefix's Windows-visible path. Battle.net is not involved.
+Runs pre-flight first, then starts the game as PLAY does: from its own library, under its Proton pin and Game Settings. Battle.net is not involved.
 
 Usage: lightforge play [OPTIONS]
 

@@ -223,20 +223,13 @@ dnf builddep /out/*.src.rpm && rpmbuild --rebuild /out/*.src.rpm
 
 ## The AUR
 
-**Not published yet: AUR registrations are closed**, so there is no account to
-upload from. Both PKGBUILDs work today, and until the AUR reopens they are how
-you install on Arch:
-
-```bash
-git clone https://git.tuxcore.pro/kenny/lightforge.git
-cd lightforge/packaging/aur/lightforge-bin   # or ../lightforge to build it
-makepkg -si
-```
+Published as `lightforge` and `lightforge-bin` since 2026-11-10, uploaded
+unchanged from `packaging/aur` and kept up by a community maintainer (GitHub
+issue #28). At each release, once the tag and both `sha256sums` are pushed to
+GitHub, tell them on that issue so the AUR follows.
 
 Both were built and installed in a clean `archlinux` container before being
-committed.
-
-When registration reopens, each package is its own AUR git repo:
+committed. Each AUR package is its own git repo, so an update is:
 
 ```bash
 git clone ssh://aur@aur.archlinux.org/lightforge.git aur-lightforge

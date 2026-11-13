@@ -58,6 +58,9 @@ pub enum Origin {
     Copr { atomic: bool },
     /// The `.rpm` from the release page.
     Rpm { atomic: bool },
+    /// An RPM on openSUSE, whose MicroOS, Aeon and Kalpa install into a
+    /// snapshot of a read-only root.
+    Zypper { transactional: bool },
     /// Built from a checkout, and run from its `target/`.
     Checkout { repo: PathBuf },
     /// `cargo install`.
@@ -121,6 +124,11 @@ impl Origin {
         if root.join(COPR_REPO).is_file() {
             return Self::Copr { atomic };
         }
+        if root.join("usr/bin/zypper").is_file() {
+            let transactional =
+                root.join("usr/sbin/transactional-update").is_file() && crate::fsutil::read_only(root);
+            return Self::Zypper { transactional };
+        }
         if root.join("usr/lib/sysimage/rpm").is_dir() || root.join("var/lib/rpm").is_dir() {
             return Self::Rpm { atomic };
         }
@@ -138,6 +146,7 @@ impl Origin {
             Self::Pacman { package } => Route::Terminal(Package::Pacman { package: package.clone() }),
             Self::Deb => Route::Terminal(Package::Deb),
             Self::Rpm { atomic: false } => Route::Terminal(Package::Rpm),
+            Self::Zypper { transactional } => Route::Terminal(Package::Zypper { transactional: *transactional }),
             Self::Copr { atomic: false } => say(
                 &["sudo dnf upgrade --refresh lightforge"],
                 "Lightforge comes from its COPR repository, so it also arrives with your \
@@ -206,6 +215,7 @@ pub enum Package {
     Pacman { package: String },
     Deb,
     Rpm,
+    Zypper { transactional: bool },
 }
 
 /// What starts this Lightforge again later: `current_exe`, the AppImage
@@ -215,7 +225,11 @@ pub fn lasting_exe() -> std::io::Result<PathBuf> {
     if let Some(appimage) = appimage::running() {
         return Ok(appimage);
     }
-    let exe = std::env::current_exe()?;
+    // Set by the flake's wrapper, which starts this binary through steam-run.
+    let exe = match std::env::var_os("LIGHTFORGE_WRAPPER") {
+        Some(wrapper) => PathBuf::from(wrapper),
+        None => std::env::current_exe()?,
+    };
     if !exe.starts_with(NIX_STORE) {
         return Ok(exe);
     }
@@ -346,6 +360,9 @@ pub enum UpgradeError {
     #[error("{0} does not look like a Lightforge release")]
     NotARelease(PathBuf),
 
+    #[error(transparent)]
+    Archive(#[from] crate::archive::ArchiveError),
+
     #[error("no terminal to run the update in was found")]
     NoTerminal,
 
@@ -419,7 +436,12 @@ mod tests {
         let fedora = root("rpm", &[], &["usr/lib/sysimage/rpm"]);
         assert_eq!(detect("/usr/bin/lightforge-gui", &fedora), Origin::Rpm { atomic: false });
 
-        for dir in [arch, source, debian, bazzite, fedora] {
+        // A writable root: Tumbleweed with transactional-update installed.
+        let tumbleweed =
+            root("zypper", &["usr/bin/zypper", "usr/sbin/transactional-update"], &["usr/lib/sysimage/rpm"]);
+        assert_eq!(detect("/usr/bin/lightforge-gui", &tumbleweed), Origin::Zypper { transactional: false });
+
+        for dir in [arch, source, debian, bazzite, fedora, tumbleweed] {
             let _ = std::fs::remove_dir_all(dir);
         }
     }
@@ -487,6 +509,7 @@ mod tests {
         assert!(pressable(Origin::Pacman { package: "lightforge-bin".into() }));
         assert!(pressable(Origin::Deb));
         assert!(pressable(Origin::Rpm { atomic: false }));
+        assert!(pressable(Origin::Zypper { transactional: true }));
         for words in [
             Origin::Copr { atomic: false },
             Origin::Copr { atomic: true },

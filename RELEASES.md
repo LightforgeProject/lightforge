@@ -1,6 +1,29 @@
 # Lightforge release notes
 
 
+## 1.0.0-beta.12
+
+Lightforge 1.0.0-beta.12 makes Seamless Battle.net Mode steadier and adds a few things around it. Battle.net's own games show their updates as soon as Blizzard releases them, games get Steam-style launch options, and the addon manager is now something you switch on. Lightforge is also on the AUR now.
+
+- Battle.net's own games, like Hearthstone, now say Update via Battle.net as soon as Blizzard releases a patch, even while Battle.net is closed, and with Seamless Battle.net Mode on or off. Lightforge runs the update, shows its progress and starts the game when it is done. Your own auto-update setting for that game is put back afterwards.
+- New: launch options in Game Settings, like Steam's. One line with %command% where the game goes, for example to put gamemoderun in front of it or start a program beside it. For games Battle.net starts, the line runs once the game is up.
+- The addon manager is now off on new setups. Tick it in the setup's Games step, or switch it on later in Settings, General. Existing setups keep it on.
+- Fixed Lightforge saying a game was up to date when Blizzard had already released a patch for the region you log into. It now checks the region picked on the play card. Blizzard released Forever 1.60.1.70888 to NA a day before EU, so NA players on an EU setup could not play.
+- Fixed starting a game through Battle.net with Start Battle.net minimized on sometimes quitting Battle.net instead of starting the game.
+- On desktops without a system tray, like Hyprland or GNOME without the AppIndicator extension, closing Battle.net's window now quits it instead of hiding it where nobody can reach it. Its window no longer flashes up when a game starts.
+- Battle.net's error messages and sign-in prompts now stay on screen during a launch instead of being hidden with the window.
+- Seamless Battle.net Mode: starting Battle.net, launches, downloads and repairs now take turns in the Wine prefix, so pressing Play while Battle.net is still starting no longer closes it or starts it twice. A Battle.net window you have open is left alone.
+- Turning Seamless Battle.net Mode off now puts back Battle.net's own settings, like notifications and auto-update, as they were before, instead of fixed defaults.
+- If Battle.net quits or crashes while starting or during a launch, Lightforge now notices within a second or two and says so. Stopping Lightforge from a terminal or at logout closes Battle.net too.
+- Closing Lightforge while a game runs now closes it right away instead of waiting for the game to end.
+- A repair no longer downloads every install file again, and Pause now stops a download that is still planning instead of a minute or two later.
+- Downloads now skip a Blizzard download server that keeps failing, read the game's index once instead of several times, and use less memory while planning.
+- Moving a game to another drive keeps its addons managed, with their update checks.
+- Proton downloads, Lightforge updates and artwork now refuse a redirect from https to plain http, and an archive with files that would land outside its folder.
+- Fixed the 32-bit runtime commands shown on openSUSE, and menu entries for an install in a folder with spaces in its name. The deb, rpm and AUR packages now ask for the same dependencies.
+- Arch: Lightforge is on the AUR, as lightforge-bin (prebuilt) or lightforge (built from source). Thanks to BrianAllred for maintaining it.
+- NixOS: the flake builds again, there is a CLI-only package, Battle.net gets the 32-bit FreeType it needs, and Add to Steam no longer points at a path the garbage collector deletes.
+
 ## 1.0.0-beta.11
 
 Lightforge 1.0.0-beta.11 is a fix update, almost all of it from your GitHub issues and bug reports. Addons that need other addons now bring them along, big voice packs install, and Lightforge and Battle.net no longer get in each other's way over the game files. It also adds moving the Wine prefix to another drive and a way to repair Battle.net without losing anything.

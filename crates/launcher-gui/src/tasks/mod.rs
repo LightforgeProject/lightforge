@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -26,7 +27,7 @@ use lightforge_core::state::Local;
 use lightforge_core::tact::download::{Cancel, Downloads, Progress};
 use lightforge_core::tact::install::{self, Event, Options as InstallOptions, Summary};
 use lightforge_core::tact::version::{self, Region, Version};
-use lightforge_core::tweaks::{HostTools, Tweaks};
+use lightforge_core::tweaks::HostTools;
 
 use crate::art::Art;
 
@@ -53,6 +54,108 @@ pub(crate) use desktop::*;
 pub(crate) use companions::*;
 pub(crate) use client::*;
 pub(crate) use upgrade::{Prepared, Stamp};
+
+/// What every user of the shared prefix goes through. The flags sit outside
+/// the lock: the GUI thread reads them, and a pre-flight holds it for seconds.
+pub(crate) struct Prefix {
+    /// Held across every check-then-act that starts or stops something in
+    /// the prefix: the warm-up, a pre-flight, a launch, making way for the store.
+    lock: Mutex<PrefixState>,
+    /// The background client went away for a reason that passes, and is owed
+    /// a restart once nothing needs the prefix. The client poll reads it.
+    owed: AtomicBool,
+    /// The client updates a game for us: [`make_way`] leaves it be, or the
+    /// update dies with it.
+    updating: AtomicBool,
+    /// Launch pre-flights run. A warm-up that finds one ran since it was asked
+    /// stands down: the client may be meant to run under another build.
+    preflights: AtomicU64,
+}
+
+pub(crate) struct PrefixState {
+    /// Launches started, so a wind-down can tell whether a newer one owns
+    /// the prefix: a game not yet in the process table looks like an empty one.
+    pub(crate) launches: u64,
+    /// Times the lock was taken, so a spawn can tell whether anyone came
+    /// between it and its pre-flight.
+    holds: u64,
+}
+
+/// The prefix as a pre-flight left it, for the spawn it cleared the way for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cleared(u64);
+
+impl PrefixState {
+    pub(crate) fn cleared(&self) -> Cleared {
+        Cleared(self.holds)
+    }
+
+    /// Whether this hold is the first since `cleared`'s.
+    pub(crate) fn follows(&self, cleared: Cleared) -> bool {
+        self.holds == cleared.0 + 1
+    }
+}
+
+impl Prefix {
+    const fn new() -> Self {
+        Self {
+            lock: Mutex::new(PrefixState { launches: 0, holds: 0 }),
+            owed: AtomicBool::new(false),
+            updating: AtomicBool::new(false),
+            preflights: AtomicU64::new(0),
+        }
+    }
+}
+
+#[cfg(not(test))]
+fn prefix() -> &'static Prefix {
+    static PREFIX: Prefix = Prefix::new();
+    &PREFIX
+}
+
+/// One per test thread: the tests run in parallel, each with an app of its own.
+#[cfg(test)]
+fn prefix() -> &'static Prefix {
+    thread_local!(static PREFIX: &'static Prefix = Box::leak(Box::new(Prefix::new())));
+    PREFIX.with(|prefix| *prefix)
+}
+
+/// Poisoned only by a panic in a holder, which must not wedge every launch after it.
+pub(crate) fn hold_prefix() -> std::sync::MutexGuard<'static, PrefixState> {
+    let mut state = prefix().lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    state.holds += 1;
+    state
+}
+
+pub(crate) fn owe_client() {
+    prefix().owed.store(true, Ordering::SeqCst);
+}
+
+pub(crate) fn take_client_owed() -> bool {
+    prefix().owed.swap(false, Ordering::SeqCst)
+}
+
+pub(crate) fn preflights() -> u64 {
+    prefix().preflights.load(Ordering::SeqCst)
+}
+
+/// Run a wait on the game or the client on a thread of its own, not tokio's
+/// blocking pool: closing the window drops the runtime, which waits for every
+/// blocking task, and a game's exit watch kept Lightforge open for as long as
+/// the game ran. A thread of its own ends with the process.
+pub(crate) async fn off_runtime<T: Send + 'static>(
+    name: &str,
+    wait: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, Problem> {
+    let (answer, answered) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(move || {
+            let _ = answer.send(wait());
+        })
+        .map_err(|e| Problem::of(&e))?;
+    answered.await.map_err(|_| Problem::from(format!("the {name} thread stopped without an answer")))
+}
 
 
 /// An error on its way to the screen: what went wrong, and what to do about
@@ -129,6 +232,7 @@ impl Runs {
 /// rewrote is the one way this arrangement breaks. The caller decides what to
 /// do about it. Nothing here refuses a launch.
 pub fn prefix_fit(
+    config: &Config,
     layout: &Layout,
     code: &ProductCode,
     runs: Runs,
@@ -138,10 +242,9 @@ pub fn prefix_fit(
     let Ok(dirs) = AppDirs::discover() else {
         return (None, proton::PrefixFit::Unknown);
     };
-    let config = Config::load_or_default(&dirs.config_file()).unwrap_or_default();
     let steam = lightforge_core::steam::SteamRoot::discover();
     let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());
-    let Some(build) = proton::select(&builds, runs.pin(&config, code)) else {
+    let Some(build) = proton::select(&builds, runs.pin(config, code)) else {
         return (None, proton::PrefixFit::Unknown);
     };
     let built_by = proton::prefix_build(&layout.compat_data());
@@ -151,33 +254,12 @@ pub fn prefix_fit(
 
 /// The Proton build a product launches under, with its per-product caches.
 fn runner_for(
+    config: &Config,
     layout: &Layout,
     code: &ProductCode,
     runs: Runs,
 ) -> Result<lightforge_core::prefix::ProtonRunner, String> {
-    use lightforge_core::prefix::ProtonRunner;
-    use lightforge_core::proton;
-
-    if layout.prefix_away() {
-        return Err(chain(&lightforge_core::prefix::PrefixError::Away(layout.compat_data())));
-    }
     let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
-    let config = Config::load_or_default(&dirs.config_file()).unwrap_or_default();
-    let steam = lightforge_core::steam::SteamRoot::discover();
-    let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());
-    let build = proton::select(&builds, runs.pin(&config, code))
-        .ok_or_else(|| "no supported Proton-GE build installed".to_owned())?;
-
-    let target =
-        std::fs::read_link(layout.wow_symlink()).unwrap_or_else(|_| layout.wow_install(code));
-    let shaders = dirs.shader_cache_dir(code);
-    let mut runner =
-        ProtonRunner::new(build, layout, ProtonRunner::steam_client_path(steam.as_ref(), &dirs))
-            .with_compat_mount(&target)
-            // The prefix is shared, so pooling the shader cache would mean one
-            // product's Proton swap discarding another's shaders.
-            .with_shader_cache(shaders);
-
     // Two profiles, because they are two different questions. A direct
     // launch is this product's own; a Battle.net launch is the client's and
     // therefore every game the client starts, the one environment all of
@@ -187,20 +269,20 @@ fn runner_for(
         Runs::Game => config.product(code).map(|p| p.profile.tweaks.clone()).unwrap_or_default(),
         Runs::BattleNet => config.battle_net_tweaks.clone(),
     };
-    for (key, value) in tweaks.environment(&HostTools::detect()) {
-        runner = runner.with_env(key, value);
-    }
-    Ok(runner)
+    lightforge_core::launch::runner(layout, &dirs, code, runs.pin(config, code), &tweaks, &HostTools::detect())
+        .map(|(runner, _)| runner)
+        .map_err(|e| chain(&e))
 }
 
 /// [`runner_for`] Battle.net itself, inside Steam's runtime where the host has
 /// no 32-bit gnutls. Only for the calls that start the client or hand it
 /// something, everything else about the prefix still runs on the host.
 fn client_runner(
+    config: &Config,
     layout: &Layout,
     code: &ProductCode,
 ) -> Result<lightforge_core::prefix::ProtonRunner, Problem> {
-    in_tls_container(runner_for(layout, code, Runs::BattleNet)?)
+    in_tls_container(runner_for(config, layout, code, Runs::BattleNet)?)
 }
 
 /// `runner` inside Steam's runtime, where the host has no 32-bit gnutls.
@@ -218,12 +300,11 @@ fn in_tls_container(
 /// [`runner_for`] Battle.net on its own, for no game: its own pin and shared
 /// profile, and no per-product shader cache, since every game it goes on to
 /// start inherits this environment.
-fn lone_client_runner(layout: &Layout) -> Result<lightforge_core::prefix::ProtonRunner, String> {
+fn lone_client_runner(config: &Config, layout: &Layout) -> Result<lightforge_core::prefix::ProtonRunner, String> {
     use lightforge_core::prefix::ProtonRunner;
     use lightforge_core::proton;
 
     let dirs = AppDirs::discover().map_err(|e| chain(&e))?;
-    let config = Config::load_or_default(&dirs.config_file()).unwrap_or_default();
     let steam = lightforge_core::steam::SteamRoot::discover();
     let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());
     let build = proton::select(&builds, config.battle_net_proton_version())
@@ -236,33 +317,11 @@ fn lone_client_runner(layout: &Layout) -> Result<lightforge_core::prefix::Proton
     Ok(runner)
 }
 
-/// The shared profile Battle.net and its games launch under.
-///
-/// Not per product; see `Config::battle_net_tweaks`.
-fn config_tweaks() -> Tweaks {
-    AppDirs::discover()
-        .ok()
-        .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
-        .map(|config| config.battle_net_tweaks)
-        .unwrap_or_default()
-}
-
-/// One product's performance settings, and what this machine can honour.
-fn tweaks_for(code: &ProductCode) -> (Tweaks, HostTools) {
-    let tweaks = AppDirs::discover()
-        .ok()
-        .and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
-        .and_then(|config| config.product(code).map(|p| p.profile.tweaks.clone()))
-        .unwrap_or_default();
-    (tweaks, HostTools::detect())
-}
-
 /// The Proton build that would be used, for the debug bundle.
-pub fn proton_for(code: &ProductCode) -> Option<lightforge_core::proton::ProtonRelease> {
+pub fn proton_for(config: &Config, code: &ProductCode) -> Option<lightforge_core::proton::ProtonRelease> {
     use lightforge_core::proton;
 
     let dirs = AppDirs::discover().ok()?;
-    let config = Config::load_or_default(&dirs.config_file()).unwrap_or_default();
     let steam = lightforge_core::steam::SteamRoot::discover();
     let builds = proton::discover_all(steam.as_ref(), &dirs.proton_dir());
     proton::select(&builds, config.effective_proton(code)).cloned()
@@ -276,4 +335,38 @@ pub fn open_path(path: PathBuf) -> Result<(), String> {
 /// Open a URL in the default browser.
 pub fn open_url(url: &str) -> Result<(), String> {
     open::that_detached(url).map_err(|e| format!("{url}: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_spawn_right_after_its_pre_flight_finds_the_prefix_as_left() {
+        let cleared = hold_prefix().cleared();
+        assert!(hold_prefix().follows(cleared));
+    }
+
+    #[test]
+    fn a_wait_on_the_game_does_not_hold_the_runtime_open() {
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let (started, has_started) = std::sync::mpsc::channel();
+        let (_game, game_exited) = std::sync::mpsc::channel::<()>();
+        let waiting = runtime.spawn(off_runtime("test-wait", move || {
+            let _ = started.send(());
+            let _ = game_exited.recv();
+        }));
+        runtime.block_on(async { while !waiting.is_finished() && has_started.try_recv().is_err() { tokio::task::yield_now().await } });
+
+        let closing = Instant::now();
+        drop(runtime);
+        assert!(closing.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_spawn_sees_anyone_who_held_the_prefix_after_its_pre_flight() {
+        let cleared = hold_prefix().cleared();
+        drop(hold_prefix());
+        assert!(!hold_prefix().follows(cleared));
+    }
 }
