@@ -20,3 +20,9 @@ retains the change for rebuilding.
 
 Run the deterministic behavior evaluation with
 `bash crates/launcher-gui/evals/play-login.sh`. All six checks must pass.
+
+If Battle.net marks a current Lightforge installation as Update, open its
+WoW page and let that update finish once. Matching build numbers alone do
+not mean Battle.net considers an adopted installation playable. Wait until
+its state is UpToDate, then retry Play in Lightforge. Do not work around
+this by skipping its update guard or falling back to a password prompt.
