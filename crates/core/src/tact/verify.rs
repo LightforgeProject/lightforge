@@ -22,7 +22,7 @@
 //! Repair removes damaged entries from the index; the planner then sees the
 //! files as absent and the download path fetches them again.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::FileExt;
@@ -32,7 +32,7 @@ use std::time::{Duration, SystemTime};
 
 use super::download::Cancel;
 use super::entry::Header;
-use super::idx::{Entry, Index, CASC_ENTRY_HEADER, KEY_SIZE};
+use super::idx::{Entry, Index, CASC_ENTRY_HEADER, CASC_ENTRY_HEADER_U32, KEY_SIZE};
 use super::storage::{archive_name, blte_payload, resolve_data_dir, Storage, StorageError};
 use super::writer::StoreLock;
 
@@ -62,6 +62,10 @@ pub enum Fault {
     WrongPayload,
     /// A chunk's bytes do not hash to the checksum its table gives.
     BadChunk,
+    /// A headerless alias whose headed entry is gone. The client reads a key
+    /// at its header, so it cannot load the file ("InvalidSpan", wowf
+    /// 70938, 2026-11-13), and the planner counts the key as present.
+    LoneAlias,
 }
 
 impl Fault {
@@ -77,6 +81,7 @@ impl Fault {
             Self::MalformedBlte => "chunk table is unreadable",
             Self::WrongPayload => "file does not hash to its key",
             Self::BadChunk => "a chunk does not match its checksum",
+            Self::LoneAlias => "only a headerless copy is indexed",
         }
     }
 }
@@ -135,6 +140,7 @@ pub fn scan(store: &Storage, mut on_progress: impl FnMut(Progress)) -> Report {
     let mut entries: Vec<Entry> = store.files().copied().collect();
     entries.sort_unstable_by_key(|e| (e.archive_id, e.offset));
     let total = entries.len() as u64;
+    let aliases = Aliases::of(&entries);
 
     let mut lengths: BTreeMap<u16, Option<u64>> = BTreeMap::new();
     let mut open: Option<(u16, File)> = None;
@@ -198,7 +204,7 @@ pub fn scan(store: &Storage, mut on_progress: impl FnMut(Progress)) -> Report {
         report.headers_read += 1;
         report.bytes_read += CASC_ENTRY_HEADER as u64;
 
-        if let Some(fault) = fault_in(&header, &entry) {
+        if let Some(fault) = fault_in(&header, &entry, &aliases) {
             report.damaged.push(Damage { entry, fault });
         }
     }
@@ -215,10 +221,10 @@ pub fn scan(store: &Storage, mut on_progress: impl FnMut(Progress)) -> Report {
 /// Check one header against the index entry that pointed at it.
 ///
 /// An entry pointing straight at `BLTE` is a headerless alias (see
-/// [`super::storage`]) and has no header to check.
-fn fault_in(header: &[u8], entry: &Entry) -> Option<Fault> {
+/// [`super::storage`]) and has no header to check, only a headed twin.
+fn fault_in(header: &[u8], entry: &Entry, aliases: &Aliases) -> Option<Fault> {
     if header.starts_with(b"BLTE") {
-        return None;
+        return (!aliases.twinned(entry)).then_some(Fault::LoneAlias);
     }
     let parsed = Header::parse(header)?;
     if parsed.key != entry.key {
@@ -231,6 +237,24 @@ fn fault_in(header: &[u8], entry: &Entry) -> Option<Fault> {
         return Some(Fault::BadChecksum);
     }
     None
+}
+
+/// Where an alias may sit: just past the header of an entry with its key.
+struct Aliases(HashSet<([u8; KEY_SIZE], u16, u32)>);
+
+impl Aliases {
+    fn of<'a>(entries: impl IntoIterator<Item = &'a Entry>) -> Self {
+        Self(
+            entries
+                .into_iter()
+                .map(|e| (e.key, e.archive_id, e.offset + CASC_ENTRY_HEADER_U32))
+                .collect(),
+        )
+    }
+
+    fn twinned(&self, alias: &Entry) -> bool {
+        self.0.contains(&(alias.key, alias.archive_id, alias.offset))
+    }
 }
 
 /// Verify every file in the store at `path` down to its last byte.
@@ -262,12 +286,13 @@ pub fn deep_scan(
 
     let total = work.iter().map(|(_, e)| e.len() as u64).sum();
     let bytes_total = work.iter().flat_map(|(_, e)| e).map(|e| u64::from(e.size)).sum();
+    let aliases = Aliases::of(work.iter().flat_map(|(_, e)| e));
     let shared = Shared::default();
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(8);
 
     let parts: Vec<Part> = std::thread::scope(|scope| {
         let workers: Vec<_> = (0..threads)
-            .map(|_| scope.spawn(|| deep_worker(&data_dir, &work, &shared, cancel)))
+            .map(|_| scope.spawn(|| deep_worker(&data_dir, &work, &aliases, &shared, cancel)))
             .collect();
 
         while !workers.iter().all(|w| w.is_finished()) {
@@ -340,6 +365,7 @@ struct Part {
 fn deep_worker(
     data_dir: &Path,
     work: &[(u16, Vec<Entry>)],
+    aliases: &Aliases,
     shared: &Shared,
     cancel: &Cancel,
 ) -> Part {
@@ -387,7 +413,7 @@ fn deep_worker(
             shared.bytes.fetch_add(u64::from(entry.size), Ordering::Relaxed);
 
             let header = match buf.get(..CASC_ENTRY_HEADER) {
-                Some(header) => fault_in(header, entry),
+                Some(header) => fault_in(header, entry, aliases),
                 None => Some(Fault::Unreadable),
             };
             match header.map_or_else(|| payload(&buf, &entry.key), Payload::Damaged) {
@@ -613,12 +639,50 @@ mod tests {
     }
 
     #[test]
-    fn a_headerless_alias_is_not_reported_as_damage() {
+    fn a_headerless_alias_beside_its_headed_entry_is_not_damage() {
         // The bytes at an alias's offset are its BLTE payload, not a header.
         let mut bytes = [0u8; CASC_ENTRY_HEADER];
         bytes[..4].copy_from_slice(b"BLTE");
+        let headed = Entry { key: [5; 9], archive_id: 4, offset: 1000, size: 130 };
         let alias = Entry { key: [5; 9], archive_id: 4, offset: 1030, size: 100 };
-        assert_eq!(fault_in(&bytes, &alias), None);
+        assert_eq!(fault_in(&bytes, &alias, &Aliases::of([&headed, &alias])), None);
+    }
+
+    #[test]
+    fn a_headerless_alias_without_its_headed_entry_is_damage() {
+        let mut bytes = [0u8; CASC_ENTRY_HEADER];
+        bytes[..4].copy_from_slice(b"BLTE");
+        let alias = Entry { key: [5; 9], archive_id: 4, offset: 1030, size: 100 };
+        // Same key, but in another archive: not the header in front of it.
+        let elsewhere = Entry { key: [5; 9], archive_id: 5, offset: 1000, size: 130 };
+        assert_eq!(fault_in(&bytes, &alias, &Aliases::of([&alias, &elsewhere])), Some(Fault::LoneAlias));
+    }
+
+    /// The reported store: the alias left, its headed entry gone. Scan and
+    /// repair must hand the key back to the planner.
+    #[test]
+    fn a_lone_alias_is_scanned_as_damage_and_repaired_away() {
+        // Longer than a header, as every real file is: the scan reads 30 bytes.
+        let dir = store_with(&[(1, &[b"BLTE\0\0\0\0".as_slice(), &[b'N'; 56]].concat())]);
+        let data = dir.path().join("Data").join("data");
+        let headed = *open(&dir).files().next().unwrap();
+        let header = CASC_ENTRY_HEADER_U32;
+        let alias = Entry { offset: headed.offset + header, size: headed.size - header, ..headed };
+
+        let path = crate::tact::idx::discover(&data)
+            .unwrap()
+            .into_iter()
+            .find(|p| Index::load(p).unwrap().files().any(|e| e.key == headed.key))
+            .unwrap();
+        let mut index = Index::load(&path).unwrap();
+        assert!(index.remove_entry(&headed));
+        index.insert(alias);
+        index.save_generation(&data, 0x40).unwrap();
+
+        let report = scan(&open(&dir), |_| {});
+        assert_eq!(report.damaged, vec![Damage { entry: alias, fault: Fault::LoneAlias }]);
+        assert_eq!(repair(&data, &report.damaged).unwrap(), 1);
+        assert_eq!(open(&dir).files().count(), 0, "the planner sees the key as absent");
     }
 
     #[test]
