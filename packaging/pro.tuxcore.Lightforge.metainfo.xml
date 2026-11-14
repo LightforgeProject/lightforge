@@ -78,6 +78,16 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.0.0-beta.13" date="2026-11-14">
+      <description>
+        <p>
+          Scan and Repair now finds game files the game cannot read and
+          downloads them again, which fixes WoW stopping at "Failed to load
+          ui toc list".
+        </p>
+      </description>
+      <url>https://github.com/LightforgeProject/lightforge/blob/main/RELEASES.md</url>
+    </release>
     <release version="1.0.0-beta.12" date="2026-11-13">
       <description>
         <p>
