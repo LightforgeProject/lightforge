@@ -1,6 +1,12 @@
 # Lightforge release notes
 
 
+## 1.0.0-beta.13
+
+Lightforge 1.0.0-beta.13 is a hotfix for one bug: a game that stops at "Failed to load ui toc list" right after it starts.
+
+- Fixed Scan and Repair and Deep Scan passing game files that the game cannot read, so neither a repair nor a download ever fetched them again. WoW then stopped at start with ERROR #134, "Failed to load ui toc list". If that happened to you, close the game and run Scan and Repair once: it now finds those files and downloads them again. Thanks to strucky for the report and for running the test scripts.
+
 ## 1.0.0-beta.12
 
 Lightforge 1.0.0-beta.12 makes Seamless Battle.net Mode steadier and adds a few things around it. Battle.net's own games show their updates as soon as Blizzard releases them, games get Steam-style launch options, and the addon manager is now something you switch on. Lightforge is also on the AUR now.
