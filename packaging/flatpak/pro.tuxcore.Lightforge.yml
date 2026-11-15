@@ -1,0 +1,77 @@
+app-id: pro.tuxcore.Lightforge
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: lightforge-gui
+
+# Battle.net's installer is 32-bit. These runtime extensions provide the
+# 32-bit loader, libraries and graphics stack inside the Flatpak sandbox.
+add-extensions:
+  org.freedesktop.Platform.Compat.i386:
+    directory: lib/i386-linux-gnu
+    version: '26.08'
+  org.freedesktop.Platform.GL32:
+    directory: lib/i386-linux-gnu/GL
+    add-ld-path: lib
+    download-if: active-gl-driver
+    enable-if: active-gl-driver
+    autoprune-unless: active-gl-driver
+    no-autodownload: true
+    version: '1.4'
+
+finish-args:
+  # Native windowing and rendering backends used by iced/wgpu.
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  # Lightforge downloads Blizzard content, Proton builds and addons.
+  - --share=network
+  # The launcher can manage games and prefixes on the user's normal drives.
+  - --filesystem=~/Games/Blizzard:rw
+  # - --filesystem=/run/media:rw
+  # - --filesystem=/mnt:rw
+  # Gamepads are read through libudev.
+  - --device=input
+
+modules:
+  - name: lightforge
+    buildsystem: simple
+    build-options:
+      # The Rust extension is supplied by the Freedesktop SDK.
+      append-path: /usr/lib/sdk/rust-stable/bin
+      build-args:
+        - --share=network
+      env:
+        CARGO_HOME: /run/build/lightforge/cargo
+        CARGO_NET_OFFLINE: 'false'
+    build-commands:
+      - cargo build --release --locked
+      # Runtime extensions are mounted at these paths and need their mount
+      # points to exist in the immutable application image.
+      - install -d /app/lib/i386-linux-gnu/GL
+      - install -Dm755 target/release/lightforge-gui /app/bin/lightforge-gui
+      - install -Dm755 target/release/lightforge /app/bin/lightforge
+      - install -Dm644 packaging/pro.tuxcore.Lightforge.desktop /app/share/applications/pro.tuxcore.Lightforge.desktop
+      - install -Dm644 packaging/pro.tuxcore.Lightforge.metainfo.xml /app/share/metainfo/pro.tuxcore.Lightforge.metainfo.xml
+      - install -Dm644 LICENSE /app/share/licenses/pro.tuxcore.Lightforge/LICENSE
+      - install -Dm644 packaging/icons/hicolor/16x16/apps/pro.tuxcore.Lightforge.png /app/share/icons/hicolor/16x16/apps/pro.tuxcore.Lightforge.png
+      - install -Dm644 packaging/icons/hicolor/22x22/apps/pro.tuxcore.Lightforge.png /app/share/icons/hicolor/22x22/apps/pro.tuxcore.Lightforge.png
+      - install -Dm644 packaging/icons/hicolor/24x24/apps/pro.tuxcore.Lightforge.png /app/share/icons/hicolor/24x24/apps/pro.tuxcore.Lightforge.png
+      - install -Dm644 packaging/icons/hicolor/32x32/apps/pro.tuxcore.Lightforge.png /app/share/icons/hicolor/32x32/apps/pro.tuxcore.Lightforge.png
+      - install -Dm644 packaging/icons/hicolor/48x48/apps/pro.tuxcore.Lightforge.png /app/share/icons/hicolor/48x48/apps/pro.tuxcore.Lightforge.png
+      - install -Dm644 packaging/icons/hicolor/64x64/apps/pro.tuxcore.Lightforge.png /app/share/icons/hicolor/64x64/apps/pro.tuxcore.Lightforge.png
+      - install -Dm644 packaging/icons/hicolor/128x128/apps/pro.tuxcore.Lightforge.png /app/share/icons/hicolor/128x128/apps/pro.tuxcore.Lightforge.png
+      - install -Dm644 packaging/icons/hicolor/256x256/apps/pro.tuxcore.Lightforge.png /app/share/icons/hicolor/256x256/apps/pro.tuxcore.Lightforge.png
+      - install -Dm644 packaging/icons/hicolor/512x512/apps/pro.tuxcore.Lightforge.png /app/share/icons/hicolor/512x512/apps/pro.tuxcore.Lightforge.png
+      - install -Dm644 packaging/icons/hicolor/scalable/apps/pro.tuxcore.Lightforge.svg /app/share/icons/hicolor/scalable/apps/pro.tuxcore.Lightforge.svg
+    sources:
+      - type: dir
+        path: ../..
+      # Keep the upstream source unchanged; this Flatpak-only patch teaches
+      # the runtime probe where the compat.i386 extension is mounted.
+      - type: patch
+        path: flatpak-runtime.patch

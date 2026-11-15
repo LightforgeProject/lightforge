@@ -1,0 +1,11 @@
+diff --git a/crates/core/src/runtime.rs b/crates/core/src/runtime.rs
+--- a/crates/core/src/runtime.rs
++++ b/crates/core/src/runtime.rs
+@@ -32,4 +32,7 @@ const LOADER_CANDIDATES: &[&str] = &[
+     "/lib32/ld-linux.so.2",
+     "/usr/lib/ld-linux.so.2",
+     "/usr/lib32/ld-linux.so.2",
++    // Freedesktop's 32-bit compatibility extension is mounted here by the
++    // Flatpak manifest.
++    "/app/lib/i386-linux-gnu/ld-linux.so.2",
+ ];
