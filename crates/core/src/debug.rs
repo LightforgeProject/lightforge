@@ -52,6 +52,15 @@ pub struct DebugInfo {
     pub client_log: Option<CrashLog>,
     /// The end of Lightforge's own log; see [`log_tail`].
     pub own_log: Option<String>,
+    /// Game account and character names, taken out of the rendered text.
+    pub wtf_names: Vec<WtfName>,
+}
+
+/// A name the client keeps a `WTF/Account` folder for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WtfName {
+    Account(String),
+    Character(String),
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +116,7 @@ impl DebugInfo {
             last_crash: newest_log(&install),
             client_log: None,
             own_log: None,
+            wtf_names: wtf_names(&install),
         }
     }
 
@@ -165,8 +175,58 @@ impl DebugInfo {
         if let Some(tail) = &self.own_log {
             let _ = writeln!(out, "\n--- Lightforge log ---\n{tail}");
         }
-        scrub(&out)
+        scrub_wtf_names(&scrub(&out), &self.wtf_names)
     }
+}
+
+/// Every game account and character with settings in `install`:
+/// `WTF/Account/<account>/<realm>/<character>`, `SavedVariables` beside them.
+fn wtf_names(install: &Path) -> Vec<WtfName> {
+    let folders = |dir: &Path| -> Vec<(PathBuf, String)> {
+        let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+        entries
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|t| t.is_dir()))
+            .filter_map(|entry| Some((entry.path(), entry.file_name().into_string().ok()?)))
+            .filter(|(_, name)| name != "SavedVariables")
+            .collect()
+    };
+    let mut names = Vec::new();
+    for (account, account_name) in folders(&install.join("WTF/Account")) {
+        for (realm, _) in folders(&account) {
+            names.extend(folders(&realm).into_iter().map(|(_, name)| WtfName::Character(name)));
+        }
+        names.push(WtfName::Account(account_name));
+    }
+    names
+}
+
+/// Replace each name where it stands as a whole word: a character called
+/// "Mage" leaves "Image" alone.
+fn scrub_wtf_names(text: &str, names: &[WtfName]) -> String {
+    let mut out = text.to_owned();
+    for name in names {
+        let (name, placeholder) = match name {
+            WtfName::Account(name) => (name, "<account>"),
+            WtfName::Character(name) => (name, "<character>"),
+        };
+        if name.chars().count() < MIN_NAME {
+            continue;
+        }
+        let word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
+        let mut kept = String::with_capacity(out.len());
+        let mut rest = out.as_str();
+        while let Some(at) = rest.find(name.as_str()) {
+            let after = &rest[at + name.len()..];
+            let whole = !word(rest[..at].chars().next_back()) && !word(after.chars().next());
+            kept.push_str(&rest[..at]);
+            kept.push_str(if whole { placeholder } else { name });
+            rest = after;
+        }
+        kept.push_str(rest);
+        out = kept;
+    }
+    out
 }
 
 /// Take the person's name out of a rendered bundle.
@@ -521,6 +581,25 @@ mod tests {
 
         assert!(text.contains("~/Games/Blizzard"));
         assert!(!text.contains(&home.display().to_string()));
+    }
+
+    #[test]
+    fn account_and_character_names_leave_the_bundle() {
+        let install = tempfile::tempdir().unwrap();
+        let account = install.path().join("WTF/Account/478511984#1");
+        std::fs::create_dir_all(account.join("Silvermoon/Thrallsbane/SavedVariables")).unwrap();
+        std::fs::create_dir_all(account.join("SavedVariables")).unwrap();
+        let names = wtf_names(install.path());
+
+        let text = scrub_wtf_names("Thrallsbane of 478511984#1 crashed on Silvermoon", &names);
+
+        assert_eq!(text, "<character> of <account> crashed on Silvermoon");
+    }
+
+    #[test]
+    fn a_character_name_inside_a_longer_word_is_left_alone() {
+        let names = [WtfName::Character("Mage".to_owned())];
+        assert_eq!(scrub_wtf_names("Image loaded for Mage", &names), "Image loaded for <character>");
     }
 
     /// Real lines from client 2.53.6 logs, the account id and challenge id zeroed.

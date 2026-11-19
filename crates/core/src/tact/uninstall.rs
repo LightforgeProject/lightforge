@@ -111,59 +111,61 @@ pub fn execute(
         false => None,
     };
 
-    for path in plan.flavor_dir.iter().chain(plan.store.iter()) {
-        if !is_plain_child(install, path) {
-            return Err(UninstallError::Outside(path.clone()));
-        }
-        std::fs::remove_dir_all(path).map_err(io(path))?;
-        removed.paths.push(path.clone());
+    let doomed: Vec<&PathBuf> = plan.flavor_dir.iter().chain(plan.store.iter()).collect();
+    if let Some(path) = doomed.iter().find(|path| !is_plain_child(install, path)) {
+        return Err(UninstallError::Outside(path.to_path_buf()));
     }
 
+    // The records go before the files: a crash part-way then leaves stray
+    // files a retry removes, never a row naming a product whose files are gone.
     let info_path = install.join(".build.info");
-    match plan.remove_build_info {
+    let remaining_info = match plan.remove_build_info {
         // Nothing left to describe: the file goes with the last product.
         true => {
             if info_path.exists() {
                 std::fs::remove_file(&info_path).map_err(io(&info_path))?;
                 removed.paths.push(info_path);
             }
+            None
         }
         false => {
-            if let Ok(mut info) = BuildInfo::load(&info_path) {
-                if info.remove_product(code) {
-                    info.save(&info_path)?;
-                }
+            let mut info = BuildInfo::load(&info_path)?;
+            if info.remove_product(code) {
+                info.save(&info_path)?;
             }
+            Some(info)
         }
-    }
-
-    // Its pre-download goes with it, or prune would keep that data forever.
-    super::staged::clear(install, code, None)?;
+    };
 
     // A record naming a removed product makes Battle.net reject the install.
     let db_path = install.join(".product.db");
     if db_path.exists() {
-        match plan.remaining.is_empty() {
-            true => {
+        match &remaining_info {
+            None => {
                 std::fs::remove_file(&db_path).map_err(io(&db_path))?;
                 removed.paths.push(db_path);
             }
-            false => {
-                if let Ok(info) = BuildInfo::load(install.join(".build.info")) {
-                    let records: Vec<_> = plan
-                        .remaining
-                        .iter()
-                        .filter_map(|code| {
-                            let flavor = crate::paths::flavor_dir_name(install, code);
-                            productdb::ProductInstall::from_build_info(&info, code, &flavor, windows_path)
-                            .ok()
-                        })
-                        .collect();
-                    productdb::write(install, &records)?;
-                }
+            Some(info) => {
+                let records: Vec<_> = plan
+                    .remaining
+                    .iter()
+                    .filter_map(|code| {
+                        let flavor = crate::paths::flavor_dir_name(install, code);
+                        productdb::ProductInstall::from_build_info(info, code, &flavor, windows_path).ok()
+                    })
+                    .collect();
+                productdb::write(install, &records)?;
             }
         }
     }
+
+    for path in doomed {
+        std::fs::remove_dir_all(path).map_err(io(path))?;
+        removed.paths.push(path.clone());
+    }
+
+    // Its pre-download goes with it, or prune would keep that data forever.
+    super::staged::clear(install, code, None)?;
 
     Ok(removed)
 }
@@ -290,6 +292,25 @@ mod tests {
         let info = BuildInfo::load(dir.join(".build.info")).unwrap();
         assert!(info.row(&ProductCode::ClassicEra).is_none());
         assert!(info.row(&ProductCode::Retail).is_some());
+    }
+
+    #[test]
+    fn a_delete_that_fails_part_way_leaves_no_row_for_the_product() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = install_with("stuck", &[("wow", "_retail_"), ("wow_classic_era", "_classic_era_")]);
+        let flavor = dir.join("_classic_era_");
+        std::fs::set_permissions(&flavor, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let plan = plan(&dir, &ProductCode::ClassicEra).unwrap();
+
+        let failed = execute(&dir, &ProductCode::ClassicEra, &plan, crate::paths::WINDOWS_WOW_PATH);
+        std::fs::set_permissions(&flavor, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(matches!(failed, Err(UninstallError::Io { .. })), "{failed:?}");
+        let info = BuildInfo::load(dir.join(".build.info")).unwrap();
+        assert!(info.row(&ProductCode::ClassicEra).is_none());
+        assert!(info.row(&ProductCode::Retail).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

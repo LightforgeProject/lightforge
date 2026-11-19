@@ -191,9 +191,8 @@ pub(super) fn verify(encoded: &[u8], ekey: &EKey, ckey: Option<&CKey>) -> Verifi
         return unverifiable(encoded, ekey);
     };
 
-    match crate::tact::blte::decode(encoded) {
-        Ok(decoded) => {
-            let actual = *md5::compute(&decoded);
+    match crate::tact::blte::decode_md5(encoded) {
+        Ok(actual) => {
             if &actual == ckey {
                 Verified::Ok
             } else {
