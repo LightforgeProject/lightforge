@@ -2382,3 +2382,41 @@ fn a_battle_net_repair_waits_for_a_running_setup() {
     let _ = app.update(Message::RepairBattleNet);
     assert!(app.error.is_some());
 }
+
+fn setup_status(app: &Lightforge, proton: bool, battle_net: bool) -> lightforge_core::setup::Status {
+    let mut prefix = lightforge_core::prefix::PrefixStatus::inspect(&app.layout);
+    prefix.initialized = true;
+    prefix.link = lightforge_core::prefix::LinkState::Correct;
+    lightforge_core::setup::Status {
+        proton: proton.then(|| lightforge_core::proton::ProtonRelease {
+            version: "GE-Proton11-7".into(),
+            flavor: lightforge_core::proton::ProtonFlavor::GloriousEggroll,
+            source: lightforge_core::proton::ProtonSource::Managed,
+            path: PathBuf::from("/tmp/ge"),
+            built_at: None,
+        }),
+        installed: Vec::new(),
+        prefix,
+        battle_net,
+        battle_net_wanted: true,
+        thirty_two_bit: true,
+    }
+}
+
+#[test]
+fn a_missing_battle_net_alone_opens_on_play() {
+    let (mut app, _scratch) = test_app();
+    app.splash = None;
+    let status = setup_status(&app, true, false);
+    let _ = app.update(Message::SetupStatus(Some(Box::new(status))));
+    assert_eq!(app.screen, Screen::Dashboard);
+}
+
+#[test]
+fn a_missing_proton_opens_on_setup() {
+    let (mut app, _scratch) = test_app();
+    app.splash = None;
+    let status = setup_status(&app, false, true);
+    let _ = app.update(Message::SetupStatus(Some(Box::new(status))));
+    assert_eq!(app.screen, Screen::Settings);
+}

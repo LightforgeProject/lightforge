@@ -32,9 +32,11 @@ impl Lightforge {
                 };
                 let mut opened = Task::none();
                 // Open on Settings' setup section if nothing can launch yet.
+                // A missing Battle.net alone is not that: WoW launches without
+                // it, and the jump would come back on every start.
                 if let Some(status) = &status {
                     // Not under the first run, which has its own setup step.
-                    if !status.is_ready()
+                    if (status.proton.is_none() || !status.prefix.is_ready())
                         && self.screen == Screen::Dashboard
                         && !self.setup_running
                         && self.wizard.is_none()
