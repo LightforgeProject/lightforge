@@ -700,3 +700,17 @@ fn a_game_without_a_ledger_carries_nothing() {
     carry_ledger(data.path(), &code, Path::new("/mnt/a/AddOns"), Path::new("/mnt/b/AddOns")).unwrap();
     assert!(!ledger_path(data.path(), Path::new("/mnt/b/AddOns"), &code).exists());
 }
+
+#[test]
+fn an_uninstalled_game_s_ledger_is_forgotten() {
+    let data = tempfile::tempdir().unwrap();
+    let code = crate::product::ProductCode::ClassicEra;
+    let addons = Path::new("/games/World of Warcraft/_classic_era_/Interface/AddOns");
+    let mut ledger = Ledger::default();
+    ledger.addons.push(Record { folders: vec!["QuestieDB".into()], ..Default::default() });
+    ledger.save(&ledger_path(data.path(), addons, &code)).unwrap();
+
+    forget_ledger(data.path(), &code, addons).unwrap();
+
+    assert!(!ledger_path(data.path(), addons, &code).exists());
+}

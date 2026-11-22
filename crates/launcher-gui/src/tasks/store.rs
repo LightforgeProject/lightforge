@@ -218,6 +218,7 @@ pub async fn uninstall(
     };
 
     tokio::task::spawn_blocking(move || -> Result<_, Problem> {
+        let addons_dir = plan.flavor_dir.as_ref().map(|dir| dir.join("Interface").join("AddOns"));
         let removed = uninstall::execute(&install, &code, &plan, &windows_path)
             .map_err(|e| Problem::of(&e))?;
         let reclaimed = match &reclaim {
@@ -228,6 +229,11 @@ pub async fn uninstall(
             None => 0,
         };
         productdb::unregister(&layout.agent_dir(), code.as_str()).map_err(|e| Problem::of(&e))?;
+        if let (Some(addons_dir), Ok(dirs)) = (addons_dir, AppDirs::discover()) {
+            if let Err(e) = lightforge_core::addons::manage::forget_ledger(dirs.data_dir(), &code, &addons_dir) {
+                tracing::warn!("the addon ledger for {} stayed after the uninstall: {e}", code.as_str());
+            }
+        }
         tracing::info!("uninstalled {}: {} B removed, {reclaimed} B reclaimed", code.as_str(), removed.bytes);
         Ok(removed.bytes + reclaimed)
     })

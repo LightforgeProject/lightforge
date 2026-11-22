@@ -31,7 +31,7 @@ pub(crate) enum Command {
     ProtonCheck,
     /// Download, verify, and install a Proton-GE release.
     ProtonInstall {
-        /// Release tag, e.g. `GE-Proton11-7`. Defaults to the latest stable.
+        /// Release tag, e.g. `GE-Proton11-12`. Defaults to the build Lightforge is tested with.
         version: Option<String>,
     },
     /// Report on the shared prefix and the game symlink.

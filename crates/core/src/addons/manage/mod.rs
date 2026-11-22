@@ -117,6 +117,16 @@ pub fn carry_ledger(
     }
 }
 
+/// Drop `code`'s ledger along with its install. Left behind, a reinstall at the
+/// same path finds every addon it names "up to date" with no folder on disk,
+/// and installing one again does nothing.
+pub fn forget_ledger(data_dir: &Path, code: &crate::product::ProductCode, addons_dir: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(ledger_path(data_dir, addons_dir, code)) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        done => done,
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ManageError {
     #[error(transparent)]

@@ -193,7 +193,7 @@ Download, verify, and install a Proton-GE release
 Usage: lightforge proton-install [OPTIONS] [VERSION]
 
 Arguments:
-  [VERSION]  Release tag, e.g. `GE-Proton11-7`. Defaults to the latest stable
+  [VERSION]  Release tag, e.g. `GE-Proton11-12`. Defaults to the build Lightforge is tested with
 
 Options:
       --root <ROOT>  Override the Blizzard root (default: ~/Games/Blizzard)

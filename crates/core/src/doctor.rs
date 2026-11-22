@@ -279,7 +279,7 @@ fn proton(config: &Config, proton_dir: &Path) -> Check {
             None => check(
                 "proton",
                 Status::Fail,
-                "no supported Proton build",
+                "no Proton-GE build installed",
                 Some(format!("setup installs {}, or run `lightforge proton-install`", proton::TESTED)),
             ),
         };

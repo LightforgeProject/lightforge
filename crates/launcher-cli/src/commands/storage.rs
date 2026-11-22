@@ -11,7 +11,6 @@ pub(crate) fn verify(ctx: Ctx, path: Option<PathBuf>, deep: bool, repair: bool, 
     const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
     let install = path.unwrap_or_else(|| default_install(&layout));
-    let data_dir = install.join("Data").join("data");
 
     // Repair rewrites the indices a running client memory-maps. The
     // scan itself only reads, so it is allowed either way.
@@ -25,7 +24,8 @@ pub(crate) fn verify(ctx: Ctx, path: Option<PathBuf>, deep: bool, repair: bool, 
         }
     }
 
-    let store = Storage::open(install.join("Data")).context("opening the store")?;
+    let store = Storage::open(&install).context("opening the store")?;
+    let data_dir = store.data_dir().to_path_buf();
     let stats = store.stats();
     println!("store           {}", data_dir.display());
     println!("indexed         {} files across {} buckets", stats.files, stats.buckets);
@@ -284,8 +284,15 @@ pub(crate) fn uninstall(ctx: Ctx, code: ProductCode, path: Option<PathBuf>, yes:
         .find(|library| layout.wow_install_in(library) == install)
         .map(|library| library.windows_wow_path())
         .unwrap_or_else(|| windows_wow_path(&layout, &code));
+    let addons_dir = plan.flavor_dir.as_ref().map(|dir| dir.join("Interface").join("AddOns"));
     let removed = uninstall::execute(&install, &code, &plan, &windows_path)?;
     println!("\ndeleted         {} paths, {:.2} GiB", removed.paths.len(), gib(removed.bytes));
+    if let Some(addons_dir) = addons_dir {
+        let dirs = AppDirs::discover()?;
+        if let Err(e) = lightforge_core::addons::manage::forget_ledger(dirs.data_dir(), &code, &addons_dir) {
+            eprintln!("warning: the addon ledger stayed, so a reinstall here reports its addons as installed: {e}");
+        }
+    }
     Ok(())
 }
 
