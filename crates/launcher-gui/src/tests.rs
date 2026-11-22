@@ -2420,3 +2420,15 @@ fn a_missing_proton_opens_on_setup() {
     let _ = app.update(Message::SetupStatus(Some(Box::new(status))));
     assert_eq!(app.screen, Screen::Settings);
 }
+
+#[test]
+fn a_deep_scan_that_found_only_an_unreadable_index_still_repairs() {
+    let (mut app, _scratch) = test_app();
+    let report = lightforge_core::tact::verify::Report {
+        damaged_indices: vec!["/games/Data/data/0500000043.idx".into()],
+        ..Default::default()
+    };
+    let _ = app.update(Message::DeepScanned(Box::new(Ok(report))));
+    assert!(app.status.contains("1 unreadable index files"), "{}", app.status);
+    assert!(app.repairing.is_some());
+}

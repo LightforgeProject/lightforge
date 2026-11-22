@@ -21,6 +21,7 @@ pub async fn install_all(
 ) -> Result<Report, ManageError> {
     // Read once to decide. The save reads it again: a pin set meanwhile survives.
     let mut ledger = Ledger::load(&options.ledger_path)?;
+    ledger.forget_missing(&options.addons_dir);
     let mut written: Vec<(Record, Option<String>)> = Vec::new();
     let mut report = Report::default();
 
@@ -188,7 +189,8 @@ pub async fn update_all(
     options: &Options,
     on_event: impl FnMut(Event),
 ) -> Result<Report, ManageError> {
-    let ledger = Ledger::load(&options.ledger_path)?;
+    let mut ledger = Ledger::load(&options.ledger_path)?;
+    ledger.forget_missing(&options.addons_dir);
     let requests = update_requests(&ledger, options.channel);
 
     let options = Options { pinned: false, reinstall: false, ..options.clone() };

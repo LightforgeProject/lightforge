@@ -124,8 +124,11 @@ pub(crate) fn addons(ctx: Ctx, code: ProductCode, path: Option<PathBuf>, token: 
         .ok()
         .and_then(|info| info.get(&code, lightforge_core::buildinfo::COL_VERSION).ok().map(str::to_owned));
     let client = addons::Client::of(&code, version.as_deref());
-    let installed = addons::scan(&dir, &client)
-        .with_context(|| format!("reading {}", dir.display()))?;
+    // The client creates the folder on its first start; until then, none.
+    let installed = match dir.is_dir() {
+        true => addons::scan(&dir, &client).with_context(|| format!("reading {}", dir.display()))?,
+        false => Vec::new(),
+    };
 
     println!("addons dir      {}", dir.display());
     println!("installed       {}", installed.len());
@@ -138,12 +141,23 @@ pub(crate) fn addons(ctx: Ctx, code: ProductCode, path: Option<PathBuf>, token: 
     }
     println!();
 
+    // What Lightforge installed and tracks, beside what each TOC declares.
+    let ledger = AppDirs::discover()
+        .ok()
+        .and_then(|dirs| addons::install::Ledger::load(&addons::manage::ledger_path(dirs.data_dir(), &dir, &code)).ok())
+        .unwrap_or_default();
     for addon in &installed {
-        let ids: Vec<String> = addon
+        let mut ids: Vec<String> = addon
             .ids
             .iter()
             .map(|(provider, id)| format!("{}:{id}", provider.as_str()))
             .collect();
+        if let Some(record) = ledger.addons.iter().find(|r| r.folders.contains(&addon.folder)) {
+            let tracked = format!("{}:{}", record.provider, record.id);
+            if !ids.contains(&tracked) {
+                ids.insert(0, tracked);
+            }
+        }
         println!(
             "{:<34} {:<18} {}{}",
             addon.folder,
@@ -224,6 +238,7 @@ pub(crate) async fn addon_search(query: String, code: ProductCode, limit: usize,
 
 pub(crate) async fn addon_install(ctx: Ctx, id: String, provider: String, code: ProductCode, catalog: Option<String>) -> Result<()> {
     let Ctx { layout, .. } = ctx;
+    let (provider, id) = provider_and_id(provider, id);
     use lightforge_core::addons::{self, catalog::Catalog, catalog::Request, manage};
     use lightforge_core::net::Http;
 
@@ -424,6 +439,7 @@ pub(crate) fn backup_restore(ctx: Ctx, which: String, code: ProductCode, account
 
 pub(crate) fn addon_remove(ctx: Ctx, id: String, provider: String, code: ProductCode) -> Result<()> {
     let Ctx { layout, .. } = ctx;
+    let (provider, id) = provider_and_id(provider, id);
     use lightforge_core::addons::{self, manage};
 
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
@@ -555,4 +571,12 @@ fn print_addon_report(report: &lightforge_core::addons::manage::Report) {
         report.up_to_date.len(),
         report.unavailable.len()
     );
+}
+
+/// `curse:334372`, as `addons` prints it, names its own provider over `--provider`.
+fn provider_and_id(provider: String, id: String) -> (String, String) {
+    match id.split_once(':') {
+        Some((named, id)) => (named.to_owned(), id.to_owned()),
+        None => (provider, id),
+    }
 }

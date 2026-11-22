@@ -335,7 +335,7 @@ pub(crate) enum Command {
     },
     /// Install an addon by provider and id.
     AddonInstall {
-        /// Provider id: a number, a slug, or `owner/repo`.
+        /// Provider id: a number, a slug, `owner/repo`, or `curse:334372` as `addons` lists it.
         id: String,
         #[arg(long, default_value = "wowinterface")]
         provider: String,
@@ -366,7 +366,7 @@ pub(crate) enum Command {
     },
     /// Remove an addon Lightforge installed.
     AddonRemove {
-        /// Provider id, e.g. `2382`.
+        /// Provider id, e.g. `2382`, or `curse:2382` as `addons` lists it.
         id: String,
         #[arg(long, default_value = "curse")]
         provider: String,

@@ -115,6 +115,9 @@ pub struct Report {
     /// Archives named by the index that are not on disk.
     pub missing_archives: Vec<u16>,
     pub damaged: Vec<Damage>,
+    /// Bucket indices that would not parse. Their files read as absent until
+    /// a repair replaces each with an empty one and a download refetches them.
+    pub damaged_indices: Vec<PathBuf>,
     /// Files a deep scan cannot check (patch manifests); never repaired.
     pub unverifiable: u64,
     /// The store as it was when the scan began, for [`repair_unchanged`].
@@ -123,7 +126,7 @@ pub struct Report {
 
 impl Report {
     pub fn is_healthy(&self) -> bool {
-        self.damaged.is_empty()
+        self.damaged.is_empty() && self.damaged_indices.is_empty()
     }
 }
 
@@ -133,6 +136,7 @@ pub fn scan(store: &Storage, mut on_progress: impl FnMut(Progress)) -> Report {
     let data_dir = store.data_dir().to_path_buf();
     let mut report = Report {
         snapshot: Snapshot::take(&data_dir).unwrap_or_default(),
+        damaged_indices: store.damaged_indices().to_vec(),
         ..Report::default()
     };
 
@@ -270,7 +274,7 @@ pub fn deep_scan(
     let data_dir = resolve_data_dir(path.as_ref());
     // Before the indices load, so a write during the load is caught too.
     let before = Snapshot::take(&data_dir)?;
-    let store = Storage::open(path.as_ref())?;
+    let store = Storage::open_skipping_damaged(path.as_ref())?;
 
     let mut by_archive: BTreeMap<u16, Vec<Entry>> = BTreeMap::new();
     for entry in store.files() {
@@ -313,7 +317,11 @@ pub fn deep_scan(
         return Err(VerifyError::StoreChanged);
     }
 
-    let mut report = Report { snapshot: before, ..Report::default() };
+    let mut report = Report {
+        snapshot: before,
+        damaged_indices: store.damaged_indices().to_vec(),
+        ..Report::default()
+    };
     for part in parts {
         report.checked += part.checked;
         report.headers_read += part.headers_read;
@@ -539,15 +547,35 @@ pub fn repair_unchanged(data_dir: &Path, report: &Report) -> Result<usize, Verif
     if Snapshot::take(data_dir)? != report.snapshot {
         return Err(VerifyError::StoreChanged);
     }
+    replace_damaged_indices(data_dir, &report.damaged_indices)?;
     remove_entries(data_dir, report.damaged.iter().map(|d| d.entry))
 }
 
-/// Remove damaged entries from the store's indices, returning how many: the
-/// next download fetches them again. Archives are not touched. Never against
-/// a live client, which memory-maps the indices.
-pub fn repair(data_dir: &Path, damaged: &[Damage]) -> Result<usize, VerifyError> {
+/// Remove what `report` found damaged from the store's indices, returning how
+/// many entries went: the next download fetches them again. Archives are not
+/// touched. Never against a live client, which memory-maps the indices.
+pub fn repair(data_dir: &Path, report: &Report) -> Result<usize, VerifyError> {
     let _lock = StoreLock::acquire(data_dir)?;
-    remove_entries(data_dir, damaged.iter().map(|d| d.entry))
+    replace_damaged_indices(data_dir, &report.damaged_indices)?;
+    remove_entries(data_dir, report.damaged.iter().map(|d| d.entry))
+}
+
+/// Swap each unreadable bucket index for an empty generation, then delete it.
+/// Its files become absent and the next download fetches them, a sixteenth
+/// of the store; the archive bytes they held are left for compaction.
+fn replace_damaged_indices(data_dir: &Path, damaged: &[PathBuf]) -> Result<(), VerifyError> {
+    for path in damaged {
+        let Some((bucket, _)) = path
+            .file_name()
+            .and_then(|name| super::idx::parse_file_name(&name.to_string_lossy()))
+        else {
+            continue;
+        };
+        Index::new(bucket).save_new_generation(data_dir)?;
+        std::fs::remove_file(path).map_err(|source| super::idx::IdxError::Io { path: path.clone(), source })?;
+        tracing::warn!("replaced the unreadable index {} with an empty one", path.display());
+    }
+    Ok(())
 }
 
 /// Drop `entries` from the latest generation of each bucket's index, writing
@@ -681,8 +709,56 @@ mod tests {
 
         let report = scan(&open(&dir), |_| {});
         assert_eq!(report.damaged, vec![Damage { entry: alias, fault: Fault::LoneAlias }]);
-        assert_eq!(repair(&data, &report.damaged).unwrap(), 1);
+        assert_eq!(repair(&data, &report).unwrap(), 1);
         assert_eq!(open(&dir).files().count(), 0, "the planner sees the key as absent");
+    }
+
+    /// Truncate the index holding file `n` of [`store_with`] into its
+    /// entries, as a cut-off write or a bad disk would, and return its path.
+    fn truncate_index_of(dir: &tempfile::TempDir, n: u8) -> PathBuf {
+        let data = dir.path().join("Data").join("data");
+        let path = crate::tact::idx::discover(&data)
+            .unwrap()
+            .into_iter()
+            .find(|p| Index::load(p).unwrap().files().any(|e| e.key[0] == n))
+            .unwrap();
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(40).unwrap();
+        path
+    }
+
+    #[test]
+    fn opening_a_store_with_a_truncated_index_names_the_file() {
+        let dir = store_with(&[(1, b"hello"), (2, b"world")]);
+        let path = truncate_index_of(&dir, 1);
+        match Storage::open(dir.path()) {
+            Err(StorageError::DamagedIndex { path: named, .. }) => assert_eq!(named, path),
+            other => panic!("expected DamagedIndex, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_deep_scan_reports_a_truncated_index_and_checks_the_rest() {
+        let dir = store_with(&[(1, b"hello"), (2, b"world")]);
+        let path = truncate_index_of(&dir, 1);
+        let report = deep_scan(dir.path(), &Cancel::new(), |_| {}).unwrap();
+        assert_eq!(report.damaged_indices, vec![path]);
+        assert_eq!(report.checked, 1);
+        assert!(!report.is_healthy());
+    }
+
+    #[test]
+    fn repair_replaces_a_truncated_index_so_the_store_opens_again() {
+        let dir = store_with(&[(1, b"hello"), (2, b"world")]);
+        let data = dir.path().join("Data").join("data");
+        let path = truncate_index_of(&dir, 1);
+        let report = scan(&Storage::open_skipping_damaged(dir.path()).unwrap(), |_| {});
+
+        repair_unchanged(&data, &report).unwrap();
+
+        assert!(!path.exists());
+        let store = open(&dir);
+        assert_eq!(store.files().count(), 1, "the other bucket's file is kept");
+        assert!(store.files().all(|e| e.key[0] == 2));
     }
 
     #[test]
@@ -754,7 +830,8 @@ mod tests {
             let entry = *store.files().next().unwrap();
             vec![Damage { entry, fault: Fault::BadChecksum }]
         };
-        assert_eq!(repair(&data, &damaged).unwrap(), 1);
+        let report = Report { damaged: damaged.clone(), ..Report::default() };
+        assert_eq!(repair(&data, &report).unwrap(), 1);
 
         // Gone from the index, so the planner counts it absent.
         let store = open(&dir);
@@ -770,7 +847,7 @@ mod tests {
     fn repairing_nothing_changes_nothing() {
         let dir = store_with(&[(1, b"hello")]);
         let data = dir.path().join("Data").join("data");
-        assert_eq!(repair(&data, &[]).unwrap(), 0);
+        assert_eq!(repair(&data, &Report::default()).unwrap(), 0);
         assert_eq!(open(&dir).files().count(), 1);
     }
 

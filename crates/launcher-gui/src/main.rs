@@ -143,6 +143,7 @@ fn main() -> iced::Result {
         return Ok(());
     }
     tune_allocator();
+    fit::drop_dead_wayland();
     fit::take_over_scale();
     trace::begin();
     // 0.14 takes the boot function where 0.13 took the title, and runs it

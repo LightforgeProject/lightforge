@@ -33,6 +33,9 @@ pub struct Storage {
     /// Newest generation per bucket, keyed by bucket number.
     indices: HashMap<u8, Index>,
     archives: HashMap<u16, File>,
+    /// Newest generations that would not parse, left out of `indices`. Only
+    /// [`Storage::open_skipping_damaged`] leaves any here.
+    damaged_indices: Vec<PathBuf>,
 }
 
 impl std::fmt::Debug for Storage {
@@ -49,21 +52,43 @@ impl Storage {
     /// Open the store under an install root, a `Data` directory, or
     /// `Data/data` itself.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
-        let data_dir = resolve_data_dir(path.as_ref());
+        Self::load(path.as_ref(), false)
+    }
+
+    /// [`Storage::open`], leaving out any bucket whose index will not parse
+    /// instead of failing: a scan reports them, and a repair replaces them.
+    /// [`Storage::damaged_indices`] names them.
+    pub fn open_skipping_damaged(path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        Self::load(path.as_ref(), true)
+    }
+
+    fn load(path: &Path, skip_damaged: bool) -> Result<Self, StorageError> {
+        let data_dir = resolve_data_dir(path);
         if !data_dir.is_dir() {
             return Err(StorageError::NotACascStore(data_dir));
         }
 
         let mut indices = HashMap::new();
+        let mut damaged_indices = Vec::new();
         for file in idx::discover(&data_dir)? {
-            let index = Index::load(&file)?;
-            indices.insert(index.bucket(), index);
+            match Index::load(&file) {
+                Ok(index) => {
+                    indices.insert(index.bucket(), index);
+                }
+                Err(e @ IdxError::Io { .. }) => return Err(e.into()),
+                Err(_) if skip_damaged => damaged_indices.push(file),
+                Err(source) => return Err(StorageError::DamagedIndex { path: file, source }),
+            }
         }
-        if indices.is_empty() {
+        if indices.is_empty() && damaged_indices.is_empty() {
             return Err(StorageError::NoIndices(data_dir));
         }
 
-        Ok(Self { data_dir, indices, archives: HashMap::new() })
+        Ok(Self { data_dir, indices, archives: HashMap::new(), damaged_indices })
+    }
+
+    pub fn damaged_indices(&self) -> &[PathBuf] {
+        &self.damaged_indices
     }
 
     pub fn data_dir(&self) -> &Path {
@@ -261,6 +286,13 @@ pub enum StorageError {
         offset: u32,
         #[source]
         source: super::blte::BlteError,
+    },
+
+    #[error("{path} is damaged")]
+    DamagedIndex {
+        path: PathBuf,
+        #[source]
+        source: IdxError,
     },
 
     #[error(transparent)]

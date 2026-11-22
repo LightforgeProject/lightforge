@@ -38,6 +38,29 @@ pub fn take_over_scale() {
     OWNED.store(true, Ordering::Relaxed);
 }
 
+/// Fall back to X11 when `WAYLAND_DISPLAY` names a socket that is gone, as
+/// in a shell that outlived its compositor: winit takes the variable as a
+/// promise and panics on the failed connection instead of trying X11.
+///
+/// Before any thread starts, like [`take_over_scale`].
+pub fn drop_dead_wayland() {
+    let Some(display) = std::env::var_os("WAYLAND_DISPLAY") else {
+        return;
+    };
+    let socket = match std::path::Path::new(&display).is_absolute() {
+        true => std::path::PathBuf::from(&display),
+        false => match std::env::var_os("XDG_RUNTIME_DIR") {
+            Some(runtime) => std::path::Path::new(&runtime).join(&display),
+            None => return,
+        },
+    };
+    if socket.exists() || std::env::var_os("DISPLAY").is_none() {
+        return;
+    }
+    tracing::warn!("{} is gone, using X11 instead", socket.display());
+    std::env::remove_var("WAYLAND_DISPLAY");
+}
+
 /// Whether the app scales itself, see [`take_over_scale`].
 pub fn owned() -> bool {
     OWNED.load(Ordering::Relaxed)

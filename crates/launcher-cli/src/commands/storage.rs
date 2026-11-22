@@ -24,7 +24,7 @@ pub(crate) fn verify(ctx: Ctx, path: Option<PathBuf>, deep: bool, repair: bool, 
         }
     }
 
-    let store = Storage::open(&install).context("opening the store")?;
+    let store = Storage::open_skipping_damaged(&install).context("opening the store")?;
     let data_dir = store.data_dir().to_path_buf();
     let stats = store.stats();
     println!("store           {}", data_dir.display());
@@ -86,6 +86,9 @@ pub(crate) fn verify(ctx: Ctx, path: Option<PathBuf>, deep: bool, repair: bool, 
         return Ok(());
     }
 
+    for path in &report.damaged_indices {
+        println!("\nunreadable      {} (its files read as absent)", path.display());
+    }
     println!("\ndamaged         {} entries", report.damaged.len());
     let mut by_fault: std::collections::BTreeMap<&str, usize> = Default::default();
     for damage in &report.damaged {
@@ -128,6 +131,9 @@ pub(crate) fn verify(ctx: Ctx, path: Option<PathBuf>, deep: bool, repair: bool, 
             }
             let removed = verify::repair_unchanged(&data_dir, &report)?;
             println!("\nremoved         {removed} entries from the indices");
+            if !report.damaged_indices.is_empty() {
+                println!("replaced        {} unreadable index files with empty ones", report.damaged_indices.len());
+            }
             println!("Run a download for this product to fetch them again.");
         }
     }

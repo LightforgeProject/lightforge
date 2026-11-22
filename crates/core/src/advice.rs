@@ -141,7 +141,8 @@ fn recognise(error: &(dyn Error + 'static)) -> Option<Advice> {
     if let Some(e) = error.downcast_ref::<tact::storage::StorageError>() {
         use tact::storage::StorageError as S;
         return match e {
-            S::NoIndices(_) | S::NotBlte { .. } | S::Decode { .. } => Some(damaged()),
+            S::DamagedIndex { .. } | S::NotBlte { .. } | S::Decode { .. } => Some(damaged()),
+            S::NoIndices(_) => Some(Advice::say("This game's download did not finish. Install it again to complete it.")),
             _ => None,
         };
     }
@@ -243,7 +244,7 @@ fn transparent<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a (dyn Error + 
         PreflightError => [PreflightError::Prefix, PreflightError::BattleNet],
         InstallError => [
             InstallError::Version, InstallError::Cdn, InstallError::Indices,
-            InstallError::Download, InstallError::Writer,
+            InstallError::Download, InstallError::Writer, InstallError::Storage,
         ],
         DownloadError => [DownloadError::Write, DownloadError::Cdn],
         IndexError => [IndexError::Cdn],
@@ -362,6 +363,21 @@ mod tests {
             tact::idx::IdxError::DataHash { expected: 1, found: 2 },
         ));
         assert_eq!(advise(&error).unwrap().fix, Some(Fix::DeepScan));
+    }
+
+    #[test]
+    fn an_unreadable_index_offers_a_deep_scan() {
+        let error = tact::storage::StorageError::DamagedIndex {
+            path: "/games/Data/data/0500000043.idx".into(),
+            source: tact::idx::IdxError::Truncated { need: 166_918, got: 100_000 },
+        };
+        assert_eq!(advise(&error).unwrap().fix, Some(Fix::DeepScan));
+    }
+
+    #[test]
+    fn a_store_without_indices_is_an_unfinished_download_not_damage() {
+        let error = tact::storage::StorageError::NoIndices("/games/Data/data".into());
+        assert_eq!(advise(&error).unwrap().fix, None);
     }
 
     #[test]

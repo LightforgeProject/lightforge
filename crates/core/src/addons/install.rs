@@ -126,6 +126,13 @@ fn is_false(value: &bool) -> bool {
 }
 
 impl Ledger {
+    /// Drop records none of whose folders is left in `addons_dir`. Deleted by
+    /// hand, an addon would still read as installed and up to date, and
+    /// installing it again would do nothing.
+    pub fn forget_missing(&mut self, addons_dir: &Path) {
+        self.addons.retain(|record| record.folders.iter().any(|folder| addons_dir.join(folder).is_dir()));
+    }
+
     /// Folders records from more than one provider claim, with those
     /// providers. Each record's update writes the folder, so the two overwrite
     /// each other and removing one takes the other's files.
@@ -548,6 +555,22 @@ fn io(path: &Path) -> impl FnOnce(std::io::Error) -> InstallError + '_ {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_addon_whose_folders_were_deleted_is_forgotten() {
+        let addons = tempfile::tempdir().unwrap();
+        std::fs::create_dir(addons.path().join("Questie")).unwrap();
+        let record = |name: &str, folders: &[&str]| Record {
+            name: name.to_owned(),
+            folders: folders.iter().map(|f| (*f).to_owned()).collect(),
+            ..Record::default()
+        };
+        let mut ledger = Ledger {
+            addons: vec![record("Questie", &["Questie", "QuestieTrace"]), record("QuestieDB", &["QuestieDB"])],
+        };
+        ledger.forget_missing(addons.path());
+        assert_eq!(ledger.addons.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["Questie"]);
+    }
 
     #[test]
     fn a_folder_two_providers_installed_is_reported_once_with_both() {

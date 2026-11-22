@@ -524,7 +524,7 @@ Install an addon by provider and id
 Usage: lightforge addon-install [OPTIONS] <ID>
 
 Arguments:
-  <ID>  Provider id: a number, a slug, or `owner/repo`
+  <ID>  Provider id: a number, a slug, `owner/repo`, or `curse:334372` as `addons` lists it
 
 Options:
       --provider <PROVIDER>  [default: wowinterface]
@@ -574,7 +574,7 @@ Remove an addon Lightforge installed
 Usage: lightforge addon-remove [OPTIONS] <ID>
 
 Arguments:
-  <ID>  Provider id, e.g. `2382`
+  <ID>  Provider id, e.g. `2382`, or `curse:2382` as `addons` lists it
 
 Options:
       --provider <PROVIDER>  [default: curse]

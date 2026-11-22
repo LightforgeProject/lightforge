@@ -207,6 +207,8 @@ pub struct ProductStatus {
     pub label: Option<String>,
     /// `None` when the service has no such product (404).
     pub version: Option<Version>,
+    /// Why the service could not be asked, when it could not.
+    pub unreachable: Option<String>,
 }
 
 impl ProductStatus {
@@ -249,11 +251,11 @@ pub async fn probe_all(
 
     let mut found: Vec<ProductStatus> = futures_util::stream::iter(codes.iter().copied())
         .map(|code| async move {
-            ProductStatus {
-                code: code.to_owned(),
-                label: label(code),
-                version: probe(http, region, code).await.ok().flatten(),
-            }
+            let (version, unreachable) = match probe(http, region, code).await {
+                Ok(version) => (version, None),
+                Err(e) => (None, Some(crate::error::chain(&e))),
+            };
+            ProductStatus { code: code.to_owned(), label: label(code), version, unreachable }
         })
         .buffer_unordered(concurrency.max(1))
         .collect()

@@ -42,20 +42,24 @@ pub async fn scan_and_repair(
 
         let install = layout.wow_install(&code);
         tracing::info!("scan and repair {} at {}", code.as_str(), install.display());
-        let store = Storage::open(install.join("Data")).map_err(|e| chain(&e))?;
+        let store = Storage::open_skipping_damaged(&install).map_err(|e| chain(&e))?;
         let report = verify::scan(&store, |progress| {
             let _ = tx.send(progress);
         });
-        tracing::info!("scan checked {} entries, {} damaged", report.checked, report.damaged.len());
+        tracing::info!(
+            "scan checked {} entries, {} damaged, {} unreadable indices",
+            report.checked,
+            report.damaged.len(),
+            report.damaged_indices.len()
+        );
 
         let removed = match report.is_healthy() {
             true => 0,
-            false => verify::repair(&install.join("Data").join("data"), &report.damaged)
-                .map_err(|e| chain(&e))?,
+            false => verify::repair(store.data_dir(), &report).map_err(|e| chain(&e))?,
         };
         Ok(Scanned {
             checked: report.checked,
-            damaged: report.damaged.len() as u64,
+            damaged: (report.damaged.len() + report.damaged_indices.len()) as u64,
             removed,
         })
     })

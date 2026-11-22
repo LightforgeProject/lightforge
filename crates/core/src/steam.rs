@@ -7,12 +7,13 @@ use std::path::{Path, PathBuf};
 
 /// Candidate Steam roots, in preference order. The `.steam` entries are
 /// symlinks maintained by Steam itself and are the most reliable answer when
-/// present; the rest cover native and Flatpak installs.
+/// present; the rest cover native, Flatpak and Snap installs.
 const STEAM_ROOT_CANDIDATES: &[&str] = &[
     ".steam/steam",
     ".steam/root",
     ".local/share/Steam",
     ".var/app/com.valvesoftware.Steam/.local/share/Steam",
+    "snap/steam/common/.local/share/Steam",
 ];
 
 /// A located Steam installation.
