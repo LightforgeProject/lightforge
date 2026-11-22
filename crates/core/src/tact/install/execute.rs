@@ -58,6 +58,20 @@ pub async fn execute(
     }
 
     let mut writer = StoreWriter::create(dest.join("Data").join("data"))?;
+    // Before the first byte: a cancel later removes this build's data by it.
+    if !options.stage {
+        crate::tact::staged::begin_fetch(
+            dest,
+            crate::tact::staged::Staged {
+                product: code.clone(),
+                build_key: remote.build_config.clone(),
+                version: remote.versions_name.clone(),
+                cdn_path: cdn.path.clone(),
+                cdn_hosts: cdn.hosts.clone(),
+                cdn_servers: cdn.servers.clone(),
+            },
+        )?;
+    }
     writer.write(&encoding_key, &encoding_blte)?;
     // 141 MB for wowf, not to be held through an hours-long download.
     drop(encoding_blte);
@@ -171,9 +185,17 @@ pub async fn execute(
             path: info_path,
             version: remote.versions_name.clone(),
         });
-        // Released and now installed: nothing is staged any more.
+        // Released and now installed: nothing is staged or fetching any more.
         if let Err(e) = crate::tact::staged::clear(dest, code, Some(&remote.build_config)) {
             tracing::warn!("{e}");
+        }
+        if let Err(e) = crate::tact::staged::end_fetch(dest, code) {
+            tracing::warn!("{e}");
+        }
+        match crate::tact::indices::prune_unnamed(dest) {
+            Ok(0) => {}
+            Ok(freed) => tracing::info!("removed archive indices no build names: {freed} B"),
+            Err(e) => tracing::warn!("could not prune Data/indices: {}", crate::error::chain(&e)),
         }
 
         // Without `.product.db` Locate answers error 2800. From `.build.info`,

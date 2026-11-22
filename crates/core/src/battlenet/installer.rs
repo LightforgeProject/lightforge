@@ -54,7 +54,8 @@ pub async fn fetch_installer(
     on_progress: impl FnMut(u64, Option<u64>),
 ) -> Result<PathBuf, BattleNetError> {
     let dest = cache_dir.join(INSTALLER_FILE);
-    http.download(INSTALLER_URL, &dest, on_progress).await?;
+    // A 4.7 MB stub; it has no checksum, so at least its size is bounded.
+    http.download(INSTALLER_URL, &dest, 256 << 20, on_progress).await?;
     Ok(dest)
 }
 

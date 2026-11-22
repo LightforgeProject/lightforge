@@ -738,17 +738,32 @@ fn configure_is_idempotent_and_leaves_no_temp_files() {
 }
 
 #[test]
-fn a_corrupt_config_is_reported_rather_than_silently_replaced() {
+fn a_corrupt_config_is_kept_aside_and_replaced() {
     let dir = scratch("corrupt");
     let layout = Layout::with_root(&dir);
     let path = layout.battle_net_config("steamuser");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "{ not json").unwrap();
 
-    assert!(matches!(
-        configure(&layout, "steamuser", &default_tweaks(&layout, false)),
-        Err(BattleNetError::MalformedConfig { .. })
-    ));
+    configure(&layout, "steamuser", &default_tweaks(&layout, false)).unwrap();
+
+    let aside = path.with_file_name("Battle.net.config.broken");
+    assert_eq!(std::fs::read_to_string(aside).unwrap(), "{ not json");
+    let fresh: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(fresh.is_object());
+}
+
+#[test]
+fn an_empty_account_config_does_not_stop_the_overrides() {
+    let dir = scratch("empty-account");
+    let layout = Layout::with_root(&dir);
+    let global = layout.battle_net_config("steamuser");
+    std::fs::create_dir_all(global.parent().unwrap()).unwrap();
+    std::fs::write(&global, "{}").unwrap();
+    std::fs::write(global.with_file_name("12345678.config"), "").unwrap();
+
+    record_overrides(&layout, "steamuser", &[], &account_tweaks(true, false)).unwrap();
+    assert!(global.with_file_name("12345678.config.broken").exists());
 }
 
 #[test]

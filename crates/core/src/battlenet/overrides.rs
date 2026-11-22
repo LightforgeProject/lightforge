@@ -12,7 +12,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::tweaks::{account_configs, merge_file, remove_key};
+use super::tweaks::{account_configs, merge_file, read_json, remove_key};
 use super::{io, BattleNetError, Tweak};
 use crate::paths::Layout;
 
@@ -74,21 +74,11 @@ pub fn restore_overrides(layout: &Layout, user: &str) -> Result<bool, BattleNetE
 }
 
 fn read_record(dir: &Path) -> Result<Record, BattleNetError> {
-    let path = dir.join(RECORD_FILE);
-    match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text).map_err(|e| BattleNetError::MalformedConfig { path, source: e }),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Record::new()),
-        Err(e) => Err(io(&path)(e)),
-    }
+    Ok(read_json(&dir.join(RECORD_FILE))?.unwrap_or_default())
 }
 
 fn note(record: &mut Record, path: &Path, tweaks: &[Tweak]) -> Result<(), BattleNetError> {
-    let config: Value = match std::fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str(&text)
-            .map_err(|e| BattleNetError::MalformedConfig { path: path.to_path_buf(), source: e })?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Null,
-        Err(e) => return Err(io(path)(e)),
-    };
+    let config: Value = read_json(path)?.unwrap_or(Value::Null);
     let Some(file) = path.file_name().map(|name| name.to_string_lossy().into_owned()) else {
         return Ok(());
     };

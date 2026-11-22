@@ -33,7 +33,7 @@ const BUILD: &[(&str, &[u8])] = &[
 fn an_unpacked_build_lands_whole_and_leaves_no_staging() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("proton");
-    let built = unpack(&tarball(tmp.path(), BUILD), &root).unwrap();
+    let built = unpack(&tarball(tmp.path(), BUILD), &root, "GE-Proton11-7").unwrap();
 
     assert_eq!(built, root.join("GE-Proton11-7"));
     assert!(built.join("files/bin/wine").is_file());
@@ -48,7 +48,7 @@ fn a_truncated_download_leaves_nothing_behind() {
     let bytes = std::fs::read(&archive).unwrap();
     std::fs::write(&archive, &bytes[..bytes.len() / 2]).unwrap();
 
-    assert!(unpack(&archive, &root).is_err());
+    assert!(unpack(&archive, &root, "GE-Proton11-7").is_err());
     assert!(!root.join("GE-Proton11-7").exists());
     assert!(!staging_left(&root));
     assert!(discover_managed(&root).is_empty());
@@ -60,8 +60,23 @@ fn a_tarball_that_is_not_a_proton_build_is_not_installed() {
     let root = tmp.path().join("proton");
     let archive = tarball(tmp.path(), &[("Something/readme", b"hi")]);
 
-    assert!(matches!(unpack(&archive, &root), Err(ProtonError::NotAProtonBuild(_))));
+    assert!(matches!(unpack(&archive, &root, "GE-Proton11-7"), Err(ProtonError::NotAProtonBuild(_))));
     assert!(!root.join("Something").exists());
+    assert!(!staging_left(&root));
+}
+
+#[test]
+fn a_tarball_naming_another_release_does_not_replace_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("proton");
+    let kept = root.join("GE-Proton11-7/files/kept.dll");
+    std::fs::create_dir_all(kept.parent().unwrap()).unwrap();
+    std::fs::write(&kept, b"mine").unwrap();
+
+    let refused = unpack(&tarball(tmp.path(), BUILD), &root, "GE-Proton11-12");
+
+    assert!(matches!(refused, Err(ProtonError::WrongFolder { .. })));
+    assert!(kept.is_file());
     assert!(!staging_left(&root));
 }
 
@@ -73,7 +88,7 @@ fn unpacking_a_release_again_replaces_it_rather_than_merging() {
     std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
     std::fs::write(&stale, b"old").unwrap();
 
-    let built = unpack(&tarball(tmp.path(), BUILD), &root).unwrap();
+    let built = unpack(&tarball(tmp.path(), BUILD), &root, "GE-Proton11-7").unwrap();
     assert!(built.join("proton").is_file());
     assert!(!stale.exists());
     assert!(!staging_left(&root));
@@ -531,7 +546,7 @@ fn an_xz_build_unpacks_like_a_gz_one() {
     tar.into_inner().unwrap().finish().unwrap();
 
     let root = tmp.path().join("proton");
-    let built = unpack(&archive, &root).unwrap();
+    let built = unpack(&archive, &root, "GE-Proton11-7").unwrap();
     assert!(built.join("files/bin/wine").is_file());
 }
 

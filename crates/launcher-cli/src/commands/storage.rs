@@ -203,6 +203,11 @@ pub(crate) async fn move_game(ctx: Ctx, code: ProductCode, to: String, yes: bool
         println!("\nnothing moved; add --yes to move it");
         return Ok(());
     }
+    // The window keeps its own copy of the config and saves it over this
+    // one, naming the old library again after its copy is gone.
+    if AppDirs::discover().is_ok_and(|dirs| dirs.gui_running()) {
+        anyhow::bail!("close the Lightforge window first, or move the game from its Game Settings, Drive");
+    }
 
     let http = Http::new()?;
     let mut shown = u64::MAX;
@@ -228,6 +233,7 @@ pub(crate) async fn move_game(ctx: Ctx, code: ProductCode, to: String, yes: bool
     let dirs = AppDirs::discover()?;
     config.save(&dirs.config_file())?;
     let moved_to = config.layout()?;
+    lightforge_core::migrate::settled(&moved_to, &code);
     let (from, to) = (layout.addons_dir(&code), moved_to.addons_dir(&code));
     if let Err(e) = lightforge_core::addons::manage::carry_ledger(dirs.data_dir(), &code, &from, &to) {
         eprintln!("warning: the addon ledger stayed at the old path, so the addons show as unmanaged: {e}");
@@ -376,17 +382,19 @@ pub(crate) async fn prune(ctx: Ctx, path: Option<PathBuf>, yes: bool) -> Result<
     println!("frees           {:.2} GiB", gib(plan.freed));
     println!("stranded        {:.2} GiB left as dead space", gib(plan.stranded));
 
-    if !yes || plan.entries.is_empty() {
-        if !plan.entries.is_empty() {
-            println!("\nnothing changed. Re-run with --yes to go ahead.");
-        }
+    if !yes {
+        println!("\nnothing changed. Re-run with --yes to go ahead, which also drops archive indices no version names.");
         return Ok(());
     }
     if let Some(process) = lightforge_core::preflight::scan(&layout).first() {
         anyhow::bail!("close {} first — the store is in use", process.name);
     }
-    let freed = reclaim::execute(&install, &plan, copy_progress(plan.moved))?;
-    println!("\nfreed           {:.2} GiB", gib(freed));
+    let freed = match plan.entries.is_empty() {
+        true => 0,
+        false => reclaim::execute(&install, &plan, copy_progress(plan.moved))?,
+    };
+    let indices = lightforge_core::tact::indices::prune_unnamed(&install)?;
+    println!("\nfreed           {:.2} GiB, and {:.2} GiB of archive indices", gib(freed), gib(indices));
     Ok(())
 }
 

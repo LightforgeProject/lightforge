@@ -296,6 +296,13 @@ pub async fn discard_download(
     }
 
     let install = layout.wow_install(&code);
+    // Read before the uninstall below forgets them.
+    let fetched: Vec<reclaim::Build> = lightforge_core::tact::staged::fetching(&install)
+        .map_err(|e| chain(&e))?
+        .into_iter()
+        .filter(|build| build.product == code)
+        .map(reclaim::Build::from_staged)
+        .collect();
     let plan = uninstall::plan(&install, &code).map_err(|e| chain(&e))?;
     let windows_path = layout
         .library(&code)
@@ -320,23 +327,32 @@ pub async fn discard_download(
     }
 
     let http = http.ok_or_else(|| NO_HTTP.to_owned())?;
-    let versions = version::versions(&http, region, code.as_str())
-        .await
-        .map_err(|e| chain(&e))?;
-    let remote = version::for_region(&versions, region, |v| &v.region)
-        .ok_or_else(|| "the version service lists no build for this region".to_owned())?;
-    let cdns = version::cdns(&http, region, code.as_str()).await.map_err(|e| chain(&e))?;
-    let cdn = version::for_region(&cdns, region, |c| &c.name)
-        .cloned()
-        .ok_or_else(|| "the version service lists no CDN for this region".to_owned())?;
+    // A download from before the record existed: the build being served
+    // now, which is the one it fetched unless Blizzard moved on meanwhile.
+    let departing = match fetched.is_empty() {
+        false => fetched,
+        true => {
+            let versions = version::versions(&http, region, code.as_str()).await.map_err(|e| chain(&e))?;
+            let remote = version::for_region(&versions, region, |v| &v.region)
+                .ok_or_else(|| "the version service lists no build for this region".to_owned())?;
+            let cdns = version::cdns(&http, region, code.as_str()).await.map_err(|e| chain(&e))?;
+            let cdn = version::for_region(&cdns, region, |c| &c.name)
+                .cloned()
+                .ok_or_else(|| "the version service lists no CDN for this region".to_owned())?;
+            vec![reclaim::Build::remote(code, remote.build_config.clone(), cdn)]
+        }
+    };
 
-    let departing = reclaim::Build::remote(code, remote.build_config.clone(), cdn);
-    let reclaim = reclaim::plan(&http, &install, &departing).await.map_err(|e| chain(&e))?;
-    let freed = tokio::task::spawn_blocking(move || {
-        reclaim::execute(&install, &reclaim, |_| {}).map_err(|e| chain(&e))
-    })
-    .await
-    .map_err(|e| chain(&e))??;
+    let mut freed = 0;
+    for build in departing {
+        let reclaim = reclaim::plan(&http, &install, &build).await.map_err(|e| chain(&e))?;
+        let install = install.clone();
+        freed += tokio::task::spawn_blocking(move || {
+            reclaim::execute(&install, &reclaim, |_| {}).map_err(|e| chain(&e))
+        })
+        .await
+        .map_err(|e| chain(&e))??;
+    }
 
     Ok(removed + freed)
 }

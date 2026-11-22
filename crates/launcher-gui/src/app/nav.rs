@@ -73,19 +73,34 @@ impl Lightforge {
     pub(crate) fn add_to_steam(&mut self) {
         use lightforge_core::steam_shortcut;
 
+        // Into every Steam: a native and a Flatpak one can both be in use.
         let outcome = (|| {
-            let steam = lightforge_core::steam::SteamRoot::discover()
-                .ok_or_else(|| chain(&steam_shortcut::ShortcutError::NoSteam))?;
+            let steams = lightforge_core::steam::SteamRoot::discover_all();
+            if steams.is_empty() {
+                return Err(chain(&steam_shortcut::ShortcutError::NoSteam));
+            }
             let exe = lightforge_core::upgrade::lasting_exe()
                 .map_err(|e| format!("where Lightforge is: {e}"))?;
-            steam_shortcut::add(&steam, "Lightforge", &exe, &STEAM_ART).map_err(|e| chain(&e))
+            let mut updated = true;
+            for steam in &steams {
+                updated &= steam_shortcut::add(steam, "Lightforge", &exe, &STEAM_ART).map_err(|e| chain(&e))?.updated;
+            }
+            let flatpak_blocked =
+                steams.iter().any(|s| s.is_flatpak()) && !lightforge_core::steam::flatpak_reaches_host();
+            Ok((updated, flatpak_blocked))
         })();
-        self.steam_shortcut = Some(outcome.map(|added| match added.updated {
-            true => "Lightforge's entry in Steam is up to date. Steam shows changes the next \
-                     time it starts."
-                .to_owned(),
-            false => "Lightforge is in your Steam library from the next time Steam starts."
-                .to_owned(),
+        self.steam_shortcut = Some(outcome.map(|(updated, flatpak_blocked)| {
+            let done = match updated {
+                true => "Lightforge's entry in Steam is up to date. Steam shows changes the next time it starts.",
+                false => "Lightforge is in your Steam library from the next time Steam starts.",
+            };
+            match flatpak_blocked {
+                false => done.to_owned(),
+                true => format!(
+                    "{done} Steam from Flathub can only start it once allowed to: \
+                     flatpak override --user --talk-name=org.freedesktop.Flatpak com.valvesoftware.Steam"
+                ),
+            }
         }));
     }
 

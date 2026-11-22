@@ -244,6 +244,15 @@ async fn fetch_and_install(
     ledger: &mut Ledger,
 ) -> Result<Vec<String>, ManageError> {
     let url = entry.downloadable().ok_or(ManageError::NoDownload)?;
+    // Plain http only to this machine, where the tests' servers are.
+    let secure = reqwest::Url::parse(url).is_ok_and(|parsed| {
+        parsed.scheme() == "https"
+            || (parsed.scheme() == "http"
+                && parsed.host_str().and_then(|host| host.parse::<std::net::IpAddr>().ok()).is_some_and(|ip| ip.is_loopback()))
+    });
+    if !secure {
+        return Err(ManageError::InsecureDownload(url.to_owned()));
+    }
     // On the game's disk, not in memory: voice packs run to gigabytes.
     let interface = options.addons_dir.parent().unwrap_or(&options.addons_dir);
     let mut package = http.download_temp(url, interface, install::MAX_PACKAGE_BYTES).await?;

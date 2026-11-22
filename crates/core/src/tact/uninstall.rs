@@ -166,6 +166,7 @@ pub fn execute(
 
     // Its pre-download goes with it, or prune would keep that data forever.
     super::staged::clear(install, code, None)?;
+    super::staged::end_fetch(install, code)?;
 
     Ok(removed)
 }

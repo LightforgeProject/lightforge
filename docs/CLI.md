@@ -423,9 +423,9 @@ Options:
 ### `lightforge prune`
 
 ```text
-Drop game data no installed or pre-installed version uses, then compact what that leaves. Prints the plan unless `--yes`.
+Drop game data no installed, pre-installed or unfinished version uses, and archive indices no version names, then compact what that leaves. Prints the plan unless `--yes`.
 
-That data is mostly what earlier patches left behind. Never run it while a download is running or paused: what that has fetched so far belongs to no version yet, and would have to be fetched again.
+That data is mostly what earlier patches left behind. A paused download keeps its data, unless an older Lightforge started it.
 
 Usage: lightforge prune [OPTIONS]
 

@@ -141,6 +141,11 @@ pub enum ManageError {
     #[error("the catalog reported this addon as available but gave no download URL")]
     NoDownload,
 
+    /// Only CurseForge's packages come with a hash; over plain http any could
+    /// be swapped on the way.
+    #[error("{0} is not an https address")]
+    InsecureDownload(String),
+
     #[error("{name} downloaded as {actual}, expected {expected} — the package is damaged")]
     Checksum { name: String, expected: String, actual: String },
 

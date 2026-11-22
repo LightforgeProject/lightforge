@@ -254,8 +254,10 @@ impl Lightforge {
             return iced::window::oldest().and_then(iced::window::toggle_decorations);
         }
         self.load_tweak_inputs();
-        // Before any path resolves: find drives at new mount points.
+        // Before any path resolves: find drives at new mount points, and
+        // games a cut-off move left where the config does not look.
         self.refresh_drives();
+        self.recover_moves();
         self.restore_queue();
 
         // What is provisioned decides which screen opens.

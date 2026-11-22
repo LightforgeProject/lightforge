@@ -237,6 +237,9 @@ pub enum ProtonError {
     #[error("{0} is not a Proton build")]
     NotAProtonBuild(PathBuf),
 
+    #[error("the {tag} download unpacks to {folder}, which is not that release")]
+    WrongFolder { tag: String, folder: String },
+
     #[error("extraction task failed: {0}")]
     Join(String),
 

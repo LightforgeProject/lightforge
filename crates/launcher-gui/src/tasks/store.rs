@@ -348,7 +348,8 @@ pub async fn free_unused(
             copied.store(base + bytes, Ordering::Relaxed)
         })
         .map_err(|e| chain(&e))?;
-        Ok(pruned + compacted)
+        let indices = lightforge_core::tact::indices::prune_unnamed(&install).map_err(|e| chain(&e))?;
+        Ok(pruned + compacted + indices)
     })
     .await
     .map_err(|e| chain(&e))?

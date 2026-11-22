@@ -166,6 +166,14 @@ fn recognise(error: &(dyn Error + 'static)) -> Option<Advice> {
              then try again.",
         ));
     }
+    if let Some(crate::prefix::PrefixError::ContainerBlocked(_)) = error.downcast_ref() {
+        return Some(Advice::say(
+            "This system blocks the user namespaces Steam's runtime container needs, which \
+             Ubuntu 24.04 and later do through AppArmor. Check \
+             `sysctl kernel.apparmor_restrict_unprivileged_userns`; Steam games in the same \
+             runtime fail the same way until it is allowed for Steam.",
+        ));
+    }
     if let Some(crate::prefix::PrefixError::MissingRuntime(_)) = error.downcast_ref() {
         return Some(Advice::with(
             "This Proton build is incomplete. Remove it and install it again, or pick another \

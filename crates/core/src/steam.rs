@@ -8,6 +8,27 @@ use std::path::{Path, PathBuf};
 /// Candidate Steam roots, in preference order. The `.steam` entries are
 /// symlinks maintained by Steam itself and are the most reliable answer when
 /// present; the rest cover native, Flatpak and Snap installs.
+const FLATPAK_ID: &str = "com.valvesoftware.Steam";
+
+/// Whether Flathub's Steam may use `flatpak-spawn --host`: its manifest does
+/// not grant `org.freedesktop.Flatpak`, so only an override the user made
+/// lets it start Lightforge.
+pub fn flatpak_reaches_host() -> bool {
+    let Some(dirs) = directories::UserDirs::new() else {
+        return false;
+    };
+    let home = dirs.home_dir();
+    [
+        home.join(".local/share/flatpak/overrides").join(FLATPAK_ID),
+        Path::new("/var/lib/flatpak/overrides").join(FLATPAK_ID),
+        home.join(".local/share/flatpak/app").join(FLATPAK_ID).join("current/active/metadata"),
+        Path::new("/var/lib/flatpak/app").join(FLATPAK_ID).join("current/active/metadata"),
+    ]
+    .iter()
+    .filter_map(|path| std::fs::read_to_string(path).ok())
+    .any(|text| text.lines().any(|line| line.trim().replace(' ', "") == "org.freedesktop.Flatpak=talk"))
+}
+
 const STEAM_ROOT_CANDIDATES: &[&str] = &[
     ".steam/steam",
     ".steam/root",
@@ -29,17 +50,38 @@ impl SteamRoot {
 
     /// Find Steam under the given home directory, if installed.
     pub fn discover_in(home: &Path) -> Option<Self> {
-        STEAM_ROOT_CANDIDATES
-            .iter()
-            .map(|c| home.join(c))
-            .find(|p| p.join("steamapps").is_dir())
-            .map(|p| Self::with_path(p.canonicalize().unwrap_or(p.clone())))
+        Self::discover_all_in(home).into_iter().next()
+    }
+
+    /// Every Steam under `home`, in preference order: a native and a Flatpak
+    /// one can sit side by side, each with its own library.
+    pub fn discover_all_in(home: &Path) -> Vec<Self> {
+        let mut found: Vec<Self> = Vec::new();
+        for path in STEAM_ROOT_CANDIDATES.iter().map(|c| home.join(c)).filter(|p| p.join("steamapps").is_dir()) {
+            // `.steam/steam` and `.steam/root` point at one of the others.
+            let root = Self::with_path(path.canonicalize().unwrap_or(path));
+            if !found.contains(&root) {
+                found.push(root);
+            }
+        }
+        found
     }
 
     /// Find Steam under the current user's home directory.
     pub fn discover() -> Option<Self> {
         let dirs = directories::UserDirs::new()?;
         Self::discover_in(dirs.home_dir())
+    }
+
+    /// Every Steam under the current user's home directory.
+    pub fn discover_all() -> Vec<Self> {
+        directories::UserDirs::new().map_or_else(Vec::new, |dirs| Self::discover_all_in(dirs.home_dir()))
+    }
+
+    /// Flathub's Steam, whose sandbox cannot start a program outside it
+    /// except through `flatpak-spawn --host`.
+    pub fn is_flatpak(&self) -> bool {
+        self.path.components().any(|c| c.as_os_str() == FLATPAK_ID)
     }
 
     pub fn path(&self) -> &Path {
@@ -89,6 +131,23 @@ pub(crate) fn parse_library_paths(contents: &str) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_native_and_a_flatpak_steam_are_both_found_once() {
+        let home = tempfile::tempdir().unwrap();
+        let native = home.path().join(".local/share/Steam");
+        let flatpak = home.path().join(".var/app/com.valvesoftware.Steam/.local/share/Steam");
+        for root in [&native, &flatpak] {
+            std::fs::create_dir_all(root.join("steamapps")).unwrap();
+        }
+        std::fs::create_dir_all(home.path().join(".steam")).unwrap();
+        std::os::unix::fs::symlink(&native, home.path().join(".steam/steam")).unwrap();
+
+        let found = SteamRoot::discover_all_in(home.path());
+
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(!found[0].is_flatpak() && found[1].is_flatpak());
+    }
 
     const VDF: &str = r#"
 "libraryfolders"

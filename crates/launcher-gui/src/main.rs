@@ -145,6 +145,7 @@ fn main() -> iced::Result {
     tune_allocator();
     fit::drop_dead_wayland();
     fit::take_over_scale();
+    fit::composited();
     trace::begin();
     // 0.14 takes the boot function where 0.13 took the title, and runs it
     // from `run`, not `run_with`.
@@ -168,7 +169,7 @@ fn main() -> iced::Result {
     // `transparent: true` only adds alpha; iced still clears to the theme's
     // background unless told otherwise here.
     .style(|state: &Lightforge, theme| iced::theme::Style {
-        background_color: match state.splash.is_some() {
+        background_color: match state.splash.is_some() && fit::composited() {
             true => iced::Color::TRANSPARENT,
             false => theme.palette().background,
         },

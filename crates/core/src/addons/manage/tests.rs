@@ -642,6 +642,34 @@ async fn installing_an_addon_brings_its_required_dependencies() {
 }
 
 #[tokio::test]
+async fn a_package_offered_over_plain_http_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = questie_catalog(dir.path(), "http://cdn.example.invalid");
+    let options = questie_options(dir.path());
+
+    let http = Http::new().unwrap();
+    let report = install_all(&http, Some(&catalog), &[questie_request()], &options, |_| {}).await.unwrap();
+
+    assert!(report.installed.is_empty());
+    assert!(report.unavailable[0].reason.contains("not an https address"), "{}", report.unavailable[0].reason);
+}
+
+#[tokio::test]
+async fn an_addon_whose_folders_were_deleted_installs_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = questie_catalog(dir.path(), &questie_packages());
+    let options = questie_options(dir.path());
+    let http = Http::new().unwrap();
+    install_all(&http, Some(&catalog), &[questie_request()], &options, |_| {}).await.unwrap();
+    std::fs::remove_dir_all(options.addons_dir.join("Questie")).unwrap();
+
+    let report = install_all(&http, Some(&catalog), &[questie_request()], &options, |_| {}).await.unwrap();
+
+    assert_eq!(report.installed, ["Questie"]);
+    assert!(options.addons_dir.join("Questie/Questie.toc").is_file());
+}
+
+#[tokio::test]
 async fn an_addon_already_up_to_date_does_not_bring_back_a_removed_dependency() {
     let dir = tempfile::tempdir().unwrap();
     let catalog = questie_catalog(dir.path(), &questie_packages());

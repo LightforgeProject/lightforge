@@ -118,11 +118,23 @@ impl Build {
     pub fn remote(product: ProductCode, build_key: String, cdn: Cdn) -> Self {
         Self { product, build_key, cdn }
     }
+
+    /// A pre-downloaded build, or one a download was fetching.
+    pub fn from_staged(staged: super::staged::Staged) -> Self {
+        let cdn = Cdn {
+            name: String::new(),
+            path: staged.cdn_path,
+            hosts: staged.cdn_hosts,
+            servers: staged.cdn_servers,
+            config_path: String::new(),
+        };
+        Self { product: staged.product, build_key: staged.build_key, cdn }
+    }
 }
 
 /// Every build whose data lives in the store under `install`: each
-/// `.build.info` row, each product `.product.db` records without one, and
-/// each pre-downloaded build.
+/// `.build.info` row, each product `.product.db` records without one, each
+/// pre-downloaded build, and each download not yet finished.
 ///
 /// A record with no build key or no CDN row is an error: skipped, its whole
 /// build would count as unused.
@@ -152,18 +164,14 @@ pub fn builds(install: &Path) -> Result<Vec<Build>, ReclaimError> {
         builds.push(Build { product, build_key, cdn });
     }
 
-    for staged in super::staged::load(install)? {
+    // A pre-download, and a download that has not finished: both their data.
+    let mut ahead = super::staged::load(install)?;
+    ahead.extend(super::staged::fetching(install)?);
+    for staged in ahead {
         if builds.iter().any(|b| b.product == staged.product && b.build_key == staged.build_key) {
             continue;
         }
-        let cdn = Cdn {
-            name: String::new(),
-            path: staged.cdn_path,
-            hosts: staged.cdn_hosts,
-            servers: staged.cdn_servers,
-            config_path: String::new(),
-        };
-        builds.push(Build { product: staged.product, build_key: staged.build_key, cdn });
+        builds.push(Build::from_staged(staged));
     }
     Ok(builds)
 }
