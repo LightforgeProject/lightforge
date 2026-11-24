@@ -481,8 +481,15 @@ impl Lightforge {
         // underneath, so the two stack flush, not nearly flush.
         .width(Length::Fixed(190.0))
         .height(Length::Fixed(theme::CONTROL_HEIGHT));
+        // In Seamless Battle.net Mode PLAY is the hand-off, so this is the
+        // direct start; it needs the game ready, as PLAY does.
+        let (second_label, second_press) = match self.plays_via_battle_net(&self.selected.code) {
+            true => ("Launch via Lightforge", matches!(action, ActionState::Play).then_some(Message::LaunchViaLightforge)),
+            false => ("Launch via Battle.net", Some(Message::BattleNet)),
+        };
+        let second_press = second_press.filter(|_| !self.busy && session.is_none());
         let battle_net = button(
-            container(text("Launch via Battle.net").size(theme::tap_text(theme::LABEL))).center_x(Length::Fill),
+            container(text(second_label).size(theme::tap_text(theme::LABEL))).center_x(Length::Fill),
         )
         .style(theme::outlined)
         .padding(theme::tap([theme::SM, theme::MD]))
@@ -527,14 +534,7 @@ impl Lightforge {
 
         column![
             control,
-            self.ring(
-                focus::Target::LaunchViaBattleNet,
-                (!self.busy && session.is_none()).then_some(Message::BattleNet),
-                match self.busy || session.is_some() {
-                    true => battle_net,
-                    false => battle_net.on_press(Message::BattleNet),
-                },
-            ),
+            self.ring(focus::Target::SecondLaunch, second_press.clone(), battle_net.on_press_maybe(second_press)),
         ]
         .push(release_date.map(|date| muted(servers_open(date), theme::CAPTION)))
         .spacing(theme::SM)

@@ -187,6 +187,9 @@ pub(crate) enum Message {
     /// game is up, the client needs a person, or nothing started.
     HandoffStarted(Result<tasks::Handoff, Problem>),
     BattleNet,
+    /// Start a Lightforge-managed game directly, where PLAY would hand it to
+    /// Battle.net; see [`Lightforge::plays_via_battle_net`].
+    LaunchViaLightforge,
     ManageSubscription,
     /// Game Tools: ask the file picker for an installer or a program.
     CompanionPick(CompanionPick),

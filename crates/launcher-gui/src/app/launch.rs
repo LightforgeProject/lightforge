@@ -408,6 +408,17 @@ impl Lightforge {
         lightforge_core::battlenet::resolve_game_uid(code, &self.families)
     }
 
+    /// Whether PLAY hands this game to Battle.net instead of starting it
+    /// itself: in Seamless Battle.net Mode, for a game Lightforge installs
+    /// and Battle.net has registered. Downloads and updates stay Lightforge's
+    /// either way; Launch via Lightforge is the direct start.
+    pub(crate) fn plays_via_battle_net(&self, code: &ProductCode) -> bool {
+        self.config.battle_net_in_background
+            && self.kind_of(code) == Kind::Managed
+            && (self.installed_versions.contains_key(code.as_str())
+                || self.installed_versions.contains_key(&self.install_uid_of(code)))
+    }
+
     /// What Battle.net's install flow calls this product.
     ///
     /// The catalogue's install key (`hs_beta`), else the product code.

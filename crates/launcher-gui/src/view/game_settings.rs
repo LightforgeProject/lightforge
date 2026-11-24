@@ -32,13 +32,22 @@ impl Lightforge {
         ]
         .align_y(Alignment::Center);
 
+        let mut heading = column![
+            text("Game Settings").size(theme::TITLE),
+            muted(settings.label.clone(), theme::LABEL),
+        ]
+        .spacing(theme::XS);
+        // Battle.net starts the game with its own Proton and settings.
+        if self.plays_via_battle_net(&settings.code) {
+            heading = heading.push(muted(
+                "In Seamless Battle.net Mode PLAY goes through Battle.net and its settings; these apply to Launch via Lightforge.".to_owned(),
+                theme::CAPTION,
+            ));
+        }
+
         container(
             column![
-                column![
-                    text("Game Settings").size(theme::TITLE),
-                    muted(settings.label.clone(), theme::LABEL),
-                ]
-                .spacing(theme::XS),
+                heading,
                 container(focus::region(
                     "game settings",
                     scrollable(sections)

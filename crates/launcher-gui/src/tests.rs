@@ -2432,3 +2432,56 @@ fn a_deep_scan_that_found_only_an_unreadable_index_still_repairs() {
     assert!(app.status.contains("1 unreadable index files"), "{}", app.status);
     assert!(app.repairing.is_some());
 }
+
+/// Seamless mode, the selected WoW installed and current, Battle.net still
+/// signing in: a hand-off waits for it, a direct start does not.
+fn seamless_and_playable(registered: bool) -> (Lightforge, tempfile::TempDir, ProductCode) {
+    let (mut app, scratch) = test_app();
+    app.dirs = None;
+    app.queue.clear();
+    app.local = Local {
+        build_key: Some("abc".to_owned()),
+        version: Some("11.2.7.65000".to_owned()),
+        executable: Some(PathBuf::from("/nowhere/Wow.exe")),
+        store_files: 12,
+        staged: None,
+        portal: None,
+    };
+    app.config.battle_net_in_background = true;
+    app.client_phase = ClientPhase::SigningIn;
+    let code = app.selected.code.clone();
+    if registered {
+        app.installed_versions.insert(code.as_str().to_owned(), "11.2.7.65000".to_owned());
+    }
+    (app, scratch, code)
+}
+
+#[test]
+fn in_seamless_mode_play_hands_a_registered_wow_to_battle_net() {
+    let (mut app, _scratch, code) = seamless_and_playable(true);
+    assert!(matches!(app.action(), ActionState::Play));
+
+    let _ = app.update(Message::Primary);
+
+    assert_eq!(app.launch_after_client, Some((Launch::BattleNet, code)), "it waits for the sign-in, then hands off");
+}
+
+#[test]
+fn in_seamless_mode_play_starts_a_wow_battle_net_does_not_know_itself() {
+    let (mut app, _scratch, _code) = seamless_and_playable(false);
+
+    let _ = app.update(Message::Primary);
+
+    assert_eq!(app.launch_after_client, None);
+    assert!(app.busy, "the direct start went ahead");
+}
+
+#[test]
+fn launch_via_lightforge_starts_the_game_without_battle_net() {
+    let (mut app, _scratch, _code) = seamless_and_playable(true);
+
+    let _ = app.update(Message::LaunchViaLightforge);
+
+    assert_eq!(app.launch_after_client, None);
+    assert!(app.busy, "the direct start went ahead");
+}

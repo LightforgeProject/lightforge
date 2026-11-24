@@ -140,7 +140,7 @@ mod tests {
             (Target::Addons, at(62.0, 722.0, 118.0, 24.0)),
             (Target::Primary, at(983.0, 660.0, 185.0, 56.0)),
             (Target::Gear, at(1168.0, 660.0, 50.0, 56.0)),
-            (Target::LaunchViaBattleNet, at(983.0, 722.0, 235.0, 30.0)),
+            (Target::SecondLaunch, at(983.0, 722.0, 235.0, 30.0)),
         ];
         places.into_iter().map(|(target, bounds)| Place { target, bounds, group: None, pane: None }).collect()
     }
@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(step(&page, &Target::AppMenu, Step::Down), Some(Target::Tile(ProductLine::Retail)));
         assert_eq!(step(&page, &Target::Shop, Step::Down), Some(Target::Tile(ProductLine::Forever)));
         assert_eq!(step(&page, &Target::BattleNet, Step::Down), Some(Target::Gear));
-        assert_eq!(step(&page, &Target::Primary, Step::Down), Some(Target::LaunchViaBattleNet));
+        assert_eq!(step(&page, &Target::Primary, Step::Down), Some(Target::SecondLaunch));
         assert_eq!(step(&page, &Target::Primary, Step::Right), Some(Target::Gear));
     }
 

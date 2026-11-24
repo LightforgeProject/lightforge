@@ -34,7 +34,10 @@ impl Lightforge {
                         self.pause(&self.selected.code.clone());
                         Task::none()
                     }
-                    ActionState::Play => self.preflight(Launch::Game),
+                    ActionState::Play => match self.plays_via_battle_net(&self.selected.code) {
+                        true => self.preflight(Launch::BattleNet),
+                        false => self.preflight(Launch::Game),
+                    },
                     ActionState::Unknown => Task::none(),
                     // Nothing to download and nothing to repair: look for the
                     // drive again, and reload the product if it came back.
@@ -187,9 +190,14 @@ impl Lightforge {
                         let code = self.launching.clone().unwrap_or_else(|| self.selected.code.clone());
                         match Kind::of(&code) {
                             // Its store is ours: Agent must not patch it.
-                            Kind::Managed => {
-                                self.launch_failed("Battle.net wants to update this game — press Play to start it here")
-                            }
+                            Kind::Managed => match self.plays_via_battle_net(&code) {
+                                true => self.launch_failed(
+                                    "Battle.net wants to update this game — press Launch via Lightforge to start it here",
+                                ),
+                                false => {
+                                    self.launch_failed("Battle.net wants to update this game — press Play to start it here")
+                                }
+                            },
                             // The lock is released: an update can take an hour,
                             // and another game can be played meanwhile.
                             Kind::HandOff => {
@@ -217,6 +225,11 @@ impl Lightforge {
             Message::BattleNet => {
                 self.track_selected();
                 self.preflight(Launch::BattleNet)
+            }
+
+            Message::LaunchViaLightforge => {
+                self.track_selected();
+                self.preflight(Launch::Game)
             }
 
             Message::InstallViaBattleNet => {

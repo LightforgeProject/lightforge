@@ -233,7 +233,9 @@ impl Lightforge {
                         };
                         let told = self.notify_unseen(&code, "is ready to play", installed.clone());
                         note(self, installed);
-                        Task::batch([self.pump(), self.reload_if_showing(&code), told])
+                        // The download registered it with Battle.net: PLAY's route can change.
+                        let registry = Task::perform(tasks::installed_versions(self.layout.clone()), Message::InstalledVersions);
+                        Task::batch([self.pump(), self.reload_if_showing(&code), told, registry])
                     }
                     Ok(done) if done.cancelled => {
                         // Paused, so it keeps its place with what it reached.
