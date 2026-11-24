@@ -49,9 +49,9 @@ pub(crate) fn battlenet_setup(ctx: Ctx, proton: Option<String>, locale: String, 
     let mut container = None;
     if !setup.is_installed() {
         let steam = lightforge_core::steam::SteamRoot::discover();
-        container = lightforge_core::runtime::tls_container(&build.path, steam.as_ref())?;
+        container = lightforge_core::runtime::battle_net_container(&build.path, steam.as_ref())?;
         if let Some(entry) = &container {
-            println!("no 32-bit gnutls here, running the installer in {}", entry.display());
+            println!("32-bit libraries Battle.net needs are missing, running the installer in {}", entry.display());
         }
         println!("running setup — this takes a few minutes");
     }
@@ -159,8 +159,8 @@ pub(crate) fn battlenet_run(ctx: Ctx, proton: Option<String>, product: Option<Pr
     }
 
     let steam = lightforge_core::steam::SteamRoot::discover();
-    if let Some(entry) = lightforge_core::runtime::tls_container(&build.path, steam.as_ref())? {
-        println!("no 32-bit gnutls here, running Battle.net in {}", entry.display());
+    if let Some(entry) = lightforge_core::runtime::battle_net_container(&build.path, steam.as_ref())? {
+        println!("32-bit libraries Battle.net needs are missing, running it in {}", entry.display());
         runner = runner.in_container(entry);
     }
 

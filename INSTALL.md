@@ -253,6 +253,13 @@ Two more details:
   i386 and pulls in the 32-bit libraries. You shouldn't need Steam for this,
   though.
 
+**With Steam, you may not need the table at all.** When gnutls, freetype or
+fontconfig has no 32-bit build, Lightforge runs Battle.net inside Steam's own
+Steam Linux Runtime, which brings them. On SteamOS and atomic systems
+(Bazzite, Silverblue) that's the better way: nothing gets layered onto the
+system. Steam needs the runtime installed; Lightforge gives you the link if
+it isn't.
+
 **You can skip Battle.net.** Decline it during setup. WoW works without it,
 but you won't have the in-game shop, the Token or the other games.
 

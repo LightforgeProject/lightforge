@@ -97,7 +97,7 @@ impl ClientDriver for Live<'_> {
     }
 
     fn start(&self) -> Result<SystemTime, Problem> {
-        start_client(self.config, &in_tls_container(lone_client_runner(self.config, self.layout)?)?, self.layout, true)
+        start_client(self.config, &in_battle_net_container(lone_client_runner(self.config, self.layout)?)?, self.layout, true)
     }
 
     fn quit(&self) -> Result<(), Problem> {
@@ -227,7 +227,7 @@ pub fn update_through_client(
             tracing::info!("asking Battle.net to update {uid}");
             prefix.launches += 1;
 
-            let started = start_client(&config, &in_tls_container(runner)?, &layout, true)?;
+            let started = start_client(&config, &in_battle_net_container(runner)?, &layout, true)?;
             drop(prefix);
             match battlenet::wait_until_ready(&layout, user, started, SIGN_IN_TIMEOUT, || preflight::client_running(&layout)) {
                 Readiness::SignedIn => {}

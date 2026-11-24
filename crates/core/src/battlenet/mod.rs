@@ -61,7 +61,7 @@ pub struct SetupReport {
 
 /// Install Battle.net and configure it, in an existing prefix (see
 /// [`crate::prefix::provision`]). Only the installer runs in `container`
-/// ([`crate::runtime::tls_container`]); the rest runs on the host.
+/// ([`crate::runtime::battle_net_container`]); the rest runs on the host.
 pub fn provision(
     runner: &ProtonRunner,
     container: Option<&Path>,

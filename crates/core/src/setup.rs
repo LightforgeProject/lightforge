@@ -187,14 +187,14 @@ pub async fn run(
         return Ok(status);
     }
 
-    //    Wine's HTTPS needs a 32-bit gnutls too, which neither check sees;
-    //    without it the installer runs inside Steam's runtime, which brings
-    //    its own (SteamOS ships none).
+    //    Wine also dlopens 32-bit gnutls, freetype and fontconfig, which
+    //    neither check sees; without any of them the installer runs inside
+    //    Steam's runtime, which brings its own (SteamOS ships no gnutls).
     let container = match status.battle_net {
         true => None,
         false => {
             runtime::check_wine(runner.dist())?;
-            runtime::tls_container(&build.path, steam.as_ref())?
+            runtime::battle_net_container(&build.path, steam.as_ref())?
         }
     };
 

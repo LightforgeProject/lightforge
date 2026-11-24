@@ -36,7 +36,7 @@ pub struct ProtonRunner {
     shader_cache: Option<PathBuf>,
     env: Vec<(OsString, OsString)>,
     /// A Steam Linux Runtime entry point to run Proton inside, as Steam
-    /// does. Only for Battle.net, see [`crate::runtime::tls_container`].
+    /// does. Only for Battle.net, see [`crate::runtime::battle_net_container`].
     container: Option<PathBuf>,
     /// The prefix already has a session this command joins, see
     /// [`ProtonRunner::joining_session`].

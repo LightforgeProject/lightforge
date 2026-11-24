@@ -274,23 +274,24 @@ fn runner_for(
         .map_err(|e| chain(&e))
 }
 
-/// [`runner_for`] Battle.net itself, inside Steam's runtime where the host has
-/// no 32-bit gnutls. Only for the calls that start the client or hand it
+/// [`runner_for`] Battle.net itself, inside Steam's runtime where the host
+/// lacks 32-bit libraries it needs. Only for the calls that start the client or hand it
 /// something, everything else about the prefix still runs on the host.
 fn client_runner(
     config: &Config,
     layout: &Layout,
     code: &ProductCode,
 ) -> Result<lightforge_core::prefix::ProtonRunner, Problem> {
-    in_tls_container(runner_for(config, layout, code, Runs::BattleNet)?)
+    in_battle_net_container(runner_for(config, layout, code, Runs::BattleNet)?)
 }
 
-/// `runner` inside Steam's runtime, where the host has no 32-bit gnutls.
-fn in_tls_container(
+/// `runner` inside Steam's runtime, where the host lacks 32-bit libraries
+/// Battle.net needs; see [`lightforge_core::runtime::battle_net_container`].
+fn in_battle_net_container(
     runner: lightforge_core::prefix::ProtonRunner,
 ) -> Result<lightforge_core::prefix::ProtonRunner, Problem> {
     let steam = lightforge_core::steam::SteamRoot::discover();
-    match lightforge_core::runtime::tls_container(runner.build(), steam.as_ref()) {
+    match lightforge_core::runtime::battle_net_container(runner.build(), steam.as_ref()) {
         Ok(Some(entry)) => Ok(runner.in_container(entry)),
         Ok(None) => Ok(runner),
         Err(e) => Err(Problem::of(&e)),

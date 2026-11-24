@@ -28,6 +28,21 @@ please tell me. It means the check passed and something else is missing that
 the check can't see. Send a report; it includes the installer's own error
 output.
 
+### Battle.net's login window has no text
+
+The window opens, but every label, field and button is empty. Battle.net is
+32-bit and draws its text with the system's 32-bit freetype and fontconfig;
+with only the 64-bit ones it draws nothing.
+
+When Lightforge finds those missing (or gnutls), it runs Battle.net inside
+Steam's own Steam Linux Runtime, which brings all three, so nothing has to be
+installed into the system. That needs Steam with the runtime installed; if
+it's missing, Lightforge says so and gives the `steam://install/…` link.
+
+On an atomic system (Bazzite, Silverblue and friends) that is the better way:
+layering `freetype.i686` and `fontconfig.i686` with `rpm-ostree` works, but
+can get in the way of later system updates.
+
 ### "the prefix at … has not been created yet", or "no Battle.net install at …"
 
 Setup was declined or interrupted. Nothing is broken, it just hasn't been done

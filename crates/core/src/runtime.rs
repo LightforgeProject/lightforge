@@ -63,8 +63,8 @@ pub enum RuntimeError {
     },
 
     #[error(
-        "Battle.net would have no internet here: this system has no 32-bit gnutls, which Wine \
-         needs for HTTPS{}",
+        "Battle.net cannot work here: this system has no 32-bit {libraries}, which Wine needs \
+         for HTTPS and to draw text{}",
         match install {
             Some(appid) => format!(
                 ", and the Steam Linux Runtime that would bring its own is not installed \
@@ -73,7 +73,9 @@ pub enum RuntimeError {
             None => format!(" — {ADVICE}"),
         }
     )]
-    NoTls {
+    Missing32Bit {
+        /// Which of [`BATTLE_NET_LIBS`], comma-separated.
+        libraries: String,
         /// The Steam Linux Runtime the Proton build asks for, when Steam is
         /// here to install it.
         install: Option<u32>,
@@ -682,40 +684,65 @@ pub fn find_steam_runtime(libraries: &[PathBuf], appid: u32) -> Option<PathBuf> 
     })
 }
 
-/// Whether the dynamic loader can find a 32-bit gnutls, from its own cache.
+/// The 32-bit libraries the 32-bit Battle.net takes from the host, which
+/// neither loader check sees: Wine dlopens them. gnutls for every HTTPS
+/// request (SteamOS has none), freetype and fontconfig for every line of
+/// text (GlitchTip #48: a login window with no words, on an atomic Fedora
+/// with only the 64-bit ones).
+pub const BATTLE_NET_LIBS: [&str; 3] = ["libgnutls.so.30", "libfreetype.so.6", "libfontconfig.so.1"];
+
+/// Which of [`BATTLE_NET_LIBS`] the dynamic loader has no 32-bit build of.
 ///
-/// `None` when that cache cannot be read: no `ldconfig` (NixOS), or one that
-/// fails. Not knowing is not a reason to change how setup runs.
-pub fn has_32bit_tls() -> Option<bool> {
-    has_32bit_lib("libgnutls.so.30")
+/// `None` when its cache cannot be read: no `ldconfig` (NixOS), or one that
+/// fails. Not knowing is not a reason to change how Battle.net runs.
+pub fn missing_32bit_libraries() -> Option<Vec<&'static str>> {
+    let cache = ldconfig_cache()?;
+    Some(BATTLE_NET_LIBS.into_iter().filter(|lib| !has_32bit(&cache, lib)).collect())
 }
 
 /// Whether the dynamic loader's cache has a 32-bit `lib`; `None` when that
 /// cache cannot be read.
 pub fn has_32bit_lib(lib: &str) -> Option<bool> {
+    ldconfig_cache().map(|cache| has_32bit(&cache, lib))
+}
+
+/// `ldconfig -p`, the loader's own list of what it can find.
+fn ldconfig_cache() -> Option<String> {
     ["ldconfig", "/sbin/ldconfig", "/usr/sbin/ldconfig"].iter().find_map(|ldconfig| {
         let output = Command::new(ldconfig).arg("-p").stdin(Stdio::null()).output().ok()?;
-        output.status.success().then(|| has_32bit(&String::from_utf8_lossy(&output.stdout), lib))
+        output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
     })
 }
 
 /// Where to run Battle.net, its installer and its client alike: `None`
 /// straight on the host, as the games run, or the Steam Linux Runtime entry
-/// point to run it through when the host has no 32-bit gnutls.
-pub fn tls_container(
+/// point to run it through when the host lacks any of [`BATTLE_NET_LIBS`]:
+/// the runtime brings its own, and nothing has to be layered onto an
+/// atomic system.
+pub fn battle_net_container(
     proton_root: &Path,
     steam: Option<&crate::steam::SteamRoot>,
 ) -> Result<Option<PathBuf>, RuntimeError> {
-    if !needs_32bit_libraries() || has_32bit_tls() != Some(false) {
+    if !needs_32bit_libraries() {
         return Ok(None);
     }
+    let missing = match missing_32bit_libraries() {
+        Some(missing) if !missing.is_empty() => missing,
+        _ => return Ok(None),
+    };
     let appid = required_runtime(proton_root);
     let found = steam
         .zip(appid)
         .and_then(|(steam, appid)| find_steam_runtime(&steam.library_paths(), appid));
     match found {
-        Some(entry) => Ok(Some(entry)),
-        None => Err(RuntimeError::NoTls { install: appid.filter(|_| steam.is_some()) }),
+        Some(entry) => {
+            tracing::info!("no 32-bit {} here, Battle.net runs in {}", missing.join(", "), entry.display());
+            Ok(Some(entry))
+        }
+        None => Err(RuntimeError::Missing32Bit {
+            libraries: missing.join(", "),
+            install: appid.filter(|_| steam.is_some()),
+        }),
     }
 }
 
@@ -810,9 +837,22 @@ mod container_tests {
 
     #[test]
     fn without_steam_the_message_names_the_32_bit_wine() {
-        let rendered = RuntimeError::NoTls { install: None }.to_string();
-        assert!(rendered.contains("gnutls") && rendered.contains(ADVICE), "{rendered}");
-        let rendered = RuntimeError::NoTls { install: Some(4183110) }.to_string();
+        let missing = |install| RuntimeError::Missing32Bit { libraries: "libfreetype.so.6".to_owned(), install };
+        let rendered = missing(None).to_string();
+        assert!(rendered.contains("libfreetype.so.6") && rendered.contains(ADVICE), "{rendered}");
+        let rendered = missing(Some(4183110)).to_string();
         assert!(rendered.contains("steam://install/4183110"), "{rendered}");
+    }
+
+    /// What the GlitchTip #48 reporter's `ldconfig -p` showed: gnutls in both
+    /// builds, freetype and fontconfig 64-bit only.
+    #[test]
+    fn freetype_and_fontconfig_without_a_32_bit_build_are_missing() {
+        let cache = "\tlibgnutls.so.30 (libc6,x86-64) => /lib64/libgnutls.so.30\n\
+                     \tlibgnutls.so.30 (libc6) => /lib/libgnutls.so.30\n\
+                     \tlibfreetype.so.6 (libc6,x86-64) => /lib64/libfreetype.so.6\n\
+                     \tlibfontconfig.so.1 (libc6,x86-64) => /lib64/libfontconfig.so.1\n";
+        let missing: Vec<&str> = BATTLE_NET_LIBS.into_iter().filter(|lib| !has_32bit(cache, lib)).collect();
+        assert_eq!(missing, ["libfreetype.so.6", "libfontconfig.so.1"]);
     }
 }
