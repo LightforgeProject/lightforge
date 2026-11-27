@@ -209,6 +209,12 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::ClosePrefixOnExit(on) => {
+                self.config.close_prefix_on_exit = on;
+                self.save_config();
+                Task::none()
+            }
+
             Message::BattleNetMinimized(on) => {
                 self.config.battle_net_minimized = on;
                 self.save_config();

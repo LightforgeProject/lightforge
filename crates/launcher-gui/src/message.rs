@@ -398,6 +398,8 @@ pub(crate) enum Message {
     CloseBattleNetOnPlay(bool),
     /// Whether Battle.net is kept running between games.
     BattleNetInBackground(bool),
+    /// Whether closing Lightforge closes everything in the prefix.
+    ClosePrefixOnExit(bool),
     /// Restart now, for the mode just switched.
     ModeRestart,
     /// Not now: the mode just switched applies without a restart.

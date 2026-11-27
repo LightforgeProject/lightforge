@@ -94,6 +94,11 @@ pub struct Config {
     /// [`Config::close_battle_net_on_play`] while on.
     #[serde(default)]
     pub battle_net_in_background: bool,
+    /// Whether closing Lightforge closes everything in the prefix too:
+    /// Battle.net, Agent and Game Tools, unless a game is running. Off by
+    /// default; for desktops without a tray to quit them from (GitHub #35).
+    #[serde(default)]
+    pub close_prefix_on_exit: bool,
     /// How Battle.net and every game it launches are started. Shared: a
     /// running client takes launches over IPC, so games cannot differ. Only
     /// the host and runtime half of [`crate::tweaks::Tweaks`] applies.
@@ -199,6 +204,7 @@ impl Default for Config {
             battle_net_minimized: true,
             close_battle_net_on_play: false,
             battle_net_in_background: false,
+            close_prefix_on_exit: false,
             battle_net_tweaks: crate::tweaks::Tweaks::default(),
             region: crate::tact::version::Region::default(),
             locale: default_locale(),

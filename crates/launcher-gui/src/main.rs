@@ -198,7 +198,7 @@ fn main() -> iced::Result {
     .exit_on_close_request(false)
     .run()?;
     // Here, not in a message: every way out of the app ends up on this line.
-    tasks::stop_background_client_at_exit();
+    tasks::tidy_prefix_at_exit();
     Ok(())
 }
 

@@ -360,17 +360,22 @@ pub async fn close_background_client(config: Config, layout: Layout) -> Result<S
     .map_err(|e| Problem::of(&e))?
 }
 
-/// Close what the background mode left running, as the last thing Lightforge
-/// does. Best effort: the next pre-flight clears the prefix anyway.
-pub fn stop_background_client_at_exit() {
+/// Close what Lightforge leaves running in the prefix, as the last thing it
+/// does: everything with `close_prefix_on_exit`, else what the background mode
+/// started. Best effort: the next pre-flight clears the prefix anyway.
+pub fn tidy_prefix_at_exit() {
     let Some(config) = AppDirs::discover().ok().and_then(|dirs| Config::load_or_default(&dirs.config_file()).ok())
     else {
         return;
     };
+    let Ok(layout) = config.layout() else { return };
+    if config.close_prefix_on_exit {
+        close_prefix(&config, &layout);
+        return;
+    }
     if !config.battle_net_in_background {
         return;
     }
-    let Ok(layout) = config.layout() else { return };
     let _prefix = hold_prefix();
     let client = Live { config: &config, layout: &layout };
     if !client.client_running() {
@@ -380,6 +385,29 @@ pub fn stop_background_client_at_exit() {
         Ok(true) => tracing::info!("closed the background Battle.net on exit"),
         Ok(false) => tracing::info!("left Battle.net running on exit: a game or its window is using it"),
         Err(e) => tracing::warn!("could not close the background Battle.net on exit: {e}"),
+    }
+}
+
+/// Everything in the prefix, Game Tools included, unless a game runs.
+fn close_prefix(config: &Config, layout: &Layout) {
+    let _prefix = hold_prefix();
+    if preflight::scan(layout).is_empty() {
+        return;
+    }
+    // `wineserver -k` has to be the live server's own build: two builds
+    // cannot talk to one server. With none running, any build will do.
+    let candidates = std::iter::once(lone_client_runner(config, layout)).chain(
+        config.products.iter().map(|product| runner_for(config, layout, &product.code, Runs::Game)),
+    );
+    let Some(runner) = candidates.flatten().find(|runner| preflight::served_by(runner, layout)) else {
+        tracing::warn!("left the prefix running on exit: no installed Proton build serves it");
+        return;
+    };
+    let tools: Vec<String> = config.companions.iter().map(|tool| tool.name.clone()).collect();
+    match preflight::close_all(&runner, layout, &tools, STOP_GRACE) {
+        Ok(closed) if closed.is_empty() => {}
+        Ok(closed) => tracing::info!("closed {} process(es) in the prefix on exit", closed.len()),
+        Err(e) => tracing::info!("left the prefix running on exit: {}", chain(&e)),
     }
 }
 
