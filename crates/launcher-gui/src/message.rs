@@ -551,8 +551,9 @@ pub(crate) enum Message {
     ConfirmRestore(Option<String>),
     ConfirmDeleteBackup,
     BackupFinished(Result<String, String>),
-    /// Open the detail view for one addon: provider, id, name.
-    ShowAddonDetail(String, String, String),
+    /// Open the detail view for one addon: provider, id, name, and the build
+    /// whose changelog to show (the newest when `None`).
+    ShowAddonDetail(String, String, String, Option<String>),
     /// The catalogue answered with the project, description and changelog.
     AddonDetailLoaded(Box<Result<addonwork::Detail, String>>),
     /// Which half of the detail view is showing.

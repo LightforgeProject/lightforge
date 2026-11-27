@@ -34,24 +34,12 @@ pub(crate) fn usage_row<'a>(
     .into()
 }
 
-/// The optional downloads Lightforge offers to switch on.
-///
-/// What is *shown*, not what is gated: every optional tag stays off unless
-/// opted in. `Alternate` and `Talebound` get no switch.
-pub(crate) const OFFERED_OPTIONAL: &[&str] = &[HIGH_RES];
-
-/// The high-resolution texture pack's manifest tag.
-pub(crate) const HIGH_RES: &str = "HighRes";
-
-/// The tags in `tags` that [`OFFERED_OPTIONAL`] names.
-pub(crate) fn offered_only(tags: &[String]) -> Vec<String> {
-    tags.iter().filter(|tag| OFFERED_OPTIONAL.contains(&tag.as_str())).cloned().collect()
-}
+pub(crate) use lightforge_core::product::{offered_only, HIGH_RES};
 
 /// A human label for an optional-download tag.
 ///
 /// The manifest's own name is the fallback, for anything added to
-/// [`OFFERED_OPTIONAL`] before it gets a phrase.
+/// [`lightforge_core::product::OFFERED_OPTIONAL`] before it gets a phrase.
 pub(crate) fn optional_label(tag: &str) -> String {
     match tag {
         "HighRes" => "High-resolution textures".to_owned(),

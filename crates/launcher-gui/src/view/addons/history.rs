@@ -26,14 +26,23 @@ impl Lightforge {
             .spacing(theme::XS);
 
             for change in &run.updated {
-                card = card.push(
-                    row![
-                        text(change.name.clone()).size(theme::BODY).width(Length::Fill),
-                        mono(versions(change)),
-                    ]
-                    .spacing(theme::SM)
-                    .align_y(Alignment::Center),
-                );
+                let mut line = row![
+                    text(change.name.clone()).size(theme::BODY).width(Length::Fill),
+                    mono(versions(change)),
+                ]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center);
+                // Only CurseForge publishes changelogs; older entries have no build.
+                if let (true, Some(file_id)) = (change.provider.eq_ignore_ascii_case("curse"), &change.file_id) {
+                    let open = Message::ShowAddonDetail(
+                        change.provider.clone(),
+                        change.id.clone(),
+                        change.name.clone(),
+                        Some(file_id.clone()),
+                    );
+                    line = line.push(secondary("Changelog", open).enabled(true));
+                }
+                card = card.push(line);
             }
             for problem in &run.problems {
                 card = card.push(text(problem.clone()).size(theme::CAPTION).color(theme::WARN));

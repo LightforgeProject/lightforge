@@ -134,7 +134,14 @@ mod tests {
     use crate::addons::Unavailable;
 
     fn change(name: &str) -> Change {
-        Change { name: name.to_owned(), from: Some("v1".to_owned()), to: Some("v2".to_owned()) }
+        Change {
+            name: name.to_owned(),
+            from: Some("v1".to_owned()),
+            to: Some("v2".to_owned()),
+            provider: "curse".to_owned(),
+            id: "1".to_owned(),
+            file_id: Some("2".to_owned()),
+        }
     }
 
     #[test]
@@ -181,6 +188,17 @@ mod tests {
         assert_eq!(history.runs.len(), KEPT);
         assert_eq!(history.runs[0].at, KEPT as i64);
         assert_eq!(history.runs.last().unwrap().at, 1);
+    }
+
+    #[test]
+    fn a_history_from_before_builds_were_recorded_still_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("retail.history.json");
+        let old = r#"{"runs":[{"at":1,"trigger":"automatic","updated":[{"name":"Details!","from":"v1","to":"v2"}]}]}"#;
+        std::fs::write(&path, old).unwrap();
+        let change = &History::load(&path).runs[0].updated[0];
+        assert_eq!(change.name, "Details!");
+        assert_eq!(change.file_id, None);
     }
 
     #[test]

@@ -135,7 +135,7 @@ impl Lightforge {
         if managed.provider.eq_ignore_ascii_case("curse") {
             rows = rows.push(entry(
                 "Details and changelog…".to_owned(),
-                Message::ShowAddonDetail(provider.clone(), id.clone(), name.to_owned()),
+                Message::ShowAddonDetail(provider.clone(), id.clone(), name.to_owned(), None),
             ));
             rows = rows.push(entry(
                 "Choose a version…".to_owned(),

@@ -121,7 +121,14 @@ pub async fn install_all(
                         // A repair writes the same file again: nothing changed.
                         if let Some((_, from)) = before.filter(|(file_id, _)| *file_id != record.file_id) {
                             let to = record.folders.first().and_then(|f| addons::folder_version(&options.addons_dir.join(f)));
-                            report.updated.push(Change { name: name.clone(), from, to });
+                            report.updated.push(Change {
+                                name: name.clone(),
+                                from,
+                                to,
+                                provider: provider.clone(),
+                                id: entry.id.clone(),
+                                file_id: record.file_id.clone(),
+                            });
                         }
                         written.push((record.clone(), pin));
                     }

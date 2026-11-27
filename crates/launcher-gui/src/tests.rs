@@ -1141,15 +1141,6 @@ fn a_config_that_will_not_load_is_described_kept_and_never_overwritten() {
 }
 
 #[test]
-fn only_offered_optional_content_is_shown_or_fetched() {
-    let tags = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
-    // What the Forever beta's manifest carries.
-    assert_eq!(offered_only(&tags(&["Alternate", "HighRes", "Talebound"])), tags(&["HighRes"]));
-    // A stale opt-in from before the list existed is dropped, not fetched.
-    assert!(offered_only(&tags(&["Talebound"])).is_empty());
-}
-
-#[test]
 fn the_rate_meter_smooths_rather_than_tracking_one_tick() {
     let mut rate = Rate::default();
     rate.sample(0);

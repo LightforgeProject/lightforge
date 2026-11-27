@@ -289,9 +289,10 @@ impl Lightforge {
             |families| Message::FamiliesRead(Box::new(families)),
         );
         // Once: the flag is written when the wizard ends.
-        if !self.config.setup_complete {
-            self.wizard = Some(wizard::Wizard::default());
-        }
+        let first_run = match self.config.setup_complete {
+            true => Task::none(),
+            false => wizard::open(self),
+        };
         // The splash is this art fetch; the wizard's first slide counts it.
         let artwork = self.open_splash();
         let client = self.warm_client();
@@ -306,6 +307,7 @@ impl Lightforge {
             resume,
             artwork,
             client,
+            first_run,
             iced::system::information().map(|info| Message::SystemInfo(Box::new(info))),
         ])
     }

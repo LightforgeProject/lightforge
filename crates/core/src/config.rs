@@ -76,6 +76,11 @@ pub struct Config {
     /// nothing is restored when the game exits.
     #[serde(default)]
     pub minimize_on_launch: bool,
+    /// Whether `lightforge play` first updates the game and the addons that
+    /// update themselves, for a script or shortcut nobody watches. Off by
+    /// default; config only, the GUI has its Update button.
+    #[serde(default)]
+    pub update_on_play: bool,
     /// Whether Battle.net comes up minimized for a hand-off. On by default,
     /// honoured only when [`crate::battlenet::signs_in_by_itself`].
     #[serde(default = "yes")]
@@ -190,6 +195,7 @@ impl Default for Config {
             download_limit_mbps: None,
             pause_downloads_while_playing: true,
             minimize_on_launch: false,
+            update_on_play: false,
             battle_net_minimized: true,
             close_battle_net_on_play: false,
             battle_net_in_background: false,

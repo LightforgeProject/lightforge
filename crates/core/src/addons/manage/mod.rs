@@ -97,6 +97,14 @@ pub struct Change {
     pub name: String,
     pub from: Option<String>,
     pub to: Option<String>,
+    /// Which addon and build it became, so its changelog can be fetched.
+    /// Empty in history written before they were recorded.
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub file_id: Option<String>,
 }
 
 /// The ledger path for one install of a product.

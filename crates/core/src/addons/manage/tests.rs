@@ -718,9 +718,17 @@ async fn an_update_reports_the_versions_it_went_between() {
     std::fs::write(options.addons_dir.join("Questie/Questie.toc"), "## Version: v1\n").unwrap();
 
     let report = install_all(&http, Some(&catalog), &[questie_request()], &options, |_| {}).await.unwrap();
+    let installed = Ledger::load(&options.ledger_path).unwrap().find("curse", "334372").unwrap().file_id.clone();
     assert_eq!(
         report.updated,
-        [Change { name: "Questie".into(), from: Some("v1".into()), to: Some("v2".into()) }]
+        [Change {
+            name: "Questie".into(),
+            from: Some("v1".into()),
+            to: Some("v2".into()),
+            provider: "curse".into(),
+            id: "334372".into(),
+            file_id: installed,
+        }]
     );
 }
 

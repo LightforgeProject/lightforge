@@ -97,7 +97,8 @@ pub(crate) enum Command {
     ///
     /// Runs pre-flight first, then starts the game as PLAY does: from its own
     /// library, under its Proton pin and Game Settings. Battle.net is not
-    /// involved.
+    /// involved. With `update_on_play = true` in the config, the game and the
+    /// addons that update themselves are brought up to date first.
     Play {
         /// Product to launch, e.g. `wow` or `wow_classic`.
         #[arg(long, default_value = "wow", value_parser = commands::product_code)]

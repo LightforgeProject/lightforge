@@ -586,6 +586,22 @@ pub struct ProductProfile {
     pub executable: Option<String>,
 }
 
+/// The optional downloads Lightforge offers to switch on.
+///
+/// What is *shown*, not what is gated: every optional tag stays off unless
+/// opted in. `Alternate` and `Talebound` get no switch.
+pub const OFFERED_OPTIONAL: &[&str] = &[HIGH_RES];
+
+/// The high-resolution texture pack's manifest tag.
+pub const HIGH_RES: &str = "HighRes";
+
+/// The tags in `tags` that [`OFFERED_OPTIONAL`] names. An opt-in to anything
+/// else, from before that list existed, is ignored, not fetched behind a
+/// switch the user can no longer see.
+pub fn offered_only(tags: &[String]) -> Vec<String> {
+    tags.iter().filter(|tag| OFFERED_OPTIONAL.contains(&tag.as_str())).cloned().collect()
+}
+
 /// Lifecycle of a product's Wine/Proton prefix.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -613,6 +629,15 @@ pub enum ProductError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_offered_optional_content_is_shown_or_fetched() {
+        let tags = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        // What the Forever beta's manifest carries.
+        assert_eq!(offered_only(&tags(&["Alternate", "HighRes", "Talebound"])), tags(&["HighRes"]));
+        // A stale opt-in from before the list existed is dropped, not fetched.
+        assert!(offered_only(&tags(&["Talebound"])).is_empty());
+    }
 
     #[test]
     fn a_code_is_well_formed_only_as_a_plain_folder_name() {

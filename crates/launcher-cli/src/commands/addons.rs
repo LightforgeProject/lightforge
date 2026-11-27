@@ -350,20 +350,12 @@ pub(crate) async fn addon_import(ctx: Ctx, token: String, code: ProductCode, cat
 
 pub(crate) async fn addon_update(ctx: Ctx, code: ProductCode, catalog: Option<String>) -> Result<()> {
     let Ctx { layout, .. } = ctx;
-    use lightforge_core::addons::{self, catalog::Catalog, manage};
+    use lightforge_core::addons::{catalog::Catalog, manage};
     use lightforge_core::net::Http;
 
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let catalog = addon_origin(catalog.as_deref(), &dirs).map(Catalog::new);
-    let options = manage::Options {
-        flavor: addons::flavor_of(&code).to_owned(),
-        addons_dir: layout.addons_dir(&code),
-        ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code),
-        pinned: false,
-        reinstall: false,
-        channel: addon_channel(&dirs),
-        backup: Some(settings_backup(&layout, &dirs, &code)),
-    };
+    let options = update_options(&layout, &dirs, &code);
 
     let http = Http::new()?;
     let report = manage::update_all(&http, catalog.as_ref(), &options, |event| {
@@ -373,6 +365,70 @@ pub(crate) async fn addon_update(ctx: Ctx, code: ProductCode, catalog: Option<St
     print_addon_report(&report);
     record_history(&options.ledger_path, &report);
     Ok(())
+}
+
+/// The GUI's automatic pass, in front of `play` when `update_on_play` is on:
+/// only addons that update themselves, never while a game has them loaded,
+/// and a failure is a warning, not a reason to stay out of the game.
+pub(crate) async fn addon_pass_before_play(config: &Config, layout: &Layout, dirs: &AppDirs, code: &ProductCode) {
+    use lightforge_core::addons::catalog::Catalog;
+    use lightforge_core::addons::history::{History, Run, Trigger};
+    use lightforge_core::addons::install::Ledger;
+    use lightforge_core::addons::manage;
+    use lightforge_core::net::Http;
+
+    let options = update_options(layout, dirs, code);
+    let mut ledger = match Ledger::load(&options.ledger_path) {
+        Ok(ledger) => ledger,
+        Err(e) => {
+            eprintln!("warning: addons not updated: {}", lightforge_core::error::chain(&e));
+            return;
+        }
+    };
+    ledger.prune_missing(&options.addons_dir);
+    let requests = manage::auto_update_requests(&ledger, config.addon_channel, config.addon_auto_update);
+    if requests.is_empty() {
+        return;
+    }
+    if !lightforge_core::preflight::games_running(layout).is_empty() {
+        println!("addons          not updated, a game has them loaded");
+        History::record(&options.ledger_path, Run::problem(Trigger::Automatic, "skipped: a game was running".to_owned()));
+        return;
+    }
+
+    let catalog = addon_origin(None, dirs).map(Catalog::new);
+    let result = match Http::new() {
+        Ok(http) => manage::install_all(&http, catalog.as_ref(), &requests, &options, |event| print_addon_event(&event)).await,
+        Err(e) => Err(e.into()),
+    };
+    let run = match &result {
+        Ok(report) => {
+            print_addon_report(report);
+            Run::of(report, Trigger::Automatic)
+        }
+        Err(e) => {
+            let problem = format!("check failed: {}", lightforge_core::error::chain(e));
+            eprintln!("warning: addons not updated: {problem}");
+            Some(Run::problem(Trigger::Automatic, problem))
+        }
+    };
+    if let Some(run) = run {
+        History::record(&options.ledger_path, run);
+    }
+}
+
+/// What both `addon-update` and the pass before `play` update with.
+fn update_options(layout: &Layout, dirs: &AppDirs, code: &ProductCode) -> lightforge_core::addons::manage::Options {
+    use lightforge_core::addons::{self, manage};
+    manage::Options {
+        flavor: addons::flavor_of(code).to_owned(),
+        addons_dir: layout.addons_dir(code),
+        ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(code), code),
+        pinned: false,
+        reinstall: false,
+        channel: addon_channel(dirs),
+        backup: Some(settings_backup(layout, dirs, code)),
+    }
 }
 
 pub(crate) fn backup_list(ctx: Ctx, code: ProductCode) -> Result<()> {

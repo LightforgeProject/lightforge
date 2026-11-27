@@ -739,7 +739,7 @@ pub async fn versions(
 }
 
 /// Everything the detail view shows about one addon: the project, its
-/// description and the changelog of its newest build.
+/// description and the changelog of one build, the newest by default.
 ///
 /// One fetch, one spinner; a missing changelog is ordinary.
 #[derive(Debug, Clone)]
@@ -751,7 +751,8 @@ pub struct Detail {
     pub changelog_build: Option<String>,
 }
 
-/// Reads one addon's project, description and newest changelog.
+/// Reads one addon's project, description, and the changelog of `build` (a
+/// file id) or of the newest build.
 ///
 /// CurseForge only: the other providers publish no description endpoint, and
 /// the detail view falls back to the summary the search already returned.
@@ -760,6 +761,7 @@ pub async fn detail(
     code: ProductCode,
     provider: String,
     id: String,
+    build: Option<String>,
 ) -> Result<Detail, String> {
     if addons::Provider::parse(&provider) != addons::Provider::Curse {
         return Err("only CurseForge addons have a detail page".to_owned());
@@ -774,18 +776,23 @@ pub async fn detail(
 
     let description = catalog.description(&http, &id).await.ok();
 
-    // The changelog needs the newest build's file id.
-    let (changelog, changelog_build) = match catalog
-        .files(&http, &id, addons::flavor_of(&code), 1)
-        .await
-        .ok()
-        .and_then(|files| files.into_iter().next())
-    {
-        Some(newest) => {
-            let log = catalog.changelog(&http, &id, &newest.file_id).await.ok();
-            (log, newest.display_name)
+    // The file list only names the build for the heading; a build older
+    // than the list still gets its changelog, under a plain heading.
+    let limit = if build.is_some() { VERSION_CHOICES } else { 1 };
+    let files = catalog.files(&http, &id, addons::flavor_of(&code), limit).await.unwrap_or_default();
+    let (file_id, changelog_build) = match build {
+        Some(file_id) => {
+            let named = files.into_iter().find(|f| f.file_id == file_id).and_then(|f| f.display_name);
+            (Some(file_id), named)
         }
-        None => (None, None),
+        None => match files.into_iter().next() {
+            Some(newest) => (Some(newest.file_id), newest.display_name),
+            None => (None, None),
+        },
+    };
+    let changelog = match &file_id {
+        Some(file_id) => catalog.changelog(&http, &id, file_id).await.ok(),
+        None => None,
     };
 
     Ok(Detail { project, description, changelog, changelog_build })

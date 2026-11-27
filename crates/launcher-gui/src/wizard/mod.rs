@@ -1,6 +1,6 @@
 //! The first run.
 //!
-//! Where things go, what is already here, provisioning, which games to keep.
+//! What is already here, where things go, provisioning, which games to keep.
 //! A layer over the app reusing its pieces (the Install step is
 //! [`crate::provision`]); new are only the art prefetch, the scan for
 //! existing installs, and declining Battle.net.
@@ -12,7 +12,7 @@ mod view;
 #[cfg(test)]
 mod tests;
 
-pub use update::update;
+pub use update::{open, update};
 pub use view::view;
 
 use std::path::PathBuf;
@@ -39,10 +39,11 @@ pub enum Step {
     /// What this is, the one thing the machine may be missing, and the two
     /// choices every later step depends on: region and language.
     Welcome,
+    /// Blizzard installs that were here before Lightforge. Before Place, so
+    /// an adopted install is already one of the drives Place lists.
+    Found,
     /// Where the prefix goes, and which drives games may go on.
     Place,
-    /// Blizzard installs that were here before Lightforge.
-    Found,
     /// Proton, the prefix and Battle.net.
     Install,
     /// Which games sit in the band.
@@ -53,7 +54,7 @@ pub enum Step {
 impl Step {
     /// Every step, in order, the dots across the top count these.
     pub const ALL: [Step; 6] =
-        [Step::Welcome, Step::Place, Step::Found, Step::Install, Step::Games, Step::Done];
+        [Step::Welcome, Step::Found, Step::Place, Step::Install, Step::Games, Step::Done];
 
     fn title(self) -> &'static str {
         match self {
@@ -114,9 +115,6 @@ pub struct Wizard {
     /// not two seconds of empty card. `None` until it finishes.
     pub prefetched: Option<usize>,
     pub scanning: bool,
-    /// Whether the scan has run at all, an empty `rows` means something quite
-    /// different before and after.
-    pub scanned: bool,
     pub rows: Vec<Row>,
     /// A folder the user typed in themselves.
     pub pointed: String,
@@ -144,7 +142,6 @@ impl Default for Wizard {
             step: Step::Welcome,
             prefetched: None,
             scanning: false,
-            scanned: false,
             rows: Vec::new(),
             pointed: String::new(),
             point_error: None,

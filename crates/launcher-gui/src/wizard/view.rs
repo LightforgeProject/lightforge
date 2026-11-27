@@ -92,7 +92,7 @@ fn footer<'a>(app: &'a Lightforge, wizard: &'a Wizard) -> Element<'a, Message> {
     // What the step's own button says, and whether it can be pressed yet.
     let (label, ready): (&str, bool) = match wizard.step {
         Step::Welcome => ("Get started", welcome_answered(app)),
-        Step::Place => ("Look for my games", true),
+        Step::Place => ("Continue", true),
         Step::Found => (
             match wizard.rows.iter().any(|row| row.take) {
                 true => "Add these and continue",
