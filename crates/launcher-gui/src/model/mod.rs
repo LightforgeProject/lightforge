@@ -108,6 +108,8 @@ pub(crate) enum AddonTab {
     Import,
     /// Hand this collection to another machine, or to WoWUp.
     Export,
+    /// What update passes changed, and the ones that could not run.
+    History,
 }
 
 /// Agent's registry, watched while Battle.net may be writing to it.

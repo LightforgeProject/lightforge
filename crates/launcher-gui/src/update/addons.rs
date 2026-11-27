@@ -421,19 +421,18 @@ impl Lightforge {
                                 1 => format!("{} updated automatically", report.installed[0]),
                                 n => format!("{n} addons updated automatically"),
                             });
-                            tasks.push(Task::perform(
-                                addonwork::list(
-                                    self.layout.clone(),
-                                    self.selected.code.clone(),
-                                ),
-                                |listing| Message::AddonsListed(Box::new(listing)),
-                            ));
                         }
                     }
                     // Said quietly and only here: a launcher that cannot
                     // reach CurseForge is not a launcher that cannot play.
                     Err(e) => self.addon_auto_note = Some(format!("addon check failed: {e}")),
                 }
+                // Even a pass that installed nothing may have added to the
+                // history, which comes with the listing.
+                tasks.push(Task::perform(
+                    addonwork::list(self.layout.clone(), self.selected.code.clone()),
+                    |listing| Message::AddonsListed(Box::new(listing)),
+                ));
 
                 // Whoever was waiting on this can go now.
                 if let Some((what, code)) = self.launch_after_addons.take() {

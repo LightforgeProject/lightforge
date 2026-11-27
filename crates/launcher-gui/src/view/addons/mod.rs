@@ -5,6 +5,7 @@ use iced::widget::column;
 
 mod browse;
 mod detail;
+mod history;
 mod mine;
 mod sharing;
 
@@ -62,6 +63,7 @@ impl Lightforge {
             tab("Browse Addons", AddonTab::Browse),
             tab("Import", AddonTab::Import),
             tab("Export", AddonTab::Export),
+            tab("History", AddonTab::History),
         ]
         .spacing(theme::XS)]
         .spacing(theme::MD);
@@ -86,6 +88,7 @@ impl Lightforge {
             AddonTab::Browse => self.addons_browse(),
             AddonTab::Import => self.addons_import(),
             AddonTab::Export => self.addons_export(),
+            AddonTab::History => self.addons_history(),
         });
 
         // Parent folders only, so the count matches the rows you can see,

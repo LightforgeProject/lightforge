@@ -19,6 +19,7 @@
 pub mod browse;
 pub mod catalog;
 pub mod fingerprint;
+pub mod history;
 pub mod install;
 pub mod manage;
 pub mod providers;
@@ -508,6 +509,15 @@ fn toc_for(dir: &Path, folder: &str, client: &Client) -> Option<(PathBuf, bool)>
         .or_else(|| named(folder))
         .map(|path| (path.clone(), true))
         .or_else(|| tocs.first().map(|path| (path.clone(), false)))
+}
+
+/// `## Version` of the addon folder at `dir`. Any of its `.toc` files will do:
+/// the flavour variants carry the same version.
+pub fn folder_version(dir: &Path) -> Option<String> {
+    let folder = dir.file_name()?.to_string_lossy();
+    let any_flavour = Client { suffixes: &[], interface: None };
+    let (toc, _) = toc_for(dir, &folder, &any_flavour)?;
+    Toc::parse(&read_toc(&toc).ok()?).get("Version").map(str::to_owned)
 }
 
 /// Required dependencies no folder in `installed` provides, as

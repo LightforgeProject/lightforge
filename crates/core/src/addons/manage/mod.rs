@@ -20,6 +20,7 @@ pub use updates::{auto_update_requests, check_updates, update_requests, UpdateSt
 use std::path::{Path, PathBuf};
 
 use super::catalog::CatalogError;
+use super::history::History;
 use super::install::{InstallError, Ledger};
 use crate::backup::BackupError;
 // The tests reach the ledger writer, the pin rule and the adoption grouping.
@@ -76,6 +77,8 @@ pub struct Unavailable {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Report {
     pub installed: Vec<String>,
+    /// Of `installed`, what replaced another build already there.
+    pub updated: Vec<Change>,
     pub up_to_date: Vec<String>,
     pub unavailable: Vec<Unavailable>,
 }
@@ -85,6 +88,15 @@ impl Report {
     pub fn is_complete(&self) -> bool {
         self.unavailable.is_empty()
     }
+}
+
+/// An installed addon replaced by another build, by its `## Version` lines.
+/// `None` where a `.toc` names none.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Change {
+    pub name: String,
+    pub from: Option<String>,
+    pub to: Option<String>,
 }
 
 /// The ledger path for one install of a product.
@@ -100,7 +112,7 @@ pub fn ledger_path(
 /// to another library or the library turning up at a new mount point. Keyed
 /// by the path, a ledger left behind shows every addon as unmanaged and none
 /// is updated again. It replaces one at the new path: that is a stale ledger
-/// from a move before this one.
+/// from a move before this one. The update history goes with it.
 pub fn carry_ledger(
     data_dir: &Path,
     code: &crate::product::ProductCode,
@@ -111,20 +123,29 @@ pub fn carry_ledger(
     if from == to {
         return Ok(());
     }
-    match std::fs::rename(&from, &to) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        done => done,
+    let history = (History::path_for(&from), History::path_for(&to));
+    for (from, to) in [(from, to), history] {
+        match std::fs::rename(&from, &to) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            done => done?,
+        }
     }
+    Ok(())
 }
 
 /// Drop `code`'s ledger along with its install. Left behind, a reinstall at the
 /// same path finds every addon it names "up to date" with no folder on disk,
 /// and installing one again does nothing.
 pub fn forget_ledger(data_dir: &Path, code: &crate::product::ProductCode, addons_dir: &Path) -> std::io::Result<()> {
-    match std::fs::remove_file(ledger_path(data_dir, addons_dir, code)) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        done => done,
+    let ledger = ledger_path(data_dir, addons_dir, code);
+    let history = History::path_for(&ledger);
+    for path in [ledger, history] {
+        match std::fs::remove_file(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            done => done?,
+        }
     }
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]

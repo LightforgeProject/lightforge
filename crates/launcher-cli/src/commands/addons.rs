@@ -267,6 +267,7 @@ pub(crate) async fn addon_install(ctx: Ctx, id: String, provider: String, code: 
         })
         .await?;
     print_addon_report(&report);
+    record_history(&options.ledger_path, &report);
     Ok(())
 }
 
@@ -343,6 +344,7 @@ pub(crate) async fn addon_import(ctx: Ctx, token: String, code: ProductCode, cat
     })
     .await?;
     print_addon_report(&report);
+    record_history(&options.ledger_path, &report);
     Ok(())
 }
 
@@ -369,6 +371,7 @@ pub(crate) async fn addon_update(ctx: Ctx, code: ProductCode, catalog: Option<St
     })
     .await?;
     print_addon_report(&report);
+    record_history(&options.ledger_path, &report);
     Ok(())
 }
 
@@ -561,6 +564,14 @@ fn print_addon_event(event: &lightforge_core::addons::manage::Event) {
         Event::Unavailable { name, reason } => {
             println!("--  {:<44} {reason}", truncate(name, 44))
         }
+    }
+}
+
+/// The GUI's History tab lists what the CLI updated too.
+fn record_history(ledger_path: &std::path::Path, report: &lightforge_core::addons::manage::Report) {
+    use lightforge_core::addons::history::{History, Run, Trigger};
+    if let Some(run) = Run::of(report, Trigger::Manual) {
+        History::record(ledger_path, run);
     }
 }
 

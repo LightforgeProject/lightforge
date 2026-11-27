@@ -570,7 +570,7 @@ fn addon_zip(folder: &str) -> Vec<u8> {
     let mut buffer = Vec::new();
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
     zip.start_file(format!("{folder}/{folder}.toc"), zip::write::SimpleFileOptions::default()).unwrap();
-    zip.write_all(b"## Interface: 16001\n").unwrap();
+    zip.write_all(b"## Interface: 16001\n## Version: v2\n").unwrap();
     zip.finish().unwrap();
     buffer
 }
@@ -702,6 +702,56 @@ async fn a_reinstall_restores_a_dependency_that_never_arrived() {
     let repair = Options { reinstall: true, ..questie_options(dir.path()) };
     let report = install_all(&http, Some(&catalog), &[questie_request()], &repair, |_| {}).await.unwrap();
     assert_eq!(report.installed, ["Questie", "QuestieDB", "QuestieTrace"]);
+}
+
+#[tokio::test]
+async fn an_update_reports_the_versions_it_went_between() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = questie_catalog(dir.path(), &questie_packages());
+    let options = questie_options(dir.path());
+    let http = Http::new().unwrap();
+    install_all(&http, Some(&catalog), &[questie_request()], &options, |_| {}).await.unwrap();
+
+    let mut ledger = Ledger::load(&options.ledger_path).unwrap();
+    ledger.find_mut("curse", "334372").unwrap().file_id = Some("0".into());
+    ledger.save(&options.ledger_path).unwrap();
+    std::fs::write(options.addons_dir.join("Questie/Questie.toc"), "## Version: v1\n").unwrap();
+
+    let report = install_all(&http, Some(&catalog), &[questie_request()], &options, |_| {}).await.unwrap();
+    assert_eq!(
+        report.updated,
+        [Change { name: "Questie".into(), from: Some("v1".into()), to: Some("v2".into()) }]
+    );
+}
+
+#[tokio::test]
+async fn a_first_install_or_a_repair_is_not_an_update() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = questie_catalog(dir.path(), &questie_packages());
+    let options = questie_options(dir.path());
+    let http = Http::new().unwrap();
+
+    let first = install_all(&http, Some(&catalog), &[questie_request()], &options, |_| {}).await.unwrap();
+    let repair = Options { reinstall: true, ..questie_options(dir.path()) };
+    let again = install_all(&http, Some(&catalog), &[questie_request()], &repair, |_| {}).await.unwrap();
+
+    assert!(first.updated.is_empty(), "{:?}", first.updated);
+    assert!(again.updated.is_empty(), "{:?}", again.updated);
+}
+
+#[test]
+fn a_moved_game_s_update_history_goes_with_its_ledger() {
+    let data = tempfile::tempdir().unwrap();
+    let code = crate::product::ProductCode::ClassicEra;
+    let (from, to) = (Path::new("/mnt/a/AddOns"), Path::new("/mnt/b/AddOns"));
+    Ledger::default().save(&ledger_path(data.path(), from, &code)).unwrap();
+    let history = |addons| crate::addons::history::History::path_for(&ledger_path(data.path(), addons, &code));
+    std::fs::write(history(from), "{}").unwrap();
+
+    carry_ledger(data.path(), &code, from, to).unwrap();
+
+    assert!(history(to).is_file());
+    assert!(!history(from).exists());
 }
 
 #[test]

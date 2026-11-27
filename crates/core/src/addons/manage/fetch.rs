@@ -2,7 +2,8 @@ use std::collections::HashSet;
 use std::io::{BufReader, Read, Seek};
 
 use super::updates::{effective_channel, update_requests};
-use super::{io, Event, ManageError, Options, Report, Unavailable};
+use super::{io, Change, Event, ManageError, Options, Report, Unavailable};
+use crate::addons;
 use crate::addons::catalog::{Catalog, Request, Resolved};
 use crate::addons::install::{self, Ledger, Record};
 use crate::addons::providers;
@@ -107,10 +108,21 @@ pub async fn install_all(
                 }
             }
 
+            // Read before the install overwrites the `.toc` it comes from.
+            let before = ledger.find(&provider, &entry.id).map(|record| {
+                let version = record.folders.first().and_then(|f| addons::folder_version(&options.addons_dir.join(f)));
+                (record.file_id.clone(), version)
+            });
+
             on_event(Event::Downloading { name: name.clone(), bytes: entry.file_length });
             match fetch_and_install(http, entry, &provider, &name, pin.clone(), options, &mut ledger).await {
                 Ok(folders) => {
                     if let Some(record) = ledger.find(&provider, &entry.id) {
+                        // A repair writes the same file again: nothing changed.
+                        if let Some((_, from)) = before.filter(|(file_id, _)| *file_id != record.file_id) {
+                            let to = record.folders.first().and_then(|f| addons::folder_version(&options.addons_dir.join(f)));
+                            report.updated.push(Change { name: name.clone(), from, to });
+                        }
                         written.push((record.clone(), pin));
                     }
                     tracing::info!("addons: installed {name} ({provider}/{}): {folders:?}", entry.id);

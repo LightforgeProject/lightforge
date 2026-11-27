@@ -10,6 +10,7 @@ use lightforge_core::error::chain;
 
 use crate::tasks::Problem;
 use lightforge_core::addons::catalog::{Catalog, Request};
+use lightforge_core::addons::history::{self, History, Trigger};
 use lightforge_core::addons::manage::{self, Event, Options, Report};
 use lightforge_core::addons::richtext;
 use lightforge_core::addons::{self, Channel, Collection, Installed, Ledger, Record};
@@ -81,6 +82,8 @@ pub struct Listing {
     pub problem: Option<String>,
     /// Folders two providers' records both claim, with the providers.
     pub shared: Vec<(String, Vec<String>)>,
+    /// What update passes did here, newest first.
+    pub history: Vec<history::Run>,
 }
 
 /// Scan a product's addons and fold in what the ledger knows.
@@ -133,6 +136,7 @@ pub async fn list(layout: Layout, code: ProductCode) -> Listing {
             dir,
             problem,
             shared: ledger.shared_folders(),
+            history: path.map(|path| History::load(&History::path_for(&path)).runs).unwrap_or_default(),
         }
     })
     .await
@@ -547,9 +551,12 @@ pub async fn auto_update(
             .unwrap_or(true)
     };
     if in_game {
+        let skipped = history::Run::problem(Trigger::Automatic, "skipped: a game was running".to_owned());
+        History::record(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code), skipped);
         return Ok(None);
     }
-    run(http, layout, code, requests, Mode::default(), channel, tx).await.map(Some)
+    let mode = Mode { trigger: Trigger::Automatic, ..Mode::default() };
+    run(http, layout, code, requests, mode, channel, tx).await.map(Some)
 }
 
 /// How one run differs from an ordinary install.
@@ -560,6 +567,8 @@ struct Mode {
     pinned: bool,
     /// Install over what is there even when the ledger says it is current.
     reinstall: bool,
+    /// What the update history calls it.
+    trigger: Trigger,
 }
 
 async fn run(
@@ -613,9 +622,18 @@ async fn run(
         let _ = tx.send(progress.clone());
     };
 
-    manage::install_all(&http, catalog.as_ref(), &requests, &options, on_event)
-        .await
-        .map_err(|e| Problem::of(&e))
+    let result = manage::install_all(&http, catalog.as_ref(), &requests, &options, on_event).await;
+    let entry = match &result {
+        Ok(report) => history::Run::of(report, mode.trigger),
+        Err(e) if mode.trigger == Trigger::Automatic => {
+            Some(history::Run::problem(Trigger::Automatic, format!("check failed: {}", chain(e))))
+        }
+        Err(_) => None,
+    };
+    if let Some(entry) = entry {
+        History::record(&options.ledger_path, entry);
+    }
+    result.map_err(|e| Problem::of(&e))
 }
 
 /// Search every provider that can answer.
@@ -795,7 +813,7 @@ pub async fn install_version(
         layout,
         code,
         vec![Request { provider, id, version_id: Some(file_id), channel: None }],
-        Mode { pinned: true, reinstall: false },
+        Mode { pinned: true, ..Mode::default() },
         // No channel is consulted: naming the file *is* the choice, and the
         // channel only ever decides which file to pick when nobody has.
         Channel::default(),
@@ -831,7 +849,7 @@ pub async fn reinstall_one(
             version_id: pinned_file.clone(),
             channel: None,
         }],
-        Mode { pinned: pinned_file.is_some(), reinstall: true },
+        Mode { pinned: pinned_file.is_some(), reinstall: true, ..Mode::default() },
         channel,
         tx,
     )
