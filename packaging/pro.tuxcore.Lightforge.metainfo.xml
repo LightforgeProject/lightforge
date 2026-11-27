@@ -78,6 +78,17 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.0.0-beta.14" date="2026-11-27">
+      <description>
+        <p>
+          Multi-boxing up to five clients, a history of addon updates with
+          changelogs, and PLAY through Battle.net in Seamless Battle.net Mode.
+          Battle.net's login window shows its text again when 32-bit fonts
+          are missing, and Lightforge opens on Play instead of Setup.
+        </p>
+      </description>
+      <url>https://github.com/LightforgeProject/lightforge/blob/main/RELEASES.md</url>
+    </release>
     <release version="1.0.0-beta.13" date="2026-11-14">
       <description>
         <p>
