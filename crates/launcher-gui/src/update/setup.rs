@@ -30,24 +30,17 @@ impl Lightforge {
                     ),
                     None => Task::none(),
                 };
-                let mut opened = Task::none();
-                // Open on Settings' setup section if nothing can launch yet.
-                // A missing Battle.net alone is not that: WoW launches without
-                // it, and the jump would come back on every start.
-                if let Some(status) = &status {
-                    // Not under the first run, which has its own setup step.
-                    if (status.proton.is_none() || !status.prefix.is_ready())
-                        && self.screen == Screen::Dashboard
-                        && !self.setup_running
-                        && self.wizard.is_none()
-                    {
-                        self.screen = Screen::Settings;
-                        self.settings_jump = Some(SettingsTab::Setup);
-                        // Behind the splash, the jump waits for it.
-                        if self.splash.is_none() {
-                            opened = self.arrived();
-                        }
+                // Said, not jumped to: opening on Settings every start
+                // (GitHub #38) is worse than a game that may not launch.
+                // Not under the first run, which has its own setup step.
+                match &status {
+                    Some(status) if status.is_ready() => self.setup_notice = None,
+                    Some(status) if !self.setup_notice_seen && !self.setup_running && self.wizard.is_none() => {
+                        let missing: Vec<&str> = status.outstanding().iter().map(|step| step.label()).collect();
+                        self.setup_notice = Some(format!("Setup is not finished: {} missing", missing.join(", ")));
+                        self.setup_notice_seen = true;
                     }
+                    _ => {}
                 }
                 // Setup is what installs Battle.net's mark.
                 self.bnet_icon =
@@ -77,7 +70,17 @@ impl Lightforge {
                     _ => Task::none(),
                 };
                 self.setup = status;
-                Task::batch([measure, opened, fetch])
+                Task::batch([measure, fetch])
+            }
+
+            Message::SetupNoticeOpen => {
+                self.setup_notice = None;
+                self.update(Message::ShowSettingsTab(SettingsTab::Setup))
+            }
+
+            Message::SetupNoticeClose => {
+                self.setup_notice = None;
+                Task::none()
             }
 
             // Quiet either way: it was nobody's request. A failure leaves the

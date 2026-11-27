@@ -372,6 +372,11 @@ struct Lightforge {
 
     screen: Screen,
     setup: Option<SetupStatus>,
+    /// The setup steps still missing, named in the corner on start instead
+    /// of opening on Settings: a game may well launch without them.
+    setup_notice: Option<String>,
+    /// Shown once a session: a dismissal stays dismissed.
+    setup_notice_seen: bool,
     /// The first run, while it is happening. `None` the rest of the time, and
     /// on every start after the one that finished or dismissed it.
     wizard: Option<wizard::Wizard>,

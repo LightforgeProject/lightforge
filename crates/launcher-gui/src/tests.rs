@@ -2469,20 +2469,40 @@ fn setup_status(app: &Lightforge, proton: bool, battle_net: bool) -> lightforge_
 }
 
 #[test]
-fn a_missing_battle_net_alone_opens_on_play() {
+fn an_unfinished_setup_opens_on_play_and_says_what_is_missing() {
     let (mut app, _scratch) = test_app();
     app.splash = None;
-    let status = setup_status(&app, true, false);
+    let status = setup_status(&app, false, false);
     let _ = app.update(Message::SetupStatus(Some(Box::new(status))));
     assert_eq!(app.screen, Screen::Dashboard);
+    assert_eq!(app.setup_notice.as_deref(), Some("Setup is not finished: Proton-GE, Battle.net missing"));
 }
 
 #[test]
-fn a_missing_proton_opens_on_setup() {
+fn a_closed_setup_notice_stays_closed_for_the_session() {
+    let (mut app, _scratch) = test_app();
+    let _ = app.update(Message::SetupStatus(Some(Box::new(setup_status(&app, true, false)))));
+    let _ = app.update(Message::SetupNoticeClose);
+    let _ = app.update(Message::SetupStatus(Some(Box::new(setup_status(&app, true, false)))));
+    assert!(app.setup_notice.is_none());
+}
+
+#[test]
+fn finishing_setup_takes_the_notice_away() {
+    let (mut app, _scratch) = test_app();
+    let _ = app.update(Message::SetupStatus(Some(Box::new(setup_status(&app, true, false)))));
+    assert!(app.setup_notice.is_some());
+    let _ = app.update(Message::SetupStatus(Some(Box::new(setup_status(&app, true, true)))));
+    assert!(app.setup_notice.is_none());
+}
+
+#[test]
+fn the_setup_notice_leads_to_the_setup_section() {
     let (mut app, _scratch) = test_app();
     app.splash = None;
-    let status = setup_status(&app, false, true);
-    let _ = app.update(Message::SetupStatus(Some(Box::new(status))));
+    let _ = app.update(Message::SetupStatus(Some(Box::new(setup_status(&app, true, false)))));
+    let _ = app.update(Message::SetupNoticeOpen);
+    assert!(app.setup_notice.is_none());
     assert_eq!(app.screen, Screen::Settings);
 }
 

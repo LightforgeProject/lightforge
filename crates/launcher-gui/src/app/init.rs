@@ -148,6 +148,8 @@ impl Lightforge {
             closing: None,
             screen: Screen::Dashboard,
             setup: None,
+            setup_notice: None,
+            setup_notice_seen: false,
             wizard: None,
             patch_notes: None,
             splash: None,

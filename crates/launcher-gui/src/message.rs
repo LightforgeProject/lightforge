@@ -361,6 +361,9 @@ pub(crate) enum Message {
 
     Show(Screen),
     SetupStatus(Option<Box<SetupStatus>>),
+    /// The start-up note that setup is not finished: open Setup, or close it.
+    SetupNoticeOpen,
+    SetupNoticeClose,
     RunSetup,
     /// The first-run wizard; see [`wizard`].
     Wizard(wizard::Msg),
