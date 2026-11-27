@@ -82,13 +82,17 @@ pub fn add(steam: &SteamRoot, name: &str, exe: &Path, art: &Artwork) -> Result<A
         Err(source) => return Err(ShortcutError::Io { path: file, source }),
     };
 
-    let exe_field = quoted(exe);
+    // Steam's own form for a program outside Flathub's sandbox.
+    let (exe_field, launch) = match steam.is_flatpak() {
+        true => (FLATPAK_SPAWN.to_owned(), Some(format!("--host {}", quoted(exe)))),
+        false => (quoted(exe), None),
+    };
     let appid = appid(&exe_field, name);
     let grid = config.join("grid");
     let icon = grid.join(format!("{appid}_icon.{}", art.icon.ext));
 
     let shortcuts = shortcuts_mut(&mut root);
-    let fields = entry(appid, name, &exe_field, exe, &icon);
+    let fields = entry(appid, name, &exe_field, exe, &icon, launch.as_deref());
     // Ours by name or by program: a moved launcher is still one entry.
     let ours = shortcuts.iter().position(|(_, value)| match value {
         Value::Map(entry) => {
@@ -99,9 +103,11 @@ pub fn add(steam: &SteamRoot, name: &str, exe: &Path, art: &Artwork) -> Result<A
     });
     let updated = match ours {
         Some(at) => {
-            // Only our fields: launch options, play time and collections are theirs.
+            // Only our fields: launch options, play time and collections are
+            // theirs, except Flatpak's launch options, which start the program.
             if let (_, Value::Map(entry)) = &mut shortcuts[at] {
-                for (key, value) in fields.into_iter().filter(|(key, _)| IDENTITY.contains(key)) {
+                let ours = |key: &&str| IDENTITY.contains(key) || (launch.is_some() && *key == "LaunchOptions");
+                for (key, value) in fields.into_iter().filter(|(key, _)| ours(key)) {
                     set(entry, key, value);
                 }
             }
@@ -148,6 +154,9 @@ pub fn appid(exe_field: &str, name: &str) -> u32 {
     crc.sum() | 0x8000_0000
 }
 
+/// What Flathub's Steam starts for a program outside its sandbox.
+const FLATPAK_SPAWN: &str = "\"/usr/bin/flatpak-spawn\"";
+
 fn quoted(path: &Path) -> String {
     format!("\"{}\"", path.display())
 }
@@ -156,7 +165,7 @@ fn quoted(path: &Path) -> String {
 const IDENTITY: [&str; 5] = ["appid", "AppName", "Exe", "StartDir", "icon"];
 
 /// The fields of one shortcut, in the order Steam itself writes them.
-fn entry(appid: u32, name: &str, exe_field: &str, exe: &Path, icon: &Path) -> Vec<(&'static str, Value)> {
+fn entry(appid: u32, name: &str, exe_field: &str, exe: &Path, icon: &Path, launch: Option<&str>) -> Vec<(&'static str, Value)> {
     let start = exe.parent().map(quoted).unwrap_or_default();
     let text = |s: &str| Value::Str(s.as_bytes().to_vec());
     vec![
@@ -166,7 +175,7 @@ fn entry(appid: u32, name: &str, exe_field: &str, exe: &Path, icon: &Path) -> Ve
         ("StartDir", text(&start)),
         ("icon", text(&icon.display().to_string())),
         ("ShortcutPath", text("")),
-        ("LaunchOptions", text("")),
+        ("LaunchOptions", text(launch.unwrap_or(""))),
         ("IsHidden", Value::Int(0)),
         ("AllowDesktopConfig", Value::Int(1)),
         ("AllowOverlay", Value::Int(1)),
@@ -392,26 +401,45 @@ mod tests {
 
     /// A Steam root with one signed-in account, and that account's id.
     fn steam(name: &str) -> (tempfile::TempDir, SteamRoot, u32) {
-        let dir = tempfile::Builder::new().prefix(name).tempdir().unwrap();
+        steam_at(name, "")
+    }
+
+    /// [`steam`], at `sub` under the temporary folder.
+    fn steam_at(name: &str, sub: &str) -> (tempfile::TempDir, SteamRoot, u32) {
+        let temp = tempfile::Builder::new().prefix(name).tempdir().unwrap();
+        let dir = temp.path().join(sub);
         let account = 125_143_762;
         let id64 = STEAM_ID64_BASE + account as u64;
-        std::fs::create_dir_all(dir.path().join("config")).unwrap();
+        std::fs::create_dir_all(dir.join("config")).unwrap();
         std::fs::write(
-            dir.path().join("config/loginusers.vdf"),
+            dir.join("config/loginusers.vdf"),
             format!(
                 "\"users\"\n{{\n\t\"76561198000000001\"\n\t{{\n\t\t\"AccountName\"\t\t\"other\"\n\t\t\"MostRecent\"\t\t\"0\"\n\t}}\n\
                  \t\"{id64}\"\n\t{{\n\t\t\"AccountName\"\t\t\"me\"\n\t\t\"MostRecent\"\t\t\"1\"\n\t}}\n}}\n"
             ),
         )
         .unwrap();
-        let root = SteamRoot::with_path(dir.path());
-        (dir, root, account)
+        let root = SteamRoot::with_path(dir);
+        (temp, root, account)
     }
 
     fn shortcuts_of(root: &SteamRoot, account: u32) -> Vec<(Vec<u8>, Value)> {
         let file = root.path().join(format!("userdata/{account}/config/shortcuts.vdf"));
         let mut parsed = parse(&std::fs::read(file).unwrap()).unwrap();
         std::mem::take(shortcuts_mut(&mut parsed))
+    }
+
+    #[test]
+    fn flathub_s_steam_starts_it_through_flatpak_spawn() {
+        let (_dir, root, account) = steam_at("lf-steam-flatpak", ".var/app/com.valvesoftware.Steam/.local/share/Steam");
+        let exe = Path::new("/home/deck/.local/bin/lightforge-gui");
+
+        add(&root, "Lightforge", exe, &art()).unwrap();
+
+        let shortcuts = shortcuts_of(&root, account);
+        let Value::Map(ref ours) = shortcuts[0].1 else { panic!("not a map") };
+        assert_eq!(get_str(ours, "Exe"), Some(b"\"/usr/bin/flatpak-spawn\"".as_slice()));
+        assert_eq!(get_str(ours, "LaunchOptions"), Some(b"--host \"/home/deck/.local/bin/lightforge-gui\"".as_slice()));
     }
 
     /// The id other tools compute for the same program and name, checked

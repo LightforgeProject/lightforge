@@ -10,6 +10,7 @@ use lightforge_core::error::chain;
 
 use crate::tasks::Problem;
 use lightforge_core::addons::catalog::{Catalog, Request};
+use lightforge_core::addons::history::{self, History, Trigger};
 use lightforge_core::addons::manage::{self, Event, Options, Report};
 use lightforge_core::addons::richtext;
 use lightforge_core::addons::{self, Channel, Collection, Installed, Ledger, Record};
@@ -81,6 +82,8 @@ pub struct Listing {
     pub problem: Option<String>,
     /// Folders two providers' records both claim, with the providers.
     pub shared: Vec<(String, Vec<String>)>,
+    /// What update passes did here, newest first.
+    pub history: Vec<history::Run>,
 }
 
 /// Scan a product's addons and fold in what the ledger knows.
@@ -133,6 +136,7 @@ pub async fn list(layout: Layout, code: ProductCode) -> Listing {
             dir,
             problem,
             shared: ledger.shared_folders(),
+            history: path.map(|path| History::load(&History::path_for(&path)).runs).unwrap_or_default(),
         }
     })
     .await
@@ -547,9 +551,12 @@ pub async fn auto_update(
             .unwrap_or(true)
     };
     if in_game {
+        let skipped = history::Run::problem(Trigger::Automatic, "skipped: a game was running".to_owned());
+        History::record(&manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code), skipped);
         return Ok(None);
     }
-    run(http, layout, code, requests, Mode::default(), channel, tx).await.map(Some)
+    let mode = Mode { trigger: Trigger::Automatic, ..Mode::default() };
+    run(http, layout, code, requests, mode, channel, tx).await.map(Some)
 }
 
 /// How one run differs from an ordinary install.
@@ -560,6 +567,8 @@ struct Mode {
     pinned: bool,
     /// Install over what is there even when the ledger says it is current.
     reinstall: bool,
+    /// What the update history calls it.
+    trigger: Trigger,
 }
 
 async fn run(
@@ -613,9 +622,18 @@ async fn run(
         let _ = tx.send(progress.clone());
     };
 
-    manage::install_all(&http, catalog.as_ref(), &requests, &options, on_event)
-        .await
-        .map_err(|e| Problem::of(&e))
+    let result = manage::install_all(&http, catalog.as_ref(), &requests, &options, on_event).await;
+    let entry = match &result {
+        Ok(report) => history::Run::of(report, mode.trigger),
+        Err(e) if mode.trigger == Trigger::Automatic => {
+            Some(history::Run::problem(Trigger::Automatic, format!("check failed: {}", chain(e))))
+        }
+        Err(_) => None,
+    };
+    if let Some(entry) = entry {
+        History::record(&options.ledger_path, entry);
+    }
+    result.map_err(|e| Problem::of(&e))
 }
 
 /// Search every provider that can answer.
@@ -721,7 +739,7 @@ pub async fn versions(
 }
 
 /// Everything the detail view shows about one addon: the project, its
-/// description and the changelog of its newest build.
+/// description and the changelog of one build, the newest by default.
 ///
 /// One fetch, one spinner; a missing changelog is ordinary.
 #[derive(Debug, Clone)]
@@ -733,7 +751,8 @@ pub struct Detail {
     pub changelog_build: Option<String>,
 }
 
-/// Reads one addon's project, description and newest changelog.
+/// Reads one addon's project, description, and the changelog of `build` (a
+/// file id) or of the newest build.
 ///
 /// CurseForge only: the other providers publish no description endpoint, and
 /// the detail view falls back to the summary the search already returned.
@@ -742,6 +761,7 @@ pub async fn detail(
     code: ProductCode,
     provider: String,
     id: String,
+    build: Option<String>,
 ) -> Result<Detail, String> {
     if addons::Provider::parse(&provider) != addons::Provider::Curse {
         return Err("only CurseForge addons have a detail page".to_owned());
@@ -756,18 +776,23 @@ pub async fn detail(
 
     let description = catalog.description(&http, &id).await.ok();
 
-    // The changelog needs the newest build's file id.
-    let (changelog, changelog_build) = match catalog
-        .files(&http, &id, addons::flavor_of(&code), 1)
-        .await
-        .ok()
-        .and_then(|files| files.into_iter().next())
-    {
-        Some(newest) => {
-            let log = catalog.changelog(&http, &id, &newest.file_id).await.ok();
-            (log, newest.display_name)
+    // The file list only names the build for the heading; a build older
+    // than the list still gets its changelog, under a plain heading.
+    let limit = if build.is_some() { VERSION_CHOICES } else { 1 };
+    let files = catalog.files(&http, &id, addons::flavor_of(&code), limit).await.unwrap_or_default();
+    let (file_id, changelog_build) = match build {
+        Some(file_id) => {
+            let named = files.into_iter().find(|f| f.file_id == file_id).and_then(|f| f.display_name);
+            (Some(file_id), named)
         }
-        None => (None, None),
+        None => match files.into_iter().next() {
+            Some(newest) => (Some(newest.file_id), newest.display_name),
+            None => (None, None),
+        },
+    };
+    let changelog = match &file_id {
+        Some(file_id) => catalog.changelog(&http, &id, file_id).await.ok(),
+        None => None,
     };
 
     Ok(Detail { project, description, changelog, changelog_build })
@@ -795,7 +820,7 @@ pub async fn install_version(
         layout,
         code,
         vec![Request { provider, id, version_id: Some(file_id), channel: None }],
-        Mode { pinned: true, reinstall: false },
+        Mode { pinned: true, ..Mode::default() },
         // No channel is consulted: naming the file *is* the choice, and the
         // channel only ever decides which file to pick when nobody has.
         Channel::default(),
@@ -831,7 +856,7 @@ pub async fn reinstall_one(
             version_id: pinned_file.clone(),
             channel: None,
         }],
-        Mode { pinned: pinned_file.is_some(), reinstall: true },
+        Mode { pinned: pinned_file.is_some(), reinstall: true, ..Mode::default() },
         channel,
         tx,
     )

@@ -75,8 +75,8 @@ yay -S lightforge-bin   # or: yay -S lightforge
 
 Download `lightforge-installer.desktop` and double-click it. It fetches the
 newest version, verifies it, installs it into your home folder and starts
-Lightforge, no terminal needed. Run it again any time to update. Or from a
-terminal:
+Lightforge, no terminal needed. Run it again any time to update. GNOME Files
+opens it as text instead, so on GNOME, and anywhere else, use a terminal:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/LightforgeProject/lightforge/main/packaging/installer/install.sh | bash

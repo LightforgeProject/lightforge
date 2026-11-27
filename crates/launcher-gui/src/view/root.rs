@@ -1,6 +1,7 @@
 //! The window under the first-run wizard: a screen, and what is over it.
 
 use crate::*;
+use iced::widget::column;
 
 impl Lightforge {
     /// The wizard's card, on the backdrop the rest of the app is drawn on.
@@ -28,10 +29,12 @@ impl Lightforge {
         };
 
         // The download manager, top right on every screen, under its button.
+        // The setup note sits there too, under the manager when both want it.
         let overlay: Option<Element<Message>> =
-            match self.manager_open && !self.queue.is_empty() {
-                true => Some(self.manager()),
-                false => None,
+            match (self.manager_open && !self.queue.is_empty(), &self.setup_notice) {
+                (true, _) => Some(self.manager()),
+                (false, Some(missing)) => Some(setup_notice(missing)),
+                (false, None) => None,
             };
         // Clicks inside a panel never reach the dismissal beneath.
         let overlay = overlay.map(|panel| focus::layer(mouse_area(panel).on_press(Message::MenuClick)));
@@ -139,4 +142,24 @@ impl Lightforge {
         };
         card.map(|card| (card, on_scrim))
     }
+}
+
+/// Setup is not finished: says what is missing, the way there, and a close.
+fn setup_notice(missing: &str) -> Element<'_, Message> {
+    container(
+        column![
+            text(missing).size(theme::BODY),
+            row![
+                Space::new().width(Length::Fill),
+                secondary("Close", Message::SetupNoticeClose).enabled(true),
+                secondary("Open setup", Message::SetupNoticeOpen).enabled(true),
+            ]
+            .spacing(theme::SM),
+        ]
+        .spacing(theme::SM)
+        .width(Length::Fixed(380.0)),
+    )
+    .padding(theme::MD)
+    .style(theme::floating)
+    .into()
 }

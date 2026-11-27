@@ -254,23 +254,24 @@ impl Lightforge {
     /// One addon: its detail card, and installing, reinstalling or picking a version of it.
     fn update_addon_one(&mut self, message: Message) -> Result<Task<Message>, Message> {
         Ok(match message {
-            Message::ShowAddonDetail(provider, id, name) => {
+            Message::ShowAddonDetail(provider, id, name, build) => {
                 self.addon_menu_open = None;
-                // Changelog first if installed, About when browsing.
-                let installed = self.addon_is_installed(&provider, &id);
+                // Changelog first if installed or a build was named, About
+                // when browsing.
+                let changelog = build.is_some() || self.addon_is_installed(&provider, &id);
                 self.addon_detail = Some(AddonDetail {
                     provider: provider.clone(),
                     id: id.clone(),
                     name,
                     loaded: None,
                     problem: None,
-                    tab: match installed {
+                    tab: match changelog {
                         true => DetailTab::Changelog,
                         false => DetailTab::About,
                     },
                 });
                 Task::perform(
-                    addonwork::detail(self.http.clone(), self.selected.code.clone(), provider, id),
+                    addonwork::detail(self.http.clone(), self.selected.code.clone(), provider, id, build),
                     |result| Message::AddonDetailLoaded(Box::new(result)),
                 )
             }
@@ -421,19 +422,18 @@ impl Lightforge {
                                 1 => format!("{} updated automatically", report.installed[0]),
                                 n => format!("{n} addons updated automatically"),
                             });
-                            tasks.push(Task::perform(
-                                addonwork::list(
-                                    self.layout.clone(),
-                                    self.selected.code.clone(),
-                                ),
-                                |listing| Message::AddonsListed(Box::new(listing)),
-                            ));
                         }
                     }
                     // Said quietly and only here: a launcher that cannot
                     // reach CurseForge is not a launcher that cannot play.
                     Err(e) => self.addon_auto_note = Some(format!("addon check failed: {e}")),
                 }
+                // Even a pass that installed nothing may have added to the
+                // history, which comes with the listing.
+                tasks.push(Task::perform(
+                    addonwork::list(self.layout.clone(), self.selected.code.clone()),
+                    |listing| Message::AddonsListed(Box::new(listing)),
+                ));
 
                 // Whoever was waiting on this can go now.
                 if let Some((what, code)) = self.launch_after_addons.take() {

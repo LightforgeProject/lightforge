@@ -204,6 +204,22 @@ impl Lightforge {
                 Task::none()
             }
 
+            Message::MultiboxToggled(on) => {
+                if let Some(product) = self.config.product_mut(&self.selected.code) {
+                    product.profile.multibox = on.then_some(1);
+                }
+                self.save_config();
+                Task::none()
+            }
+
+            Message::MultiboxClientsPicked(count) => {
+                if let Some(product) = self.config.product_mut(&self.selected.code) {
+                    product.profile.multibox = Some(count);
+                }
+                self.save_config();
+                Task::none()
+            }
+
             Message::EnvEdit(scope, action) => {
                 let editor = match scope {
                     Scope::Product => &mut self.env_editor,

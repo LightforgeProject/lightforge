@@ -216,7 +216,8 @@ pub async fn install_release(
         dest_root.display()
     );
     let digest = http
-        .download(&tarball.browser_download_url, &archive, on_progress)
+        // GitHub's own figure; a release without one gets the unpack cap.
+        .download(&tarball.browser_download_url, &archive, Some(tarball.size).filter(|&s| s > 0).unwrap_or(MAX_UNPACKED), on_progress)
         .await?;
 
     // The ~400 MB tarball goes, whatever happens from here.
@@ -239,7 +240,8 @@ pub async fn install_release(
         let dest_root = dest_root.to_path_buf();
         let archive_for_task = archive.clone();
         // Decompression is CPU-bound and blocking; keep it off the async runtime.
-        let unpacked = tokio::task::spawn_blocking(move || unpack(&archive_for_task, &dest_root))
+        let tag = release.tag_name.clone();
+        let unpacked = tokio::task::spawn_blocking(move || unpack(&archive_for_task, &dest_root, &tag))
             .await
             .map_err(|e| ProtonError::Join(e.to_string()))??;
 
@@ -258,10 +260,11 @@ pub async fn install_release(
 /// A GE build unpacks to about 1.6 GB.
 const MAX_UNPACKED: u64 = 8 << 30;
 
-/// Extract a `.tar.gz` or `.tar.xz` into `dest_root`, returning the build's
-/// directory. Unpacked into staging and renamed in only once it reads as a
-/// Proton build, so a failed unpack leaves nothing for discovery to list.
-pub(super) fn unpack(archive: &Path, dest_root: &Path) -> Result<PathBuf, ProtonError> {
+/// Extract a `.tar.gz` or `.tar.xz` of release `tag` into `dest_root`,
+/// returning the build's directory. Unpacked into staging and renamed in only
+/// once it reads as a Proton build, so a failed unpack leaves nothing for
+/// discovery to list.
+pub(super) fn unpack(archive: &Path, dest_root: &Path, tag: &str) -> Result<PathBuf, ProtonError> {
     let file = std::fs::File::open(archive).map_err(io(archive))?;
     std::fs::create_dir_all(dest_root).map_err(io(dest_root))?;
 
@@ -294,6 +297,12 @@ pub(super) fn unpack(archive: &Path, dest_root: &Path) -> Result<PathBuf, Proton
     };
     if ProtonRelease::read_from_dir(&built, ProtonSource::Managed).is_none() {
         return Err(ProtonError::NotAProtonBuild(archive.to_path_buf()));
+    }
+    // `GE-Proton11-7-x86_64`, `proton-cachyos-…-slr-x86_64`: the folder names
+    // the release. One naming another would replace that build below.
+    let folder = built.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    if !folder.to_ascii_lowercase().contains(&tag.to_ascii_lowercase()) {
+        return Err(ProtonError::WrongFolder { tag: tag.to_owned(), folder });
     }
 
     let target = dest_root.join(built.file_name().unwrap_or_default());

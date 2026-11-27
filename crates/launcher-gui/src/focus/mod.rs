@@ -59,7 +59,8 @@ pub enum Target {
     PreDownload,
     Primary,
     Gear,
-    LaunchViaBattleNet,
+    /// Under PLAY: Launch via Battle.net, or via Lightforge in Seamless mode.
+    SecondLaunch,
     /// A hand-off game's link to how Battle.net launches.
     HandOffSettings,
     /// An entry in the app menu or the gear menu, by its label.

@@ -365,9 +365,7 @@ impl Lightforge {
     }
 
     /// The optional downloads a product is opted into, limited to the ones
-    /// Lightforge offers; see [`OFFERED_OPTIONAL`]. An opt-in to anything
-    /// else, from before that list existed, is ignored, not fetched
-    /// behind a switch the user can no longer see.
+    /// Lightforge offers; see [`offered_only`].
     pub(crate) fn opted_optional(&self, code: &ProductCode) -> Vec<String> {
         offered_only(
             self.config.product(code).map(|p| p.profile.optional_content.as_slice()).unwrap_or(&[]),

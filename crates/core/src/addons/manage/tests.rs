@@ -570,7 +570,7 @@ fn addon_zip(folder: &str) -> Vec<u8> {
     let mut buffer = Vec::new();
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
     zip.start_file(format!("{folder}/{folder}.toc"), zip::write::SimpleFileOptions::default()).unwrap();
-    zip.write_all(b"## Interface: 16001\n").unwrap();
+    zip.write_all(b"## Interface: 16001\n## Version: v2\n").unwrap();
     zip.finish().unwrap();
     buffer
 }
@@ -642,6 +642,34 @@ async fn installing_an_addon_brings_its_required_dependencies() {
 }
 
 #[tokio::test]
+async fn a_package_offered_over_plain_http_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = questie_catalog(dir.path(), "http://cdn.example.invalid");
+    let options = questie_options(dir.path());
+
+    let http = Http::new().unwrap();
+    let report = install_all(&http, Some(&catalog), &[questie_request()], &options, |_| {}).await.unwrap();
+
+    assert!(report.installed.is_empty());
+    assert!(report.unavailable[0].reason.contains("not an https address"), "{}", report.unavailable[0].reason);
+}
+
+#[tokio::test]
+async fn an_addon_whose_folders_were_deleted_installs_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = questie_catalog(dir.path(), &questie_packages());
+    let options = questie_options(dir.path());
+    let http = Http::new().unwrap();
+    install_all(&http, Some(&catalog), &[questie_request()], &options, |_| {}).await.unwrap();
+    std::fs::remove_dir_all(options.addons_dir.join("Questie")).unwrap();
+
+    let report = install_all(&http, Some(&catalog), &[questie_request()], &options, |_| {}).await.unwrap();
+
+    assert_eq!(report.installed, ["Questie"]);
+    assert!(options.addons_dir.join("Questie/Questie.toc").is_file());
+}
+
+#[tokio::test]
 async fn an_addon_already_up_to_date_does_not_bring_back_a_removed_dependency() {
     let dir = tempfile::tempdir().unwrap();
     let catalog = questie_catalog(dir.path(), &questie_packages());
@@ -676,6 +704,64 @@ async fn a_reinstall_restores_a_dependency_that_never_arrived() {
     assert_eq!(report.installed, ["Questie", "QuestieDB", "QuestieTrace"]);
 }
 
+#[tokio::test]
+async fn an_update_reports_the_versions_it_went_between() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = questie_catalog(dir.path(), &questie_packages());
+    let options = questie_options(dir.path());
+    let http = Http::new().unwrap();
+    install_all(&http, Some(&catalog), &[questie_request()], &options, |_| {}).await.unwrap();
+
+    let mut ledger = Ledger::load(&options.ledger_path).unwrap();
+    ledger.find_mut("curse", "334372").unwrap().file_id = Some("0".into());
+    ledger.save(&options.ledger_path).unwrap();
+    std::fs::write(options.addons_dir.join("Questie/Questie.toc"), "## Version: v1\n").unwrap();
+
+    let report = install_all(&http, Some(&catalog), &[questie_request()], &options, |_| {}).await.unwrap();
+    let installed = Ledger::load(&options.ledger_path).unwrap().find("curse", "334372").unwrap().file_id.clone();
+    assert_eq!(
+        report.updated,
+        [Change {
+            name: "Questie".into(),
+            from: Some("v1".into()),
+            to: Some("v2".into()),
+            provider: "curse".into(),
+            id: "334372".into(),
+            file_id: installed,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn a_first_install_or_a_repair_is_not_an_update() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = questie_catalog(dir.path(), &questie_packages());
+    let options = questie_options(dir.path());
+    let http = Http::new().unwrap();
+
+    let first = install_all(&http, Some(&catalog), &[questie_request()], &options, |_| {}).await.unwrap();
+    let repair = Options { reinstall: true, ..questie_options(dir.path()) };
+    let again = install_all(&http, Some(&catalog), &[questie_request()], &repair, |_| {}).await.unwrap();
+
+    assert!(first.updated.is_empty(), "{:?}", first.updated);
+    assert!(again.updated.is_empty(), "{:?}", again.updated);
+}
+
+#[test]
+fn a_moved_game_s_update_history_goes_with_its_ledger() {
+    let data = tempfile::tempdir().unwrap();
+    let code = crate::product::ProductCode::ClassicEra;
+    let (from, to) = (Path::new("/mnt/a/AddOns"), Path::new("/mnt/b/AddOns"));
+    Ledger::default().save(&ledger_path(data.path(), from, &code)).unwrap();
+    let history = |addons| crate::addons::history::History::path_for(&ledger_path(data.path(), addons, &code));
+    std::fs::write(history(from), "{}").unwrap();
+
+    carry_ledger(data.path(), &code, from, to).unwrap();
+
+    assert!(history(to).is_file());
+    assert!(!history(from).exists());
+}
+
 #[test]
 fn a_moved_game_s_ledger_follows_its_addons_folder() {
     let data = tempfile::tempdir().unwrap();
@@ -699,4 +785,18 @@ fn a_game_without_a_ledger_carries_nothing() {
     let code = crate::product::ProductCode::ClassicEra;
     carry_ledger(data.path(), &code, Path::new("/mnt/a/AddOns"), Path::new("/mnt/b/AddOns")).unwrap();
     assert!(!ledger_path(data.path(), Path::new("/mnt/b/AddOns"), &code).exists());
+}
+
+#[test]
+fn an_uninstalled_game_s_ledger_is_forgotten() {
+    let data = tempfile::tempdir().unwrap();
+    let code = crate::product::ProductCode::ClassicEra;
+    let addons = Path::new("/games/World of Warcraft/_classic_era_/Interface/AddOns");
+    let mut ledger = Ledger::default();
+    ledger.addons.push(Record { folders: vec!["QuestieDB".into()], ..Default::default() });
+    ledger.save(&ledger_path(data.path(), addons, &code)).unwrap();
+
+    forget_ledger(data.path(), &code, addons).unwrap();
+
+    assert!(!ledger_path(data.path(), addons, &code).exists());
 }

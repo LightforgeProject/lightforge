@@ -117,6 +117,7 @@ impl Lightforge {
             warming: None,
             close_client_after_play: false,
             client_update_retries: 0,
+            more_clients: 0,
             update_pending: None,
             latest_build: None,
             client_update: None,
@@ -147,6 +148,8 @@ impl Lightforge {
             closing: None,
             screen: Screen::Dashboard,
             setup: None,
+            setup_notice: None,
+            setup_notice_seen: false,
             wizard: None,
             patch_notes: None,
             splash: None,
@@ -254,8 +257,10 @@ impl Lightforge {
             return iced::window::oldest().and_then(iced::window::toggle_decorations);
         }
         self.load_tweak_inputs();
-        // Before any path resolves: find drives at new mount points.
+        // Before any path resolves: find drives at new mount points, and
+        // games a cut-off move left where the config does not look.
         self.refresh_drives();
+        self.recover_moves();
         self.restore_queue();
 
         // What is provisioned decides which screen opens.
@@ -286,9 +291,10 @@ impl Lightforge {
             |families| Message::FamiliesRead(Box::new(families)),
         );
         // Once: the flag is written when the wizard ends.
-        if !self.config.setup_complete {
-            self.wizard = Some(wizard::Wizard::default());
-        }
+        let first_run = match self.config.setup_complete {
+            true => Task::none(),
+            false => wizard::open(self),
+        };
         // The splash is this art fetch; the wizard's first slide counts it.
         let artwork = self.open_splash();
         let client = self.warm_client();
@@ -303,6 +309,7 @@ impl Lightforge {
             resume,
             artwork,
             client,
+            first_run,
             iced::system::information().map(|info| Message::SystemInfo(Box::new(info))),
         ])
     }

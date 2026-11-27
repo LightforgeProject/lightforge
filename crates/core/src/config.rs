@@ -76,6 +76,11 @@ pub struct Config {
     /// nothing is restored when the game exits.
     #[serde(default)]
     pub minimize_on_launch: bool,
+    /// Whether `lightforge play` first updates the game and the addons that
+    /// update themselves, for a script or shortcut nobody watches. Off by
+    /// default; config only, the GUI has its Update button.
+    #[serde(default)]
+    pub update_on_play: bool,
     /// Whether Battle.net comes up minimized for a hand-off. On by default,
     /// honoured only when [`crate::battlenet::signs_in_by_itself`].
     #[serde(default = "yes")]
@@ -89,6 +94,11 @@ pub struct Config {
     /// [`Config::close_battle_net_on_play`] while on.
     #[serde(default)]
     pub battle_net_in_background: bool,
+    /// Whether closing Lightforge closes everything in the prefix too:
+    /// Battle.net, Agent and Game Tools, unless a game is running. Off by
+    /// default; for desktops without a tray to quit them from (GitHub #35).
+    #[serde(default)]
+    pub close_prefix_on_exit: bool,
     /// How Battle.net and every game it launches are started. Shared: a
     /// running client takes launches over IPC, so games cannot differ. Only
     /// the host and runtime half of [`crate::tweaks::Tweaks`] applies.
@@ -190,9 +200,11 @@ impl Default for Config {
             download_limit_mbps: None,
             pause_downloads_while_playing: true,
             minimize_on_launch: false,
+            update_on_play: false,
             battle_net_minimized: true,
             close_battle_net_on_play: false,
             battle_net_in_background: false,
+            close_prefix_on_exit: false,
             battle_net_tweaks: crate::tweaks::Tweaks::default(),
             region: crate::tact::version::Region::default(),
             locale: default_locale(),

@@ -34,6 +34,7 @@ pub mod launch_options;
 pub mod library;
 pub mod logging;
 pub mod migrate;
+pub mod multibox;
 pub mod net;
 pub mod paths;
 pub mod portal;

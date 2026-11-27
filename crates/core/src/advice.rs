@@ -141,7 +141,8 @@ fn recognise(error: &(dyn Error + 'static)) -> Option<Advice> {
     if let Some(e) = error.downcast_ref::<tact::storage::StorageError>() {
         use tact::storage::StorageError as S;
         return match e {
-            S::NoIndices(_) | S::NotBlte { .. } | S::Decode { .. } => Some(damaged()),
+            S::DamagedIndex { .. } | S::NotBlte { .. } | S::Decode { .. } => Some(damaged()),
+            S::NoIndices(_) => Some(Advice::say("This game's download did not finish. Install it again to complete it.")),
             _ => None,
         };
     }
@@ -165,6 +166,14 @@ fn recognise(error: &(dyn Error + 'static)) -> Option<Advice> {
              then try again.",
         ));
     }
+    if let Some(crate::prefix::PrefixError::ContainerBlocked(_)) = error.downcast_ref() {
+        return Some(Advice::say(
+            "This system blocks the user namespaces Steam's runtime container needs, which \
+             Ubuntu 24.04 and later do through AppArmor. Check \
+             `sysctl kernel.apparmor_restrict_unprivileged_userns`; Steam games in the same \
+             runtime fail the same way until it is allowed for Steam.",
+        ));
+    }
     if let Some(crate::prefix::PrefixError::MissingRuntime(_)) = error.downcast_ref() {
         return Some(Advice::with(
             "This Proton build is incomplete. Remove it and install it again, or pick another \
@@ -183,10 +192,10 @@ fn recognise(error: &(dyn Error + 'static)) -> Option<Advice> {
     if let Some(e) = error.downcast_ref::<crate::runtime::RuntimeError>() {
         use crate::runtime::RuntimeError as R;
         return match e {
-            R::NoLoader { .. } | R::WineFailed { .. } | R::NoTls { install: None } => Some(runtime()),
-            R::NoTls { install: Some(appid) } => Some(Advice::with(
-                "Install the Steam Linux Runtime in Steam: Battle.net runs inside it, since this \
-                 system has no 32-bit gnutls of its own. Then try again.",
+            R::NoLoader { .. } | R::WineFailed { .. } | R::Missing32Bit { install: None, .. } => Some(runtime()),
+            R::Missing32Bit { install: Some(appid), .. } => Some(Advice::with(
+                "Install the Steam Linux Runtime in Steam: Battle.net runs inside it, which brings \
+                 the 32-bit libraries this system lacks. Then try again.",
                 Fix::CopyCommand(format!("steam steam://install/{appid}")),
             )),
             _ => None,
@@ -243,7 +252,7 @@ fn transparent<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a (dyn Error + 
         PreflightError => [PreflightError::Prefix, PreflightError::BattleNet],
         InstallError => [
             InstallError::Version, InstallError::Cdn, InstallError::Indices,
-            InstallError::Download, InstallError::Writer,
+            InstallError::Download, InstallError::Writer, InstallError::Storage,
         ],
         DownloadError => [DownloadError::Write, DownloadError::Cdn],
         IndexError => [IndexError::Cdn],
@@ -362,6 +371,21 @@ mod tests {
             tact::idx::IdxError::DataHash { expected: 1, found: 2 },
         ));
         assert_eq!(advise(&error).unwrap().fix, Some(Fix::DeepScan));
+    }
+
+    #[test]
+    fn an_unreadable_index_offers_a_deep_scan() {
+        let error = tact::storage::StorageError::DamagedIndex {
+            path: "/games/Data/data/0500000043.idx".into(),
+            source: tact::idx::IdxError::Truncated { need: 166_918, got: 100_000 },
+        };
+        assert_eq!(advise(&error).unwrap().fix, Some(Fix::DeepScan));
+    }
+
+    #[test]
+    fn a_store_without_indices_is_an_unfinished_download_not_damage() {
+        let error = tact::storage::StorageError::NoIndices("/games/Data/data".into());
+        assert_eq!(advise(&error).unwrap().fix, None);
     }
 
     #[test]

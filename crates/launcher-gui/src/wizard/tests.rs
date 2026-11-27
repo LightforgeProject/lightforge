@@ -65,7 +65,7 @@ fn setup_walks_by_enter_and_steps_back_by_escape() {
     let _ = app.update(Message::FocusStep(focus::Step::Down));
     assert_eq!(app.focus, Some(forward(app.wizard.as_ref().unwrap())));
     let _ = app.update(Message::FocusPress);
-    assert_eq!(app.wizard.as_ref().unwrap().step, Step::Place);
+    assert_eq!(app.wizard.as_ref().unwrap().step, Step::Found);
 
     let _ = app.update(Message::FocusBack);
     assert_eq!(app.wizard.as_ref().unwrap().step, Step::Welcome);
@@ -77,6 +77,18 @@ fn setup_walks_by_enter_and_steps_back_by_escape() {
     let _ = app.update(Message::FocusBack);
     assert!(app.wizard.is_some(), "Escape in setup over Settings left setup");
     assert_eq!(app.screen, crate::Screen::Settings);
+}
+
+/// A Battle.net already on the machine is found before setup asks where
+/// things go: the scan starts with the wizard, its answer is the next slide.
+#[test]
+fn setup_looks_for_installs_before_asking_where_things_go() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    let _ = update(&mut app, Msg::Open);
+    let wizard = app.wizard.as_ref().unwrap();
+    assert!(wizard.scanning, "opening did not start the scan");
+    assert_eq!(wizard.step.next(), Some(Step::Found));
 }
 
 /// A second look lists what is new, and greys out what Lightforge

@@ -32,6 +32,7 @@ const EXTENSION: &str = ".tar.zst";
 const LEVEL: i32 = 3;
 /// Beside `Account` in `WTF`, so both renames stay on one filesystem.
 const STAGING: &str = ".lightforge-restore";
+/// What a restore moved aside; `-<account>` follows for one account's.
 const REPLACED: &str = ".lightforge-replaced";
 /// Beside the game accounts in `Account`: what the Battle.net account keeps
 /// for all of them. Never one account's to restore.
@@ -178,6 +179,7 @@ impl Plan {
     /// The backup before a launch: taken only when no backup exists on the
     /// installed build, which is the first launch after a patch.
     pub fn before_launch(&self) -> Result<Option<Backup>, BackupError> {
+        self.put_back_interrupted()?;
         let newest = self.list()?.into_iter().next();
         if newest.is_some_and(|b| b.build == self.build) {
             return Ok(None);
@@ -207,10 +209,12 @@ impl Plan {
     fn replace(&self, backup: &Backup, account: Option<&str>) -> Result<Option<Backup>, BackupError> {
         let wtf = self.account_dir.parent().unwrap_or(Path::new("."));
         let staging = wtf.join(STAGING);
-        let replaced = wtf.join(REPLACED);
-        // Leftovers of an interrupted restore, never the live `Account`.
+        let replaced = match account {
+            None => wtf.join(REPLACED),
+            Some(name) => wtf.join(format!("{REPLACED}-{name}")),
+        };
+        self.put_back_interrupted()?;
         remove_if_present(&staging)?;
-        remove_if_present(&replaced)?;
 
         unpack(&backup.path, &staging)?;
         let (fresh, target) = match account {
@@ -239,6 +243,36 @@ impl Plan {
         let _ = fs::remove_dir_all(&replaced);
         let _ = fs::remove_dir_all(&staging);
         Ok(safety)
+    }
+
+    /// A restore cut off between its two renames leaves the live folder under
+    /// [`REPLACED`] and its target missing: put it back. One whose target
+    /// exists is a finished restore's leftover.
+    fn put_back_interrupted(&self) -> Result<(), BackupError> {
+        let wtf = self.account_dir.parent().unwrap_or(Path::new("."));
+        let Ok(entries) = fs::read_dir(wtf) else {
+            return Ok(());
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let target = match name.to_str().and_then(|n| n.strip_prefix(REPLACED)) {
+                Some("") => self.account_dir.clone(),
+                Some(rest) => match rest.strip_prefix('-') {
+                    Some(account) => self.account_dir.join(account),
+                    None => continue,
+                },
+                None => continue,
+            };
+            let aside = entry.path();
+            if target.exists() {
+                remove_if_present(&aside)?;
+                continue;
+            }
+            tracing::warn!("putting back {} from an interrupted restore", target.display());
+            fs::create_dir_all(&self.account_dir).map_err(io(&self.account_dir))?;
+            fs::rename(&aside, &target).map_err(io(&target))?;
+        }
+        Ok(())
     }
 
     /// Delete one backup, the player's own decision.
@@ -586,6 +620,38 @@ mod tests {
         // And the restore is itself undoable.
         plan.restore(&safety).unwrap();
         assert_eq!(fs::read_to_string(&saved).unwrap(), "X = 2, migrated");
+    }
+
+    #[test]
+    fn a_restore_cut_off_between_its_renames_is_put_back_before_launch() {
+        let root = tempfile::tempdir().unwrap();
+        let plan = plan(root.path());
+        let saved = plan.account_dir.join("A/SavedVariables/X.lua");
+        write(&saved, "X = 1");
+        fs::rename(&plan.account_dir, plan.account_dir.with_file_name(REPLACED)).unwrap();
+
+        plan.before_launch().unwrap();
+
+        assert_eq!(fs::read_to_string(&saved).unwrap(), "X = 1");
+        assert!(!plan.account_dir.with_file_name(REPLACED).exists());
+    }
+
+    #[test]
+    fn a_cut_off_account_restore_is_put_back_before_the_next_restore() {
+        let root = tempfile::tempdir().unwrap();
+        let plan = plan(root.path());
+        let first = plan.account_dir.join("478511984#1/SavedVariables/Details.lua");
+        let second = plan.account_dir.join("478511984#2/SavedVariables/Details.lua");
+        write(&first, "first");
+        write(&second, "second");
+        let backup = plan.create(Reason::Manual).unwrap().unwrap();
+        let aside = plan.account_dir.with_file_name(format!("{REPLACED}-478511984#2"));
+        fs::rename(plan.account_dir.join("478511984#2"), &aside).unwrap();
+
+        plan.restore_account(&backup, "478511984#1").unwrap();
+
+        assert_eq!(fs::read_to_string(&second).unwrap(), "second");
+        assert!(!aside.exists());
     }
 
     #[test]

@@ -64,7 +64,7 @@ fn check(name: impl Into<String>, status: Status, detail: impl Into<String>, hin
 }
 
 pub fn run(config: &Config, layout: &Layout, proton_dir: &Path) -> Vec<Check> {
-    let mut checks = vec![open_files(), ntsync(), vulkan(), loader(), gnutls()];
+    let mut checks = vec![open_files(), ntsync(), vulkan(), loader(), battle_net_libraries()];
     checks.extend(libraries(layout));
     checks.push(proton(config, proton_dir));
     checks.push(python());
@@ -217,19 +217,22 @@ fn python() -> Check {
     }
 }
 
-fn gnutls() -> Check {
+/// gnutls, freetype and fontconfig: what the 32-bit Battle.net takes from
+/// the host. See [`runtime::BATTLE_NET_LIBS`].
+fn battle_net_libraries() -> Check {
+    const NAME: &str = "32-bit libraries";
     if !runtime::needs_32bit_libraries() {
-        return check("32-bit gnutls", Status::Ok, "not needed on this processor", None);
+        return check(NAME, Status::Ok, "not needed on this processor", None);
     }
-    match runtime::has_32bit_tls() {
-        Some(true) => check("32-bit gnutls", Status::Ok, "present", None),
-        Some(false) => check(
-            "32-bit gnutls",
+    match runtime::missing_32bit_libraries() {
+        Some(missing) if missing.is_empty() => check(NAME, Status::Ok, "gnutls, freetype, fontconfig", None),
+        Some(missing) => check(
+            NAME,
             Status::Warn,
-            "missing",
+            format!("missing {}", missing.join(", ")),
             Some("Battle.net then runs inside the Steam Linux Runtime, which Steam has to have installed".to_owned()),
         ),
-        None => check("32-bit gnutls", Status::Ok, "unknown, ldconfig could not be read", None),
+        None => check(NAME, Status::Ok, "unknown, ldconfig could not be read", None),
     }
 }
 
@@ -279,7 +282,7 @@ fn proton(config: &Config, proton_dir: &Path) -> Check {
             None => check(
                 "proton",
                 Status::Fail,
-                "no supported Proton build",
+                "no Proton-GE build installed",
                 Some(format!("setup installs {}, or run `lightforge proton-install`", proton::TESTED)),
             ),
         };

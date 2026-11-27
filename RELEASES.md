@@ -1,6 +1,30 @@
 # Lightforge release notes
 
 
+## 1.0.0-beta.14
+
+Lightforge 1.0.0-beta.14 adds multi-boxing, a history of addon updates, and PLAY through Battle.net in Seamless Battle.net Mode. It also fixes Battle.net's login window showing no text on some systems, and Lightforge opening on the Setup page at every start.
+
+- New: multi-box. Switch it on in Game Settings, Multi-box, and choose how many clients PLAY starts, up to five. While a client runs, Launch additional client starts one more, and a list beside PLAY stops each client on its own. Extra clients open in a window with their own copy of the game's settings, and you log in to each one yourself. STOP ends them all. This is for games Lightforge installs.
+- New: a History tab in the addon manager. It lists every addon update, from which version to which, and whether it ran by itself or by hand. A CurseForge entry has a Changelog button that opens the notes for that version. Thanks to Quiley for the idea.
+- Seamless Battle.net Mode: PLAY now starts the games Lightforge installs through Battle.net, the way Battle.net's own Play button does. Launch via Lightforge, under PLAY, still starts the game directly with Lightforge's Game Settings.
+- Lightforge no longer opens on the Setup page at every start when part of setup is missing, like a Battle.net install that failed. It opens on Play, and a small note says what is missing, with a button that leads to Setup.
+- Fixed Battle.net's login window showing no text when the 32-bit FreeType or Fontconfig libraries are missing. Battle.net then runs in Steam's runtime, as it already did without 32-bit GnuTLS, so nothing has to be installed next to your system packages. That needs Steam with SteamLinuxRuntime_4. lightforge doctor lists the 32-bit libraries that are missing.
+- New setting: Close Battle.net and tools when Lightforge closes, in Settings, General. It closes everything left in the Wine prefix, but nothing while a game runs. Off by default. It is meant for desktops without a system tray, like COSMIC, where Battle.net and Game Tools hide out of reach.
+- Setup now looks for Battle.net and games already on the computer first and asks where things go afterwards, so the drive of a WoW install it found is already in the list. Thanks to raggi for the idea.
+- Command line: with update_on_play = true in config.toml, lightforge play updates the game, and its addons if the addon manager is on, before it starts. Thanks to Toofy for the idea.
+- A damaged index file in a game's folder no longer blocks downloads, repairs and scans with an error that pointed back at itself. Lightforge now names the file, and Scan and Repair replaces it and downloads about a sixteenth of the game again. Before, the only way out was a full download.
+- Free up space and every finished download now remove index files no installed version uses. On a store that has seen many patches that was about 470 MiB. A paused download keeps its files.
+- Uninstalling a game now removes its records before its files, so an uninstall cut short no longer leaves a game Lightforge thinks is there. Its addon list goes with it, so a reinstall no longer says addons are up to date when none are there.
+- A move to another drive cut short by a crash or power loss is picked up at the next start. The command line refuses to move a game while the Lightforge window is open.
+- A damaged Battle.net settings file is now set aside, instead of stopping PLAY and every other launch.
+- Restoring backed-up game settings that was cut short now puts the account folder back at the next restore or launch.
+- A first start after a download no longer shows the game's own language picker: the game is set to the language you picked in Lightforge.
+- Bug reports now replace account and character names found in the game's settings folders.
+- Add to Steam works with Flatpak Steam and Snap Steam. Flatpak Steam needs one permission, and Lightforge shows the command for it.
+- On X11 without a compositor the splash screen is drawn solid instead of showing what is behind it. Lightforge no longer fails to start when WAYLAND_DISPLAY points at a Wayland session that is gone.
+- Proton downloads are checked to hold the build they are named for, Lightforge updates, Proton and the Battle.net installer have a size limit, and addons only download over https. If Steam's runtime container cannot start because the system blocks user namespaces, Lightforge says so and names the setting.
+
 ## 1.0.0-beta.13
 
 Lightforge 1.0.0-beta.13 is a hotfix for one bug: a game that stops at "Failed to load ui toc list" right after it starts.

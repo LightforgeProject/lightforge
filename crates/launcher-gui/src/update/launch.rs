@@ -34,7 +34,16 @@ impl Lightforge {
                         self.pause(&self.selected.code.clone());
                         Task::none()
                     }
-                    ActionState::Play => self.preflight(Launch::Game),
+                    ActionState::Play => {
+                        let code = self.selected.code.clone();
+                        let task = match self.plays_via_battle_net(&code) {
+                            true => self.preflight(Launch::BattleNet),
+                            false => self.preflight(Launch::Game),
+                        };
+                        // After `preflight`, which clears what an earlier PLAY left.
+                        self.more_clients = self.multibox(&code).unwrap_or(1).saturating_sub(1);
+                        task
+                    }
                     ActionState::Unknown => Task::none(),
                     // Nothing to download and nothing to repair: look for the
                     // drive again, and reload the product if it came back.
@@ -55,14 +64,14 @@ impl Lightforge {
             }
 
             Message::GameStarted(result) => match result {
-                Ok(tasks::Started::Up { game, generation }) => self.game_up(game, Some(generation)),
+                Ok(tasks::Started::Up { game, generation, slot }) => self.game_up(game, Some(generation), slot),
                 Ok(tasks::Started::Over(note)) => self.update(Message::Launched(Ok(note))),
                 Err(e) => self.update(Message::Launched(Err(e))),
             },
 
-            Message::GameExited(code, result) => {
-                self.playing.retain(|s| s.code != code);
-                if self.stop_dialog.as_ref().is_some_and(|d| d.code == code) {
+            Message::GameExited(code, pid, result) => {
+                self.playing.retain(|s| s.game.pid != pid);
+                if self.stop_dialog.as_ref().is_some_and(|d| d.code == code) && self.session(&code).is_none() {
                     self.stop_dialog = None;
                 }
                 match result {
@@ -90,25 +99,33 @@ impl Lightforge {
                 let Some(dialog) = self.stop_dialog.take() else {
                     return Ok(Task::none());
                 };
-                let Some(session) = self.playing.iter_mut().find(|s| s.code == dialog.code && !s.stopping) else {
+                let pids: Vec<u32> = self.sessions(&dialog.code).filter(|s| !s.stopping).map(|s| s.game.pid).collect();
+                if pids.is_empty() {
                     return Ok(Task::none());
-                };
-                session.stopping = true;
-                let game = session.game.clone();
+                }
                 self.status = "stopping the game…".to_owned();
-                let code = dialog.code;
-                Task::perform(tasks::stop_game(self.layout.clone(), game), move |result| {
-                    Message::GameStopped(code.clone(), result)
-                })
+                Task::batch(pids.into_iter().map(|pid| self.stop_client(pid)))
             }
 
-            Message::GameStopped(code, result) => {
+            Message::StopClient(pid) => self.stop_client(pid),
+
+            Message::LaunchAdditionalClient => {
+                let code = self.selected.code.clone();
+                if self.multibox(&code).is_none()
+                    || self.sessions(&code).count() >= usize::from(lightforge_core::multibox::MAX_CLIENTS)
+                {
+                    return Ok(Task::none());
+                }
+                self.preflight(Launch::Game)
+            }
+
+            Message::GameStopped(pid, result) => {
                 // The exit watcher's `GameExited` hands PLAY back; this only reports.
                 match result {
                     Ok(note) => self.status = note,
                     Err(e) => {
                         // Still up: STOP is offered again.
-                        if let Some(session) = self.playing.iter_mut().find(|s| s.code == code) {
+                        if let Some(session) = self.playing.iter_mut().find(|s| s.game.pid == pid) {
                             session.stopping = false;
                         }
                         self.error = Some(e);
@@ -119,6 +136,8 @@ impl Lightforge {
 
             Message::Launched(result) => {
                 self.busy = false;
+                // A multi-box chain stops at the first client that did not come up.
+                self.more_clients = 0;
                 let launched = self.launching.take().unwrap_or_else(|| self.selected.code.clone());
                 match result {
                     Ok(note) => self.status = note,
@@ -146,7 +165,7 @@ impl Lightforge {
                         let code = self.launching.clone().unwrap_or_else(|| self.selected.code.clone());
                         let line = self.config.product(&code).map(|p| p.profile.launch_options.clone()).unwrap_or_default();
                         let beside = Task::future(tasks::run_beside(line, code, game.clone())).discard();
-                        Task::batch([self.game_up(game, None), self.minimize_if_asked(), beside])
+                        Task::batch([self.game_up(game, None, 1), self.minimize_if_asked(), beside])
                     }
                     // Closed while signing in, or quit in the middle of the launch.
                     Ok(tasks::Handoff::ClientClosed) => {
@@ -187,9 +206,14 @@ impl Lightforge {
                         let code = self.launching.clone().unwrap_or_else(|| self.selected.code.clone());
                         match Kind::of(&code) {
                             // Its store is ours: Agent must not patch it.
-                            Kind::Managed => {
-                                self.launch_failed("Battle.net wants to update this game — press Play to start it here")
-                            }
+                            Kind::Managed => match self.plays_via_battle_net(&code) {
+                                true => self.launch_failed(
+                                    "Battle.net wants to update this game — press Launch via Lightforge to start it here",
+                                ),
+                                false => {
+                                    self.launch_failed("Battle.net wants to update this game — press Play to start it here")
+                                }
+                            },
                             // The lock is released: an update can take an hour,
                             // and another game can be played meanwhile.
                             Kind::HandOff => {
@@ -219,6 +243,11 @@ impl Lightforge {
                 self.preflight(Launch::BattleNet)
             }
 
+            Message::LaunchViaLightforge => {
+                self.track_selected();
+                self.preflight(Launch::Game)
+            }
+
             Message::InstallViaBattleNet => {
                 self.track_selected();
                 self.preflight(Launch::Install)
@@ -235,6 +264,7 @@ impl Lightforge {
                     Err(e) => {
                         self.busy = false;
                         self.launching = None;
+                        self.more_clients = 0;
                         self.error = Some(e);
                         return Ok(self.pump());
                     }

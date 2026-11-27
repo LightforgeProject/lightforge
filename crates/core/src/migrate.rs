@@ -143,11 +143,17 @@ pub async fn copy(
         }
         // Its `.product.db` still names the old Windows path.
         let record = ProductInstall::from_build_info(&info, code, &flavor, &windows_path)?;
+        // Travels with the rename; see [`stranded`].
+        let mark = from.join(MOVE_MARK);
+        crate::fsutil::write_atomic(&mark, code.as_str().as_bytes()).map_err(io(&mark))?;
         std::fs::rename(&from, &dest).map_err(io(&dest))?;
         if let Err(e) = productdb::upsert(&dest, &[record]) {
             // Back where the config says, or the game is in no library it knows.
-            if let Err(back) = std::fs::rename(&dest, &from) {
-                tracing::error!("could not move {} back to {}: {back}", dest.display(), from.display());
+            match std::fs::rename(&dest, &from) {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(&mark);
+                }
+                Err(back) => tracing::error!("could not move {} back to {}: {back}", dest.display(), from.display()),
             }
             return Err(e.into());
         }
@@ -364,6 +370,49 @@ pub fn leftovers(layout: &Layout, code: &ProductCode) -> Vec<Library> {
         .collect()
 }
 
+/// Left in an install renamed whole to another library, naming the product,
+/// until the config names that library: a crash between the two would
+/// otherwise leave the game in a library the config no longer points at.
+const MOVE_MARK: &str = ".lightforge-moving";
+
+/// The library a renamed install of `code` went to, when the config still
+/// names the one it left: its own library is mounted and has no row for it,
+/// and exactly one other holds the row and [`MOVE_MARK`] naming it. Only the
+/// mark counts, not any other copy: a Battle.net library may hold the game
+/// on purpose.
+pub fn stranded(layout: &Layout, code: &ProductCode) -> Option<Library> {
+    if !layout.library(code).is_some_and(|own| own.state().is_present()) {
+        return None;
+    }
+    let holds = |install: &Path| {
+        BuildInfo::load(install.join(".build.info")).is_ok_and(|info| info.row(code).is_some())
+    };
+    if holds(&layout.wow_install(code)) {
+        return None;
+    }
+    let marked = |install: &Path| {
+        std::fs::read_to_string(install.join(MOVE_MARK)).is_ok_and(|named| named == code.as_str())
+    };
+    let mut found = layout.libraries().all().iter().filter(|library| {
+        let install = layout.wow_install_in(library);
+        library.state().is_present() && marked(&install) && holds(&install)
+    });
+    match (found.next(), found.next()) {
+        (Some(library), None) => Some(library.clone()),
+        _ => None,
+    }
+}
+
+/// Forget the move of `code` once the config names its new library.
+pub fn settled(layout: &Layout, code: &ProductCode) {
+    let mark = layout.wow_install(code).join(MOVE_MARK);
+    if let Err(e) = std::fs::remove_file(&mark) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!("could not remove {}: {e}", mark.display());
+        }
+    }
+}
+
 fn device(path: &Path) -> Result<u64, MoveError> {
     Ok(std::fs::metadata(path).map_err(io(path))?.dev())
 }
@@ -433,6 +482,29 @@ mod tests {
         assert!(!layout.wow_install_in(&from).exists());
         let records = productdb::read(&dest.join(".product.db")).unwrap();
         assert_eq!(records[0].install_path, to.windows_wow_path());
+    }
+
+    #[tokio::test]
+    async fn a_rename_cut_off_before_the_config_save_is_found_again() {
+        let root = tempfile::tempdir().unwrap();
+        let (layout, from, to) = libraries(root.path());
+        let code = ProductCode::ClassicEra;
+        install(&layout.wow_install_in(&from), &code);
+
+        let http = Http::new().unwrap();
+        copy(&http, &layout, &code, &to, &Cancel::new(), |_| {}).await.unwrap();
+
+        assert_eq!(stranded(&layout, &code).map(|library| library.id), Some(to.id));
+    }
+
+    #[test]
+    fn another_library_s_copy_without_the_mark_is_not_taken_for_a_move() {
+        let root = tempfile::tempdir().unwrap();
+        let (layout, _, to) = libraries(root.path());
+        let code = ProductCode::ClassicEra;
+        install(&layout.wow_install_in(&to), &code);
+
+        assert_eq!(stranded(&layout, &code), None);
     }
 
     #[tokio::test]

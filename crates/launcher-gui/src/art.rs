@@ -198,7 +198,6 @@ fn load(path: &Path, max_width: u32) -> Handle {
 /// (recognised by magic bytes) decodes at 1/2, 1/4 or 1/8 almost free; PNG is
 /// decoded whole. Same 512 MiB limit as `Reader`.
 fn decode(path: &Path, max_width: u32) -> image::ImageResult<image::DynamicImage> {
-    use image::ImageDecoder;
     use std::io::Read;
 
     let mut file = std::io::BufReader::new(std::fs::File::open(path)?);
@@ -207,20 +206,40 @@ fn decode(path: &Path, max_width: u32) -> image::ImageResult<image::DynamicImage
     file.seek_relative(-(magic.len() as i64))?;
 
     if !is_jpeg {
-        return image::io::Reader::new(file).with_guessed_format()?.decode();
+        return image::ImageReader::new(file).with_guessed_format()?.decode();
     }
 
-    let mut decoder = image::codecs::jpeg::JpegDecoder::new(file)?;
+    // `jpeg-decoder` directly: image 0.25's JPEG decoder cannot scale.
+    let jpeg_error = |e: jpeg_decoder::Error| {
+        image::ImageError::Decoding(image::error::DecodingError::new(image::ImageFormat::Jpeg.into(), e))
+    };
+    let mut decoder = jpeg_decoder::Decoder::new(file);
+    decoder.read_info().map_err(jpeg_error)?;
     // The decoder keeps the aspect ratio and stops at the first scale that
     // covers *either* side, which is the side the fit below is bound by.
     let width = u16::try_from(max_width).unwrap_or(u16::MAX);
     let height = u16::try_from(max_width.saturating_mul(MAX_TALL)).unwrap_or(u16::MAX);
-    let _ = decoder.scale(width, height);
-    // After the scale, so the reservation is for the buffer actually decoded.
-    let mut limits = image::io::Limits::default();
-    limits.reserve(decoder.total_bytes())?;
-    decoder.set_limits(limits)?;
-    image::DynamicImage::from_decoder(decoder)
+    let (width, height) = decoder.scale(width, height).map_err(jpeg_error)?;
+    let format = decoder.info().map(|info| info.pixel_format);
+    // After the scale, so the check is for the buffer actually decoded.
+    let bytes = u64::from(width) * u64::from(height) * format.map_or(4, |f| f.pixel_bytes() as u64);
+    if bytes > image::Limits::default().max_alloc.unwrap_or(u64::MAX) {
+        return Err(image::ImageError::Limits(image::error::LimitError::from_kind(
+            image::error::LimitErrorKind::InsufficientMemory,
+        )));
+    }
+    let pixels = decoder.decode().map_err(jpeg_error)?;
+    let (width, height) = (u32::from(width), u32::from(height));
+    let decoded = match format {
+        Some(jpeg_decoder::PixelFormat::RGB24) => image::RgbImage::from_raw(width, height, pixels).map(image::DynamicImage::ImageRgb8),
+        Some(jpeg_decoder::PixelFormat::L8) => image::GrayImage::from_raw(width, height, pixels).map(image::DynamicImage::ImageLuma8),
+        _ => None,
+    };
+    // CMYK and 16-bit JPEGs are rare enough to decode whole.
+    match decoded {
+        Some(image) => Ok(image),
+        None => image::open(path),
+    }
 }
 
 fn scale(path: &Path, max_width: u32, filter: FilterType) -> Handle {

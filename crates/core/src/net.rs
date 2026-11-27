@@ -315,12 +315,14 @@ impl Http {
         &self,
         url: &str,
         dest: &Path,
+        max: u64,
         on_progress: impl FnMut(u64, Option<u64>),
     ) -> Result<String, NetError> {
         let dir = dest.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
         let temp = download_file_in(dir).await?;
         let file = tokio::fs::File::from_std(temp.as_file().try_clone().map_err(io(dir))?);
-        let digest = self.download_to(url, temp.path(), file, usize::MAX, on_progress).await?;
+        let max = usize::try_from(max).unwrap_or(usize::MAX);
+        let digest = self.download_to(url, temp.path(), file, max, on_progress).await?;
 
         temp.persist(dest).map_err(|e| io(dest)(e.error))?;
         Ok(digest)
@@ -697,7 +699,7 @@ mod tests {
         let dest = dir.path().join("release.tar.gz");
         let digest = Http::new()
             .unwrap()
-            .download(&sized(b"downloaded", 10), &dest, |_, _| {})
+            .download(&sized(b"downloaded", 10), &dest, u64::MAX, |_, _| {})
             .await
             .unwrap();
 
@@ -744,7 +746,7 @@ mod tests {
         let http = Http::new().unwrap();
 
         // Dropping the future is how a cancel reaches it.
-        let download = http.download(&url, &dest, |_, _| {});
+        let download = http.download(&url, &dest, u64::MAX, |_, _| {});
         assert!(tokio::time::timeout(Duration::from_millis(300), download).await.is_err());
 
         assert!(names(dir.path()).is_empty(), "{:?}", names(dir.path()));
@@ -756,7 +758,7 @@ mod tests {
         let dest = dir.path().join("release");
         std::fs::write(&dest, b"old complete version").unwrap();
 
-        let result = Http::new().unwrap().download(&sized(b"partial", 100), &dest, |_, _| {}).await;
+        let result = Http::new().unwrap().download(&sized(b"partial", 100), &dest, u64::MAX, |_, _| {}).await;
 
         assert!(result.is_err());
         assert_eq!(std::fs::read(&dest).unwrap(), b"old complete version");

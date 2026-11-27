@@ -153,6 +153,16 @@ impl Lightforge {
                         switch("close battle.net on play", self.config.close_battle_net_on_play, Message::CloseBattleNetOnPlay),
                     ),
                 },
+                setting(
+                    "Close Battle.net and tools when Lightforge closes",
+                    "Everything left in the Wine prefix, unless a game is running.",
+                    self.hint(
+                        "For desktops without a tray, where an app that minimizes to it cannot \
+                         be quit. A running game keeps everything open: closing the prefix \
+                         would end the game too.",
+                    ),
+                    switch("close prefix on exit", self.config.close_prefix_on_exit, Message::ClosePrefixOnExit),
+                ),
             ]),
             setting_group([
                 setting(

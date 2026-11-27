@@ -70,6 +70,8 @@ pub struct DirectLaunch {
     /// Our own wrappers, outermost first.
     pub wrappers: Vec<PathBuf>,
     pub launch_options: String,
+    /// Arguments for the game itself, after the exe.
+    pub args: Vec<String>,
 }
 
 impl DirectLaunch {
@@ -95,6 +97,7 @@ impl DirectLaunch {
             exe,
             wrappers: profile.tweaks.wrappers(&tools),
             launch_options: profile.launch_options,
+            args: Vec::new(),
         })
     }
 
@@ -102,7 +105,7 @@ impl DirectLaunch {
     /// of our own.
     pub fn command(&self) -> Command {
         crate::launch_options::wrap(
-            crate::tweaks::wrapped(self.runner.command("run", &self.exe, Vec::<String>::new()), &self.wrappers),
+            crate::tweaks::wrapped(self.runner.command("run", &self.exe, &self.args), &self.wrappers),
             &self.launch_options,
         )
     }

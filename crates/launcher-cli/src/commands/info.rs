@@ -57,7 +57,7 @@ pub(crate) fn config() -> Result<()> {
 
 pub(crate) async fn products(region: String, codes: Vec<String>, all: bool, concurrency: usize) -> Result<()> {
     use lightforge_core::net::Http;
-    use lightforge_core::tact::version::{self, Region, KNOWN_PRODUCTS};
+    use lightforge_core::tact::version::{self, ProductStatus, Region, KNOWN_PRODUCTS};
 
     let region: Region = region.parse().context("parsing --region")?;
 
@@ -92,6 +92,15 @@ pub(crate) async fn products(region: String, codes: Vec<String>, all: bool, conc
     }
     let live = found.iter().filter(|s| s.exists()).count();
     println!("\n{live} of {} probed codes are live in {}", found.len(), region.as_str());
+    let unreachable: Vec<&ProductStatus> = found.iter().filter(|s| s.unreachable.is_some()).collect();
+    if let Some(first) = unreachable.first() {
+        println!(
+            "{} could not be asked, e.g. {}: {}",
+            unreachable.len(),
+            first.code,
+            first.unreachable.as_deref().unwrap_or_default()
+        );
+    }
     Ok(())
 }
 

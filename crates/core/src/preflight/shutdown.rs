@@ -73,6 +73,53 @@ pub(super) fn shutdown_timed(
     if !games.is_empty() {
         return Err(PreflightError::GameRunning(games));
     }
+    stop(runner, layout, grace, found, timings)
+}
+
+/// Close everything running in the prefix: Battle.net, Agent, and the tools
+/// in `tools` (executable names, `.exe` or not), which here do not count as
+/// games. For a desktop without a tray, where an app that minimizes to it
+/// cannot be quit. Refused while a game runs, which `wineserver -k` would end.
+pub fn close_all(
+    runner: &ProtonRunner,
+    layout: &Layout,
+    tools: &[String],
+    grace: Duration,
+) -> Result<Vec<Outcome>, PreflightError> {
+    let games: Vec<_> = games_running(layout).into_iter().filter(|game| !is_tool(&game.name, tools)).collect();
+    if !games.is_empty() {
+        return Err(PreflightError::GameRunning(games));
+    }
+    // A tool alone still shows up here: its wineserver does.
+    let found = scan(layout);
+    if found.is_empty() {
+        return Ok(Vec::new());
+    }
+    tracing::info!(
+        "closing everything in the prefix: {}",
+        found.iter().map(|p| format!("{} ({})", p.name, p.pid)).collect::<Vec<_>>().join(", "),
+    );
+    stop(runner, layout, grace, found, &mut Vec::new())
+}
+
+fn is_tool(process: &str, tools: &[String]) -> bool {
+    let stem = |name: &str| name.to_ascii_lowercase().trim_end_matches(".exe").to_owned();
+    tools.iter().any(|tool| stem(tool) == stem(process))
+}
+
+/// `wineserver -k`, then signals for whatever of `found` outlived it.
+fn stop(
+    runner: &ProtonRunner,
+    layout: &Layout,
+    grace: Duration,
+    found: Vec<PrefixProcess>,
+    timings: &mut Vec<Timing>,
+) -> Result<Vec<Outcome>, PreflightError> {
+    let mut at = Instant::now();
+    let mut stamp = |timings: &mut Vec<Timing>, stage: &'static str| {
+        timings.push(Timing { stage, took: at.elapsed() });
+        at = Instant::now();
+    };
 
     // Idempotent and near-instant on a prefix with no server running.
     runner.wineserver_kill()?;
@@ -224,4 +271,17 @@ pub(super) fn remove_dir(dir: &Path) -> Result<Option<u64>, PreflightError> {
     let bytes = crate::fsutil::dir_size(dir);
     std::fs::remove_dir_all(dir).map_err(io(dir))?;
     Ok(Some(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_tool;
+
+    #[test]
+    fn a_tool_is_matched_by_its_executable_whatever_the_case() {
+        let tools = ["WowheadClient".to_owned()];
+        assert!(is_tool("WowheadClient.exe", &tools));
+        assert!(is_tool("wowheadclient.EXE", &tools));
+        assert!(!is_tool("Wow.exe", &tools));
+    }
 }

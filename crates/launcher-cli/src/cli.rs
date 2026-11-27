@@ -31,7 +31,7 @@ pub(crate) enum Command {
     ProtonCheck,
     /// Download, verify, and install a Proton-GE release.
     ProtonInstall {
-        /// Release tag, e.g. `GE-Proton11-7`. Defaults to the latest stable.
+        /// Release tag, e.g. `GE-Proton11-12`. Defaults to the build Lightforge is tested with.
         version: Option<String>,
     },
     /// Report on the shared prefix and the game symlink.
@@ -97,7 +97,8 @@ pub(crate) enum Command {
     ///
     /// Runs pre-flight first, then starts the game as PLAY does: from its own
     /// library, under its Proton pin and Game Settings. Battle.net is not
-    /// involved.
+    /// involved. With `update_on_play = true` in the config, the game and the
+    /// addons that update themselves are brought up to date first.
     Play {
         /// Product to launch, e.g. `wow` or `wow_classic`.
         #[arg(long, default_value = "wow", value_parser = commands::product_code)]
@@ -335,7 +336,7 @@ pub(crate) enum Command {
     },
     /// Install an addon by provider and id.
     AddonInstall {
-        /// Provider id: a number, a slug, or `owner/repo`.
+        /// Provider id: a number, a slug, `owner/repo`, or `curse:334372` as `addons` lists it.
         id: String,
         #[arg(long, default_value = "wowinterface")]
         provider: String,
@@ -366,7 +367,7 @@ pub(crate) enum Command {
     },
     /// Remove an addon Lightforge installed.
     AddonRemove {
-        /// Provider id, e.g. `2382`.
+        /// Provider id, e.g. `2382`, or `curse:2382` as `addons` lists it.
         id: String,
         #[arg(long, default_value = "curse")]
         provider: String,
@@ -495,12 +496,12 @@ pub(crate) enum Command {
         #[arg(long)]
         yes: bool,
     },
-    /// Drop game data no installed or pre-installed version uses, then compact
-    /// what that leaves. Prints the plan unless `--yes`.
+    /// Drop game data no installed, pre-installed or unfinished version uses,
+    /// and archive indices no version names, then compact what that leaves.
+    /// Prints the plan unless `--yes`.
     ///
-    /// That data is mostly what earlier patches left behind. Never run it
-    /// while a download is running or paused: what that has fetched so far
-    /// belongs to no version yet, and would have to be fetched again.
+    /// That data is mostly what earlier patches left behind. A paused
+    /// download keeps its data, unless an older Lightforge started it.
     Prune {
         /// Install root. Defaults to the managed WoW install.
         #[arg(long)]

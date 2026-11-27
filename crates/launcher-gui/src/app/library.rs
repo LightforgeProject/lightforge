@@ -138,6 +138,30 @@ impl Lightforge {
         }
     }
 
+    /// Point each game a renamed move left behind the config at its new
+    /// library: the run stopped before the config was saved.
+    pub(crate) fn recover_moves(&mut self) {
+        let codes: Vec<ProductCode> = self.config.products.iter().map(|p| p.code.clone()).collect();
+        let mut recovered = Vec::new();
+        for code in codes {
+            let Some(library) = lightforge_core::migrate::stranded(&self.layout, &code) else {
+                continue;
+            };
+            tracing::warn!("{} was moved to {} but the config still named its old library; following it", code.as_str(), library.label);
+            if let Some(product) = self.config.product_mut(&code) {
+                product.profile.library = Some(library.id.clone());
+            }
+            recovered.push(code);
+        }
+        if recovered.is_empty() || !self.save_config() {
+            return;
+        }
+        self.follow_games();
+        for code in &recovered {
+            lightforge_core::migrate::settled(&self.layout, code);
+        }
+    }
+
     /// Re-read the mount table: which partitions could be added, and whether a
     /// library that was absent has come back somewhere else.
     ///

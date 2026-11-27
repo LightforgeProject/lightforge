@@ -356,13 +356,32 @@ pub(super) fn account_configs(entries: std::fs::ReadDir) -> Vec<PathBuf> {
         .collect()
 }
 
+/// One of these JSON files, `None` when there is none. One that will not
+/// parse (an empty file from a client cut off mid-write) is moved aside as
+/// `<name>.broken` and counts as absent: the client writes a fresh one, and a
+/// bad file must not stop every launch, PLAY included, at pre-flight.
+pub(super) fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>, BattleNetError> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(io(path)(e)),
+    };
+    let error = match serde_json::from_str(&text) {
+        Ok(parsed) => return Ok(Some(parsed)),
+        Err(e) => e,
+    };
+    let mut aside = path.as_os_str().to_owned();
+    aside.push(".broken");
+    std::fs::rename(path, &aside).map_err(io(path))?;
+    tracing::warn!("{} would not parse ({error}), moved it aside to {}", path.display(), Path::new(&aside).display());
+    Ok(None)
+}
+
 /// Delete one dotted key. A missing file or key counts as success.
 pub(super) fn remove_key(path: &Path, key: &str) -> Result<(), BattleNetError> {
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Some(mut config) = read_json::<Value>(path)? else {
         return Ok(());
     };
-    let mut config: Value = serde_json::from_str(&text)
-        .map_err(|e| BattleNetError::MalformedConfig { path: path.to_path_buf(), source: e })?;
 
     let parts: Vec<&str> = key.split('.').collect();
     let Some((last, parents)) = parts.split_last() else {
@@ -391,12 +410,10 @@ pub(super) fn remove_key(path: &Path, key: &str) -> Result<(), BattleNetError> {
 /// Read, merge and atomically rewrite one config. With `seed` a missing file
 /// starts empty; without it, the file is the client's to create.
 pub(super) fn merge_file(path: &Path, tweaks: &[Tweak], seed: bool) -> Result<bool, BattleNetError> {
-    let mut config = match std::fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str(&text)
-            .map_err(|e| BattleNetError::MalformedConfig { path: path.to_path_buf(), source: e })?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && seed => json!({}),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(io(path)(e)),
+    let mut config = match read_json(path)? {
+        Some(config) => config,
+        None if seed => json!({}),
+        None => return Ok(false),
     };
 
     apply_tweaks(&mut config, tweaks);

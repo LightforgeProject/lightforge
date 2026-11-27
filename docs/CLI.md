@@ -106,7 +106,7 @@ Options:
 ```text
 Launch the game directly under Proton, the `[ PLAY ]` path.
 
-Runs pre-flight first, then starts the game as PLAY does: from its own library, under its Proton pin and Game Settings. Battle.net is not involved.
+Runs pre-flight first, then starts the game as PLAY does: from its own library, under its Proton pin and Game Settings. Battle.net is not involved. With `update_on_play = true` in the config, the game and the addons that update themselves are brought up to date first.
 
 Usage: lightforge play [OPTIONS]
 
@@ -193,7 +193,7 @@ Download, verify, and install a Proton-GE release
 Usage: lightforge proton-install [OPTIONS] [VERSION]
 
 Arguments:
-  [VERSION]  Release tag, e.g. `GE-Proton11-7`. Defaults to the latest stable
+  [VERSION]  Release tag, e.g. `GE-Proton11-12`. Defaults to the build Lightforge is tested with
 
 Options:
       --root <ROOT>  Override the Blizzard root (default: ~/Games/Blizzard)
@@ -423,9 +423,9 @@ Options:
 ### `lightforge prune`
 
 ```text
-Drop game data no installed or pre-installed version uses, then compact what that leaves. Prints the plan unless `--yes`.
+Drop game data no installed, pre-installed or unfinished version uses, and archive indices no version names, then compact what that leaves. Prints the plan unless `--yes`.
 
-That data is mostly what earlier patches left behind. Never run it while a download is running or paused: what that has fetched so far belongs to no version yet, and would have to be fetched again.
+That data is mostly what earlier patches left behind. A paused download keeps its data, unless an older Lightforge started it.
 
 Usage: lightforge prune [OPTIONS]
 
@@ -524,7 +524,7 @@ Install an addon by provider and id
 Usage: lightforge addon-install [OPTIONS] <ID>
 
 Arguments:
-  <ID>  Provider id: a number, a slug, or `owner/repo`
+  <ID>  Provider id: a number, a slug, `owner/repo`, or `curse:334372` as `addons` lists it
 
 Options:
       --provider <PROVIDER>  [default: wowinterface]
@@ -574,7 +574,7 @@ Remove an addon Lightforge installed
 Usage: lightforge addon-remove [OPTIONS] <ID>
 
 Arguments:
-  <ID>  Provider id, e.g. `2382`
+  <ID>  Provider id, e.g. `2382`, or `curse:2382` as `addons` lists it
 
 Options:
       --provider <PROVIDER>  [default: curse]

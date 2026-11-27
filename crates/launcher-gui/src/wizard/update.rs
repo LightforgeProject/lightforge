@@ -23,14 +23,18 @@ pub fn update(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
     }
 }
 
+/// Start the wizard on its first slide, already looking for installs, so the
+/// Found slide has its answer by the time Welcome is done.
+pub fn open(app: &mut Lightforge) -> iced::Task<Message> {
+    app.wizard = Some(Wizard { scanning: true, ..Wizard::default() });
+    scan(app)
+}
+
 /// Opening and closing the wizard, moving between steps, and the artwork
 /// prefetch it starts on opening.
 fn flow(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
     match msg {
-        Msg::Open => {
-            app.wizard = Some(Wizard::default());
-            prefetch(app)
-        }
+        Msg::Open => iced::Task::batch([open(app), prefetch(app)]),
 
         Msg::Scan => {
             app.wizard = Some(Wizard { step: Step::Found, scanning: true, scan_only: true, ..Wizard::default() });
@@ -134,7 +138,6 @@ fn found_games(app: &mut Lightforge, msg: Msg) -> iced::Task<Message> {
         Msg::Scanned(found) => {
             if let Some(wizard) = app.wizard.as_mut() {
                 wizard.scanning = false;
-                wizard.scanned = true;
                 wizard.rows = rows_of(found);
             }
             mark_known(app);
@@ -281,20 +284,6 @@ fn advance(app: &mut Lightforge) -> iced::Task<Message> {
         return iced::Task::none();
     };
     match step {
-        // Entering the scan: it reads two files per prefix and measures what it
-        // finds, so it runs off the UI thread like any other walk of a disk.
-        Step::Place => {
-            let fresh = app.wizard.as_ref().is_some_and(|w| !w.scanned);
-            if let Some(wizard) = app.wizard.as_mut() {
-                wizard.step = Step::Found;
-                wizard.scanning = fresh;
-            }
-            match fresh {
-                true => scan(app),
-                false => iced::Task::none(),
-            }
-        }
-
         // After setup a found game is linked as it is added.
         Step::Found if app.wizard.as_ref().is_some_and(|w| w.scan_only) => {
             adopt_taken(app);
@@ -305,8 +294,18 @@ fn advance(app: &mut Lightforge) -> iced::Task<Message> {
             iced::Task::none()
         }
 
+        // Adopted here rather than after Place: nothing it writes depends on
+        // where the prefix goes, and Place then lists the install's drive.
         Step::Found => {
             adopt_taken(app);
+            app.refresh_drives();
+            if let Some(wizard) = app.wizard.as_mut() {
+                wizard.step = Step::Place;
+            }
+            iced::Task::none()
+        }
+
+        Step::Place => {
             if let Some(wizard) = app.wizard.as_mut() {
                 wizard.step = Step::Install;
             }

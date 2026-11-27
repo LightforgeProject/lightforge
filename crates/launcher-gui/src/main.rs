@@ -143,7 +143,9 @@ fn main() -> iced::Result {
         return Ok(());
     }
     tune_allocator();
+    fit::drop_dead_wayland();
     fit::take_over_scale();
+    fit::composited();
     trace::begin();
     // 0.14 takes the boot function where 0.13 took the title, and runs it
     // from `run`, not `run_with`.
@@ -167,7 +169,7 @@ fn main() -> iced::Result {
     // `transparent: true` only adds alpha; iced still clears to the theme's
     // background unless told otherwise here.
     .style(|state: &Lightforge, theme| iced::theme::Style {
-        background_color: match state.splash.is_some() {
+        background_color: match state.splash.is_some() && fit::composited() {
             true => iced::Color::TRANSPARENT,
             false => theme.palette().background,
         },
@@ -196,7 +198,7 @@ fn main() -> iced::Result {
     .exit_on_close_request(false)
     .run()?;
     // Here, not in a message: every way out of the app ends up on this line.
-    tasks::stop_background_client_at_exit();
+    tasks::tidy_prefix_at_exit();
     Ok(())
 }
 
@@ -303,6 +305,8 @@ struct Lightforge {
     close_client_after_play: bool,
     /// Hand-offs sent again in a row because the client updated itself.
     client_update_retries: u8,
+    /// Multi-box clients PLAY still has to start, one after the other.
+    more_clients: u8,
     /// The game the client holds back for an update, of those asked about.
     update_pending: Option<ProductCode>,
     /// The version service's build for the selected Battle.net game.
@@ -368,6 +372,11 @@ struct Lightforge {
 
     screen: Screen,
     setup: Option<SetupStatus>,
+    /// The setup steps still missing, named in the corner on start instead
+    /// of opening on Settings: a game may well launch without them.
+    setup_notice: Option<String>,
+    /// Shown once a session: a dismissal stays dismissed.
+    setup_notice_seen: bool,
     /// The first run, while it is happening. `None` the rest of the time, and
     /// on every start after the one that finished or dismissed it.
     wizard: Option<wizard::Wizard>,

@@ -278,6 +278,10 @@ fn pacman_package(local: &Path) -> Option<String> {
     })
 }
 
+/// Far above any release asset (16 MB for beta.13's tarball and AppImage);
+/// what unpacking one is allowed, too.
+const MAX_ASSET_BYTES: u64 = 512 << 20;
+
 /// Download the release asset whose name ends in `suffix` into `dir`, and
 /// check it against the release's `SHA256SUMS`, the file `install.sh`
 /// checks against too.
@@ -300,7 +304,7 @@ pub async fn fetch_asset(
     }
 
     let path = dir.join(name);
-    http.download(&format!("{base}/{name}"), &path, on_progress).await?;
+    http.download(&format!("{base}/{name}"), &path, MAX_ASSET_BYTES, on_progress).await?;
     let actual = sha256_of(&path)?;
     if !actual.eq_ignore_ascii_case(expected) {
         let _ = std::fs::remove_file(&path);

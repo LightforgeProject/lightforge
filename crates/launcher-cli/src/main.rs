@@ -104,7 +104,7 @@ async fn run() -> Result<()> {
         } => commands::battlenet::battlenet_setup(ctx, proton, locale, installer, timeout),
         Command::BattlenetConfig => commands::battlenet::battlenet_config(ctx),
         Command::BattlenetRun { proton, product, exec, uri, install_game, skip_preflight } => commands::battlenet::battlenet_run(ctx, proton, product, exec, uri, install_game, skip_preflight),
-        Command::Play { product, proton, dry_run } => commands::play::play(ctx, product, proton, dry_run),
+        Command::Play { product, proton, dry_run } => commands::play::play(ctx, product, proton, dry_run).await,
         Command::Preflight { proton, product, dry_run, grace } => commands::play::preflight(ctx, proton, product, dry_run, grace),
         Command::CascVerify { src, dst, sample } => commands::inspect::casc_verify(src, dst, sample),
         Command::CascRebuild { src, dst, percent } => commands::inspect::casc_rebuild(src, dst, percent),

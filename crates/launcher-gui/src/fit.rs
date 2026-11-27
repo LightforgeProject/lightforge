@@ -38,6 +38,59 @@ pub fn take_over_scale() {
     OWNED.store(true, Ordering::Relaxed);
 }
 
+/// Fall back to X11 when `WAYLAND_DISPLAY` names a socket that is gone, as
+/// in a shell that outlived its compositor: winit takes the variable as a
+/// promise and panics on the failed connection instead of trying X11.
+///
+/// Before any thread starts, like [`take_over_scale`].
+pub fn drop_dead_wayland() {
+    let Some(display) = std::env::var_os("WAYLAND_DISPLAY") else {
+        return;
+    };
+    let socket = match std::path::Path::new(&display).is_absolute() {
+        true => std::path::PathBuf::from(&display),
+        false => match std::env::var_os("XDG_RUNTIME_DIR") {
+            Some(runtime) => std::path::Path::new(&runtime).join(&display),
+            None => return,
+        },
+    };
+    if socket.exists() || std::env::var_os("DISPLAY").is_none() {
+        return;
+    }
+    tracing::warn!("{} is gone, using X11 instead", socket.display());
+    std::env::remove_var("WAYLAND_DISPLAY");
+}
+
+/// Whether windows can be see-through: always on Wayland, on X11 only with a
+/// compositor running, which owns `_NET_WM_CM_S<screen>`. Without one the
+/// splash's transparent window would show as a black box around the card.
+/// Asked once; the style reads it every frame.
+pub fn composited() -> bool {
+    static COMPOSITED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *COMPOSITED.get_or_init(ask_compositor)
+}
+
+fn ask_compositor() -> bool {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::ConnectionExt;
+
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_none() {
+        return true;
+    }
+    let Ok((conn, screen)) = x11rb::connect(None) else {
+        return true;
+    };
+    let owner = conn
+        .intern_atom(true, format!("_NET_WM_CM_S{screen}").as_bytes())
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .filter(|reply| reply.atom != x11rb::NONE)
+        .and_then(|reply| conn.get_selection_owner(reply.atom).ok()?.reply().ok());
+    let composited = owner.is_some_and(|reply| reply.owner != x11rb::NONE);
+    drop(conn.flush());
+    composited
+}
+
 /// Whether the app scales itself, see [`take_over_scale`].
 pub fn owned() -> bool {
     OWNED.load(Ordering::Relaxed)

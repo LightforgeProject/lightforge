@@ -123,7 +123,7 @@ pub(crate) fn back_up_before_launch(layout: &Layout, code: &ProductCode) {
 pub enum Started {
     /// The game is up; [`await_game_exit`] watches the rest of its session.
     /// `generation` is this launch's count in [`PrefixState::launches`].
-    Up { game: GameProcess, generation: u64 },
+    Up { game: GameProcess, generation: u64, slot: u8 },
     /// It ended before it was ever seen, with this to say.
     Over(String),
 }
@@ -132,15 +132,22 @@ pub enum Started {
 ///
 /// The exe is watched by name: the game is not reliably a descendant of the
 /// Proton child. If it never appears, the child's exit status is reported.
+///
+/// `slot` 1 is the main client; a higher one is a multi-box client with a
+/// config of its own.
 pub async fn start_game(
     config: Config,
     layout: Layout,
     code: ProductCode,
+    slot: u8,
     cleared: (Cleared, SharedDownloads),
 ) -> Result<Started, Problem> {
     off_runtime("game-start", move || -> Result<_, Problem> {
         let dirs = AppDirs::discover().map_err(|e| Problem::of(&e))?;
-        let planned = DirectLaunch::plan(&config, &layout, &dirs, &code, None).map_err(|e| Problem::of(&e))?;
+        let mut planned = DirectLaunch::plan(&config, &layout, &dirs, &code, None).map_err(|e| Problem::of(&e))?;
+        if slot > 1 {
+            planned.args = lightforge_core::multibox::prepare(&layout.wtf_dir(&code), slot).map_err(|e| Problem::of(&e))?;
+        }
         back_up_before_launch(&layout, &code);
         let exe = &planned.exe;
         let mut launch = planned.command();
@@ -173,7 +180,7 @@ pub async fn start_game(
                 // for every process in the prefix, which held PLAY for tens
                 // of seconds, and outlived the game by nine on a measured one.
                 reap_later(child);
-                Ok(Started::Up { game: GameProcess { pid, name: watch }, generation })
+                Ok(Started::Up { game: GameProcess { pid, name: watch }, generation, slot })
             }
             // Either the game was never recognisable or it went down with the
             // tree. Both make the child's own status the honest answer.

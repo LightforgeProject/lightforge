@@ -108,6 +108,8 @@ pub(crate) enum AddonTab {
     Import,
     /// Hand this collection to another machine, or to WoWUp.
     Export,
+    /// What update passes changed, and the ones that could not run.
+    History,
 }
 
 /// Agent's registry, watched while Battle.net may be writing to it.
@@ -312,6 +314,9 @@ pub(crate) enum Launch {
 pub(crate) struct Session {
     pub(crate) code: ProductCode,
     pub(crate) game: lightforge_core::preflight::GameProcess,
+    /// Which client of its product: 1 is the main one, higher ones are
+    /// multi-box clients with their own `Config-<slot>.wtf`.
+    pub(crate) slot: u8,
     /// STOP was confirmed and the game has been told to go.
     pub(crate) stopping: bool,
 }

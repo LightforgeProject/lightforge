@@ -36,7 +36,7 @@ pub struct ProtonRunner {
     shader_cache: Option<PathBuf>,
     env: Vec<(OsString, OsString)>,
     /// A Steam Linux Runtime entry point to run Proton inside, as Steam
-    /// does. Only for Battle.net, see [`crate::runtime::tls_container`].
+    /// does. Only for Battle.net, see [`crate::runtime::battle_net_container`].
     container: Option<PathBuf>,
     /// The prefix already has a session this command joins, see
     /// [`ProtonRunner::joining_session`].
@@ -260,6 +260,13 @@ impl ProtonRunner {
         // Not for a Windows program, which can call what Wine never implemented.
         if program == "wineboot" && full.contains("to unimplemented function") {
             return Err(PrefixError::MixedBuild { version: self.version.clone(), build: self.build().to_path_buf() });
+        }
+        // The container's bubblewrap needs an unprivileged user namespace,
+        // which Ubuntu 24.04's AppArmor default and some hardened kernels deny.
+        if let Some(container) = &self.container {
+            if full.lines().any(|line| line.contains("bwrap") && (line.contains("namespace") || line.contains("uid map"))) {
+                return Err(PrefixError::ContainerBlocked(container.clone()));
+            }
         }
         Err(PrefixError::Command { program, code: output.status.code(), stderr })
     }
@@ -597,6 +604,9 @@ pub enum PrefixError {
     #[error("{version} at {build} holds files from two Proton versions: Wine called functions its own files do not have")]
     MixedBuild { version: String, build: PathBuf },
 
+    #[error("Steam's runtime container at {0} could not start: this system does not let it create a user namespace")]
+    ContainerBlocked(PathBuf),
+
     #[error("Proton ran but left no usable prefix at {0}")]
     NotInitialized(PathBuf),
 
@@ -681,6 +691,22 @@ mod tests {
     fn wineboot_hitting_a_missing_wine_function_names_the_mixed_build() {
         let error = mixed_build("mixed-wineboot").run("wineboot", ["-u"]).unwrap_err();
         assert!(matches!(error, PrefixError::MixedBuild { ref version, .. } if version == "GE-Proton11-7"), "{error:?}");
+    }
+
+    #[test]
+    fn a_container_bubblewrap_cannot_start_is_named_as_such() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = scratch("container-blocked");
+        let container = root.join("SteamLinuxRuntime_4").join("_v2-entry-point");
+        std::fs::create_dir_all(container.parent().unwrap()).unwrap();
+        std::fs::write(&container, "#!/bin/sh\necho 'bwrap: setting up uid map: Permission denied' >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&container, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let runner = mixed_build("container-blocked-proton").in_container(&container);
+
+        let error = runner.run("Battle.net-Setup.exe", Vec::<&str>::new()).unwrap_err();
+
+        assert!(matches!(error, PrefixError::ContainerBlocked(_)), "{error:?}");
     }
 
     #[test]

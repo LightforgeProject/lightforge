@@ -215,16 +215,17 @@ impl Lightforge {
                         }
                         self.save_config();
                         self.rebuild_layout();
-                        // Only a game that was given its own language: one
-                        // that follows the setup choice keeps whatever the
-                        // client has already written.
-                        if let Some(locale) =
-                            self.config.product(&code).and_then(|p| p.profile.locale.clone())
-                        {
-                            let file = self.layout.product_dir(&code).join("WTF").join("Config.wtf");
-                            if let Err(e) = lightforge_core::clientlocale::set(&file, &locale) {
-                                self.error = Some(format!("{}: {e}", file.display()).into());
-                            }
+                        // A game given its own language is pointed at it. One
+                        // that follows the setup choice gets it only where the
+                        // client has none yet, so its first start skips the
+                        // client's picker and a choice made in game stays.
+                        let file = self.layout.product_dir(&code).join("WTF").join("Config.wtf");
+                        let written = match self.config.product(&code).and_then(|p| p.profile.locale.clone()) {
+                            Some(own) => lightforge_core::clientlocale::set(&file, &own),
+                            None => lightforge_core::clientlocale::seed(&file, self.config.locale_for(&code)),
+                        };
+                        if let Err(e) = written {
+                            self.error = Some(format!("{}: {e}", file.display()).into());
                         }
                         let installed = match done.version {
                             Some(v) => format!("installed {v}"),
@@ -232,7 +233,9 @@ impl Lightforge {
                         };
                         let told = self.notify_unseen(&code, "is ready to play", installed.clone());
                         note(self, installed);
-                        Task::batch([self.pump(), self.reload_if_showing(&code), told])
+                        // The download registered it with Battle.net: PLAY's route can change.
+                        let registry = Task::perform(tasks::installed_versions(self.layout.clone()), Message::InstalledVersions);
+                        Task::batch([self.pump(), self.reload_if_showing(&code), told, registry])
                     }
                     Ok(done) if done.cancelled => {
                         // Paused, so it keeps its place with what it reached.

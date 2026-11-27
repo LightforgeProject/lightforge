@@ -11,6 +11,10 @@ buffer over the new one: clicks landed up to about 25 px off, until a manual
 resize (issue #14, KDE Plasma with fractional scaling). egui fixed the same winit
 behaviour the same way, emilk/egui#4211.
 
+Also `sysinfo` 0.33 → 0.36 in `Cargo.toml` (and `System::physical_core_count()`
+as an associated function in `system_information`), so the build carries the one
+`sysinfo` core already uses instead of two.
+
 Delete this directory and the `[patch.crates-io]` entry once an iced release
 carries the fix. On an iced upgrade before that, copy the new crate here and
 apply the same change.

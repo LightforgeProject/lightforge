@@ -161,13 +161,18 @@ pub(crate) enum Message {
     /// A direct launch got as far as it can tell: the game is up, or it
     /// ended before it was ever seen.
     GameStarted(Result<tasks::Started, Problem>),
-    /// A session's game exited.
-    GameExited(ProductCode, Result<String, Problem>),
-    /// STOP was pressed on the selected game: ask first.
+    /// A session's game exited, by pid.
+    GameExited(ProductCode, u32, Result<String, Problem>),
+    /// STOP was pressed on the selected game: ask first. It stops every
+    /// multi-box client of the game.
     AskStopGame,
     StopGameDismiss,
     StopGameConfirm,
-    GameStopped(ProductCode, Result<String, Problem>),
+    GameStopped(u32, Result<String, Problem>),
+    /// Multi-box: start one more client of the selected game.
+    LaunchAdditionalClient,
+    /// Multi-box: stop one client, by pid, from the list beside PLAY.
+    StopClient(u32),
     /// Every few seconds: is the Battle.net client up?
     ClientWatch,
     /// The poll's answer: the client up, and a game in the prefix.
@@ -187,6 +192,9 @@ pub(crate) enum Message {
     /// game is up, the client needs a person, or nothing started.
     HandoffStarted(Result<tasks::Handoff, Problem>),
     BattleNet,
+    /// Start a Lightforge-managed game directly, where PLAY would hand it to
+    /// Battle.net; see [`Lightforge::plays_via_battle_net`].
+    LaunchViaLightforge,
     ManageSubscription,
     /// Game Tools: ask the file picker for an installer or a program.
     CompanionPick(CompanionPick),
@@ -273,6 +281,10 @@ pub(crate) enum Message {
     PrefixReleased(Result<(), String>),
     /// Whether the game in Game Settings gets DXVK-NVAPI.
     NvapiPicked(lightforge_core::tweaks::Nvapi),
+    /// Multi-box on or off for the game in Game Settings.
+    MultiboxToggled(bool),
+    /// How many clients PLAY starts with multi-box on.
+    MultiboxClientsPicked(u8),
     /// The library picked in Game Settings to move the game to, by id.
     MoveTargetPicked(String),
     /// Move the game in Game Settings to the picked library.
@@ -349,6 +361,9 @@ pub(crate) enum Message {
 
     Show(Screen),
     SetupStatus(Option<Box<SetupStatus>>),
+    /// The start-up note that setup is not finished: open Setup, or close it.
+    SetupNoticeOpen,
+    SetupNoticeClose,
     RunSetup,
     /// The first-run wizard; see [`wizard`].
     Wizard(wizard::Msg),
@@ -383,6 +398,8 @@ pub(crate) enum Message {
     CloseBattleNetOnPlay(bool),
     /// Whether Battle.net is kept running between games.
     BattleNetInBackground(bool),
+    /// Whether closing Lightforge closes everything in the prefix.
+    ClosePrefixOnExit(bool),
     /// Restart now, for the mode just switched.
     ModeRestart,
     /// Not now: the mode just switched applies without a restart.
@@ -539,8 +556,9 @@ pub(crate) enum Message {
     ConfirmRestore(Option<String>),
     ConfirmDeleteBackup,
     BackupFinished(Result<String, String>),
-    /// Open the detail view for one addon: provider, id, name.
-    ShowAddonDetail(String, String, String),
+    /// Open the detail view for one addon: provider, id, name, and the build
+    /// whose changelog to show (the newest when `None`).
+    ShowAddonDetail(String, String, String, Option<String>),
     /// The catalogue answered with the project, description and changelog.
     AddonDetailLoaded(Box<Result<addonwork::Detail, String>>),
     /// Which half of the detail view is showing.

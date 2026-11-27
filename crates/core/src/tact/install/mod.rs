@@ -308,6 +308,9 @@ pub enum InstallError {
     Writer(#[from] crate::tact::writer::WriteError),
 
     #[error(transparent)]
+    Storage(#[from] crate::tact::storage::StorageError),
+
+    #[error(transparent)]
     BuildInfo(#[from] crate::buildinfo::BuildInfoError),
 
     #[error(transparent)]

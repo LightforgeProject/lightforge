@@ -267,11 +267,114 @@ fn io(path: &Path) -> impl FnOnce(std::io::Error) -> IndexError + '_ {
     move |source| IndexError::Io { path: path.to_path_buf(), source }
 }
 
+/// CDN config keys whose values name a file in `Data/indices`.
+const INDEX_KEYS: [&str; 6] =
+    ["archives", "patch-archives", "file-index", "patch-file-index", "archive-group", "patch-archive-group"];
+
+/// Delete the `.index` files in `install`'s cache that no product in its
+/// `.build.info` names, returning the bytes freed. Agent and Lightforge only
+/// ever add to it: on a real retail store (2026-11-22) 21 of 1,504 files were
+/// named by nothing and held 470 of its 630 MiB.
+///
+/// Touches nothing when what is needed is not known for certain: a product
+/// whose CDN config is not in `Data/config`, a pre-downloaded build, or a
+/// download not yet finished.
+pub fn prune_unnamed(install: &Path) -> Result<u64, IndexError> {
+    let Ok(info) = crate::buildinfo::BuildInfo::load(install.join(".build.info")) else {
+        return Ok(0);
+    };
+    let ahead = super::staged::load(install).and_then(|staged| Ok((staged, super::staged::fetching(install)?)));
+    if !ahead.is_ok_and(|(staged, fetching)| staged.is_empty() && fetching.is_empty()) {
+        return Ok(0);
+    }
+    let mut named = std::collections::HashSet::new();
+    for code in info.products() {
+        let Ok(cdn_key) = info.get(&code, crate::buildinfo::COL_CDN_KEY) else {
+            return Ok(0);
+        };
+        let Some(text) = super::config::config_path(&install.join("Data").join("config"), cdn_key)
+            .ok()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+        else {
+            return Ok(0);
+        };
+        for line in text.lines() {
+            let Some((key, values)) = line.split_once('=') else { continue };
+            if INDEX_KEYS.contains(&key.trim()) {
+                named.extend(values.split_whitespace().map(str::to_ascii_lowercase));
+            }
+        }
+    }
+    if named.is_empty() {
+        return Ok(0);
+    }
+
+    let dir = install.join("Data").join("indices");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(io(&dir)(e)),
+    };
+    let mut freed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        let Some(hash) = name.strip_suffix(".index") else { continue };
+        if named.contains(hash) {
+            continue;
+        }
+        let path = entry.path();
+        let len = entry.metadata().map_or(0, |m| m.len());
+        std::fs::remove_file(&path).map_err(io(&path))?;
+        freed += len;
+    }
+    Ok(freed)
+}
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    /// An install whose one product's CDN config names `named`, with an
+    /// index cache holding `cached`.
+    fn install_naming(named: &str, cached: &[&str]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let cdn_key = "ab".repeat(16);
+        let mut info = crate::buildinfo::BuildInfo::with_default_schema();
+        info.set_product(&crate::product::ProductCode::ClassicEra, &[(crate::buildinfo::COL_CDN_KEY, &cdn_key)]).unwrap();
+        info.save(dir.path().join(".build.info")).unwrap();
+        super::super::config::store(&dir.path().join("Data"), &cdn_key, named.as_bytes()).unwrap();
+        let indices = dir.path().join("Data/indices");
+        std::fs::create_dir_all(&indices).unwrap();
+        for hash in cached {
+            std::fs::write(indices.join(format!("{hash}.index")), [0u8; 100]).unwrap();
+        }
+        dir
+    }
+
+    fn cached(dir: &tempfile::TempDir) -> HashSet<String> {
+        std::fs::read_dir(dir.path().join("Data/indices"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn indices_no_build_names_are_pruned() {
+        let dir = install_naming("# CDN Configuration\narchives = aa11 bb22\nfile-index = cc33\n", &["aa11", "bb22", "cc33", "dd44"]);
+        assert_eq!(prune_unnamed(dir.path()).unwrap(), 100);
+        assert_eq!(cached(&dir), HashSet::from(["aa11.index".into(), "bb22.index".into(), "cc33.index".into()]));
+    }
+
+    #[test]
+    fn nothing_is_pruned_when_a_product_s_cdn_config_is_missing() {
+        let dir = install_naming("archives = aa11\n", &["aa11", "dd44"]);
+        let config = dir.path().join("Data/config");
+        std::fs::remove_dir_all(&config).unwrap();
+        assert_eq!(prune_unnamed(dir.path()).unwrap(), 0);
+        assert_eq!(cached(&dir).len(), 2);
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("lightforge-indices-{name}-{}", std::process::id()));

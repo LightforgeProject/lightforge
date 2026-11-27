@@ -174,15 +174,14 @@ pub(crate) async fn download(dest: PathBuf, code: ProductCode, region: String, l
         eprintln!("  ... and {} more", summary.outcome.failed.len() - 10);
     }
 
-    println!(
-        "\nstore           {} archives, {} files, {:.2} GiB",
-        summary.store.archives,
-        summary.store.files,
-        gib(summary.store.bytes)
-    );
+    // The writer's summary counts this run only; a resumed download has more.
+    if let Ok(store) = lightforge_core::tact::storage::Storage::open(&dest) {
+        let stats = store.stats();
+        println!("\nstore           {} files, {:.2} GiB", stats.files, gib(stats.bytes));
+    }
     println!("indices         {} written", summary.store.indices.len());
     match summary.complete {
-        true => println!("\nverify with:  lightforge casc {}", dest.display()),
+        true => println!("\nverify with:  lightforge verify --deep {}", dest.display()),
         false => println!("\nre-run to continue; what is stored is kept"),
     }
     Ok(())

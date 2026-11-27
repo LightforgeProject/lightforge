@@ -45,6 +45,11 @@ pub struct Staged {
 struct Record {
     #[serde(default, rename = "build")]
     builds: Vec<Staged>,
+    /// Builds a download has started on and not finished: their data is in
+    /// the store, named by nothing else. Prune keeps it, and a cancelled
+    /// download removes exactly it, even after Blizzard moved on.
+    #[serde(default, rename = "fetching", skip_serializing_if = "Vec::is_empty")]
+    fetching: Vec<Staged>,
 }
 
 fn path(install: &Path) -> PathBuf {
@@ -53,13 +58,46 @@ fn path(install: &Path) -> PathBuf {
 
 /// Every staged build in `install`; none when nothing was ever staged.
 pub fn load(install: &Path) -> Result<Vec<Staged>, StagedError> {
+    read(install).map(|r| r.builds)
+}
+
+/// Every build a download started on in `install` and has not finished.
+pub fn fetching(install: &Path) -> Result<Vec<Staged>, StagedError> {
+    read(install).map(|r| r.fetching)
+}
+
+/// Note that a download of `build` has begun. Kept across pauses and runs,
+/// so a run that resumes onto a newer build adds to it.
+pub fn begin_fetch(install: &Path, build: Staged) -> Result<(), StagedError> {
+    let mut record = read(install)?;
+    if record.fetching.iter().any(|b| b.product == build.product && b.build_key == build.build_key) {
+        return Ok(());
+    }
+    record.fetching.push(build);
+    write(install, record)
+}
+
+/// Forget every build a download of `code` was fetching, returning them:
+/// it finished, or it was cancelled and its data is going.
+pub fn end_fetch(install: &Path, code: &ProductCode) -> Result<Vec<Staged>, StagedError> {
+    let mut record = read(install)?;
+    let (ended, kept): (Vec<_>, Vec<_>) = record.fetching.into_iter().partition(|b| &b.product == code);
+    if ended.is_empty() {
+        return Ok(ended);
+    }
+    record.fetching = kept;
+    write(install, record)?;
+    Ok(ended)
+}
+
+fn read(install: &Path) -> Result<Record, StagedError> {
     let path = path(install);
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Record::default()),
         Err(source) => return Err(StagedError::Read { path, source }),
     };
-    toml::from_str::<Record>(&text).map(|r| r.builds).map_err(|source| StagedError::Parse { path, source })
+    toml::from_str::<Record>(&text).map_err(|source| StagedError::Parse { path, source })
 }
 
 /// `code`'s staged build, for showing it. An unreadable record is logged and
@@ -76,37 +114,37 @@ pub fn get(install: &Path, code: &ProductCode) -> Option<Staged> {
 
 /// Record `staged`, replacing whatever was staged for its product before.
 pub fn record(install: &Path, staged: Staged) -> Result<(), StagedError> {
-    let mut builds = load(install)?;
-    builds.retain(|b| b.product != staged.product);
-    builds.push(staged);
-    save(install, builds)
+    let mut record = read(install)?;
+    record.builds.retain(|b| b.product != staged.product);
+    record.builds.push(staged);
+    write(install, record)
 }
 
 /// Forget `code`'s staged build, or only the one keyed `build_key` when given.
 /// Whether anything was forgotten.
 pub fn clear(install: &Path, code: &ProductCode, build_key: Option<&str>) -> Result<bool, StagedError> {
-    let mut builds = load(install)?;
-    let before = builds.len();
-    builds.retain(|b| !(&b.product == code && build_key.is_none_or(|key| b.build_key == key)));
-    if builds.len() == before {
+    let mut record = read(install)?;
+    let before = record.builds.len();
+    record.builds.retain(|b| !(&b.product == code && build_key.is_none_or(|key| b.build_key == key)));
+    if record.builds.len() == before {
         return Ok(false);
     }
-    save(install, builds)?;
+    write(install, record)?;
     Ok(true)
 }
 
-/// Write atomically; nothing staged removes the file.
-fn save(install: &Path, builds: Vec<Staged>) -> Result<(), StagedError> {
+/// Write atomically; nothing staged or fetching removes the file.
+fn write(install: &Path, record: Record) -> Result<(), StagedError> {
     let path = path(install);
-    let write = |source| StagedError::Write { path: path.clone(), source };
-    if builds.is_empty() {
+    let failed = |source| StagedError::Write { path: path.clone(), source };
+    if record.builds.is_empty() && record.fetching.is_empty() {
         return match std::fs::remove_file(&path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(write(e)),
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(failed(e)),
             _ => Ok(()),
         };
     }
-    let text = toml::to_string_pretty(&Record { builds })?;
-    crate::fsutil::write_atomic(&path, text.as_bytes()).map_err(write)
+    let text = toml::to_string_pretty(&record)?;
+    crate::fsutil::write_atomic(&path, text.as_bytes()).map_err(failed)
 }
 
 #[cfg(test)]
@@ -122,6 +160,30 @@ mod tests {
             cdn_hosts: vec!["level3.blizzard.com".to_owned()],
             cdn_servers: vec!["https://level3.ssl.blizzard.com/?maxhosts=8&fallback=1".to_owned()],
         }
+    }
+
+    #[test]
+    fn a_resumed_download_onto_a_newer_build_remembers_both() {
+        let dir = tempfile::tempdir().unwrap();
+        begin_fetch(dir.path(), staged(ProductCode::ClassicEra, "aaaa")).unwrap();
+        begin_fetch(dir.path(), staged(ProductCode::ClassicEra, "aaaa")).unwrap();
+        begin_fetch(dir.path(), staged(ProductCode::ClassicEra, "bbbb")).unwrap();
+        let keys: Vec<String> = fetching(dir.path()).unwrap().into_iter().map(|b| b.build_key).collect();
+        assert_eq!(keys, ["aaaa", "bbbb"]);
+    }
+
+    #[test]
+    fn ending_a_fetch_keeps_the_staged_build_and_other_products() {
+        let dir = tempfile::tempdir().unwrap();
+        record(dir.path(), staged(ProductCode::Retail, "cccc")).unwrap();
+        begin_fetch(dir.path(), staged(ProductCode::Retail, "dddd")).unwrap();
+        begin_fetch(dir.path(), staged(ProductCode::ClassicEra, "eeee")).unwrap();
+
+        let ended = end_fetch(dir.path(), &ProductCode::Retail).unwrap();
+
+        assert_eq!(ended.len(), 1);
+        assert_eq!(load(dir.path()).unwrap().len(), 1);
+        assert_eq!(fetching(dir.path()).unwrap()[0].product, ProductCode::ClassicEra);
     }
 
     #[test]

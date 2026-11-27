@@ -124,8 +124,11 @@ pub(crate) fn addons(ctx: Ctx, code: ProductCode, path: Option<PathBuf>, token: 
         .ok()
         .and_then(|info| info.get(&code, lightforge_core::buildinfo::COL_VERSION).ok().map(str::to_owned));
     let client = addons::Client::of(&code, version.as_deref());
-    let installed = addons::scan(&dir, &client)
-        .with_context(|| format!("reading {}", dir.display()))?;
+    // The client creates the folder on its first start; until then, none.
+    let installed = match dir.is_dir() {
+        true => addons::scan(&dir, &client).with_context(|| format!("reading {}", dir.display()))?,
+        false => Vec::new(),
+    };
 
     println!("addons dir      {}", dir.display());
     println!("installed       {}", installed.len());
@@ -138,12 +141,23 @@ pub(crate) fn addons(ctx: Ctx, code: ProductCode, path: Option<PathBuf>, token: 
     }
     println!();
 
+    // What Lightforge installed and tracks, beside what each TOC declares.
+    let ledger = AppDirs::discover()
+        .ok()
+        .and_then(|dirs| addons::install::Ledger::load(&addons::manage::ledger_path(dirs.data_dir(), &dir, &code)).ok())
+        .unwrap_or_default();
     for addon in &installed {
-        let ids: Vec<String> = addon
+        let mut ids: Vec<String> = addon
             .ids
             .iter()
             .map(|(provider, id)| format!("{}:{id}", provider.as_str()))
             .collect();
+        if let Some(record) = ledger.addons.iter().find(|r| r.folders.contains(&addon.folder)) {
+            let tracked = format!("{}:{}", record.provider, record.id);
+            if !ids.contains(&tracked) {
+                ids.insert(0, tracked);
+            }
+        }
         println!(
             "{:<34} {:<18} {}{}",
             addon.folder,
@@ -224,6 +238,7 @@ pub(crate) async fn addon_search(query: String, code: ProductCode, limit: usize,
 
 pub(crate) async fn addon_install(ctx: Ctx, id: String, provider: String, code: ProductCode, catalog: Option<String>) -> Result<()> {
     let Ctx { layout, .. } = ctx;
+    let (provider, id) = provider_and_id(provider, id);
     use lightforge_core::addons::{self, catalog::Catalog, catalog::Request, manage};
     use lightforge_core::net::Http;
 
@@ -252,6 +267,7 @@ pub(crate) async fn addon_install(ctx: Ctx, id: String, provider: String, code: 
         })
         .await?;
     print_addon_report(&report);
+    record_history(&options.ledger_path, &report);
     Ok(())
 }
 
@@ -328,25 +344,18 @@ pub(crate) async fn addon_import(ctx: Ctx, token: String, code: ProductCode, cat
     })
     .await?;
     print_addon_report(&report);
+    record_history(&options.ledger_path, &report);
     Ok(())
 }
 
 pub(crate) async fn addon_update(ctx: Ctx, code: ProductCode, catalog: Option<String>) -> Result<()> {
     let Ctx { layout, .. } = ctx;
-    use lightforge_core::addons::{self, catalog::Catalog, manage};
+    use lightforge_core::addons::{catalog::Catalog, manage};
     use lightforge_core::net::Http;
 
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
     let catalog = addon_origin(catalog.as_deref(), &dirs).map(Catalog::new);
-    let options = manage::Options {
-        flavor: addons::flavor_of(&code).to_owned(),
-        addons_dir: layout.addons_dir(&code),
-        ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(&code), &code),
-        pinned: false,
-        reinstall: false,
-        channel: addon_channel(&dirs),
-        backup: Some(settings_backup(&layout, &dirs, &code)),
-    };
+    let options = update_options(&layout, &dirs, &code);
 
     let http = Http::new()?;
     let report = manage::update_all(&http, catalog.as_ref(), &options, |event| {
@@ -354,7 +363,72 @@ pub(crate) async fn addon_update(ctx: Ctx, code: ProductCode, catalog: Option<St
     })
     .await?;
     print_addon_report(&report);
+    record_history(&options.ledger_path, &report);
     Ok(())
+}
+
+/// The GUI's automatic pass, in front of `play` when `update_on_play` is on:
+/// only addons that update themselves, never while a game has them loaded,
+/// and a failure is a warning, not a reason to stay out of the game.
+pub(crate) async fn addon_pass_before_play(config: &Config, layout: &Layout, dirs: &AppDirs, code: &ProductCode) {
+    use lightforge_core::addons::catalog::Catalog;
+    use lightforge_core::addons::history::{History, Run, Trigger};
+    use lightforge_core::addons::install::Ledger;
+    use lightforge_core::addons::manage;
+    use lightforge_core::net::Http;
+
+    let options = update_options(layout, dirs, code);
+    let mut ledger = match Ledger::load(&options.ledger_path) {
+        Ok(ledger) => ledger,
+        Err(e) => {
+            eprintln!("warning: addons not updated: {}", lightforge_core::error::chain(&e));
+            return;
+        }
+    };
+    ledger.prune_missing(&options.addons_dir);
+    let requests = manage::auto_update_requests(&ledger, config.addon_channel, config.addon_auto_update);
+    if requests.is_empty() {
+        return;
+    }
+    if !lightforge_core::preflight::games_running(layout).is_empty() {
+        println!("addons          not updated, a game has them loaded");
+        History::record(&options.ledger_path, Run::problem(Trigger::Automatic, "skipped: a game was running".to_owned()));
+        return;
+    }
+
+    let catalog = addon_origin(None, dirs).map(Catalog::new);
+    let result = match Http::new() {
+        Ok(http) => manage::install_all(&http, catalog.as_ref(), &requests, &options, |event| print_addon_event(&event)).await,
+        Err(e) => Err(e.into()),
+    };
+    let run = match &result {
+        Ok(report) => {
+            print_addon_report(report);
+            Run::of(report, Trigger::Automatic)
+        }
+        Err(e) => {
+            let problem = format!("check failed: {}", lightforge_core::error::chain(e));
+            eprintln!("warning: addons not updated: {problem}");
+            Some(Run::problem(Trigger::Automatic, problem))
+        }
+    };
+    if let Some(run) = run {
+        History::record(&options.ledger_path, run);
+    }
+}
+
+/// What both `addon-update` and the pass before `play` update with.
+fn update_options(layout: &Layout, dirs: &AppDirs, code: &ProductCode) -> lightforge_core::addons::manage::Options {
+    use lightforge_core::addons::{self, manage};
+    manage::Options {
+        flavor: addons::flavor_of(code).to_owned(),
+        addons_dir: layout.addons_dir(code),
+        ledger_path: manage::ledger_path(dirs.data_dir(), &layout.addons_dir(code), code),
+        pinned: false,
+        reinstall: false,
+        channel: addon_channel(dirs),
+        backup: Some(settings_backup(layout, dirs, code)),
+    }
 }
 
 pub(crate) fn backup_list(ctx: Ctx, code: ProductCode) -> Result<()> {
@@ -424,6 +498,7 @@ pub(crate) fn backup_restore(ctx: Ctx, which: String, code: ProductCode, account
 
 pub(crate) fn addon_remove(ctx: Ctx, id: String, provider: String, code: ProductCode) -> Result<()> {
     let Ctx { layout, .. } = ctx;
+    let (provider, id) = provider_and_id(provider, id);
     use lightforge_core::addons::{self, manage};
 
     let dirs = AppDirs::discover().context("resolving XDG directories")?;
@@ -548,6 +623,14 @@ fn print_addon_event(event: &lightforge_core::addons::manage::Event) {
     }
 }
 
+/// The GUI's History tab lists what the CLI updated too.
+fn record_history(ledger_path: &std::path::Path, report: &lightforge_core::addons::manage::Report) {
+    use lightforge_core::addons::history::{History, Run, Trigger};
+    if let Some(run) = Run::of(report, Trigger::Manual) {
+        History::record(ledger_path, run);
+    }
+}
+
 fn print_addon_report(report: &lightforge_core::addons::manage::Report) {
     println!(
         "\ninstalled       {}\nup to date      {}\nunavailable     {}",
@@ -555,4 +638,12 @@ fn print_addon_report(report: &lightforge_core::addons::manage::Report) {
         report.up_to_date.len(),
         report.unavailable.len()
     );
+}
+
+/// `curse:334372`, as `addons` prints it, names its own provider over `--provider`.
+fn provider_and_id(provider: String, id: String) -> (String, String) {
+    match id.split_once(':') {
+        Some((named, id)) => (named.to_owned(), id.to_owned()),
+        None => (provider, id),
+    }
 }

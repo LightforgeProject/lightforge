@@ -110,7 +110,12 @@ pub(crate) async fn proton_install(version: Option<String>) -> Result<()> {
             .iter()
             .find(|r| &r.tag_name == tag)
             .with_context(|| format!("no release tagged `{tag}`"))?,
-        None => proton::latest_stable(&releases).context("no stable release found")?,
+        // What setup installs: newer GE builds have broken Battle.net's installer.
+        None => releases
+            .iter()
+            .find(|r| r.tag_name == proton::TESTED)
+            .or_else(|| proton::latest_stable(&releases))
+            .context("no stable release found")?,
     };
 
     let dest = dirs.proton_dir();

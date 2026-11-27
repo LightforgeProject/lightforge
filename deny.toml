@@ -18,6 +18,10 @@ ignore = [
     # A symlink entry's declared size sizes an allocation inside extract().
     # Ours never allocate from a declared size: io::copy under a take() cap.
     { id = "RUSTSEC-2026-0429", reason = "extract() is never called, entry sizes never size an allocation" },
+    # Fixed only in zip 9. The crate is built without `aes-crypto`, and addons
+    # are read through `ZipArchive` by central-directory name, never streamed.
+    { id = "RUSTSEC-2026-0545", reason = "built without aes-crypto, so no AES entry is ever decrypted" },
+    { id = "RUSTSEC-2026-0548", reason = "ZipStreamReader is never used; entries are opened by their central-directory names" },
 ]
 
 [licenses]

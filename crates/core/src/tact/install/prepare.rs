@@ -15,7 +15,7 @@ use crate::tact::encoding::Encoding;
 use crate::tact::indices::{IndexCache, Locations};
 use crate::tact::manifest::{DownloadEntry, DownloadManifest, InstallManifest, Tag, TagSet};
 use crate::tact::plan::{reverse_encoding, Loose, Options as PlanOptions, Plan};
-use crate::tact::storage::{EKey, Storage};
+use crate::tact::storage::{EKey, Storage, StorageError};
 use crate::tact::version;
 use crate::text::hex;
 
@@ -190,6 +190,11 @@ pub async fn prepare(
     options: &Options,
     on_event: &mut impl FnMut(Event),
 ) -> Result<Prepared, InstallError> {
+    // A damaged index prices the whole game as missing and stops the writer
+    // only after minutes of manifests; a Deep Scan repairs it, so say it now.
+    if let Err(e @ StorageError::DamagedIndex { .. }) = Storage::open(dest) {
+        return Err(e.into());
+    }
     let (remote, cdn, client) = resolve(http, code, options).await?;
     let product = match remote.product_config.is_empty() {
         true => None,

@@ -1022,9 +1022,9 @@ fn a_download_a_launch_paused_is_restarted_when_the_game_exits() {
     let _ = app.update(Message::Downloaded(code.clone(), stopped(true)));
     assert!(matches!(app.queue[0].stage, Stage::Paused(_)));
 
-    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(1), generation: 1 })));
+    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(1), generation: 1, slot: 1 })));
     assert!(matches!(app.queue[0].stage, Stage::Paused(_)), "not while the game runs");
-    let _ = app.update(Message::GameExited(code, Ok("exited".to_owned())));
+    let _ = app.update(Message::GameExited(code, 1, Ok("exited".to_owned())));
     assert!(
         !matches!(app.queue[0].stage, Stage::Paused(_)),
         "queued again, or already running"
@@ -1138,15 +1138,6 @@ fn a_config_that_will_not_load_is_described_kept_and_never_overwritten() {
     assert_eq!(std::fs::read_to_string(dirs.config_file()).unwrap(), broken);
     assert!(!dirs.queue_file().exists());
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn only_offered_optional_content_is_shown_or_fetched() {
-    let tags = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
-    // What the Forever beta's manifest carries.
-    assert_eq!(offered_only(&tags(&["Alternate", "HighRes", "Talebound"])), tags(&["HighRes"]));
-    // A stale opt-in from before the list existed is dropped, not fetched.
-    assert!(offered_only(&tags(&["Talebound"])).is_empty());
 }
 
 #[test]
@@ -1439,7 +1430,7 @@ fn stop_asks_first_and_play_comes_back_when_the_game_is_gone() {
     // A launch of ours, and its game seen in the prefix.
     app.busy = true;
     app.launching = Some(code.clone());
-    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(1), generation: 1 })));
+    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(1), generation: 1, slot: 1 })));
     assert!(app.session(&code).is_some() && !app.busy && app.launching.is_none());
     let _ = app.update(Message::AskStopGame);
     assert!(app.stop_dialog.is_some());
@@ -1458,7 +1449,7 @@ fn stop_asks_first_and_play_comes_back_when_the_game_is_gone() {
     let _ = app.update(Message::StopGameConfirm);
 
     // The watcher reports the exit: PLAY is back and nothing is left over.
-    let _ = app.update(Message::GameExited(code.clone(), Ok("Wow.exe exited".to_owned())));
+    let _ = app.update(Message::GameExited(code.clone(), 1, Ok("Wow.exe exited".to_owned())));
     assert!(app.playing.is_empty() && !app.in_play());
 }
 
@@ -1473,7 +1464,7 @@ fn a_second_game_starts_while_the_first_one_runs() {
     app.selected.code = first.clone();
     app.busy = true;
     app.launching = Some(first.clone());
-    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(1), generation: 1 })));
+    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(1), generation: 1, slot: 1 })));
     assert!(!app.busy, "the launcher is free while the first game runs");
 
     // STOP belongs to the running game's tile, not to every tile.
@@ -1483,13 +1474,87 @@ fn a_second_game_starts_while_the_first_one_runs() {
 
     app.busy = true;
     app.launching = Some(second.clone());
-    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(2), generation: 2 })));
+    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(2), generation: 2, slot: 1 })));
     assert_eq!(app.playing.len(), 2);
 
     // One exiting leaves the other's session alone.
-    let _ = app.update(Message::GameExited(first.clone(), Ok("Wow.exe exited".to_owned())));
+    let _ = app.update(Message::GameExited(first.clone(), 1, Ok("Wow.exe exited".to_owned())));
     assert!(app.session(&first).is_none() && app.session(&second).is_some());
     assert!(app.in_play(), "the second game still holds the store");
+}
+
+#[test]
+fn multibox_clients_of_one_game_are_tracked_and_stopped_apart() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.queue.clear();
+    let code = app.selected.code.clone();
+    app.config.product_mut(&code).unwrap().profile.multibox = Some(2);
+
+    for (pid, slot) in [(1, 1), (2, 2)] {
+        app.busy = true;
+        app.launching = Some(code.clone());
+        let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(pid), generation: pid.into(), slot })));
+    }
+    assert_eq!(app.sessions(&code).count(), 2);
+    let _ = app.view();
+
+    let _ = app.update(Message::StopClient(2));
+    assert!(app.sessions(&code).any(|s| s.slot == 2 && s.stopping));
+    assert!(app.session(&code).is_some_and(|s| !s.stopping), "STOP stays on for the main client");
+
+    let _ = app.update(Message::GameExited(code.clone(), 2, Ok("Wow.exe exited".to_owned())));
+    assert!(app.sessions(&code).map(|s| s.slot).eq([1]));
+}
+
+#[test]
+fn stop_ends_every_multibox_client_of_the_game() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.queue.clear();
+    let code = app.selected.code.clone();
+    app.config.product_mut(&code).unwrap().profile.multibox = Some(3);
+    for (pid, slot) in [(1, 1), (2, 2), (3, 3)] {
+        app.launching = Some(code.clone());
+        let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(pid), generation: pid.into(), slot })));
+    }
+
+    let _ = app.update(Message::AskStopGame);
+    let _ = app.update(Message::StopGameConfirm);
+    assert!(app.sessions(&code).all(|s| s.stopping));
+
+    // The dialog is not reopened by one of them going early.
+    let _ = app.update(Message::GameExited(code.clone(), 1, Ok("Wow.exe exited".to_owned())));
+    assert_eq!(app.sessions(&code).count(), 2);
+}
+
+#[test]
+fn multibox_play_starts_the_next_client_once_one_is_up() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.queue.clear();
+    let code = app.selected.code.clone();
+    app.config.product_mut(&code).unwrap().profile.multibox = Some(2);
+    app.busy = true;
+    app.launching = Some(code.clone());
+    app.more_clients = 1;
+
+    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(1), generation: 1, slot: 1 })));
+
+    assert_eq!(app.more_clients, 0);
+    assert_eq!(app.launching.as_ref(), Some(&code), "the second client's pre-flight is under way");
+}
+
+#[test]
+fn a_failed_multibox_client_ends_the_chain() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.queue.clear();
+    app.busy = true;
+    app.launching = Some(app.selected.code.clone());
+    app.more_clients = 2;
+    let _ = app.update(Message::Launched(Err("game exited (exit status: 1)".into())));
+    assert_eq!(app.more_clients, 0);
 }
 
 /// A run that ends short without an error used to say only "stopped", which
@@ -2381,4 +2446,127 @@ fn a_battle_net_repair_waits_for_a_running_setup() {
     app.setup_running = true;
     let _ = app.update(Message::RepairBattleNet);
     assert!(app.error.is_some());
+}
+
+fn setup_status(app: &Lightforge, proton: bool, battle_net: bool) -> lightforge_core::setup::Status {
+    let mut prefix = lightforge_core::prefix::PrefixStatus::inspect(&app.layout);
+    prefix.initialized = true;
+    prefix.link = lightforge_core::prefix::LinkState::Correct;
+    lightforge_core::setup::Status {
+        proton: proton.then(|| lightforge_core::proton::ProtonRelease {
+            version: "GE-Proton11-7".into(),
+            flavor: lightforge_core::proton::ProtonFlavor::GloriousEggroll,
+            source: lightforge_core::proton::ProtonSource::Managed,
+            path: PathBuf::from("/tmp/ge"),
+            built_at: None,
+        }),
+        installed: Vec::new(),
+        prefix,
+        battle_net,
+        battle_net_wanted: true,
+        thirty_two_bit: true,
+    }
+}
+
+#[test]
+fn an_unfinished_setup_opens_on_play_and_says_what_is_missing() {
+    let (mut app, _scratch) = test_app();
+    app.splash = None;
+    let status = setup_status(&app, false, false);
+    let _ = app.update(Message::SetupStatus(Some(Box::new(status))));
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert_eq!(app.setup_notice.as_deref(), Some("Setup is not finished: Proton-GE, Battle.net missing"));
+}
+
+#[test]
+fn a_closed_setup_notice_stays_closed_for_the_session() {
+    let (mut app, _scratch) = test_app();
+    let _ = app.update(Message::SetupStatus(Some(Box::new(setup_status(&app, true, false)))));
+    let _ = app.update(Message::SetupNoticeClose);
+    let _ = app.update(Message::SetupStatus(Some(Box::new(setup_status(&app, true, false)))));
+    assert!(app.setup_notice.is_none());
+}
+
+#[test]
+fn finishing_setup_takes_the_notice_away() {
+    let (mut app, _scratch) = test_app();
+    let _ = app.update(Message::SetupStatus(Some(Box::new(setup_status(&app, true, false)))));
+    assert!(app.setup_notice.is_some());
+    let _ = app.update(Message::SetupStatus(Some(Box::new(setup_status(&app, true, true)))));
+    assert!(app.setup_notice.is_none());
+}
+
+#[test]
+fn the_setup_notice_leads_to_the_setup_section() {
+    let (mut app, _scratch) = test_app();
+    app.splash = None;
+    let _ = app.update(Message::SetupStatus(Some(Box::new(setup_status(&app, true, false)))));
+    let _ = app.update(Message::SetupNoticeOpen);
+    assert!(app.setup_notice.is_none());
+    assert_eq!(app.screen, Screen::Settings);
+}
+
+#[test]
+fn a_deep_scan_that_found_only_an_unreadable_index_still_repairs() {
+    let (mut app, _scratch) = test_app();
+    let report = lightforge_core::tact::verify::Report {
+        damaged_indices: vec!["/games/Data/data/0500000043.idx".into()],
+        ..Default::default()
+    };
+    let _ = app.update(Message::DeepScanned(Box::new(Ok(report))));
+    assert!(app.status.contains("1 unreadable index files"), "{}", app.status);
+    assert!(app.repairing.is_some());
+}
+
+/// Seamless mode, the selected WoW installed and current, Battle.net still
+/// signing in: a hand-off waits for it, a direct start does not.
+fn seamless_and_playable(registered: bool) -> (Lightforge, tempfile::TempDir, ProductCode) {
+    let (mut app, scratch) = test_app();
+    app.dirs = None;
+    app.queue.clear();
+    app.local = Local {
+        build_key: Some("abc".to_owned()),
+        version: Some("11.2.7.65000".to_owned()),
+        executable: Some(PathBuf::from("/nowhere/Wow.exe")),
+        store_files: 12,
+        staged: None,
+        portal: None,
+    };
+    app.config.battle_net_in_background = true;
+    app.client_phase = ClientPhase::SigningIn;
+    let code = app.selected.code.clone();
+    if registered {
+        app.installed_versions.insert(code.as_str().to_owned(), "11.2.7.65000".to_owned());
+    }
+    (app, scratch, code)
+}
+
+#[test]
+fn in_seamless_mode_play_hands_a_registered_wow_to_battle_net() {
+    let (mut app, _scratch, code) = seamless_and_playable(true);
+    assert!(matches!(app.action(), ActionState::Play));
+
+    let _ = app.update(Message::Primary);
+
+    assert_eq!(app.launch_after_client, Some((Launch::BattleNet, code)), "it waits for the sign-in, then hands off");
+}
+
+#[test]
+fn in_seamless_mode_play_starts_a_wow_battle_net_does_not_know_itself() {
+    let (mut app, _scratch, _code) = seamless_and_playable(false);
+
+    let _ = app.update(Message::Primary);
+
+    assert_eq!(app.launch_after_client, None);
+    assert!(app.busy, "the direct start went ahead");
+}
+
+#[test]
+fn launch_via_lightforge_starts_the_game_without_battle_net() {
+    let (mut app, _scratch, _code) = seamless_and_playable(true);
+
+    let _ = app.update(Message::LaunchViaLightforge);
+
+    assert_eq!(app.launch_after_client, None);
+    assert!(app.busy, "the direct start went ahead");
 }

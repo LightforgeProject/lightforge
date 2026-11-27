@@ -76,7 +76,8 @@ impl Lightforge {
                 }
                 // A config still naming the old library would find it empty on
                 // the next start, and offer the new copy as a leftover.
-                if !self.save_config() && !matches!(moved, lightforge_core::migrate::Moved::Renamed) {
+                let saved = self.save_config();
+                if !saved && !matches!(moved, lightforge_core::migrate::Moved::Renamed) {
                     if let Some(product) = self.config.product_mut(&code) {
                         product.profile.library = Some(from.id.clone());
                     }
@@ -92,6 +93,10 @@ impl Lightforge {
                     return Ok(self.pump());
                 }
                 self.follow_games();
+                // Unsaved, the mark is what finds the renamed game next start.
+                if saved {
+                    lightforge_core::migrate::settled(&self.layout, &code);
+                }
                 Task::perform(
                     tasks::move_release(self.config.clone(), self.http.clone(), self.layout.clone(), code.clone(), from),
                     move |result| Message::GameMoved(code.clone(), result),

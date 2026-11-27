@@ -121,6 +121,7 @@ impl Lightforge {
                         provider.clone(),
                         listing.id.clone(),
                         listing.name.clone(),
+                        None,
                     );
                     line = line.push(secondary("Details", open).enabled(true));
                 }

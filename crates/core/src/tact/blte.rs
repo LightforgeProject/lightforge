@@ -18,25 +18,64 @@
 //! Modes in that store: `Z` (1,338,676 chunks), `N` (248,174) and `E`
 //! (5,219, under 353 keys, none of them public). `4` and `F` never occur.
 
-use std::io::Read;
-
 /// Most a file may decode to. Retail's encoding manifest, the largest file a
 /// build has, is 191 MiB.
 pub const MAX_DECODED_BYTES: u64 = 1 << 30;
 
+/// zlib output is handed on in pieces this large.
+const SCRATCH_BYTES: usize = 256 * 1024;
+
 pub fn decode(encoded: &[u8]) -> Result<Vec<u8>, BlteError> {
+    let mut out = Vec::new();
+    walk(encoded, &mut out)?;
+    Ok(out)
+}
+
+/// The MD5 of what `encoded` decodes to, the content key, without holding
+/// the decoded file.
+pub fn decode_md5(encoded: &[u8]) -> Result<[u8; 16], BlteError> {
+    let mut context = md5::Context::new();
+    walk(encoded, &mut context)?;
+    Ok(context.finalize().0)
+}
+
+/// Where decoded bytes go.
+trait Sink {
+    /// The table's declared total, before any chunk is decoded.
+    fn expect(&mut self, _bytes: u64) {}
+    fn take(&mut self, bytes: &[u8]);
+}
+
+impl Sink for Vec<u8> {
+    fn expect(&mut self, bytes: u64) {
+        #[allow(clippy::cast_possible_truncation, reason = "at most MAX_DECODED_BYTES")]
+        self.reserve_exact(bytes as usize);
+    }
+
+    fn take(&mut self, bytes: &[u8]) {
+        self.extend_from_slice(bytes);
+    }
+}
+
+impl Sink for md5::Context {
+    fn take(&mut self, bytes: &[u8]) {
+        self.consume(bytes);
+    }
+}
+
+fn walk(encoded: &[u8], sink: &mut impl Sink) -> Result<(), BlteError> {
     if encoded.get(..4) != Some(b"BLTE") {
         return Err(BlteError::NotBlte);
     }
     let header_size = be32(encoded, 4).ok_or(BlteError::Truncated)? as usize;
+    let mut inflater = Inflater::new();
 
     if header_size == 0 {
-        let mut out = Vec::new();
-        decode_chunk(0, &encoded[8..], MAX_DECODED_BYTES, &mut out)?;
-        if out.len() as u64 > MAX_DECODED_BYTES {
-            return Err(BlteError::TooLarge(out.len() as u64));
+        let got = inflater.chunk(0, &encoded[8..], MAX_DECODED_BYTES, sink)?;
+        if got > MAX_DECODED_BYTES {
+            return Err(BlteError::TooLarge(got));
         }
-        return Ok(out);
+        return Ok(());
     }
 
     let table = encoded.get(..header_size).ok_or(BlteError::Truncated)?;
@@ -56,9 +95,8 @@ pub fn decode(encoded: &[u8]) -> Result<Vec<u8>, BlteError> {
     if declared > MAX_DECODED_BYTES {
         return Err(BlteError::TooLarge(declared));
     }
+    sink.expect(declared);
 
-    #[allow(clippy::cast_possible_truncation, reason = "at most MAX_DECODED_BYTES")]
-    let mut out = Vec::with_capacity(declared as usize);
     let mut at = header_size;
     for (index, row) in rows.iter().enumerate() {
         let compressed = be32(row, 0).expect("inside the table") as usize;
@@ -68,39 +106,76 @@ pub fn decode(encoded: &[u8]) -> Result<Vec<u8>, BlteError> {
             return Err(BlteError::ChunkChecksum { index });
         }
 
-        let start = out.len();
-        decode_chunk(index, chunk, decompressed, &mut out)?;
-        let got = (out.len() - start) as u64;
+        let got = inflater.chunk(index, chunk, decompressed, sink)?;
         if got != decompressed {
             return Err(BlteError::SizeMismatch { index, declared: decompressed, got });
         }
         at += compressed;
     }
-    Ok(out)
+    Ok(())
 }
 
-/// Append one chunk's content to `out`, at most `limit + 1` bytes of it: one
-/// past is enough for the caller to see it overran.
-fn decode_chunk(index: usize, chunk: &[u8], limit: u64, out: &mut Vec<u8>) -> Result<(), BlteError> {
-    let Some((&mode, body)) = chunk.split_first() else {
-        return Err(BlteError::Truncated);
-    };
-    match mode {
-        b'N' => out.extend_from_slice(body),
-        b'Z' => {
-            flate2::read::ZlibDecoder::new(body)
-                .take(limit + 1)
-                .read_to_end(out)
-                .map_err(|source| BlteError::Zlib { index, source })?;
-        }
-        // u8 key name size (8), then the key name, little-endian.
-        b'E' => {
-            let key = body.get(1..9).map_or(0, |name| u64::from_le_bytes(name.try_into().expect("8 bytes")));
-            return Err(BlteError::Encrypted { index, key });
-        }
-        other => return Err(BlteError::UnsupportedMode { index, mode: other }),
+/// One zlib state and output buffer for every chunk of a file: a retail
+/// file can have thousands of chunks.
+struct Inflater {
+    zlib: flate2::Decompress,
+    scratch: Vec<u8>,
+}
+
+impl Inflater {
+    fn new() -> Self {
+        Self { zlib: flate2::Decompress::new(true), scratch: vec![0; SCRATCH_BYTES] }
     }
-    Ok(())
+
+    /// Hand one chunk's content to `sink`, at most `limit + 1` bytes of it:
+    /// one past is enough for the caller to see it overran. Returns how many.
+    fn chunk(&mut self, index: usize, chunk: &[u8], limit: u64, sink: &mut impl Sink) -> Result<u64, BlteError> {
+        let Some((&mode, body)) = chunk.split_first() else {
+            return Err(BlteError::Truncated);
+        };
+        match mode {
+            b'N' => {
+                let kept = &body[..body.len().min(usize::try_from(limit + 1).unwrap_or(usize::MAX))];
+                sink.take(kept);
+                Ok(kept.len() as u64)
+            }
+            b'Z' => self.inflate(index, body, limit + 1, sink),
+            // u8 key name size (8), then the key name, little-endian.
+            b'E' => {
+                let key = body.get(1..9).map_or(0, |name| u64::from_le_bytes(name.try_into().expect("8 bytes")));
+                Err(BlteError::Encrypted { index, key })
+            }
+            other => Err(BlteError::UnsupportedMode { index, mode: other }),
+        }
+    }
+
+    /// Like `ZlibDecoder::read_to_end`: a stream cut short ends where its
+    /// input does, and bytes after its end are ignored.
+    fn inflate(&mut self, index: usize, mut input: &[u8], cap: u64, sink: &mut impl Sink) -> Result<u64, BlteError> {
+        self.zlib.reset(true);
+        let mut produced = 0u64;
+        loop {
+            let (in_before, out_before) = (self.zlib.total_in(), self.zlib.total_out());
+            let status = self
+                .zlib
+                .decompress(input, &mut self.scratch, flate2::FlushDecompress::None)
+                .map_err(|e| BlteError::Zlib { index, source: e.into() })?;
+            #[allow(clippy::cast_possible_truncation, reason = "bounded by the input and scratch lengths")]
+            let (used, made) =
+                ((self.zlib.total_in() - in_before) as usize, (self.zlib.total_out() - out_before) as usize);
+            input = &input[used..];
+
+            #[allow(clippy::cast_possible_truncation, reason = "bounded by made")]
+            let kept = made.min((cap - produced) as usize);
+            sink.take(&self.scratch[..kept]);
+            produced += kept as u64;
+
+            let stalled = used == 0 && made == 0;
+            if produced == cap || status == flate2::Status::StreamEnd || stalled {
+                return Ok(produced);
+            }
+        }
+    }
 }
 
 fn be32(bytes: &[u8], at: usize) -> Option<u32> {
@@ -175,6 +250,13 @@ mod tests {
     fn chunks_of_mixed_modes_decode_in_order() {
         let encoded = table(&[(&zlib(b"first, "), 7), (b"Nsecond", 6)]);
         assert_eq!(decode(&encoded).unwrap(), b"first, second");
+    }
+
+    #[test]
+    fn the_streamed_md5_matches_the_decoded_file() {
+        let big: Vec<u8> = (0..3 * SCRATCH_BYTES as u32).flat_map(u32::to_le_bytes).collect();
+        let encoded = table(&[(&zlib(&big), big.len() as u32), (b"Ntail", 4), (&zlib(b""), 0)]);
+        assert_eq!(decode_md5(&encoded).unwrap(), md5::compute(decode(&encoded).unwrap()).0);
     }
 
     #[test]

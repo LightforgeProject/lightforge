@@ -95,7 +95,8 @@ pub async fn check_updates(
     catalog: Option<&Catalog>,
     options: &Options,
 ) -> Result<Vec<UpdateStatus>, ManageError> {
-    let ledger = Ledger::load(&options.ledger_path)?;
+    let mut ledger = Ledger::load(&options.ledger_path)?;
+    ledger.forget_missing(&options.addons_dir);
     // No request for an ignored or pinned addon.
     let requests = update_requests(&ledger, options.channel);
     if requests.is_empty() {

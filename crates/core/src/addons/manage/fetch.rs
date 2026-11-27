@@ -2,7 +2,8 @@ use std::collections::HashSet;
 use std::io::{BufReader, Read, Seek};
 
 use super::updates::{effective_channel, update_requests};
-use super::{io, Event, ManageError, Options, Report, Unavailable};
+use super::{io, Change, Event, ManageError, Options, Report, Unavailable};
+use crate::addons;
 use crate::addons::catalog::{Catalog, Request, Resolved};
 use crate::addons::install::{self, Ledger, Record};
 use crate::addons::providers;
@@ -21,6 +22,7 @@ pub async fn install_all(
 ) -> Result<Report, ManageError> {
     // Read once to decide. The save reads it again: a pin set meanwhile survives.
     let mut ledger = Ledger::load(&options.ledger_path)?;
+    ledger.forget_missing(&options.addons_dir);
     let mut written: Vec<(Record, Option<String>)> = Vec::new();
     let mut report = Report::default();
 
@@ -106,10 +108,28 @@ pub async fn install_all(
                 }
             }
 
+            // Read before the install overwrites the `.toc` it comes from.
+            let before = ledger.find(&provider, &entry.id).map(|record| {
+                let version = record.folders.first().and_then(|f| addons::folder_version(&options.addons_dir.join(f)));
+                (record.file_id.clone(), version)
+            });
+
             on_event(Event::Downloading { name: name.clone(), bytes: entry.file_length });
             match fetch_and_install(http, entry, &provider, &name, pin.clone(), options, &mut ledger).await {
                 Ok(folders) => {
                     if let Some(record) = ledger.find(&provider, &entry.id) {
+                        // A repair writes the same file again: nothing changed.
+                        if let Some((_, from)) = before.filter(|(file_id, _)| *file_id != record.file_id) {
+                            let to = record.folders.first().and_then(|f| addons::folder_version(&options.addons_dir.join(f)));
+                            report.updated.push(Change {
+                                name: name.clone(),
+                                from,
+                                to,
+                                provider: provider.clone(),
+                                id: entry.id.clone(),
+                                file_id: record.file_id.clone(),
+                            });
+                        }
                         written.push((record.clone(), pin));
                     }
                     tracing::info!("addons: installed {name} ({provider}/{}): {folders:?}", entry.id);
@@ -188,7 +208,8 @@ pub async fn update_all(
     options: &Options,
     on_event: impl FnMut(Event),
 ) -> Result<Report, ManageError> {
-    let ledger = Ledger::load(&options.ledger_path)?;
+    let mut ledger = Ledger::load(&options.ledger_path)?;
+    ledger.forget_missing(&options.addons_dir);
     let requests = update_requests(&ledger, options.channel);
 
     let options = Options { pinned: false, reinstall: false, ..options.clone() };
@@ -242,6 +263,15 @@ async fn fetch_and_install(
     ledger: &mut Ledger,
 ) -> Result<Vec<String>, ManageError> {
     let url = entry.downloadable().ok_or(ManageError::NoDownload)?;
+    // Plain http only to this machine, where the tests' servers are.
+    let secure = reqwest::Url::parse(url).is_ok_and(|parsed| {
+        parsed.scheme() == "https"
+            || (parsed.scheme() == "http"
+                && parsed.host_str().and_then(|host| host.parse::<std::net::IpAddr>().ok()).is_some_and(|ip| ip.is_loopback()))
+    });
+    if !secure {
+        return Err(ManageError::InsecureDownload(url.to_owned()));
+    }
     // On the game's disk, not in memory: voice packs run to gigabytes.
     let interface = options.addons_dir.parent().unwrap_or(&options.addons_dir);
     let mut package = http.download_temp(url, interface, install::MAX_PACKAGE_BYTES).await?;

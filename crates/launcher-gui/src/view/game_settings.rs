@@ -17,10 +17,15 @@ impl Lightforge {
             section("Graphics", self.graphics_group(settings)),
             section("Environment", self.environment_group(Scope::Product)),
             section("Launch options", self.launch_options_group()),
-            section("Game", self.game_group(settings)),
-            section("Proton", self.proton_group(settings)),
         ]
         .spacing(theme::LG);
+        // Extra clients are direct starts: only a game Lightforge installs has one.
+        if self.kind_of(&settings.code) == Kind::Managed {
+            sections = sections.push(section("Multi-box", self.multibox_group(&settings.code)));
+        }
+        sections = sections
+            .push(section("Game", self.game_group(settings)))
+            .push(section("Proton", self.proton_group(settings)));
         if self.config.addon_manager {
             sections = sections.push(section("Addons", self.addons_group()));
         }
@@ -32,13 +37,22 @@ impl Lightforge {
         ]
         .align_y(Alignment::Center);
 
+        let mut heading = column![
+            text("Game Settings").size(theme::TITLE),
+            muted(settings.label.clone(), theme::LABEL),
+        ]
+        .spacing(theme::XS);
+        // Battle.net starts the game with its own Proton and settings.
+        if self.plays_via_battle_net(&settings.code) {
+            heading = heading.push(muted(
+                "In Seamless Battle.net Mode PLAY goes through Battle.net and its settings; these apply to Launch via Lightforge.".to_owned(),
+                theme::CAPTION,
+            ));
+        }
+
         container(
             column![
-                column![
-                    text("Game Settings").size(theme::TITLE),
-                    muted(settings.label.clone(), theme::LABEL),
-                ]
-                .spacing(theme::XS),
+                heading,
                 container(focus::region(
                     "game settings",
                     scrollable(sections)
@@ -306,6 +320,38 @@ impl Lightforge {
         );
 
         setting_card(body)
+    }
+
+    /// Several clients of the game at once, each signed in by hand.
+    fn multibox_group(&self, code: &ProductCode) -> Element<'_, Message> {
+        let count = self.multibox(code);
+        let mut rows = vec![setting(
+            "Multi-box",
+            "Run more than one client of this game at once.",
+            self.hint(
+                "Every client after the first starts through Lightforge in a window, with its own \
+                 Config-2.wtf and on, so it asks for a login. While the game runs, Launch additional \
+                 client adds one more, up to five.",
+            ),
+            switch("multibox", count.is_some(), Message::MultiboxToggled),
+        )];
+        if count.is_some() {
+            rows.push(setting(
+                "Clients on PLAY",
+                "How many start together. The first goes through Battle.net in Seamless mode.",
+                None,
+                self.picker(
+                    "multibox clients".to_owned(),
+                    (1..=lightforge_core::multibox::MAX_CLIENTS).collect(),
+                    count,
+                    "",
+                    Message::MultiboxClientsPicked,
+                    Length::Fixed(120.0),
+                    theme::BODY,
+                ),
+            ));
+        }
+        setting_group(rows)
     }
 
     /// Where the game lives, and what can be done to the files there.

@@ -134,11 +134,14 @@ impl Lightforge {
                     }
                     // Before the queue is released, or the findings go stale.
                     Ok(report) => {
-                        self.status = format!(
-                            "{} damaged of {} — repairing…",
-                            report.damaged.len(),
-                            report.checked
-                        );
+                        self.status = match report.damaged_indices.len() {
+                            0 => format!("{} damaged of {} — repairing…", report.damaged.len(), report.checked),
+                            n => format!(
+                                "{} damaged of {}, {n} unreadable index files — repairing…",
+                                report.damaged.len(),
+                                report.checked
+                            ),
+                        };
                         self.owed_repair = Some((scanned, Box::new(report)));
                         self.update(Message::RepairDamaged)
                     }
@@ -172,10 +175,14 @@ impl Lightforge {
                 let code = self.repairing.take().unwrap_or_else(|| self.selected.code.clone());
                 match result {
                     Ok(removed) => {
-                        self.owed_repair = None;
+                        let replaced = self.owed_repair.take().map_or(0, |(_, r)| r.damaged_indices.len());
                         if code == self.selected.code {
-                            self.status =
-                                format!("{removed} damaged files dropped — fetching them again");
+                            self.status = match replaced {
+                                0 => format!("{removed} damaged files dropped — fetching them again"),
+                                n => format!(
+                                    "{removed} damaged files dropped, {n} index files replaced — fetching what they held again"
+                                ),
+                            };
                         }
                         self.enqueue_for(code)
                     }
