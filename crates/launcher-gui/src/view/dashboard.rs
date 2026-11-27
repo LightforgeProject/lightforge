@@ -260,7 +260,9 @@ impl Lightforge {
     /// Status, progress, and every action for the selected product.
     pub(crate) fn action_panel(&self, action: &ActionState) -> Element<'_, Message> {
         container(
-            row![self.action_details(action), self.action_buttons(action)]
+            row![self.action_details(action)]
+                .extend(self.client_list())
+                .push(self.action_buttons(action))
                 .spacing(theme::XL)
                 .align_y(Alignment::Center),
         )
@@ -482,12 +484,20 @@ impl Lightforge {
         .width(Length::Fixed(190.0))
         .height(Length::Fixed(theme::CONTROL_HEIGHT));
         // In Seamless Battle.net Mode PLAY is the hand-off, so this is the
-        // direct start; it needs the game ready, as PLAY does.
-        let (second_label, second_press) = match self.plays_via_battle_net(&self.selected.code) {
-            true => ("Launch via Lightforge", matches!(action, ActionState::Play).then_some(Message::LaunchViaLightforge)),
-            false => ("Launch via Battle.net", Some(Message::BattleNet)),
+        // direct start; it needs the game ready, as PLAY does. With multi-box
+        // on and the game up, it adds a client: always a direct start, so it
+        // asks for a login.
+        let clients = self.sessions(&self.selected.code).count();
+        let adds_client = clients > 0 && self.multibox(&self.selected.code).is_some();
+        let (second_label, second_press) = match (adds_client, self.plays_via_battle_net(&self.selected.code)) {
+            (true, _) => (
+                "Launch additional client",
+                (clients < usize::from(lightforge_core::multibox::MAX_CLIENTS)).then_some(Message::LaunchAdditionalClient),
+            ),
+            (false, true) => ("Launch via Lightforge", matches!(action, ActionState::Play).then_some(Message::LaunchViaLightforge)),
+            (false, false) => ("Launch via Battle.net", Some(Message::BattleNet)),
         };
-        let second_press = second_press.filter(|_| !self.busy && session.is_none());
+        let second_press = second_press.filter(|_| !self.busy && (adds_client || session.is_none()));
         let battle_net = button(
             container(text(second_label).size(theme::tap_text(theme::LABEL))).center_x(Length::Fill),
         )
@@ -541,6 +551,30 @@ impl Lightforge {
         .align_x(Alignment::Center)
         .width(Length::Shrink)
         .into()
+    }
+}
+
+impl Lightforge {
+    /// Multi-box: the selected game's running clients, each with its own Stop.
+    fn client_list(&self) -> Option<Element<'_, Message>> {
+        let code = &self.selected.code;
+        self.multibox(code)?;
+        let mut clients: Vec<&Session> = self.sessions(code).collect();
+        if clients.is_empty() {
+            return None;
+        }
+        clients.sort_by_key(|s| s.slot);
+        let rows = clients.into_iter().map(|session| {
+            let stop = match session.stopping {
+                true => secondary("Stopping…", Message::StopClient(session.game.pid)).enabled(false),
+                false => secondary("Stop", Message::StopClient(session.game.pid)).enabled(true),
+            };
+            row![text(format!("Client {}", session.slot)).size(theme::LABEL).width(Length::Fill), stop]
+                .spacing(theme::SM)
+                .align_y(Alignment::Center)
+                .into()
+        });
+        Some(Column::with_children(rows).spacing(theme::XS).width(Length::Fixed(180.0)).into())
     }
 }
 

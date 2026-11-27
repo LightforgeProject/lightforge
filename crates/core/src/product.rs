@@ -566,6 +566,10 @@ pub struct ProductProfile {
     /// [`crate::launch_options`]. Empty for none.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub launch_options: String,
+    /// Multi-box: how many clients PLAY starts, up to
+    /// [`crate::multibox::MAX_CLIENTS`]. `None` is off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub multibox: Option<u8>,
     /// Optional content opted in to, by tag name, e.g. `HighRes`.
     pub optional_content: Vec<String>,
     /// What the last plan said this product offers: a cache, not a setting.

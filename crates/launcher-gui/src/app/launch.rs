@@ -13,9 +13,28 @@ impl Lightforge {
         }
     }
 
-    /// A product's running game, when it has one.
+    /// A product's running game, when it has one: one not being stopped
+    /// first, so STOP stays on while any client is left.
     pub(crate) fn session(&self, code: &ProductCode) -> Option<&Session> {
-        self.playing.iter().find(|s| &s.code == code)
+        self.playing.iter().filter(|s| &s.code == code).min_by_key(|s| s.stopping)
+    }
+
+    /// Every running client of a product, the main one first.
+    pub(crate) fn sessions<'a>(&'a self, code: &'a ProductCode) -> impl Iterator<Item = &'a Session> {
+        self.playing.iter().filter(move |s| &s.code == code)
+    }
+
+    /// The client count PLAY starts, with multi-box on for this product.
+    pub(crate) fn multibox(&self, code: &ProductCode) -> Option<u8> {
+        self.config.product(code).and_then(|p| p.profile.multibox)
+    }
+
+    /// The lowest client number not running. The main client's 1 comes
+    /// back when it has closed, and a new one takes its config again.
+    fn free_slot(&self, code: &ProductCode) -> u8 {
+        let max = lightforge_core::multibox::MAX_CLIENTS;
+        // Launch additional client is gone at the maximum.
+        (1..=max).find(|slot| !self.sessions(code).any(|s| s.slot == *slot)).unwrap_or(max)
     }
 
     /// A launch of ours is under way or one of our games is up: the store
@@ -35,25 +54,51 @@ impl Lightforge {
         &mut self,
         game: lightforge_core::preflight::GameProcess,
         settle_after: Option<u64>,
+        slot: u8,
     ) -> Task<Message> {
         let code = self.launching.take().unwrap_or_else(|| self.selected.code.clone());
         self.busy = false;
         self.status = format!("{} is running", game.name);
-        self.playing.retain(|s| s.code != code);
-        self.playing.push(Session { code: code.clone(), game: game.clone(), stopping: false });
+        let first = self.session(&code).is_none();
+        self.playing.retain(|s| s.game.pid != game.pid);
+        self.playing.push(Session { code: code.clone(), game: game.clone(), slot, stopping: false });
         // After the game, so its pre-flight is long done and cannot end them.
+        // Once per game, not per multi-box client.
         let companions: Vec<Task<Message>> = self
             .config
             .companions
             .iter()
-            .filter(|c| c.game == code && c.start_with_game)
+            .filter(|c| first && c.game == code && c.start_with_game)
             .map(|c| Task::perform(tasks::launch_companion(self.config.clone(), self.layout.clone(), c.clone()), Message::CompanionStarted))
             .collect();
-        let watch = Task::perform(
-            tasks::await_game_exit(self.config.clone(), self.layout.clone(), code.clone(), game, settle_after),
-            move |result| Message::GameExited(code.clone(), result),
-        );
-        Task::batch(companions.into_iter().chain(std::iter::once(watch)))
+        let pid = game.pid;
+        let watch = {
+            let code = code.clone();
+            Task::perform(
+                tasks::await_game_exit(self.config.clone(), self.layout.clone(), code.clone(), game, settle_after),
+                move |result| Message::GameExited(code.clone(), pid, result),
+            )
+        };
+        // One at a time: each start tells its game apart from those already up.
+        let next = match self.more_clients {
+            0 => Task::none(),
+            left => {
+                self.more_clients = left - 1;
+                self.preflight_for(Launch::Game, code)
+            }
+        };
+        Task::batch(companions.into_iter().chain([watch, next]))
+    }
+
+    /// Have a running client of ours told to go; the exit watcher reports the rest.
+    pub(crate) fn stop_client(&mut self, pid: u32) -> Task<Message> {
+        let Some(session) = self.playing.iter_mut().find(|s| s.game.pid == pid && !s.stopping) else {
+            return Task::none();
+        };
+        session.stopping = true;
+        Task::perform(tasks::stop_game(self.layout.clone(), session.game.clone()), move |result| {
+            Message::GameStopped(pid, result)
+        })
     }
 
     /// Ask the process table whether the Battle.net client is up.
@@ -233,6 +278,7 @@ impl Lightforge {
     /// [`Message::PreflightDone`] start it.
     pub(crate) fn preflight(&mut self, what: Launch) -> Task<Message> {
         self.client_update_retries = 0;
+        self.more_clients = 0;
         self.preflight_for(what, self.selected.code.clone())
     }
 
@@ -314,10 +360,14 @@ impl Lightforge {
         // The long wait starts here; say what it is.
         match what {
             Launch::Game => {
-                self.status = "starting the game…".to_owned();
+                let slot = self.free_slot(&code);
+                self.status = match slot {
+                    1 => "starting the game…".to_owned(),
+                    n => format!("starting client {n}…"),
+                };
                 Task::batch([
                     Task::perform(
-                        tasks::start_game(self.config.clone(), self.layout.clone(), code.clone(), (cleared, self.downloads.clone())),
+                        tasks::start_game(self.config.clone(), self.layout.clone(), code.clone(), slot, (cleared, self.downloads.clone())),
                         Message::GameStarted,
                     ),
                     self.minimize_if_asked(),

@@ -1022,9 +1022,9 @@ fn a_download_a_launch_paused_is_restarted_when_the_game_exits() {
     let _ = app.update(Message::Downloaded(code.clone(), stopped(true)));
     assert!(matches!(app.queue[0].stage, Stage::Paused(_)));
 
-    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(1), generation: 1 })));
+    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(1), generation: 1, slot: 1 })));
     assert!(matches!(app.queue[0].stage, Stage::Paused(_)), "not while the game runs");
-    let _ = app.update(Message::GameExited(code, Ok("exited".to_owned())));
+    let _ = app.update(Message::GameExited(code, 1, Ok("exited".to_owned())));
     assert!(
         !matches!(app.queue[0].stage, Stage::Paused(_)),
         "queued again, or already running"
@@ -1439,7 +1439,7 @@ fn stop_asks_first_and_play_comes_back_when_the_game_is_gone() {
     // A launch of ours, and its game seen in the prefix.
     app.busy = true;
     app.launching = Some(code.clone());
-    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(1), generation: 1 })));
+    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(1), generation: 1, slot: 1 })));
     assert!(app.session(&code).is_some() && !app.busy && app.launching.is_none());
     let _ = app.update(Message::AskStopGame);
     assert!(app.stop_dialog.is_some());
@@ -1458,7 +1458,7 @@ fn stop_asks_first_and_play_comes_back_when_the_game_is_gone() {
     let _ = app.update(Message::StopGameConfirm);
 
     // The watcher reports the exit: PLAY is back and nothing is left over.
-    let _ = app.update(Message::GameExited(code.clone(), Ok("Wow.exe exited".to_owned())));
+    let _ = app.update(Message::GameExited(code.clone(), 1, Ok("Wow.exe exited".to_owned())));
     assert!(app.playing.is_empty() && !app.in_play());
 }
 
@@ -1473,7 +1473,7 @@ fn a_second_game_starts_while_the_first_one_runs() {
     app.selected.code = first.clone();
     app.busy = true;
     app.launching = Some(first.clone());
-    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(1), generation: 1 })));
+    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(1), generation: 1, slot: 1 })));
     assert!(!app.busy, "the launcher is free while the first game runs");
 
     // STOP belongs to the running game's tile, not to every tile.
@@ -1483,13 +1483,87 @@ fn a_second_game_starts_while_the_first_one_runs() {
 
     app.busy = true;
     app.launching = Some(second.clone());
-    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(2), generation: 2 })));
+    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(2), generation: 2, slot: 1 })));
     assert_eq!(app.playing.len(), 2);
 
     // One exiting leaves the other's session alone.
-    let _ = app.update(Message::GameExited(first.clone(), Ok("Wow.exe exited".to_owned())));
+    let _ = app.update(Message::GameExited(first.clone(), 1, Ok("Wow.exe exited".to_owned())));
     assert!(app.session(&first).is_none() && app.session(&second).is_some());
     assert!(app.in_play(), "the second game still holds the store");
+}
+
+#[test]
+fn multibox_clients_of_one_game_are_tracked_and_stopped_apart() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.queue.clear();
+    let code = app.selected.code.clone();
+    app.config.product_mut(&code).unwrap().profile.multibox = Some(2);
+
+    for (pid, slot) in [(1, 1), (2, 2)] {
+        app.busy = true;
+        app.launching = Some(code.clone());
+        let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(pid), generation: pid.into(), slot })));
+    }
+    assert_eq!(app.sessions(&code).count(), 2);
+    let _ = app.view();
+
+    let _ = app.update(Message::StopClient(2));
+    assert!(app.sessions(&code).any(|s| s.slot == 2 && s.stopping));
+    assert!(app.session(&code).is_some_and(|s| !s.stopping), "STOP stays on for the main client");
+
+    let _ = app.update(Message::GameExited(code.clone(), 2, Ok("Wow.exe exited".to_owned())));
+    assert!(app.sessions(&code).map(|s| s.slot).eq([1]));
+}
+
+#[test]
+fn stop_ends_every_multibox_client_of_the_game() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.queue.clear();
+    let code = app.selected.code.clone();
+    app.config.product_mut(&code).unwrap().profile.multibox = Some(3);
+    for (pid, slot) in [(1, 1), (2, 2), (3, 3)] {
+        app.launching = Some(code.clone());
+        let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(pid), generation: pid.into(), slot })));
+    }
+
+    let _ = app.update(Message::AskStopGame);
+    let _ = app.update(Message::StopGameConfirm);
+    assert!(app.sessions(&code).all(|s| s.stopping));
+
+    // The dialog is not reopened by one of them going early.
+    let _ = app.update(Message::GameExited(code.clone(), 1, Ok("Wow.exe exited".to_owned())));
+    assert_eq!(app.sessions(&code).count(), 2);
+}
+
+#[test]
+fn multibox_play_starts_the_next_client_once_one_is_up() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.queue.clear();
+    let code = app.selected.code.clone();
+    app.config.product_mut(&code).unwrap().profile.multibox = Some(2);
+    app.busy = true;
+    app.launching = Some(code.clone());
+    app.more_clients = 1;
+
+    let _ = app.update(Message::GameStarted(Ok(tasks::Started::Up { game: game(1), generation: 1, slot: 1 })));
+
+    assert_eq!(app.more_clients, 0);
+    assert_eq!(app.launching.as_ref(), Some(&code), "the second client's pre-flight is under way");
+}
+
+#[test]
+fn a_failed_multibox_client_ends_the_chain() {
+    let (mut app, _scratch) = test_app();
+    app.dirs = None;
+    app.queue.clear();
+    app.busy = true;
+    app.launching = Some(app.selected.code.clone());
+    app.more_clients = 2;
+    let _ = app.update(Message::Launched(Err("game exited (exit status: 1)".into())));
+    assert_eq!(app.more_clients, 0);
 }
 
 /// A run that ends short without an error used to say only "stopped", which

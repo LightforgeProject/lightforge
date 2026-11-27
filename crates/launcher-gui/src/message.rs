@@ -161,13 +161,18 @@ pub(crate) enum Message {
     /// A direct launch got as far as it can tell: the game is up, or it
     /// ended before it was ever seen.
     GameStarted(Result<tasks::Started, Problem>),
-    /// A session's game exited.
-    GameExited(ProductCode, Result<String, Problem>),
-    /// STOP was pressed on the selected game: ask first.
+    /// A session's game exited, by pid.
+    GameExited(ProductCode, u32, Result<String, Problem>),
+    /// STOP was pressed on the selected game: ask first. It stops every
+    /// multi-box client of the game.
     AskStopGame,
     StopGameDismiss,
     StopGameConfirm,
-    GameStopped(ProductCode, Result<String, Problem>),
+    GameStopped(u32, Result<String, Problem>),
+    /// Multi-box: start one more client of the selected game.
+    LaunchAdditionalClient,
+    /// Multi-box: stop one client, by pid, from the list beside PLAY.
+    StopClient(u32),
     /// Every few seconds: is the Battle.net client up?
     ClientWatch,
     /// The poll's answer: the client up, and a game in the prefix.
@@ -276,6 +281,10 @@ pub(crate) enum Message {
     PrefixReleased(Result<(), String>),
     /// Whether the game in Game Settings gets DXVK-NVAPI.
     NvapiPicked(lightforge_core::tweaks::Nvapi),
+    /// Multi-box on or off for the game in Game Settings.
+    MultiboxToggled(bool),
+    /// How many clients PLAY starts with multi-box on.
+    MultiboxClientsPicked(u8),
     /// The library picked in Game Settings to move the game to, by id.
     MoveTargetPicked(String),
     /// Move the game in Game Settings to the picked library.

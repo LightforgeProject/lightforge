@@ -117,6 +117,7 @@ impl Lightforge {
             warming: None,
             close_client_after_play: false,
             client_update_retries: 0,
+            more_clients: 0,
             update_pending: None,
             latest_build: None,
             client_update: None,

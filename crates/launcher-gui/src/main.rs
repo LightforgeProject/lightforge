@@ -305,6 +305,8 @@ struct Lightforge {
     close_client_after_play: bool,
     /// Hand-offs sent again in a row because the client updated itself.
     client_update_retries: u8,
+    /// Multi-box clients PLAY still has to start, one after the other.
+    more_clients: u8,
     /// The game the client holds back for an update, of those asked about.
     update_pending: Option<ProductCode>,
     /// The version service's build for the selected Battle.net game.
