@@ -124,18 +124,18 @@ package Battle.net's installer needs, and how to remove Lightforge again.
 | CachyOS | 🟢 | AUR, Lightforge was developed on CachyOS |
 | Arch Linux | 🟢 | AUR, Tested on hardware |
 | Omarchy | 🟢 | AUR, works |
-| EndeavourOS | 🟠 | Not tested yet but the AUR package should work |
-| Manjaro | 🟠 | Same as EndeavourOS |
+| EndeavourOS | 🟢 | AUR, works |
+| Manjaro | 🟢 | AUR, works |
 | Fedora | 🟢 | COPR repo / RPM install, Tested on hardware |
 | Bazzite | 🟢 | dnf5 copr, Desktop and ROG Ally X, reported by players. |
 | SteamOS | 🟢 | install-script, Tested in a VM; a real Steam Deck is next. |
 | Nobara | 🟢 | COPR repo / RPM install, Tested on hardware |
-| Debian | 🟢 | deb file, Tested in a VM. |
-| Ubuntu | 🟠 | not tested yet but should work with deb file |
-| Linux Mint | 🟠 | same as ubuntu |
+| Debian | 🟢 | deb file, works |
+| Ubuntu | 🟢 | deb file, works |
+| Linux Mint | 🟢 | deb file, works |
 | Pop!_OS | 🟠 | same as ubuntu |
 | openSUSE Tumbleweed | 🟠 | not tested yet |
-| NixOS | 🟠 | not tested yet |
+| NixOS | 🟢 | nix-flake, works |
 
 If you run it on another distro, or on one of the orange ones, tell me how it
 went in [Discord](https://discord.gg/vtTgmUV9Bq) or through the in-app
